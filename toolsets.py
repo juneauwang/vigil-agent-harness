@@ -295,6 +295,18 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "runbook": {
+        "description": (
+            "Ops Agent Harness 程序层 runbook（结构化 YAML：触发条件 + 步骤 + 命令 + 回滚）："
+            "runbook_load 按需加载事故/部署 runbook（支持触发关键字模糊匹配与列表），"
+            "runbook_checkpoint 维护 L4 部署 checklist 的阶段门（前置核对 → 滚动发布 → "
+            "真实验证 → 回滚预案）。工具仅当 config.yaml 的 ops.runbooks.enabled 为 true "
+            "时可用（check_fn 门控）。"
+        ),
+        "tools": ["runbook_load", "runbook_checkpoint"],
+        "includes": [],
+    },
+
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "

@@ -1,7 +1,8 @@
 # OPS-VERIFY —— 用户亲自验证步骤（一期：拓扑注入 + topo 工具 + 权限矩阵）
 
-> 对应 ops-agent-harness.md §6.3「每步验证」与 §3 权限矩阵。请**亲自**按顺序操作；
-> 全部通过后在会话里告诉 Codex「验证通过」，才开工 runbook（程序层，二期）。
+> 对应 ops-agent-harness.md §6.3「每步验证」、§3 权限矩阵与 §1/§3 L4 程序层。
+> 请**亲自**按顺序操作；一期（拓扑/工具/矩阵）通过后开工了 runbook（§6），
+> §6 也通过后即可进入正式使用。
 
 ## 0. 前置：初始化 ops profile
 
@@ -11,7 +12,8 @@ source .venv/bin/activate
 python3 scripts/ops_init.py            # 默认写到 ~/.hermes/profiles/ops
 ```
 
-输出应包含：创建 profile、写入 config.yaml、写入 topology.yaml、写入 entities/（8 个实体档案）。
+输出应包含：创建 profile、写入 config.yaml、写入 topology.yaml、写入 entities/（8 个实体档案）、
+写入 runbooks/（3 个 runbook）。
 想装到别处用 `--root <path>`；初始权限环境默认 `test`（安全默认），可用 `--env prod` 覆盖。
 
 确认 `hermes` 可用（不在 PATH 就用 `./hermes`）：
@@ -107,9 +109,36 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
 
 ## 5. 通过标准与下一步
 
-- 第 1–4 节全部符合预期 → 告诉 Codex **「验证通过」**，开工 runbook（程序层：
-  结构化 runbook 目录 + 按需加载工具 + L4 部署 checklist，ops-agent-harness.md §1/§3）。
+- 第 1–4 节全部符合预期 → 一期验证通过，Codex 已开工 runbook（程序层），继续 §6。
 - 任何一项不符合 → 把会话输出原样贴给 Codex，先修一期问题再继续。
 
 > 注意：第 4 节的所有命令都只做「判定演示」——审批的选拒绝，被拒的本来就不会执行，
 > 不会对集群产生任何真实影响。
+
+## 6. runbook（程序层）验证
+
+**前置**：初始化脚本已升级（runbook toolset + `ops.runbooks.enabled` + 样例 runbooks）。
+已有 ops profile 需要先补上新配置，二选一：
+
+- 没改过样例拓扑：`python3 scripts/ops_init.py --force`（重铺 config/拓扑/runbooks 样例）。
+- 改过拓扑/实体（保留你的修改）：手工在 `~/.hermes/profiles/ops/config.yaml` 加两处——
+  `platform_toolsets.cli` 改为 `[hermes-cli, topo, runbook]`，并在 `ops:` 下加
+  `runbooks: {enabled: true}`；然后 `python3 scripts/ops_init.py`（不带 --force，
+  会自动铺缺失的 runbooks/）。
+
+重新 `hermes -p ops chat`，依次验证：
+
+1. **列表**：问「列出可用的 runbook」。**预期**：`runbook_load` 返回 3 个——
+   `harbor-restart`、`gateway-svc-restart`（事故）+ `deploy-gateway-svc`（L4 部署 checklist）。
+2. **按触发关键字加载**：说「harbor 健康检查失败，按 runbook 处理」。**预期**：agent
+   加载 `harbor-restart`，按 诊断 → 重启（L2，prod 弹审批，选拒绝即可）→ 真实验证 推进。
+3. **L4 部署 checklist 阶段门**：说「按 runbook 发布 gateway-svc」。**预期**：
+   - 先跑 `runbook_checkpoint` 记录 deploy 会被告知「前置步骤未全部通过」（阶段门拒绝跳序）；
+   - 前置核对通过后按 preflight → deploy（`kubectl set image`，L2 弹审批，选拒绝）→ verify 推进。
+   - 发布命令停在审批处即可，**不要真发版**；回滚预案在 runbook 的 rollback 段（`rollout undo`
+     属 L3，prod 仅人工）。
+4. **跨环境提醒**：当前会话 `ops.permissions.env=test` 时加载 prod runbook，
+   **预期**：返回里带 `env_mismatch: true` + 跨环境默认拒绝的提示。
+
+**通过**：以上 4 条符合预期 → 告诉 Codex **「runbook 验证通过」**，进入正式使用；
+有不符合就把输出贴回来。

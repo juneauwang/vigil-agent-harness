@@ -1,0 +1,41 @@
+# deploy-gateway-svc —— L4 部署 checklist 模板（ops-agent-harness.md §3 L4）
+# PROD 部署强制走模板：前置核对 → 滚动发布 → 真实验证（curl 探活）→ 回滚预案。
+# 发布用 kubectl set image（L2，prod 审批）；禁止 kubectl apply 直改 prod（L3 拒绝）。
+# 样例值请按实际核对：namespace/镜像/探活端口。
+name: deploy-gateway-svc
+title: "gateway-svc 滚动发布（PROD 强制 checklist）"
+version: 1
+env: prod
+kind: deploy
+checklist: true
+triggers:
+  - "发布 gateway-svc"
+  - "上线 gateway-svc"
+  - "部署 gateway-svc 新版本"
+  - "发布单 gateway-svc"
+summary: "PROD 部署强制走 checklist：前置核对 → 滚动发布 → 真实验证 → 回滚预案；阶段顺序由 runbook_checkpoint 门控。"
+steps:
+  - id: preflight
+    title: 前置核对
+    commands:
+      - "kubectl -n prod get deploy gateway-svc -o wide"
+      - "kubectl -n prod get pods -l app=gateway-svc"
+    gate: "kubectl -n prod get deploy gateway-svc"
+    expect: "当前副本可用，无异常重启"
+  - id: deploy
+    title: 滚动发布（L2，prod 需审批）
+    commands:
+      - "kubectl -n prod set image deploy/gateway-svc gateway-svc=<新镜像>"
+  - id: verify
+    title: 真实验证（curl 探活）
+    commands:
+      - "kubectl -n prod rollout status deploy/gateway-svc --timeout=180s"
+      - "curl -sf http://127.0.0.1:8080/healthz"
+    verify: "curl -sf http://127.0.0.1:8080/healthz"
+    expect: "HTTP 200"
+rollback:
+  - title: 回滚预案（仅人工执行）
+    commands:
+      - "kubectl -n prod rollout undo deploy/gateway-svc"
+      - "kubectl -n prod rollout status deploy/gateway-svc --timeout=180s"
+    note: "kubectl rollout undo 属 L3，prod 环境被权限矩阵拒绝（仅人工）——回滚必须由人工执行；本预案只保证命令可查、可审计。"

@@ -14,6 +14,7 @@ Files written (inside the Hermes root, default ``~/.hermes`` or $HERMES_HOME):
     <root>/profiles/ops/config.yaml
     <root>/profiles/ops/topology.yaml
     <root>/profiles/ops/entities/*.yaml
+    <root>/profiles/ops/runbooks/*.yaml
 
 Idempotent: an existing profile / config.yaml / topology.yaml is left
 untouched unless ``--force`` is passed.  Nothing outside the Hermes root is
@@ -43,7 +44,7 @@ _CONFIG_TPL = """\
 #   - 跨环境操作默认拒绝；strict 环境操作需审批（ops-agent-harness.md §3）
 _config_version: {version}
 platform_toolsets:
-  cli: [hermes-cli, topo]
+  cli: [hermes-cli, topo, runbook]
 tools:
   tool_search:
     enabled: off
@@ -53,6 +54,8 @@ memory:
   provider: topo
 ops:
   topology:
+    enabled: true
+  runbooks:
     enabled: true
   permissions:
     enabled: true
@@ -90,8 +93,8 @@ def _write_config(profile_dir: Path, env: str, force: bool) -> bool:
     return True
 
 
-def _seed_topology(profile_dir: Path, force: bool) -> bool:
-    """Copy the sample topology table (layer 1 + entities/). Returns True if copied."""
+def _seed_samples(profile_dir: Path, force: bool) -> bool:
+    """Copy the sample topology table + runbooks into the profile. Returns True if copied."""
     src = _SAMPLE_DIR / "topology.yaml"
     if not src.is_file():
         raise SystemExit(f"缺少样例拓扑 {src} —— 初始化中止。")
@@ -117,6 +120,20 @@ def _seed_topology(profile_dir: Path, force: bool) -> bool:
         shutil.copy2(src_file, entities_dst / src_file.name)
         copied += 1
     print(f"· 写入 entities/：{copied} 个实体档案 → {entities_dst}")
+
+    runbooks_src = _SAMPLE_DIR / "runbooks"
+    runbooks_dst = profile_dir / "runbooks"
+    if not runbooks_src.is_dir():
+        raise SystemExit(f"缺少样例 runbooks 目录 {runbooks_src} —— 初始化中止。")
+    if not force and runbooks_dst.exists() and any(runbooks_dst.iterdir()):
+        print(f"· runbooks/ 已存在且非空，跳过（--force 覆盖）：{runbooks_dst}")
+        return True
+    runbooks_dst.mkdir(parents=True, exist_ok=True)
+    copied = 0
+    for src_file in sorted(runbooks_src.glob("*.yaml")):
+        shutil.copy2(src_file, runbooks_dst / src_file.name)
+        copied += 1
+    print(f"· 写入 runbooks/：{copied} 个 runbook → {runbooks_dst}")
     return True
 
 
@@ -163,7 +180,7 @@ def main() -> int:
         print(f"· 创建 profile 'ops'：{created}")
 
     _write_config(profile_dir, args.env, args.force)
-    _seed_topology(profile_dir, args.force)
+    _seed_samples(profile_dir, args.force)
 
     if not args.no_alias:
         alias = create_wrapper_script(_PROFILE_NAME)
@@ -172,8 +189,9 @@ def main() -> int:
 
     print("\n下一步（详见 OPS-VERIFY.md）：")
     print(f"  1. 核对拓扑：{profile_dir / 'topology.yaml'} 与 {profile_dir / 'entities'}")
-    print(f"  2. 起 session：hermes -p ops chat   （若 hermes 不在 PATH，用 {_REPO_ROOT / 'hermes'} 代替）")
-    print("  3. 验证 TOPO 段 / topo_query / topo_update / 权限矩阵")
+    print(f"  2. 核对 runbook：{profile_dir / 'runbooks'}（事故处理 + L4 部署 checklist）")
+    print(f"  3. 起 session：hermes -p ops chat   （若 hermes 不在 PATH，用 {_REPO_ROOT / 'hermes'} 代替）")
+    print("  4. 验证 TOPO 段 / topo_query / topo_update / 权限矩阵 / runbook_load")
     return 0
 
 

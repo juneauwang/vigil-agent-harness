@@ -1,0 +1,33 @@
+# harbor-restart —— 程序层：事故处理 runbook（schema v0.1，见 ops-agent-harness.md §1）
+# 样例值请按实际核对：harbor 的编排方式（docker/compose/k8s）以实际部署为准。
+name: harbor-restart
+title: "Harbor 服务异常恢复"
+version: 1
+env: prod
+kind: incident
+triggers:
+  - "harbor healthcheck failed"
+  - "harbor 健康检查失败"
+  - "harbor down"
+  - "镜像拉取超时"
+  - "docker login 超时"
+summary: "harbor 健康检查失败时的标准恢复流程：诊断 → 重启 → 真实验证；命令仍走权限矩阵。"
+steps:
+  - id: diagnose
+    title: 诊断
+    commands:
+      - "docker ps --filter name=harbor"
+      - "docker logs --tail 50 harbor"
+  - id: restart
+    title: 重启（L2，prod 需审批）
+    commands:
+      - "docker restart harbor"
+  - id: verify
+    title: 真实验证
+    verify: "curl -s http://localhost/api/v2.0/health"
+    expect: '"status":"healthy"'
+rollback:
+  - title: 兜底
+    commands:
+      - "docker logs --tail 100 harbor"
+    note: "重启为幂等操作；若仍不健康，保留现场并人工介入，勿反复重启。"

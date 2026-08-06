@@ -1,0 +1,35 @@
+# gateway-svc-restart —— 程序层：事故处理 runbook（schema v0.1，见 ops-agent-harness.md §1）
+# 样例值请按实际核对：namespace/服务名以实际 k8s 部署为准。
+name: gateway-svc-restart
+title: "gateway-svc 服务异常恢复（滚动重启）"
+version: 1
+env: prod
+kind: incident
+triggers:
+  - "gateway-svc down"
+  - "gateway-svc 探活失败"
+  - "订单链路报错"
+  - "ingress 502"
+summary: "gateway-svc 异常时的标准恢复流程：诊断 → 滚动重启 → 真实验证。"
+steps:
+  - id: diagnose
+    title: 诊断
+    commands:
+      - "kubectl -n prod get pods -l app=gateway-svc"
+      - "kubectl -n prod logs deploy/gateway-svc --tail=50"
+  - id: restart
+    title: 滚动重启（L2，prod 需审批）
+    commands:
+      - "kubectl -n prod rollout restart deploy/gateway-svc"
+  - id: verify
+    title: 真实验证
+    commands:
+      - "kubectl -n prod rollout status deploy/gateway-svc --timeout=120s"
+      - "curl -sf http://127.0.0.1:8080/healthz"          # 端口待核对
+    verify: "curl -sf http://127.0.0.1:8080/healthz"
+    expect: "HTTP 200"
+rollback:
+  - title: 回滚（仅人工）
+    commands:
+      - "kubectl -n prod rollout undo deploy/gateway-svc"
+    note: "kubectl rollout undo 属 L3，prod 环境被权限矩阵拒绝（仅人工），预案只记录命令。"

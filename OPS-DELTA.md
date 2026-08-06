@@ -37,6 +37,16 @@
 - **核销方式**：`ops.permissions.enabled` 为 false（默认）时钩子零影响；
   季度体检检查两处插入点的行为是否仍与上游意图一致。
 
+### 3. `toolsets.py` — 新增 `runbook` toolset 定义（纯数据，加段）
+
+- **为什么**：ops-agent-harness.md §1/§3 L4 —— 程序层 runbook 按需加载
+  （runbook_load）+ L4 部署 checklist 阶段门（runbook_checkpoint）需要注册为
+  一个独立 toolset，ops profile 默认启用（config.yaml 的 `platform_toolsets.cli`
+  含 `runbook`）。
+- **怎么改**：在 `TOOLSETS` 字典 `topo` 之后、`kanban` 之前插入一个 `"runbook"`
+  条目（description + tools 列表 + includes），无任何逻辑改动。
+- **核销方式**：`ops.runbooks.enabled` 为 false（默认）时工具零影响（check_fn 门控）。
+
 ## 未碰的核心区（按 §6.5 硬约束）
 
 - 不碰 conversation_loop / 上下文压缩 / prompt 缓存逻辑。
@@ -54,3 +64,6 @@
 | `scripts/ops_init.py` | §6.3 | ops profile 初始化：建 profile + 写 ops config + 铺样例拓扑（幂等，--force 重铺） |
 | `ops-profile/` | §2.2 | 样例拓扑：第一层 topology.yaml（39.106.217.32 集群实体）+ 第二层 entities/ |
 | `OPS-VERIFY.md` | §6.3 | 用户亲自验证步骤（TOPO 段 / topo_query / topo_update / 权限矩阵） |
+| `tools/runbook_tools.py` | §1 / §3 L4 | runbook_load（按名/触发关键字/列表）+ runbook_checkpoint（L4 checklist 阶段门），registry toolset=runbook |
+| `ops-profile/runbooks/` | §1 / §3 L4 | 样例 runbook：harbor-restart / gateway-svc-restart（事故）+ deploy-gateway-svc（L4 部署 checklist 模板） |
+| `tests/tools/test_runbook_tools.py` | §6.3 | runbook 加载/匹配/校验/L4 阶段门测试 |

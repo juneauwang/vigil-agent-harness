@@ -22,12 +22,14 @@ import yaml
 import hermes_cli.config as hc
 from plugins.memory.topo import render_topo_block
 from tools.ops_permissions import check_ops_command_permission
+from tools.runbook_tools import runbook_checkpoint, runbook_load
 from tools.topo_tools import topo_query, topo_update
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INIT_SCRIPT = PROJECT_ROOT / "scripts" / "ops_init.py"
 SAMPLE_DIR = PROJECT_ROOT / "ops-profile"
 SAMPLE_ENTITY_NAMES = sorted(p.stem for p in (SAMPLE_DIR / "entities").glob("*.yaml"))
+SAMPLE_RUNBOOK_NAMES = sorted(p.stem for p in (SAMPLE_DIR / "runbooks").glob("*.yaml"))
 
 
 def _run_init(root: Path, *extra: str) -> subprocess.CompletedProcess:
@@ -69,6 +71,8 @@ def test_init_creates_profile_config_and_topology(ops_home):
     assert (ops_home / "topology.yaml").is_file()
     seeded = sorted(p.stem for p in (ops_home / "entities").glob("*.yaml"))
     assert seeded == SAMPLE_ENTITY_NAMES
+    seeded_rb = sorted(p.stem for p in (ops_home / "runbooks").glob("*.yaml"))
+    assert seeded_rb == SAMPLE_RUNBOOK_NAMES
 
     hc._LOAD_CONFIG_CACHE.clear()
     try:
@@ -77,9 +81,10 @@ def test_init_creates_profile_config_and_topology(ops_home):
         hc._LOAD_CONFIG_CACHE.clear()
 
     # 四个激活开关（A 注入 / B 工具 / D 矩阵）+ Tool Search 关闭（topo_* 不被延后）。
-    assert cfg["platform_toolsets"]["cli"] == ["hermes-cli", "topo"]
+    assert cfg["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
     assert cfg["memory"]["provider"] == "topo"
     assert cfg["ops"]["topology"]["enabled"] is True
+    assert cfg["ops"]["runbooks"]["enabled"] is True
     perms = cfg["ops"]["permissions"]
     assert perms["enabled"] is True
     assert perms["env"] == "test" and perms["role"] == "test"  # 安全默认
@@ -96,21 +101,41 @@ def test_init_idempotent_and_force(tmp_path):
     assert proc.returncode == 0
     home = root / "profiles" / "ops"
     cfg_path, topo_path = home / "config.yaml", home / "topology.yaml"
+    runbooks_dir = home / "runbooks"
 
     # 用户改过的文件，重跑不覆盖。
     cfg_path.write_text("custom: true\n", encoding="utf-8")
     topo_path.write_text("custom: true\n", encoding="utf-8")
+    (runbooks_dir / "mine.yaml").write_text("custom: true\n", encoding="utf-8")
     proc = _run_init(root, "--no-alias")
     assert proc.returncode == 0
     assert cfg_path.read_text(encoding="utf-8") == "custom: true\n"
     assert topo_path.read_text(encoding="utf-8") == "custom: true\n"
+    assert (runbooks_dir / "mine.yaml").is_file()
 
     # --force 重新铺入样例（不触碰 .env / sessions 等用户数据）。
     proc = _run_init(root, "--no-alias", "--force")
     assert proc.returncode == 0
-    assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["platform_toolsets"]["cli"] == ["hermes-cli", "topo"]
+    assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
     assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 1
+    # --force 重铺样例但不删除用户自建文件（mine.yaml 保留）。
+    assert set(p.stem for p in runbooks_dir.glob("*.yaml")) >= set(SAMPLE_RUNBOOK_NAMES)
+    assert (runbooks_dir / "mine.yaml").is_file()
     assert (home / ".env").is_file()
+
+
+def test_seeded_profile_runbook_load(ops_home):
+    listed = json.loads(runbook_load(home=ops_home))
+    assert listed["count"] == len(SAMPLE_RUNBOOK_NAMES)
+
+    result = json.loads(runbook_load(runbook="deploy-gateway-svc", home=ops_home))
+    assert result["checklist"] is True
+    assert [s["id"] for s in result["steps"]] == ["preflight", "deploy", "verify"]
+
+    blocked = runbook_checkpoint(
+        runbook="deploy-gateway-svc", step_id="deploy", status="pass", home=ops_home
+    )
+    assert "前置步骤未全部通过" in blocked
 
 
 def test_env_flag_sets_permissions(tmp_path, monkeypatch):
