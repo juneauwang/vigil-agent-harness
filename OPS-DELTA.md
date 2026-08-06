@@ -51,3 +51,6 @@
 | `plugins/memory/topo/` | §4 A / §7 A | TOPO 段注入（system prompt 外部 memory block）+ §4 C 行为约束 |
 | `tools/ops_permissions.py` | §3 / §4 D | 命令分级矩阵（L1-L4 × env → execute/approve/deny） |
 | `tests/tools/test_topo_tools.py` 等 | §6.3 | 数据契约 + 矩阵验证 |
+| `scripts/ops_init.py` | §6.3 | ops profile 初始化：建 profile + 写 ops config + 铺样例拓扑（幂等，--force 重铺） |
+| `ops-profile/` | §2.2 | 样例拓扑：第一层 topology.yaml（39.106.217.32 集群实体）+ 第二层 entities/ |
+| `OPS-VERIFY.md` | §6.3 | 用户亲自验证步骤（TOPO 段 / topo_query / topo_update / 权限矩阵） |

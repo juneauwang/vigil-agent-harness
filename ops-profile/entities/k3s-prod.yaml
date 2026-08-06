@@ -1,0 +1,12 @@
+# k3s-prod —— 生产 k3s 集群（样例值请按实际核对）。
+name: k3s-prod
+type: k8s
+env: prod
+endpoint: "https://39.106.217.32:6443"
+attrs:
+  distro: k3s
+  ingress: traefik                        # k3s 默认 ingress controller
+depends_on: [harbor]
+depended_by: [argocd]
+ops:
+  healthcheck: "kubectl get nodes"
