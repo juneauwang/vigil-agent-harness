@@ -284,6 +284,17 @@ TOOLSETS = {
         "includes": []
     },
 
+    "topo": {
+        "description": (
+            "Ops Agent Harness 拓扑表（CMDB 事实层）：topo_query 查平台拓扑，"
+            "topo_update 更新实体档案（自动带 source=agent + last_verified，"
+            "PROD 实体变更需审批）。工具仅当 config.yaml 的 ops.topology.enabled "
+            "为 true 时可用（check_fn 门控）。"
+        ),
+        "tools": ["topo_query", "topo_update"],
+        "includes": [],
+    },
+
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "

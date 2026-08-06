@@ -3606,6 +3606,54 @@ def check_all_command_guards(command: str, env_type: str,
                        deny_pattern, command[:200])
         return _user_deny_block_result(deny_pattern)
 
+    # Ops harness graded permission matrix (ops-agent-harness.md §3):
+    # command grade × active environment → execute / approve / deny. A matrix
+    # DENY is a hard block — like the user deny rules above, it fires BEFORE
+    # the yolo / mode=off / permanent-allowlist bypasses so no session-level
+    # setting can override it. An APPROVE outcome rides the normal approval
+    # flow (consumed in Phase 2 below); with no human present (cron/batch) it
+    # fails closed, mirroring request_tool_approval.
+    ops_decision = None
+    try:
+        from tools.ops_permissions import check_ops_command_permission as _check_ops_permission
+        ops_decision = _check_ops_permission(command)
+    except Exception as _ops_exc:
+        logger.debug("Ops permission matrix check failed: %s", _ops_exc)
+    if ops_decision is not None:
+        if ops_decision["action"] == "deny":
+            logger.warning("Ops matrix deny (%s/%s): %s",
+                           ops_decision["grade"], ops_decision["env"], command[:200])
+            return {
+                "approved": False,
+                "ops_matrix": ops_decision,
+                "message": (
+                    f"BLOCKED: {ops_decision['description']} (grade "
+                    f"{ops_decision['grade']}, env {ops_decision['env']}). "
+                    "The ops permission matrix denies this command to the "
+                    "agent; only a human operator can run it. Do NOT retry, "
+                    "rephrase, or attempt the same outcome via a different "
+                    "command."
+                ),
+            }
+        _has_human = (
+            _is_interactive_cli()
+            or _is_gateway_approval_context()
+            or env_var_enabled("HERMES_EXEC_ASK")
+        )
+        if not _has_human:
+            # No human present (cron/batch/non-interactive): an approval
+            # requirement fails closed.
+            return {
+                "approved": False,
+                "ops_matrix": ops_decision,
+                "message": (
+                    f"BLOCKED: {ops_decision['description']} (grade "
+                    f"{ops_decision['grade']}, env {ops_decision['env']}) but "
+                    "no interactive user or gateway is present to approve it. "
+                    "Find an alternative approach or run it manually."
+                ),
+            }
+
     # --yolo or approvals.mode=off: bypass all approval prompts.
     # Gateway /yolo is session-scoped; CLI --yolo remains process-scoped.
     approval_mode = _get_approval_mode()
@@ -3756,6 +3804,15 @@ def check_all_command_guards(command: str, env_type: str,
     if is_dangerous:
         if not is_approved(session_key, pattern_key):
             warnings.append((pattern_key, description, False))
+
+    # Ops matrix "approve" (审批) outcome rides the same approval machinery as
+    # dangerous-pattern warnings, so smart approval + gateway/CLI prompting +
+    # session/permanent allowlisting all apply unchanged.
+    if ops_decision is not None and ops_decision["action"] == "approve":
+        ops_key = f"ops_matrix:{ops_decision['grade']}:{ops_decision['env']}"
+        ops_desc = ops_decision["description"]
+        if not is_approved(session_key, ops_key):
+            warnings.append((ops_key, ops_desc, False))
 
     # Nothing to warn about
     if not warnings:

@@ -1718,3 +1718,40 @@ updates:
 #     command: "cat /run/user/1000/hermes-secrets.env"
 #     helper_timeout_seconds: 3
 #     override_existing: false             # .env/shell win by default
+
+# =============================================================================
+# Ops Agent Harness —— 运维权限与拓扑（§3/§2 数据契约，见 ops-agent-harness.md）
+# =============================================================================
+# 完全 fork 的运维 harness 专用块。所有键都是行为设置，走 config.yaml，
+# 不加 HERMES_* env var。ops profile 的 config.yaml 启用后：
+#   - memory.provider: topo  → system prompt 注入 TOPO 段（事实层第一层）
+#   - toolsets 含 topo        → 暴露 topo_query / topo_update 工具
+#   - ops.permissions.enabled → 执行工具层命令分级矩阵（L1-L4 × 环境）
+#
+ops:
+  # ── 拓扑表（事实层）──────────────────────────────────────────────
+  # topology.yaml 存于 HERMES_HOME（schema v0.1，见 ops-agent-harness.md §2.2）：
+  #   第一层 topology.yaml（总览，<50 行，注入 system prompt）
+  #   第二层 entities/<name>.yaml（单实体完整档案，topo_query detail 按需加载）
+  topology:
+    enabled: false          # true 时启用 topo provider 注入与 topo 工具
+
+  # ── 权限分级矩阵（L2/L3 层，执行工具层硬 gate）────────────────────
+  # 命令按等级 L1(查询)/L2(常规)/L3(危险)/L4(致命) 分类，再按当前环境
+  # (env) 查矩阵 → execute / approve / deny。
+  #   deny   = 硬拒绝：yolo / mode=off / 永久 allowlist 都不能绕过
+  #   approve= 需要审批：复用现有审批流程（smart/CLI/gateway）
+  # 矩阵默认值（可覆盖）：
+  #   test: L1-4 全部 execute
+  #   uat : L3=approve, L4=deny
+  #   prod: L2=approve, L3/L4=deny
+  # 内置分级正则可用 grades 覆盖；matrix 可覆盖单环境行为。
+  permissions:
+    enabled: false          # true 时启用分级矩阵 gate
+    env: test               # 当前操作环境: test | uat | prod
+    role: test              # 会话角色（默认同 env，审计展示用）
+    # grades:               # 可选：覆盖内置分级正则
+    #   L2:
+    #     - "customctl .*"
+    # matrix:               # 可选：覆盖内置矩阵
+    #   prod: {L1: execute, L2: approve, L3: deny, L4: deny}
