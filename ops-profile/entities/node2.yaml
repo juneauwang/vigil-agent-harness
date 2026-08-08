@@ -8,7 +8,7 @@ attrs:
   public_ip: 39.107.92.54
   spec: ecs.e-c1m2.xlarge
   k8s_version: v1.28.15
-  disk: "cloud_essd_entry 40G"
+  disk: "cloud_essd_entry 40G (29G used, 73%)"
   ssh: "ssh -i ~/.ssh/aliyun_nopass.pem root@39.107.92.54"
   maintenance_window: "周日 02:00-04:00（示例，待调整）"
   verified_via: terraform.tfstate
