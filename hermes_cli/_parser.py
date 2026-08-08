@@ -1,5 +1,5 @@
 """
-Top-level argparse construction for the hermes CLI.
+Top-level argparse construction for the Argus CLI.
 
 Lives in its own module so other modules (e.g. ``relaunch.py``) can
 introspect the parser to discover which flags exist without running the
@@ -39,46 +39,46 @@ def _inherited_flag(parser, *args, **kwargs):
 
 _EPILOGUE = """
 Examples:
-    hermes                        Start interactive chat
-    hermes chat -q "Hello"        Single query mode
-    hermes --tui                  Launch the modern TUI (or set display.interface: tui)
-    hermes --cli                  Force the classic REPL (overrides display.interface: tui)
-    hermes -c                     Resume the most recent session
-    hermes -c "my project"        Resume a session by name (latest in lineage)
-    hermes --resume <session_id>  Resume a specific session by ID
-    hermes setup                  Run setup wizard
-    hermes logout                 Clear stored authentication
-    hermes auth add <provider>    Add a pooled credential
-    hermes auth list              List pooled credentials
-    hermes auth remove <p> <t>    Remove pooled credential by index, id, or label
-    hermes auth reset <provider>  Clear exhaustion status for a provider
-    hermes model                  Select default model
-    hermes fallback [list]        Show fallback provider chain
-    hermes fallback add           Add a fallback provider (same picker as `hermes model`)
-    hermes fallback remove        Remove a fallback provider from the chain
-    hermes config                 View configuration
-    hermes config edit            Edit config in $EDITOR
-    hermes config set model gpt-4 Set a config value
-    hermes gateway                Run messaging gateway
-    hermes -s hermes-agent-dev,github-auth
-    hermes -w                     Start in isolated git worktree
-    hermes gateway install        Install gateway background service
-    hermes sessions list          List past sessions
-    hermes sessions browse        Interactive session picker
-    hermes sessions rename ID T   Rename/title a session
-    hermes logs                   View agent.log (last 50 lines)
-    hermes logs -f                Follow agent.log in real time
-    hermes logs errors            View errors.log
-    hermes logs --since 1h        Lines from the last hour
-    hermes debug share             Upload debug report for support
-    hermes console                Open the safe Hermes command console
-    hermes update                 Update to latest version
-    hermes dashboard              Start web UI dashboard (port 9119)
-    hermes dashboard --stop       Stop running dashboard processes
-    hermes dashboard --status     List running dashboard processes
+    argus                        Start interactive chat
+    argus chat -q "Hello"        Single query mode
+    argus --tui                  Launch the modern TUI (or set display.interface: tui)
+    argus --cli                  Force the classic REPL (overrides display.interface: tui)
+    argus -c                     Resume the most recent session
+    argus -c "my project"        Resume a session by name (latest in lineage)
+    argus --resume <session_id>  Resume a specific session by ID
+    argus setup                  Run setup wizard
+    argus logout                 Clear stored authentication
+    argus auth add <provider>    Add a pooled credential
+    argus auth list              List pooled credentials
+    argus auth remove <p> <t>    Remove pooled credential by index, id, or label
+    argus auth reset <provider>  Clear exhaustion status for a provider
+    argus model                  Select default model
+    argus fallback [list]        Show fallback provider chain
+    argus fallback add           Add a fallback provider (same picker as `argus model`)
+    argus fallback remove        Remove a fallback provider from the chain
+    argus config                 View configuration
+    argus config edit            Edit config in $EDITOR
+    argus config set model gpt-4 Set a config value
+    argus gateway                Run messaging gateway
+    argus -s hermes-agent-dev,github-auth
+    argus -w                     Start in isolated git worktree
+    argus gateway install        Install gateway background service
+    argus sessions list          List past sessions
+    argus sessions browse        Interactive session picker
+    argus sessions rename ID T   Rename/title a session
+    argus logs                   View agent.log (last 50 lines)
+    argus logs -f                Follow agent.log in real time
+    argus logs errors            View errors.log
+    argus logs --since 1h        Lines from the last hour
+    argus debug share             Upload debug report for support
+    argus console                Open the safe Argus command console
+    argus update                 Update to latest version
+    argus dashboard              Start web UI dashboard (port 9119)
+    argus dashboard --stop       Stop running dashboard processes
+    argus dashboard --status     List running dashboard processes
 
 For more help on a command:
-    hermes <command> --help
+    argus <command> --help
 """
 
 
@@ -90,8 +90,8 @@ def build_top_level_parser():
     other subparsers via ``subparsers.add_parser(...)``.
     """
     parser = argparse.ArgumentParser(
-        prog="hermes",
-        description="Hermes Agent - AI assistant with tool-calling capabilities",
+        prog="argus",
+        description="Argus - 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EPILOGUE,
     )
@@ -144,7 +144,7 @@ def build_top_level_parser():
         help=(
             "Provider override for this invocation (e.g. openrouter, anthropic). "
             "Applies to -z/--oneshot and --tui. The persistent provider lives in config.yaml "
-            "under model.provider — use `hermes setup` or edit the file to change it."
+            "under model.provider — use `argus setup` or edit the file to change it."
         ),
     )
     _inherited_flag(
@@ -281,7 +281,7 @@ def build_top_level_parser():
     chat_parser = subparsers.add_parser(
         "chat",
         help="Interactive chat with the agent",
-        description="Start an interactive chat session with Hermes Agent",
+        description="Start an interactive chat session with Argus（运维 agent harness，长记忆拓扑表 + runbook + 权限矩阵）",
     )
     chat_parser.add_argument(
         "-q", "--query", help="Single query (non-interactive mode)"

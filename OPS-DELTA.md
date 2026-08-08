@@ -47,6 +47,43 @@
   条目（description + tools 列表 + includes），无任何逻辑改动。
 - **核销方式**：`ops.runbooks.enabled` 为 false（默认）时工具零影响（check_fn 门控）。
 
+
+## 产品外壳品牌化（Argus 一期，2026-08-08）
+
+- **为什么**：产品是 Argus（运维 agent harness），但外壳还是 Hermes（CLI 入口 /
+  banner / 版本号 / README）。本次只动产品外壳表面层（入口、banner、help、README、
+  SOUL 措辞），**零逻辑改动**：topo/runbook/权限矩阵代码未动，`hermes -p ops`
+  行为不变。
+- **怎么改**（逐条）：
+
+| 文件 | 改了哪 | 为什么 / 怎么改 |
+|---|---|---|
+| `pyproject.toml` | `version 0.20.0→0.1.0`、`description` 改为 Argus 定位；`[project.scripts]` 增加 `argus = hermes_cli.main:main` | 产品一期完成（拓扑+runbook+权限矩阵），版本号归 Argus 所有。发行包名**沿用** `hermes-agent`（fork 兼容：importlib.metadata、dist-info、release 脚本均按此名解析；产品名是 Argus）。`hermes` 入口保留，行为不变 |
+| `hermes_cli/__init__.py` | `__version__ = "0.1.0"`、`__release_date__ = "2026.8.8"`、模块 docstring 改 Argus | 运行时版本单一来源；CLI/gateway/dashboard/ACP 的版本串都从这里取 |
+| `hermes_cli/_startup_fast.py` | 快速 `--version` 输出 `Hermes Agent v…` → `Argus v…`，提示命令 `hermes version` → `argus version` | `argus --version` 必须显示 Argus（快速路径先于重导入执行，是首屏） |
+| `hermes_cli/banner.py` | `HERMES_AGENT_LOGO`（ASCII 大图）→ `ARGUS_LOGO`（简洁文字：名字 + 「记住整个平台，安全地动生产」）；`HERMES_CADUCEUS` → `ARGUS_HERO`（简洁标识）；`format_banner_version_label()` 版本标签 `Hermes Agent v…` → `Argus v…` | 任务硬约束：banner 换 Argus 标识，风格简洁，不要花哨 ASCII 大图 |
+| `cli.py` | 紧凑 banner 文案（`NOUS HERMES` / `Hermes Agent` / `Nous Research`）→ Argus + 运维定位；欢迎语 → 中文「欢迎使用 Argus——记住整个平台，安全地动生产」；class/module docstring；dead 的 ASCII 常量换成 Argus 简洁标识 | 交互 CLI 首屏与欢迎语品牌化；纯字符串，无逻辑改动 |
+| `hermes_cli/skin_engine.py` | 默认皮肤 branding：`agent_name: Hermes Agent`→`Argus`，`welcome`→中文欢迎语，`response_label` 去 Hermes | 皮肤引擎的默认品牌串是 banner/状态栏的回退来源 |
+| `hermes_cli/_parser.py` | `prog="hermes"`→`"argus"`；顶层 description 改为 Argus 运维定位；epilogue 示例命令 `hermes`→`argus`；chat 子命令 description | `argus --help` 显示 Argus；`hermes --help` 同样显示 argus（同一产品） |
+| `hermes_cli/main.py` | 模块 docstring 用法示例 `hermes`→`argus`；`cmd_uninstall`/`cmd_update`/ACP docstring 与 WhatsApp 引导 Tip 改 Argus | 入口文档与命令名一致 |
+| `hermes_cli/config.py` | `recommended_update_command()` 的 git 安装回退 `hermes update`→`argus update` | `argus version` 的更新提示指向正确命令 |
+| `hermes_cli/commands.py` | `/update`、`/version` CommandDef 描述 `Hermes Agent`→`Argus` | help/命令描述品牌化 |
+| `hermes_cli/profiles.py` | `create_wrapper_script()` 生成的 profile 包装命令从 `hermes -p` → `argus -p`（优先解析 `argus`，回退 `hermes`）；`build_alias_map()` / `remove_wrapper_script()` 的 wrapper 识别针同步兼容 `argus -p ` 与 `hermes -p ` | 包装命令不再依赖 hermes 命令名；反向识别（alias→profile）与删除校验跟上新命令名 |
+| `hermes_cli/default_soul.py` | `DEFAULT_SOUL_MD` 改为 Argus 视角 persona | 新 profile 的 SOUL 从出生就是 Argus；不影响 `_LEGACY_TEMPLATE_SOULS` 旧模板迁移匹配 |
+| `acp_adapter/server.py` | ACP `version` 能力返回 `Hermes Agent v…`→`Argus v…` | 编辑器集成侧的版本串 |
+| `gateway/slash_commands.py`、`gateway/platforms/api_server.py` | /version、/update 相关文案与 docstring 改 Argus | 网关侧命令文案（/version 正文走 banner 版本标签，自动变 Argus） |
+| `hermes_cli/uninstall.py` | 卸载器标题与致谢文案 `Hermes Agent`→`Argus`（shell rc 的 `# Hermes Agent` 注释匹配保持不动） | 卸载界面品牌化；注释匹配是清理逻辑的一部分，不能动 |
+| `scripts/ops_init.py` | 提示文案 `hermes -p ops`→`argus -p ops` | 初始化脚本引导用新命令名 |
+| `README.md` | 重写为中文为主的 Argus 介绍（fork 说明 + 三层核心 + 安装/开发/验证） | 产品门面 |
+| `hermes`（仓库根 launcher） | docstring 改 Argus | 开发入口说明 |
+| 测试断言同步 | `test_startup_fast_guards.py` / `test_banner.py` / `test_cli_skin_integration.py` / `test_skin_engine.py` 中表面字符串 `Hermes Agent`→`Argus` | 表面字符串测试跟随品牌化（断言的是产品外壳，非行为契约） |
+
+- **用户级文件（不在 repo）**：`~/.local/bin/argus` 更新为
+  `exec <repo>/.venv/bin/argus -p ops "$@"`（不再依赖 `hermes` 命令名）；
+  `~/.hermes/profiles/ops/SOUL.md` 改写为 Argus 运维视角（三层能力 + fail-closed 行为准则）。
+- **核销方式**：`argus --version` 显示 `Argus v0.1.0`；`argus --help` / `argus version`
+  无 Hermes 字样；banner 首屏为 Argus 标识；`hermes -p ops` 仍可用（入口保留，行为不变）。
+
 ## 未碰的核心区（按 §6.5 硬约束）
 
 - 不碰 conversation_loop / 上下文压缩 / prompt 缓存逻辑。

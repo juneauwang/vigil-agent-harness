@@ -461,7 +461,7 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
     if is_windows:
         wrapper_path = wrapper_dir / f"{canon}.bat"
         try:
-            wrapper_path.write_text(f"@echo off\r\nhermes -p {profile} %*\r\n", encoding="utf-8")
+            wrapper_path.write_text(f"@echo off\r\nargus -p {profile} %*\r\n", encoding="utf-8")
             return wrapper_path
         except OSError as e:
             print(f"⚠ Could not create wrapper at {wrapper_path}: {e}")
@@ -469,8 +469,8 @@ def create_wrapper_script(name: str, target: Optional[str] = None) -> Optional[P
     else:
         wrapper_path = wrapper_dir / canon
         try:
-            hermes_exe = shutil.which("hermes") or "hermes"
-            wrapper_path.write_text(f'#!/bin/sh\nexec {shlex.quote(hermes_exe)} -p {profile} "$@"\n', encoding="utf-8")
+            argus_exe = shutil.which("argus") or shutil.which("hermes") or "argus"
+            wrapper_path.write_text(f'#!/bin/sh\nexec {shlex.quote(argus_exe)} -p {profile} "$@"\n', encoding="utf-8")
             wrapper_path.chmod(wrapper_path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
             return wrapper_path
         except OSError as e:
@@ -498,9 +498,9 @@ def remove_wrapper_script(name: str) -> bool:
     for wrapper_path in candidates:
         if wrapper_path.exists():
             try:
-                # Verify it's our wrapper before removing
+                # Verify it's our wrapper before removing (argus -p or legacy hermes -p)
                 content = wrapper_path.read_text(encoding="utf-8")
-                if "hermes -p" in content:
+                if "argus -p" in content or "hermes -p" in content:
                     wrapper_path.unlink()
                     return True
             except Exception:
@@ -583,7 +583,9 @@ def build_alias_map() -> dict[str, str]:
     if not wrapper_dir.is_dir():
         return result
     is_windows = sys.platform == "win32"
-    prefix = "hermes -p "
+    # Wrappers may target either entry point: `argus -p` (current branding) or
+    # `hermes -p` (legacy wrappers from before the Argus rename).
+    prefixes = ("argus -p ", "hermes -p ")
 
     for entry in sorted(wrapper_dir.iterdir()):
         if not entry.is_file():
@@ -599,9 +601,10 @@ def build_alias_map() -> dict[str, str]:
         except (OSError, UnicodeDecodeError):
             # UnicodeDecodeError = a binary on PATH (ffmpeg etc.) — not a wrapper.
             continue
-        idx = content.find(prefix)
-        if idx == -1:
+        prefix = next((pfx for pfx in prefixes if pfx in content), None)
+        if prefix is None:
             continue
+        idx = content.find(prefix)
         rest = content[idx + len(prefix):]
         # Profile id is the first whitespace-delimited token after the flag.
         canon = rest.split(None, 1)[0].strip() if rest.strip() else ""

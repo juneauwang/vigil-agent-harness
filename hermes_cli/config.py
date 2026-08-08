@@ -546,7 +546,7 @@ def recommended_update_command_for_method(method: str) -> str:
         return _NIX_UPDATE_MSG
     if method == "docker":
         return "docker pull nousresearch/hermes-agent:latest"
-    return "hermes update"
+    return "argus update"
 
 
 def recommended_update_command() -> str:
