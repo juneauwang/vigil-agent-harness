@@ -2,14 +2,14 @@
 # 39.106.217.32 集群样例（schema v0.1，见 ops-agent-harness.md §2.2）；投入前请逐项核对。
 # 第二层完整档案在 entities/<name>.yaml，按需加载（topo_query detail=True）。
 version: 1
-updated_at: 2026-08-06
+updated_at: 2026-08-08
 sources: [netbox, snipeit, agent]           # 实际启用同步源（当前 agent + 人工）
 environments:
   - name: prod
     entry: "ssh jump@39.106.217.32"
     isolation: strict                       # strict = 跨环境操作需审批
     role: prod
-    core_entities: [harbor, k3s-prod, argocd]
+    core_entities: [harbor, k3s-prod, argocd, node1, node2]
   - name: test
     entry: "ssh test-jump"
     isolation: relaxed
@@ -22,7 +22,9 @@ core_entities:
   - {name: gateway-svc, type: gateway, env: prod, owner: wpwang, source: manual, last_verified: 2026-08-06, detail: entities/gateway-svc.yaml}
   - {name: order-db, type: db, env: prod, owner: wpwang, source: manual, last_verified: 2026-08-06, detail: entities/order-db.yaml}
   - {name: postgres, type: db, env: prod, owner: wpwang, source: manual, last_verified: 2026-08-06, detail: entities/postgres.yaml}
-  - {name: ingress, type: ingress, env: prod, owner: wpwang, source: manual, last_verified: 2026-08-06, detail: entities/ingress.yaml}
+  - {name: ingress, type: ingress, env: prod, owner: wpwang, source: manual, last_verified: 2026-08-08, detail: entities/ingress.yaml}
+  - {name: node1, type: k8s-node, env: prod, role: control-plane, endpoint: "39.106.217.32", owner: wpwang, source: agent, last_verified: 2026-08-08, detail: entities/node1.yaml}
+  - {name: node2, type: k8s-node, env: prod, role: worker, owner: wpwang, source: agent, last_verified: 2026-08-08, detail: entities/node2.yaml}
   - {name: test-web, type: service, env: test, owner: wpwang, source: manual, last_verified: 2026-08-06, detail: entities/test-web.yaml}
 key_paths:
   - [ingress, gateway-svc, order-db]

@@ -1,11 +1,15 @@
-# k3s-prod —— 生产 k3s 集群（样例值请按实际核对）。
+# k3s-prod —— 生产 k3s 集群（2026-08-08 实测更新）。
 name: k3s-prod
 type: k8s
 env: prod
 endpoint: "https://39.106.217.32:6443"
 attrs:
   distro: k3s
-  ingress: traefik                        # k3s 默认 ingress controller
+  version: v1.28.15
+  nodes: ["node1 (control-plane, 10.0.1.29, 8G)", "node2 (worker, 10.0.1.30)"]
+  network: "10.0.1.0/24"
+  ingress: traefik
+  workloads: [argo, argocd, gitea, harbor, dwarf-village-dev, dwarf-village-prod, istio-bookinfo, its-mytabs]
 depends_on: [harbor]
 depended_by: [argocd]
 ops:
