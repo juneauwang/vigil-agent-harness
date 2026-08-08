@@ -3974,6 +3974,32 @@ def _build_compact_banner() -> str:
     else:
         version_line = format_banner_version_label()
 
+    # Unified third status line: every profile renders the same slot — ops
+    # capabilities show their live state (env badge + gates/topo/runbooks),
+    # a plain profile shows a compact tool/skill summary.
+    _ops_line = None
+    try:
+        from hermes_cli.banner import _load_banner_state
+        _state = _load_banner_state()
+        if _state.get("ops_enabled"):
+            _env = str(_state.get("env") or "unknown")
+            _env_color = _skin.get_color(f"ops_env_{_env}", "#4A90D9") if _skin else "#4A90D9"
+            _matrix = "ON" if _state.get("matrix_enabled") else "OFF"
+            _ops_line = (
+                f"[{_env_color} bold]\\[{_env}][/]"
+                f" [dim {dim_color}]· matrix {_matrix} · topo {_state.get('entity_count', 0)} · "
+                f"runbooks {_state.get('runbook_count', 0)}[/]"
+            )
+        else:
+            try:
+                from hermes_cli.banner import get_available_skills
+                _total_skills = sum(len(v) for v in get_available_skills().values())
+            except Exception:
+                _total_skills = 0
+            _ops_line = f"[dim {dim_color}]◈ {_total_skills} skills · /help for commands[/]"
+    except Exception:
+        _ops_line = None
+
     w = min(shutil.get_terminal_size().columns - 2, 88)
     if w < 30:
         return f"\n[{title_color}]{tiny_line}[/] [dim {dim_color}]- 记住整个平台，安全地动生产[/]\n"
@@ -3986,10 +4012,19 @@ def _build_compact_banner() -> str:
     line1 = line1[:content_width].ljust(content_width)
     line2 = version_line[:content_width].ljust(content_width)
 
-    return (
-        f"\n[bold {border_color}]╔{bar}╗[/]\n"
+    rows = (
         f"[bold {border_color}]║[/] [{title_color}]{line1}[/] [bold {border_color}]║[/]\n"
         f"[bold {border_color}]║[/] [dim {dim_color}]{line2}[/] [bold {border_color}]║[/]\n"
+    )
+    if _ops_line:
+        # Self-contained markup (env badge + dim summary) — no outer wrap, so
+        # the nested [dim ...][/] pair stays balanced. Short enough to fit the
+        # compact banner width in practice.
+        rows += f"[bold {border_color}]║[/] {_ops_line} [bold {border_color}]║[/]\n"
+
+    return (
+        f"\n[bold {border_color}]╔{bar}╗[/]\n"
+        f"{rows}"
         f"[bold {border_color}]╚{bar}╝[/]\n"
     )
 
@@ -14844,6 +14879,14 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return _state_fragment("class:prompt-working", "⚕")
         if self._voice_mode:
             return _state_fragment("class:voice-prompt", "🎤")
+        try:
+            from hermes_cli.banner import _load_banner_state
+            _state = _load_banner_state()
+        except Exception:
+            _state = None
+        if _state and _state.get("ops_enabled") and _state.get("env"):
+            _env = str(_state.get("env"))
+            return [("class:ops-env-" + _env, f"[{_env}] "), ("class:prompt", symbol)]
         return [("class:prompt", symbol)]
 
     def _get_tui_prompt_text(self) -> str:

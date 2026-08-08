@@ -43,6 +43,9 @@ _CONFIG_TPL = """\
 #   - L2（重启服务/装包）→ 审批；L3（rm -rf/重启DB/改配置）→ 拒绝；L4（删namespace/删库）→ 拒绝
 #   - 跨环境操作默认拒绝；strict 环境操作需审批（ops-agent-harness.md §3）
 _config_version: {version}
+display:
+  # ops 主题：argus（蓝灰系内置皮肤，见 hermes_cli/skin_engine.py）
+  skin: argus
 platform_toolsets:
   cli: [hermes-cli, topo, runbook]
 tools:

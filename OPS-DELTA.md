@@ -84,6 +84,67 @@
 - **核销方式**：`argus --version` 显示 `Argus v0.1.0`；`argus --help` / `argus version`
   无 Hermes 字样；banner 首屏为 Argus 标识；`hermes -p ops` 仍可用（入口保留，行为不变）。
 
+
+### 5. Argus 蓝灰系 ops 皮肤（纯数据 + 配置生成）
+
+- **为什么**：产品外壳已品牌化为 Argus，但默认皮肤还是 Hermes 暖金系。新增内置
+  `argus` 皮肤（蓝灰系：主色 `#4A90D9`、深色暗灰底 `#1A202A`、边框/标题蓝灰、
+  正文浅色，区域间明度分层），并让 ops profile 默认激活。
+- **怎么改**：
+  1. `hermes_cli/skin_engine.py` — `_BUILTIN_SKINS` 中 `default` 之后新增
+     `"argus"` 条目（纯数据：colors 全套蓝灰 + 继承 default 的 spinner/branding）。
+     零逻辑改动；`/skin`、TUI、desktop 通过既有 list_skins/load_skin 自动可见。
+  2. `scripts/ops_init.py` — `_CONFIG_TPL` 增加 `display.skin: argus`，新生成的
+     ops profile config.yaml 默认激活 argus 皮肤。
+  3. 用户级文件：`~/.hermes/profiles/ops/config.yaml` 补 `display.skin: argus`
+     （幂等补丁，不影响既有拓扑/runbook/权限矩阵配置）。
+- **品牌一致**：argus 皮肤不写 branding 块，继承 default 的
+  `agent_name: Argus` / 中文欢迎语 / `◉ Argus` response_label；banner 的
+  `◉ ARGUS` 标识（ARGUS_LOGO/ARGUS_HERO）与欢迎语不动。
+- **核销方式**：`argus -p ops` 会话启动时 `init_skin_from_config` 读到
+  `display.skin: argus`；`argus skin` 列表可见 argus（builtin）并可 `/skin argus`
+  切换；banner/提示符/工具指示为蓝灰系。
+
+
+### 6. Argus 统一控制台 CLI（所有 profile 一套控制台头）
+
+- **为什么**：品牌化二期把界面结构统一了——之前只有 ops 模式是控制台头，非 ops
+  仍保留 Hermes 经典大面板（Available Tools / Available Skills 列表），观感还是
+  像 Hermes。运维定位的 CLI 需要的不是「AI 助手仪表盘」，而是「我在哪个环境、
+  Argus 记得什么、安全门是否开着」——改为所有 profile 共用一套 Argus 控制台头，
+  ops 能力按实际状态显示（开启显示实测值，未开启显示 off + 引导）。
+- **怎么改**（全部显示层 + 皮肤数据，零核心逻辑改动）：
+  1. `hermes_cli/banner.py` — 删除 ops/非 ops 双分支，收敛为统一的
+     `_load_banner_state()`（读 config 的 `ops:` 块 + profile home 的
+     topology.yaml / runbooks/ 快照，带 5s TTL 缓存，任何 profile 都返回 dict：
+     `ops_enabled` 标志 + env / matrix / topology / runbook / profile / home /
+     entity_count / runbook_count）和 `_render_banner()`：左侧 hero 标识
+     （◉ ARGUS / 记住整个平台 / 安全地动生产）+ model/cwd/session，右侧
+     `PROFILE / ENV / GATES / TOPOLOGY / RUNBOOKS / HOME` 状态行——ops 开启显示
+     实测值（`[env] badge`、`matrix ON · L1–L4`、`N entities`、`N loaded`），
+     未开启显示 off 态；底部统一能力行（ops：`◈ topo_query · runbook_load ·
+     permission matrix`，非 ops：`◈ N tools · M skills · /help` + ops_init 引导）。
+     `build_welcome_banner` 变薄包装，去掉对 `check_tool_availability` 的依赖，
+     不再渲染任何工具/技能清单。
+  2. `cli.py` — `_build_compact_banner()` 改为每行三行统一结构：ops 开启显示
+     `[env] · matrix ON · topo N · runbooks M`，否则 `◈ N skills · /help`；
+     `_get_tui_prompt_fragments()` 正常态：ops 开启且有 env 时提示符前插 env
+     badge（`[test] ops ❯ `，`class:ops-env-<env>` 皮肤驱动），其余 profile
+     保持 `❯ `。
+  3. `hermes_cli/skin_engine.py` — argus 皮肤补 `ops_env_test/uat/prod` 颜色键、
+     冷静 spinner（`(·)` 系列 + 运维动词，去 kawaii）、topo/runbook 工具 emoji
+     （🧭/📋）；`get_prompt_toolkit_style_overrides()` 注册 `ops-env-*` 样式类
+     （数据驱动，非 argus 皮肤回退默认蓝/金/红）。
+  4. 测试 — `tests/hermes_cli/test_banner_ops.py` 重写为统一版（状态快照、
+     ops off 返回 off 态 dict、ops 控制台头、matrix OFF 警示、非 ops 共用
+     控制台头 + 能力汇总行）；`tests/hermes_cli/test_banner_skills_width.py`
+     改为断言技能清单不再渲染、能力行只报计数。
+- **核销方式**：任意 profile 启动都显示同一套 Argus 控制台头（ops：ENV badge /
+  matrix / 拓扑计数；非 ops：off 态 + N tools · N skills）；`argus -p ops` 提示符
+  `[test] ops ❯ `；`/skin` 切换不受影响；banner 的 ◉ ARGUS 标识与欢迎语不动。
+- **未碰**：conversation loop / 上下文压缩 / prompt 缓存 / `system_prompt.py`；
+  topo/runbook/权限矩阵逻辑零改动。
+
 ## 未碰的核心区（按 §6.5 硬约束）
 
 - 不碰 conversation_loop / 上下文压缩 / prompt 缓存逻辑。

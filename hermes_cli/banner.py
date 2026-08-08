@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 from hermes_constants import get_hermes_home
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 # rich and prompt_toolkit are imported lazily (inside the functions that use
 # them) rather than at module level.  Importing this module is on the TUI
@@ -471,6 +471,288 @@ def get_latest_release_tag(repo_dir: Optional[Path] = None) -> Optional[tuple]:
     return _latest_release_cache
 
 
+# Short-TTL cache: the prompt renderer probes this on every repaint; the
+# snapshot is cheap but shouldn't hit config.yaml + filesystem per frame.
+_banner_state_cache: Optional[tuple] = None  # (monotonic_ts, state)
+_BANNER_STATE_TTL = 5.0
+
+
+def _load_banner_state() -> Dict[str, Any]:
+    """Return the unified banner snapshot (always a dict).
+
+    Reads the ops config block (config.yaml) and the profile home
+    (topology.yaml / runbooks/) — display-only, no agent involvement.
+    ``ops_enabled`` is True when any ops capability is active; without it the
+    same status rows render their off state (unified console header for every
+    profile — one visual language, not an ops/non-ops split).
+    """
+    global _banner_state_cache
+    _now = time.monotonic()
+    if _banner_state_cache is not None and _now - _banner_state_cache[0] < _BANNER_STATE_TTL:
+        return _banner_state_cache[1]
+
+    state: Dict[str, Any] = {
+        "ops_enabled": False,
+        "env": "",
+        "matrix_enabled": False,
+        "topology_enabled": False,
+        "runbook_enabled": False,
+        "entity_count": 0,
+        "runbook_count": 0,
+        "profile": "",
+        "home": "",
+    }
+    try:
+        from hermes_cli.profiles import get_active_profile_name
+        profile = get_active_profile_name()
+        if profile and profile != "default":
+            state["profile"] = profile
+    except Exception:
+        pass
+    home = None
+    try:
+        home = Path(get_hermes_home())
+        state["home"] = str(home)
+    except Exception:
+        pass
+
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        ops = cfg.get("ops") or {}
+        if isinstance(ops, dict):
+            topology = ops.get("topology") or {}
+            permissions = ops.get("permissions") or {}
+            runbooks = ops.get("runbooks") or {}
+            state["ops_enabled"] = bool(
+                topology.get("enabled") or permissions.get("enabled")
+            )
+            state["matrix_enabled"] = bool(permissions.get("enabled"))
+            state["topology_enabled"] = bool(topology.get("enabled"))
+            state["runbook_enabled"] = bool(runbooks.get("enabled"))
+            env = str(permissions.get("env") or "").strip()
+            if env:
+                state["env"] = env
+    except Exception:
+        pass
+
+    if state["ops_enabled"] and home is not None:
+        try:
+            topo_file = home / "topology.yaml"
+            if topo_file.is_file():
+                import yaml
+                data = yaml.safe_load(topo_file.read_text(encoding="utf-8")) or {}
+                entities = data.get("core_entities") or []
+                if isinstance(entities, list):
+                    state["entity_count"] = len(entities)
+            runbooks_dir = home / "runbooks"
+            if runbooks_dir.is_dir():
+                state["runbook_count"] = len(list(runbooks_dir.glob("*.yaml")))
+        except Exception:
+            pass
+
+    _banner_state_cache = (_now, state)
+    return state
+
+
+def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
+                   context_length: Optional[int], provider: Optional[str],
+                   state: dict, tools: list, enabled_toolsets: list) -> None:
+    """Render the unified Argus console header (every profile, one language).
+
+    Left: hero mark + session anchor. Right: PROFILE / ENV / GATES /
+    TOPOLOGY / RUNBOOKS / HOME status — ops capabilities show their live
+    state when enabled, an explicit off state otherwise. Bottom: a single
+    capability line (ops tool anchors, or a compact tool/skill summary).
+    No assistant-style tool/skill inventory.
+    """
+    from rich.panel import Panel
+    from rich.table import Table
+
+    try:
+        from hermes_cli.skin_engine import get_active_skin
+        _skin = get_active_skin()
+
+        def _c(key: str, fallback: str) -> str:
+            return _skin.get_color(key, fallback)
+    except Exception:
+        _c = lambda key, fallback: fallback
+
+    accent = _c("banner_accent", "#FFBF00")
+    dim = _c("banner_dim", "#B8860B")
+    text = _c("banner_text", "#FFF8DC")
+    title_color = _c("banner_title", "#FFD700")
+    border_color = _c("banner_border", "#CD7F32")
+    ok = _c("ui_ok", "#4caf50")
+    err = _c("ui_error", "#ef5350")
+    warn = _c("ui_warn", "#ffa726")
+    session_color = _c("session_border", "#8B8682")
+
+    # Left column: hero mark + session anchor
+    left_lines = ["", ARGUS_HERO, ""]
+    if (provider or "").strip().lower() == "moa":
+        # MoA virtual provider: ``model`` is a preset name. Show the preset and
+        # its aggregator so the banner is meaningful instead of a bare slug.
+        preset_name = model
+        agg_label = ""
+        try:
+            from hermes_cli.config import load_config
+            from hermes_cli.moa_config import normalize_moa_config
+            _moa = normalize_moa_config(load_config().get("moa") or {})
+            _preset = _moa.get("presets", {}).get(preset_name)
+            if _preset:
+                _agg = _preset.get("aggregator") or {}
+                _am = str(_agg.get("model") or "")
+                agg_label = _am.split("/")[-1] if "/" in _am else _am
+        except Exception:
+            agg_label = ""
+        if len(preset_name) > 28:
+            preset_name = preset_name[:25] + "..."
+        agg_str = f" [dim {dim}]·[/] [dim {dim}]agg {agg_label}[/]" if agg_label else ""
+        ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
+        left_lines.append(f"[{accent}]MoA: {preset_name}[/]{agg_str}{ctx_str}")
+    else:
+        if not (model or "").strip() or (model or "").strip().lower() == "unknown":
+            # Unconfigured install: say so in red instead of a blank/"unknown"
+            # slug — this is the single clearest place to tell the user what
+            # is wrong and how to fix it.
+            left_lines.append(
+                f"[bold red]no model configured[/] "
+                f"[dim {dim}]— run /model or argus setup[/]"
+            )
+        else:
+            model_short = model.split("/")[-1] if "/" in model else model
+            if model_short.endswith(".gguf"):
+                model_short = model_short[:-5]
+            if len(model_short) > 28:
+                model_short = model_short[:25] + "..."
+            ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
+            left_lines.append(f"[{accent}]{model_short}[/]{ctx_str}")
+    if os.getenv("HERMES_YOLO_MODE"):
+        left_lines.append(f"[bold red]⚠ YOLO mode[/] [dim {dim}]— all approval prompts bypassed[/]")
+    left_lines.append(f"[dim {dim}]{cwd}[/]")
+    if session_id:
+        left_lines.append(f"[dim {session_color}]Session: {session_id}[/]")
+    left_content = "\n".join(left_lines)
+
+    # Right column: unified status — where am I / what does Argus remember / gates
+    ops_on = bool(state.get("ops_enabled"))
+    right_lines: List[str] = []
+    profile_name = str(state.get("profile") or "default")
+    right_lines.append(f"[dim {dim}]PROFILE[/]     [{text}]{profile_name}[/]")
+    if ops_on:
+        env = str(state.get("env") or "unknown")
+        env_color = _c(f"ops_env_{env}", "#4A90D9")
+        env_badge = f"[{env_color} bold]\\[{env}][/]" if env_color else f"[bold]\\[{env}][/]"
+    else:
+        env_badge = f"[dim {dim}]—[/]"
+    right_lines.append(f"[dim {dim}]ENV[/]         {env_badge}")
+    if ops_on and state.get("matrix_enabled"):
+        right_lines.append(
+            f"[dim {dim}]GATES[/]       [{ok} bold]matrix ON[/] "
+            f"[dim {dim}]· L1–L4 × env → execute / approve / deny[/]"
+        )
+    elif ops_on:
+        right_lines.append(
+            f"[dim {dim}]GATES[/]       [{err} bold]matrix OFF[/] "
+            f"[dim {dim}]· fail-closed 失效[/]"
+        )
+    else:
+        right_lines.append(f"[dim {dim}]GATES[/]       [dim {dim}]off（未启用 ops harness）[/]")
+    if ops_on and state.get("topology_enabled"):
+        if state.get("entity_count"):
+            topo_val = f"[{text}]{state.get('entity_count', 0)} entities[/]"
+        else:
+            topo_val = f"[{warn}]no topology loaded[/]"
+        right_lines.append(f"[dim {dim}]TOPOLOGY[/]    {topo_val}")
+    else:
+        right_lines.append(f"[dim {dim}]TOPOLOGY[/]    [dim {dim}]—[/]")
+    if ops_on and state.get("runbook_enabled"):
+        right_lines.append(
+            f"[dim {dim}]RUNBOOKS[/]    [{text}]{state.get('runbook_count', 0)} loaded[/]"
+        )
+    else:
+        right_lines.append(f"[dim {dim}]RUNBOOKS[/]    [dim {dim}]—[/]")
+    home_disp = str(state.get("home") or "")
+    try:
+        home_disp = home_disp.replace(str(Path.home()), "~")
+    except Exception:
+        pass
+    right_lines.append(f"[dim {dim}]HOME[/]        [dim {dim}]{home_disp or '—'}[/]")
+    right_lines.append("")
+    if ops_on:
+        right_lines.append(
+            f"[dim {dim}]◈ topo_query  ·  runbook_load  ·  permission matrix  ·  /help for commands[/]"
+        )
+        if not state.get("matrix_enabled"):
+            right_lines.append(
+                f"[bold {err}]⚠ 权限矩阵未启用——安全门已打开，请立即在 config.yaml 启用 ops.permissions[/]"
+            )
+    else:
+        try:
+            total_skills = sum(len(v) for v in get_available_skills().values())
+        except Exception:
+            total_skills = 0
+        right_lines.append(
+            f"[dim {dim}]◈ {len(tools)} tools · {total_skills} skills · /help for commands[/]"
+        )
+        right_lines.append(
+            f"[dim {dim}]  提示：运行 scripts/ops_init.py 启用运维能力（拓扑表 + runbook + 权限矩阵）[/]"
+        )
+    # Update check — use prefetched result if available
+    try:
+        behind = get_update_result(timeout=0.5)
+        if behind is not None and behind != 0:
+            from hermes_cli.config import get_managed_update_command, recommended_update_command
+            if behind > 0:
+                commits_word = "commit" if behind == 1 else "commits"
+                right_lines.append(
+                    f"[bold yellow]⚠ {behind} {commits_word} behind[/]"
+                    f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] to update[/]"
+                )
+            else:
+                managed_cmd = get_managed_update_command()
+                line = "[bold yellow]⚠ update available[/]"
+                if managed_cmd:
+                    line += f"[dim yellow] — run [bold]{managed_cmd}[/bold][/]"
+                right_lines.append(line)
+    except Exception:
+        pass  # Never break the banner over an update check
+
+    right_content = "\n".join(right_lines)
+    layout_table = Table.grid(padding=(0, 3))
+    layout_table.add_column("left", justify="center")
+    layout_table.add_column("right", justify="left")
+    layout_table.add_row(left_content, right_content)
+
+    version_label = format_banner_version_label()
+    release_info = get_latest_release_tag()
+    if release_info:
+        _tag, _url = release_info
+        title_markup = f"[bold {title_color}][link={_url}]{version_label}[/link][/]"
+    else:
+        title_markup = f"[bold {title_color}]{version_label}[/]"
+    outer_panel = Panel(
+        layout_table,
+        title=title_markup,
+        border_style=border_color,
+        padding=(0, 2),
+    )
+
+    console.print()
+    term_width = shutil.get_terminal_size().columns
+    if term_width >= 95:
+        try:
+            from hermes_cli.skin_engine import get_active_skin
+            _bskin = get_active_skin()
+            _logo = _bskin.banner_logo if hasattr(_bskin, 'banner_logo') and _bskin.banner_logo else ARGUS_LOGO
+        except Exception:
+            _logo = ARGUS_LOGO
+        console.print(_logo)
+        console.print()
+    console.print(outer_panel)
+
+
 def format_banner_version_label() -> str:
     """Return the version label shown in the startup banner title."""
     base = f"Argus v{VERSION} ({RELEASE_DATE})"
@@ -534,17 +816,6 @@ def _format_context_length(tokens: int) -> str:
     return str(tokens)
 
 
-def _display_toolset_name(toolset_name: str) -> str:
-    """Normalize internal/legacy toolset identifiers for banner display."""
-    if not toolset_name:
-        return "unknown"
-    return (
-        toolset_name[:-6]
-        if toolset_name.endswith("_tools")
-        else toolset_name
-    )
-
-
 def build_welcome_banner(console: "Console", model: str, cwd: str,
                          tools: List[dict] = None,
                          enabled_toolsets: List[str] = None,
@@ -552,13 +823,13 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
                          get_toolset_for_tool=None,
                          context_length: int = None,
                          provider: str = None):
-    """Build and print a welcome banner with the Argus mark on left and info on right.
+    """Build and print the Argus console header — one language for every profile.
 
     Args:
         console: Rich Console instance.
         model: Current model name.
         cwd: Current working directory.
-        tools: List of tool definitions.
+        tools: List of tool definitions (used for the non-ops capability line).
         enabled_toolsets: List of enabled toolset names.
         session_id: Session identifier.
         get_toolset_for_tool: Callable to map tool name -> toolset name.
@@ -567,327 +838,9 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
             preset name and the banner renders the aggregator instead of a
             bare model slug.
     """
-    from model_tools import check_tool_availability, TOOLSET_REQUIREMENTS
-    from rich.panel import Panel
-    from rich.table import Table
-    if get_toolset_for_tool is None:
-        from model_tools import get_toolset_for_tool
-
-    tools = tools or []
-    enabled_toolsets = enabled_toolsets or []
-
-    _, unavailable_toolsets = check_tool_availability(quiet=True)
-    # The availability check walks the GLOBAL toolset registry, so it includes
-    # toolsets that aren't part of this agent's platform set at all (e.g.
-    # `discord`, `feishu_doc` on a CLI session). Those must never surface in the
-    # banner's "Available Tools" — they aren't exposed to the agent. Restrict to
-    # toolsets actually enabled for this agent; a toolset that's enabled but
-    # currently has unmet deps legitimately shows as disabled/lazy below.
-    _enabled_ts = {str(t) for t in enabled_toolsets}
-    if _enabled_ts:
-        unavailable_toolsets = [
-            item for item in unavailable_toolsets
-            if str(item.get("id", item.get("name", ""))) in _enabled_ts
-        ]
-    disabled_tools = set()
-    # Tools whose toolset has a check_fn are lazy-initialized (e.g. honcho,
-    # homeassistant) — they show as unavailable at banner time because the
-    # check hasn't run yet, but they aren't misconfigured.
-    lazy_tools = set()
-    for item in unavailable_toolsets:
-        toolset_name = item.get("name", "")
-        ts_req = TOOLSET_REQUIREMENTS.get(toolset_name, {})
-        tools_in_ts = item.get("tools", [])
-        if ts_req.get("check_fn"):
-            lazy_tools.update(tools_in_ts)
-        else:
-            disabled_tools.update(tools_in_ts)
-
-    layout_table = Table.grid(padding=(0, 2))
-    layout_table.add_column("left", justify="center")
-    layout_table.add_column("right", justify="left")
-
-    # Resolve skin colors once for the entire banner
-    accent = _skin_color("banner_accent", "#FFBF00")
-    dim = _skin_color("banner_dim", "#B8860B")
-    text = _skin_color("banner_text", "#FFF8DC")
-    session_color = _skin_color("session_border", "#8B8682")
-
-    # Use skin's custom caduceus art if provided
-    try:
-        from hermes_cli.skin_engine import get_active_skin
-        _bskin = get_active_skin()
-        _hero = _bskin.banner_hero if hasattr(_bskin, 'banner_hero') and _bskin.banner_hero else ARGUS_HERO
-    except Exception:
-        _bskin = None
-        _hero = ARGUS_HERO
-    left_lines = ["", _hero, ""]
-    if (provider or "").strip().lower() == "moa":
-        # MoA virtual provider: ``model`` is a preset name. Show the preset and
-        # its aggregator so the banner is meaningful instead of a bare slug.
-        preset_name = model
-        agg_label = ""
-        try:
-            from hermes_cli.config import load_config
-            from hermes_cli.moa_config import normalize_moa_config
-
-            _moa = normalize_moa_config(load_config().get("moa") or {})
-            _preset = _moa.get("presets", {}).get(preset_name)
-            if _preset:
-                _agg = _preset.get("aggregator") or {}
-                _am = str(_agg.get("model") or "")
-                agg_label = _am.split("/")[-1] if "/" in _am else _am
-        except Exception:
-            agg_label = ""
-        if len(preset_name) > 28:
-            preset_name = preset_name[:25] + "..."
-        agg_str = f" [dim {dim}]·[/] [dim {dim}]agg {agg_label}[/]" if agg_label else ""
-        ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
-        left_lines.append(f"[{accent}]MoA: {preset_name}[/]{agg_str}{ctx_str} [dim {dim}]·[/] [dim {dim}]Argus[/]")
-    else:
-        if not (model or "").strip() or (model or "").strip().lower() == "unknown":
-            # Unconfigured install: say so in red instead of a blank/"unknown"
-            # slug — this is the single clearest place to tell the user what
-            # is wrong and how to fix it.
-            left_lines.append(
-                f"[bold red]no model configured[/] "
-                f"[dim {dim}]— run /model or hermes setup[/]"
-            )
-        else:
-            model_short = model.split("/")[-1] if "/" in model else model
-            if model_short.endswith(".gguf"):
-                model_short = model_short[:-5]
-            if len(model_short) > 28:
-                model_short = model_short[:25] + "..."
-            ctx_str = f" [dim {dim}]·[/] [dim {dim}]{_format_context_length(context_length)} context[/]" if context_length else ""
-            left_lines.append(f"[{accent}]{model_short}[/]{ctx_str} [dim {dim}]·[/] [dim {dim}]Argus[/]")
-
-    if os.getenv("HERMES_YOLO_MODE"):
-        left_lines.append(f"[bold red]⚠ YOLO mode[/] [dim {dim}]— all approval prompts bypassed[/]")
-    left_lines.append(f"[dim {dim}]{cwd}[/]")
-    if session_id:
-        left_lines.append(f"[dim {session_color}]Session: {session_id}[/]")
-    left_content = "\n".join(left_lines)
-
-    right_lines = [f"[bold {accent}]Available Tools[/]"]
-    toolsets_dict: Dict[str, list] = {}
-
-    for tool in tools:
-        tool_name = tool["function"]["name"]
-        toolset = _display_toolset_name(get_toolset_for_tool(tool_name) or "other")
-        toolsets_dict.setdefault(toolset, []).append(tool_name)
-
-    for item in unavailable_toolsets:
-        toolset_id = item.get("id", item.get("name", "unknown"))
-        display_name = _display_toolset_name(toolset_id)
-        if display_name not in toolsets_dict:
-            toolsets_dict[display_name] = []
-        for tool_name in item.get("tools", []):
-            if tool_name not in toolsets_dict[display_name]:
-                toolsets_dict[display_name].append(tool_name)
-
-    sorted_toolsets = sorted(toolsets_dict.keys())
-    display_toolsets = sorted_toolsets[:8]
-    remaining_toolsets = len(sorted_toolsets) - 8
-
-    for toolset in display_toolsets:
-        tool_names = toolsets_dict[toolset]
-        colored_names = []
-        for name in sorted(tool_names):
-            if name in disabled_tools:
-                colored_names.append(f"[red]{name}[/]")
-            elif name in lazy_tools:
-                colored_names.append(f"[yellow]{name}[/]")
-            else:
-                colored_names.append(f"[{text}]{name}[/]")
-
-        tools_str = ", ".join(colored_names)
-        if len(", ".join(sorted(tool_names))) > 45:
-            short_names = []
-            length = 0
-            for name in sorted(tool_names):
-                if length + len(name) + 2 > 42:
-                    short_names.append("...")
-                    break
-                short_names.append(name)
-                length += len(name) + 2
-            colored_names = []
-            for name in short_names:
-                if name == "...":
-                    colored_names.append("[dim]...[/]")
-                elif name in disabled_tools:
-                    colored_names.append(f"[red]{name}[/]")
-                elif name in lazy_tools:
-                    colored_names.append(f"[yellow]{name}[/]")
-                else:
-                    colored_names.append(f"[{text}]{name}[/]")
-            tools_str = ", ".join(colored_names)
-
-        right_lines.append(f"[dim {dim}]{toolset}:[/] {tools_str}")
-
-    if remaining_toolsets > 0:
-        right_lines.append(f"[dim {dim}](and {remaining_toolsets} more toolsets...)[/]")
-
-    # MCP Servers section (only if configured)
-    try:
-        from tools.mcp_tool import get_mcp_status
-        mcp_status = get_mcp_status()
-    except Exception:
-        mcp_status = []
-
-    if mcp_status:
-        right_lines.append("")
-        right_lines.append(f"[bold {accent}]MCP Servers[/]")
-        for srv in mcp_status:
-            status = srv.get("status")
-            if srv["connected"]:
-                right_lines.append(
-                    f"[dim {dim}]{srv['name']}[/] [{text}]({srv['transport']})[/] "
-                    f"[dim {dim}]—[/] [{text}]{srv['tools']} tool(s)[/]"
-                )
-            elif srv.get("disabled") or status == "disabled":
-                right_lines.append(
-                    f"[dim {dim}]{srv['name']}[/] [dim]({srv['transport']})[/] "
-                    f"[dim {dim}]— disabled[/]"
-                )
-            elif status == "connecting":
-                right_lines.append(
-                    f"[dim {dim}]{srv['name']}[/] [dim]({srv['transport']})[/] "
-                    f"[yellow]— connecting[/]"
-                )
-            elif status == "configured":
-                right_lines.append(
-                    f"[dim {dim}]{srv['name']}[/] [dim]({srv['transport']})[/] "
-                    f"[dim {dim}]— configured[/]"
-                )
-            else:
-                right_lines.append(
-                    f"[red]{srv['name']}[/] [dim]({srv['transport']})[/] "
-                    f"[red]— failed[/]"
-                )
-
-    right_lines.append("")
-    right_lines.append(f"[bold {accent}]Available Skills[/]")
-    # The skills catalog is only reachable when the `skills` toolset is enabled
-    # (it exposes skill_view / skill_manage). When it's disabled — e.g. a Blank
-    # Slate install — the agent literally cannot load any skill, so advertising
-    # the on-disk catalog here is misleading. Reflect the real state instead.
-    _skills_enabled = (not _enabled_ts) or ("skills" in _enabled_ts)
-    if _skills_enabled:
-        skills_by_category = get_available_skills()
-        total_skills = sum(len(s) for s in skills_by_category.values())
-    else:
-        skills_by_category = {}
-        total_skills = 0
-
-    # Dynamically size skills display based on terminal width.
-    # Rich grid with 2 columns; right column gets roughly 60% of terminal.
-    _term_cols = shutil.get_terminal_size().columns
-    _right_col_width = max(int(_term_cols * 0.6) - 10, 30)
-
-    if not _skills_enabled:
-        right_lines.append(f"[dim {dim}]Skills toolset disabled[/]")
-    elif skills_by_category:
-        for category in sorted(skills_by_category.keys()):
-            skill_names = sorted(skills_by_category[category])
-            # Account for "category: " prefix
-            _prefix_len = len(category) + 2
-            _avail = max(_right_col_width - _prefix_len, 20)
-            # Accumulate skills until we run out of space
-            parts, length = [], 0
-            for i, name in enumerate(skill_names):
-                _sep = ", " if parts else ""
-                _needed = len(_sep) + len(name)
-                # Estimate indicator size IF we were to add this skill then stop
-                _after = len(skill_names) - (i + 1)  # remaining after adding this
-                _ind_len = len(f", +{_after} more") if _after > 0 else 0
-                if parts and length + _needed + _ind_len > _avail:
-                    remaining = len(skill_names) - len(parts)
-                    parts.append(f"+{remaining} more")
-                    break
-                parts.append(name)
-                length += _needed
-            skills_str = ", ".join(parts)
-            right_lines.append(f"[dim {dim}]{category}:[/] [{text}]{skills_str}[/]")
-    else:
-        right_lines.append(f"[dim {dim}]No skills installed[/]")
-
-    right_lines.append("")
-    mcp_connected = sum(1 for s in mcp_status if s["connected"]) if mcp_status else 0
-    summary_parts = [f"{len(tools)} tools", f"{total_skills} skills"]
-    if mcp_connected:
-        summary_parts.append(f"{mcp_connected} MCP servers")
-    summary_parts.append("/help for commands")
-    # Indicate when the codex_app_server runtime is active so users
-    # understand why tool counts may not match what's actually reachable
-    # (codex builds its own tool list inside the spawned subprocess).
-    try:
-        from hermes_cli.codex_runtime_switch import get_current_runtime
-        from hermes_cli.config import load_config as _load_cfg
-        if get_current_runtime(_load_cfg()) == "codex_app_server":
-            right_lines.append(
-                f"[bold {accent}]Runtime:[/] [{text}]codex app-server[/] "
-                f"[dim {dim}](terminal/file ops/MCP run inside codex)[/]"
-            )
-    except Exception:
-        pass
-    # Show active profile name when not 'default'
-    try:
-        from hermes_cli.profiles import get_active_profile_name
-        _profile_name = get_active_profile_name()
-        if _profile_name and _profile_name != "default":
-            right_lines.append(f"[bold {accent}]Profile:[/] [{text}]{_profile_name}[/]")
-    except Exception:
-        pass  # Never break the banner over a profiles.py bug
-
-    right_lines.append(f"[dim {dim}]{' · '.join(summary_parts)}[/]")
-
-    # Update check — use prefetched result if available
-    try:
-        behind = get_update_result(timeout=0.5)
-        if behind is not None and behind != 0:
-            from hermes_cli.config import get_managed_update_command, recommended_update_command
-            if behind > 0:
-                commits_word = "commit" if behind == 1 else "commits"
-                right_lines.append(
-                    f"[bold yellow]⚠ {behind} {commits_word} behind[/]"
-                    f"[dim yellow] — run [bold]{recommended_update_command()}[/bold] to update[/]"
-                )
-            else:
-                # UPDATE_AVAILABLE_NO_COUNT: nix-built hermes; we know an update
-                # exists but not by how much, and we don't know how the user
-                # installed it (nix run, profile, system flake, home-manager).
-                managed_cmd = get_managed_update_command()
-                line = "[bold yellow]⚠ update available[/]"
-                if managed_cmd:
-                    line += f"[dim yellow] — run [bold]{managed_cmd}[/bold][/]"
-                right_lines.append(line)
-    except Exception:
-        pass  # Never break the banner over an update check
-
-    right_content = "\n".join(right_lines)
-    layout_table.add_row(left_content, right_content)
-
-    title_color = _skin_color("banner_title", "#FFD700")
-    border_color = _skin_color("banner_border", "#CD7F32")
-    version_label = format_banner_version_label()
-    release_info = get_latest_release_tag()
-    if release_info:
-        _tag, _url = release_info
-        title_markup = f"[bold {title_color}][link={_url}]{version_label}[/link][/]"
-    else:
-        title_markup = f"[bold {title_color}]{version_label}[/]"
-    outer_panel = Panel(
-        layout_table,
-        title=title_markup,
-        border_style=border_color,
-        padding=(0, 2),
+    _render_banner(
+        console=console, model=model, cwd=cwd,
+        session_id=session_id, context_length=context_length,
+        provider=provider, state=_load_banner_state(),
+        tools=tools or [], enabled_toolsets=enabled_toolsets or [],
     )
-
-    console.print()
-    term_width = shutil.get_terminal_size().columns
-    if term_width >= 95:
-        _logo = _bskin.banner_logo if _bskin and hasattr(_bskin, 'banner_logo') and _bskin.banner_logo else ARGUS_LOGO
-        console.print(_logo)
-        console.print()
-    console.print(outer_panel)

@@ -283,6 +283,72 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "tool_prefix": "┊",
     },
+    "argus": {
+        "name": "argus",
+        "description": "Argus ops theme — slate blue-gray on dark gray",
+        # 蓝灰系 ops 主题：主色 #4A90D9，深色暗灰底（非纯黑）。层次阶梯：
+        # 边框暗蓝灰 < 标题亮蓝灰 < accent 中蓝 < 正文浅灰白；工具指示亮蓝；
+        # 状态栏中性灰蓝。banner 标识（◉ ARGUS）与欢迎语继承 default（品牌一致）。
+        "colors": {
+            "banner_border": "#3E6B9B",
+            "banner_title": "#8FB8E8",
+            "banner_accent": "#5B9BD5",
+            "banner_dim": "#6B7F99",
+            "banner_text": "#E8EEF5",
+            "ui_accent": "#4A90D9",
+            "ui_label": "#8FB8E8",
+            "ui_ok": "#4CAF7D",
+            "ui_error": "#E06C6C",
+            "ui_warn": "#E0A060",
+            "ui_tool": "#6BA9E8",
+            "ui_thinking": "#7D93B8",
+            "prompt": "#E8EEF5",
+            "input_rule": "#3E6B9B",
+            "response_border": "#4A90D9",
+            "status_bar_bg": "#1A202A",
+            "status_bar_text": "#C7D2E0",
+            "status_bar_strong": "#8FB8E8",
+            "status_bar_dim": "#5E6F87",
+            "status_bar_good": "#5FB98A",
+            "status_bar_warn": "#E0A060",
+            "status_bar_bad": "#D9822B",
+            "status_bar_critical": "#E06C6C",
+            "session_label": "#8FB8E8",
+            "session_border": "#5E6F87",
+            "completion_menu_bg": "#1A202A",
+            "completion_menu_current_bg": "#2A3B52",
+            "completion_menu_meta_bg": "#1A202A",
+            "completion_menu_meta_current_bg": "#30445E",
+            "selection_bg": "#2A3B52",
+            "shell_dollar": "#4A90D9",
+            "voice_status_bg": "#1A202A",
+            "syntax_string": "#7FC98C",
+            "syntax_number": "#C7D2E0",
+            "syntax_keyword": "#6BA9E8",
+            "syntax_comment": "#5E6F87",
+            # Ops env badge colors (consumed by the ops-mode CLI prompt/banner;
+            # plain color keys, no schema change)
+            "ops_env_test": "#4A90D9",
+            "ops_env_uat": "#E0A060",
+            "ops_env_prod": "#E06C6C",
+        },
+        # 冷静的运维 spinner（不 kawaii）——API 等待/思考期间显示的 faces 与动词
+        "spinner": {
+            "waiting_faces": ["(·)", "(·|)", "(·/)", "(·\\)"],
+            "thinking_faces": ["(·)", "(⌁)", "(∘)", "(○)"],
+            "thinking_verbs": [
+                "querying topology", "checking runbook", "verifying permissions",
+                "tracing entity", "confirming env", "watching gates",
+            ],
+        },
+        "tool_emojis": {
+            "topo_query": "🧭",
+            "topo_update": "🧭",
+            "runbook_load": "📋",
+            "runbook_checkpoint": "📋",
+        },
+        "tool_prefix": "┊",
+    },
     "ares": {
         "name": "ares",
         "description": "War-god theme — crimson and bronze",
@@ -1016,6 +1082,9 @@ def get_prompt_toolkit_style_overrides() -> Dict[str, str]:
     status_warn = skin.get_color("status_bar_warn", warn)
     status_bad = skin.get_color("status_bar_bad", skin.get_color("banner_accent", warn))
     status_critical = skin.get_color("status_bar_critical", error)
+    env_test = skin.get_color("ops_env_test", "#4A90D9")
+    env_uat = skin.get_color("ops_env_uat", "#E0A060")
+    env_prod = skin.get_color("ops_env_prod", "#E06C6C")
     voice_bg = skin.get_color("voice_status_bg", status_bg)
     menu_bg = skin.get_color("completion_menu_bg", "#1a1a2e")
     menu_current_bg = skin.get_color("completion_menu_current_bg", "#333355")
@@ -1041,6 +1110,9 @@ def get_prompt_toolkit_style_overrides() -> Dict[str, str]:
         "status-bar-critical": f"bg:{status_bg} {status_critical} bold",
         "input-rule": input_rule,
         "image-badge": f"{label} bold",
+        "ops-env-test": f"{env_test} bold",
+        "ops-env-uat": f"{env_uat} bold",
+        "ops-env-prod": f"{env_prod} bold",
         "completion-menu": f"bg:{menu_bg} {text}",
         "completion-menu.completion": f"bg:{menu_bg} {text}",
         "completion-menu.completion.current": f"bg:{menu_current_bg} {title}",
