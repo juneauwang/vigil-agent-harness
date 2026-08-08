@@ -104,7 +104,7 @@ class GatewaySlashCommandsMixin:
     async_session_store: AsyncSessionStore
 
     def _typed_command_prefix_for(self, platform) -> str:
-        """Return the prefix users can always type to reach Hermes commands.
+        """Return the prefix users can always type to reach Vigil commands.
 
         Reads the adapter's ``typed_command_prefix`` capability flag
         (default "/"). Slack and Matrix return "!" because typed "/"
@@ -1632,7 +1632,7 @@ class GatewaySlashCommandsMixin:
         return EphemeralReply(t("gateway.restart.restarting"))
 
     async def _handle_version_command(self, event: MessageEvent) -> str:
-        """Handle /version — show the running Argus version."""
+        """Handle /version — show the running Vigil version."""
         from hermes_cli.slash_exec import CommandContext, execute_command
 
         return execute_command("version", CommandContext(surface="gateway")).text
@@ -2449,7 +2449,7 @@ class GatewaySlashCommandsMixin:
 
         Same surface as the CLI handler in cli.py:
             /codex-runtime                  — show current state
-            /codex-runtime auto             — Hermes default runtime
+            /codex-runtime auto             — Vigil default runtime
             /codex-runtime codex_app_server — codex subprocess runtime
             /codex-runtime on / off         — synonyms
 
@@ -3194,7 +3194,7 @@ class GatewaySlashCommandsMixin:
         ``/diff`` (default) shows unstaged + untracked changes, ``/diff
         staged`` the staged ones, ``/diff all`` everything since HEAD, and
         ``/diff session`` the cumulative checkpoint-baseline diff of what
-        Hermes itself changed. ``--stat`` limits output to the summary.
+        Vigil itself changed. ``--stat`` limits output to the summary.
 
         The diff body is truncated hard here (messaging surfaces are not a
         pager); platform senders additionally split/clamp long messages to
@@ -5539,7 +5539,7 @@ class GatewaySlashCommandsMixin:
         return await loop.run_in_executor(None, _collect_and_upload)
 
     async def _handle_update_command(self, event: MessageEvent) -> str:
-        """Handle /update command — update Argus to the latest version.
+        """Handle /update command — update Vigil to the latest version.
 
         Spawns ``hermes update`` in a detached session (via ``setsid``) so it
         survives the gateway restart that ``hermes update`` may trigger. Marker
@@ -5567,7 +5567,7 @@ class GatewaySlashCommandsMixin:
                 return t("gateway.update.platform_not_messaging")
 
         if is_managed():
-            return f"✗ {format_managed_message('update Argus')}"
+            return f"✗ {format_managed_message('update Vigil')}"
 
         project_root = Path(__file__).parent.parent.resolve()
         git_dir = project_root / '.git'

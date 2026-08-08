@@ -1,5 +1,5 @@
 """
-Top-level argparse construction for the Argus CLI.
+Top-level argparse construction for the Vigil CLI.
 
 Lives in its own module so other modules (e.g. ``relaunch.py``) can
 introspect the parser to discover which flags exist without running the
@@ -39,46 +39,46 @@ def _inherited_flag(parser, *args, **kwargs):
 
 _EPILOGUE = """
 Examples:
-    argus                        Start interactive chat
-    argus chat -q "Hello"        Single query mode
-    argus --tui                  Launch the modern TUI (or set display.interface: tui)
-    argus --cli                  Force the classic REPL (overrides display.interface: tui)
-    argus -c                     Resume the most recent session
-    argus -c "my project"        Resume a session by name (latest in lineage)
-    argus --resume <session_id>  Resume a specific session by ID
-    argus setup                  Run setup wizard
-    argus logout                 Clear stored authentication
-    argus auth add <provider>    Add a pooled credential
-    argus auth list              List pooled credentials
-    argus auth remove <p> <t>    Remove pooled credential by index, id, or label
-    argus auth reset <provider>  Clear exhaustion status for a provider
-    argus model                  Select default model
-    argus fallback [list]        Show fallback provider chain
-    argus fallback add           Add a fallback provider (same picker as `argus model`)
-    argus fallback remove        Remove a fallback provider from the chain
-    argus config                 View configuration
-    argus config edit            Edit config in $EDITOR
-    argus config set model gpt-4 Set a config value
-    argus gateway                Run messaging gateway
-    argus -s hermes-agent-dev,github-auth
-    argus -w                     Start in isolated git worktree
-    argus gateway install        Install gateway background service
-    argus sessions list          List past sessions
-    argus sessions browse        Interactive session picker
-    argus sessions rename ID T   Rename/title a session
-    argus logs                   View agent.log (last 50 lines)
-    argus logs -f                Follow agent.log in real time
-    argus logs errors            View errors.log
-    argus logs --since 1h        Lines from the last hour
-    argus debug share             Upload debug report for support
-    argus console                Open the safe Argus command console
-    argus update                 Update to latest version
-    argus dashboard              Start web UI dashboard (port 9119)
-    argus dashboard --stop       Stop running dashboard processes
-    argus dashboard --status     List running dashboard processes
+    vigil                        Start interactive chat
+    vigil chat -q "Hello"        Single query mode
+    vigil --tui                  Launch the modern TUI (or set display.interface: tui)
+    vigil --cli                  Force the classic REPL (overrides display.interface: tui)
+    vigil -c                     Resume the most recent session
+    vigil -c "my project"        Resume a session by name (latest in lineage)
+    vigil --resume <session_id>  Resume a specific session by ID
+    vigil setup                  Run setup wizard
+    vigil logout                 Clear stored authentication
+    vigil auth add <provider>    Add a pooled credential
+    vigil auth list              List pooled credentials
+    vigil auth remove <p> <t>    Remove pooled credential by index, id, or label
+    vigil auth reset <provider>  Clear exhaustion status for a provider
+    vigil model                  Select default model
+    vigil fallback [list]        Show fallback provider chain
+    vigil fallback add           Add a fallback provider (same picker as `vigil model`)
+    vigil fallback remove        Remove a fallback provider from the chain
+    vigil config                 View configuration
+    vigil config edit            Edit config in $EDITOR
+    vigil config set model gpt-4 Set a config value
+    vigil gateway                Run messaging gateway
+    vigil -s hermes-agent-dev,github-auth
+    vigil -w                     Start in isolated git worktree
+    vigil gateway install        Install gateway background service
+    vigil sessions list          List past sessions
+    vigil sessions browse        Interactive session picker
+    vigil sessions rename ID T   Rename/title a session
+    vigil logs                   View agent.log (last 50 lines)
+    vigil logs -f                Follow agent.log in real time
+    vigil logs errors            View errors.log
+    vigil logs --since 1h        Lines from the last hour
+    vigil debug share             Upload debug report for support
+    vigil console                Open the safe Vigil command console
+    vigil update                 Update to latest version
+    vigil dashboard              Start web UI dashboard (port 9119)
+    vigil dashboard --stop       Stop running dashboard processes
+    vigil dashboard --status     List running dashboard processes
 
 For more help on a command:
-    argus <command> --help
+    vigil <command> --help
 """
 
 
@@ -90,8 +90,8 @@ def build_top_level_parser():
     other subparsers via ``subparsers.add_parser(...)``.
     """
     parser = argparse.ArgumentParser(
-        prog="argus",
-        description="Argus - 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）",
+        prog="vigil",
+        description="Vigil - 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=_EPILOGUE,
     )
@@ -144,7 +144,7 @@ def build_top_level_parser():
         help=(
             "Provider override for this invocation (e.g. openrouter, anthropic). "
             "Applies to -z/--oneshot and --tui. The persistent provider lives in config.yaml "
-            "under model.provider — use `argus setup` or edit the file to change it."
+            "under model.provider — use `vigil setup` or edit the file to change it."
         ),
     )
     _inherited_flag(
@@ -281,7 +281,7 @@ def build_top_level_parser():
     chat_parser = subparsers.add_parser(
         "chat",
         help="Interactive chat with the agent",
-        description="Start an interactive chat session with Argus（运维 agent harness，长记忆拓扑表 + runbook + 权限矩阵）",
+        description="Start an interactive chat session with Vigil（运维 agent harness，长记忆拓扑表 + runbook + 权限矩阵）",
     )
     chat_parser.add_argument(
         "-q", "--query", help="Single query (non-interactive mode)"
@@ -440,7 +440,7 @@ def build_top_level_parser():
         "--safe-mode",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Troubleshooting mode: disable ALL customizations — user config, AGENTS.md/memory injection, plugins, and MCP servers (implies --ignore-user-config and --ignore-rules). Use to isolate whether a problem comes from your setup or from Hermes itself.",
+        help="Troubleshooting mode: disable ALL customizations — user config, AGENTS.md/memory injection, plugins, and MCP servers (implies --ignore-user-config and --ignore-rules). Use to isolate whether a problem comes from your setup or from Vigil itself.",
     )
     chat_parser.add_argument(
         "--source",

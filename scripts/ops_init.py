@@ -10,14 +10,14 @@ Usage:
     python3 scripts/ops_init.py [--root PATH] [--env test|uat|prod]
                                 [--force] [--no-alias]
 
-Files written (inside the Hermes root, default ``~/.hermes`` or $HERMES_HOME):
+Files written (inside the Vigil root, default ``~/.hermes`` or $HERMES_HOME):
     <root>/profiles/ops/config.yaml
     <root>/profiles/ops/topology.yaml
     <root>/profiles/ops/entities/*.yaml
     <root>/profiles/ops/runbooks/*.yaml
 
 Idempotent: an existing profile / config.yaml / topology.yaml is left
-untouched unless ``--force`` is passed.  Nothing outside the Hermes root is
+untouched unless ``--force`` is passed.  Nothing outside the Vigil root is
 written except the optional ops wrapper alias (~/.local/bin).
 """
 
@@ -44,8 +44,8 @@ _CONFIG_TPL = """\
 #   - 跨环境操作默认拒绝；strict 环境操作需审批（ops-agent-harness.md §3）
 _config_version: {version}
 display:
-  # ops 主题：argus（蓝灰系内置皮肤，见 hermes_cli/skin_engine.py）
-  skin: argus
+  # ops 主题：vigil（蓝灰系内置皮肤，见 hermes_cli/skin_engine.py）
+  skin: vigil
 platform_toolsets:
   cli: [hermes-cli, topo, runbook]
 tools:
@@ -68,7 +68,7 @@ ops:
 
 
 def _resolve_root(arg_root: str | None) -> Path:
-    """Hermes root for profiles: --root wins, else env/default resolution."""
+    """Vigil root for profiles: --root wins, else env/default resolution."""
     if arg_root:
         root = Path(arg_root).expanduser().resolve()
         root.mkdir(parents=True, exist_ok=True)
@@ -144,7 +144,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--root",
-        help="Hermes 根目录（默认 ~/.hermes 或 $HERMES_HOME）；ops profile 建在 <root>/profiles/ops",
+        help="Vigil 根目录（默认 ~/.hermes 或 $HERMES_HOME）；ops profile 建在 <root>/profiles/ops",
     )
     parser.add_argument(
         "--env", choices=("test", "uat", "prod"), default="test",
@@ -156,7 +156,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--no-alias", action="store_true",
-        help="不创建 ops 包装命令（仅 argus -p ops 可用）",
+        help="不创建 ops 包装命令（仅 vigil -p ops 可用）",
     )
     args = parser.parse_args()
 
@@ -188,12 +188,12 @@ def main() -> int:
     if not args.no_alias:
         alias = create_wrapper_script(_PROFILE_NAME)
         if alias is None:
-            print("· 未创建 ops 包装命令（argus 不在 PATH？）；可用 argus -p ops 代替")
+            print("· 未创建 ops 包装命令（vigil 不在 PATH？）；可用 vigil -p ops 代替")
 
     print("\n下一步（详见 OPS-VERIFY.md）：")
     print(f"  1. 核对拓扑：{profile_dir / 'topology.yaml'} 与 {profile_dir / 'entities'}")
     print(f"  2. 核对 runbook：{profile_dir / 'runbooks'}（事故处理 + L4 部署 checklist）")
-    print(f"  3. 起 session：argus -p ops chat   （若 argus 不在 PATH，用 {_REPO_ROOT / 'hermes'} 代替）")
+    print(f"  3. 起 session：vigil -p ops chat   （若 vigil 不在 PATH，用 {_REPO_ROOT / 'hermes'} 代替）")
     print("  4. 验证 TOPO 段 / topo_query / topo_update / 权限矩阵 / runbook_load")
     return 0
 

@@ -1,9 +1,26 @@
-# Argus ☉ —— 运维 Agent Harness
+# Vigil ☉ —— 运维 Agent Harness
+
+```text
+        /\    /\
+       /  \  /  \
+      |  ◉    ◉  |
+      |    ^     |
+       \   ‾    /
+        '-....-'
+      .-'      '-.
+     /  ▓▓▓▓▓▓▓▓  \
+    |   ▓▓▓▓▓▓▓▓   |
+     \  ▓▓▓▓▓▓▓▓  /
+      '-.      .-'
+         |  |  |
+         |  |  |
+         ‾‾‾‾‾‾‾
+```
 
 > **记住整个平台，安全地动生产。**
 
-Argus 是一个**运维 agent harness**：它让 AI agent 在真实的服务器环境里干活时，
-既「记得住整个平台」，又「动得安全」。Argus 完全 fork 自
+Vigil 是一个**运维 agent harness**：它让 AI agent 在真实的服务器环境里干活时，
+既「记得住整个平台」，又「动得安全」。Vigil 完全 fork 自
 [Hermes Agent](https://hermes-agent.nousresearch.com/)（MIT License），
 在保留其 agent 内核（终端、工具调用、会话、网关、插件）的基础上，独立演进出
 **面向生产运维的三层核心能力**。
@@ -30,19 +47,19 @@ Argus 是一个**运维 agent harness**：它让 AI agent 在真实的服务器�
 ### 1. 安装（开发 / 自托管）
 
 ```bash
-cd argus_agent
+cd vigil-agent
 python3 -m venv .venv
-.venv/bin/pip install -e .          # 生成 argus / hermes 两个命令入口
+.venv/bin/pip install -e .          # 生成 vigil / hermes 两个命令入口
 ```
 
-> 发行包名沿用 `hermes-agent`（fork 兼容），产品名是 **Argus**。
-> `hermes` 命令保留作为兼容入口，行为不变；日常请用 `argus`。
+> 发行包名沿用 `hermes-agent`（fork 兼容），产品名是 **Vigil**。
+> `hermes` 命令保留作为兼容入口，行为不变；日常请用 `vigil`。
 
 ### 2. 初始化 ops profile
 
 ```bash
 .venv/bin/python scripts/ops_init.py            # 建 ops profile + 铺样例拓扑/runbook
-.venv/bin/argus -p ops                          # 进入 ops profile 会话
+.venv/bin/vigil -p ops                          # 进入 ops profile 会话
 ```
 
 `ops_init.py` 会写入 `~/.hermes/profiles/ops/` 下的配置、样例拓扑
@@ -51,8 +68,8 @@ python3 -m venv .venv
 ### 3. 验证（对应 [OPS-VERIFY.md](OPS-VERIFY.md)）
 
 ```bash
-argus --version        # Argus v0.1.0
-argus -p ops chat      # 起会话后核对：TOPO 段注入 / topo_query / topo_update / 权限矩阵 / runbook_load
+vigil --version        # Vigil v0.1.0
+vigil -p ops chat      # 起会话后核对：TOPO 段注入 / topo_query / topo_update / 权限矩阵 / runbook_load
 ```
 
 ## 开发
@@ -74,10 +91,10 @@ scripts/run_tests.sh               # 优先 .venv，其次 venv
 
 - 代码目录沿用 fork 的 `hermes_*` 命名（`hermes_cli/`、`hermes_state.py` 等），
   这是内核兼容性的一部分，不改名。
-- 产品外壳已品牌化为 Argus：CLI 入口 `argus`、启动 banner、`--version`、
+- 产品外壳已品牌化为 Vigil：CLI 入口 `vigil`、启动 banner、`--version`、
   help 文本、README 与 ops profile 的 SOUL.md。
 - 运维专属改动全部登记在 [`OPS-DELTA.md`](OPS-DELTA.md)，季度体检核销。
 
 ## License
 
-MIT。Argus 是 Hermes Agent 的独立 fork，遵守上游 [LICENSE](LICENSE)。
+MIT。Vigil 是 Hermes Agent 的独立 fork，遵守上游 [LICENSE](LICENSE)。

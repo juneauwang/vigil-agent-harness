@@ -67,13 +67,59 @@ def _skin_color(key: str, fallback: str) -> str:
 
 from hermes_cli import __version__ as VERSION, __release_date__ as RELEASE_DATE
 
-ARGUS_LOGO = """[bold #FFD700]ARGUS[/]  [dim #B8860B]— 记住整个平台，安全地动生产[/]"""
+def _vigil_owl_lines():
+    """Owl mascot art as (region, text) rows; backslashes are literal text.
+
+    Rows are colored by region when rendered: accent = ears, bright = eyes,
+    dim = beak/chin.
+    """
+    bs = chr(92)
+    return [
+        ("accent", f"  /{bs}_/{bs}"),
+        ("bright", "  ( \u25c9.\u25c9 )"),
+        ("dim",    "  > ^ <"),
+    ]
+def _vigil_owl_art(accent: str, bright: str, dim: str) -> str:
+    """Owl mascot (3 rows) as colored Rich markup, no wordmark or tagline."""
+    parts = []
+    for region, text in _vigil_owl_lines():
+        color = {"accent": accent, "bright": bright, "dim": dim}[region]
+        style = f"bold {color}" if region != "dim" else color
+        escaped = text[:-1] + "\\\\" if text.endswith("\\") else text
+        parts.append(f"[{style}]{escaped}[/]")
+    return "\n".join(parts)
 
 
-ARGUS_HERO = """[bold #FFD700]◉[/]
-[bold #FFD700]ARGUS[/]
-[dim #B8860B]记住整个平台[/]
-[dim #B8860B]安全地动生产[/]"""
+
+def get_vigil_owl_markup(accent: Optional[str] = None, bright: Optional[str] = None,
+                         dim: Optional[str] = None) -> str:
+    """Return the Vigil owl wordmark block (VIGIL + owl + tagline) as Rich markup.
+
+    Blue-gray brand theme by default; adapts to whatever skin is active so the
+    owl stays legible on any theme. Used by /help; the startup banner renders
+    the bare owl via _vigil_owl_art() inside its status panel.
+    """
+    if None in (accent, bright, dim):
+        try:
+            from hermes_cli.skin_engine import get_active_skin
+            _s = get_active_skin()
+            accent = accent or _s.get_color("banner_accent", "#5B9BD5")
+            bright = bright or _s.get_color("banner_title", "#8FB8E8")
+            dim = dim or _s.get_color("banner_dim", "#6B7F99")
+        except Exception:
+            pass
+    accent = accent or "#5B9BD5"
+    bright = bright or "#8FB8E8"
+    dim = dim or "#6B7F99"
+    return "\n".join([
+        f"[bold {bright}]VIGIL[/]",
+        _vigil_owl_art(accent, bright, dim),
+        f"[dim {dim}]\u8bb0\u4f4f\u6574\u4e2a\u5e73\u53f0\uff0c\u5b89\u5168\u5730\u52a8\u751f\u4ea7[/]",
+    ])
+
+
+VIGIL_LOGO = get_vigil_owl_markup("#5B9BD5", "#8FB8E8", "#6B7F99")
+
 
 
 
@@ -260,7 +306,7 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
 
 
 def check_for_updates() -> Optional[int]:
-    """Check whether a Hermes update is available.
+    """Check whether a Vigil update is available.
 
     Two paths: if ``HERMES_REVISION`` is set (nix builds embed it), compare
     it to upstream main via ``git ls-remote``. Otherwise look for a local
@@ -332,7 +378,7 @@ def check_for_updates() -> Optional[int]:
 
 
 def _resolve_repo_dir() -> Optional[Path]:
-    """Return the active Hermes git checkout, or None if this isn't a git install.
+    """Return the active Vigil git checkout, or None if this isn't a git install.
 
     Prefers the running code's location over the profile-scoped path
     because ``$HERMES_HOME/hermes-agent/`` may be a stale copy carried
@@ -431,7 +477,7 @@ def get_latest_release_tag(repo_dir: Optional[Path] = None) -> Optional[tuple]:
     """Return ``(tag, release_url)`` for the latest git tag, or None.
 
     Local-only — runs ``git describe --tags --abbrev=0`` against the
-    Hermes checkout. Cached per-process. Release URL always points at the
+    Vigil checkout. Cached per-process. Release URL always points at the
     canonical NousResearch/hermes-agent repo (forks don't get a link).
     """
     global _latest_release_cache
@@ -558,7 +604,7 @@ def _load_banner_state() -> Dict[str, Any]:
 def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
                    context_length: Optional[int], provider: Optional[str],
                    state: dict, tools: list, enabled_toolsets: list) -> None:
-    """Render the unified Argus console header (every profile, one language).
+    """Render the unified Vigil console header (every profile, one language).
 
     Left: hero mark + session anchor. Right: PROFILE / ENV / GATES /
     TOPOLOGY / RUNBOOKS / HOME status — ops capabilities show their live
@@ -589,7 +635,7 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
     session_color = _c("session_border", "#8B8682")
 
     # Left column: hero mark + session anchor
-    left_lines = ["", ARGUS_HERO, ""]
+    left_lines = ["", _vigil_owl_art(accent, text, dim), ""]
     if (provider or "").strip().lower() == "moa":
         # MoA virtual provider: ``model`` is a preset name. Show the preset and
         # its aggregator so the banner is meaningful instead of a bare slug.
@@ -618,7 +664,7 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
             # is wrong and how to fix it.
             left_lines.append(
                 f"[bold red]no model configured[/] "
-                f"[dim {dim}]— run /model or argus setup[/]"
+                f"[dim {dim}]— run /model or vigil setup[/]"
             )
         else:
             model_short = model.split("/")[-1] if "/" in model else model
@@ -635,7 +681,7 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
         left_lines.append(f"[dim {session_color}]Session: {session_id}[/]")
     left_content = "\n".join(left_lines)
 
-    # Right column: unified status — where am I / what does Argus remember / gates
+    # Right column: unified status — where am I / what does Vigil remember / gates
     ops_on = bool(state.get("ops_enabled"))
     right_lines: List[str] = []
     profile_name = str(state.get("profile") or "default")
@@ -740,22 +786,12 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
     )
 
     console.print()
-    term_width = shutil.get_terminal_size().columns
-    if term_width >= 95:
-        try:
-            from hermes_cli.skin_engine import get_active_skin
-            _bskin = get_active_skin()
-            _logo = _bskin.banner_logo if hasattr(_bskin, 'banner_logo') and _bskin.banner_logo else ARGUS_LOGO
-        except Exception:
-            _logo = ARGUS_LOGO
-        console.print(_logo)
-        console.print()
     console.print(outer_panel)
 
 
 def format_banner_version_label() -> str:
     """Return the version label shown in the startup banner title."""
-    base = f"Argus v{VERSION} ({RELEASE_DATE})"
+    base = f"Vigil v{VERSION} ({RELEASE_DATE})"
     state = get_git_banner_state()
     if not state:
         return base
@@ -823,7 +859,7 @@ def build_welcome_banner(console: "Console", model: str, cwd: str,
                          get_toolset_for_tool=None,
                          context_length: int = None,
                          provider: str = None):
-    """Build and print the Argus console header — one language for every profile.
+    """Build and print the Vigil console header — one language for every profile.
 
     Args:
         console: Rich Console instance.

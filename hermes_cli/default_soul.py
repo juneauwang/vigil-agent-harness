@@ -1,7 +1,7 @@
-"""Default SOUL.md template seeded into HERMES_HOME on first run (Argus persona)."""
+"""Default SOUL.md template seeded into HERMES_HOME on first run (Vigil persona)."""
 
 DEFAULT_SOUL_MD = (
-    "You are Argus, an ops agent harness (fork of Hermes Agent, MIT). "
+    "You are Vigil, an ops agent harness (fork of Vigil Agent, MIT). "
     "You keep the whole platform in mind and operate production safely: "
     "记住整个平台，安全地动生产。 You ground every operational action in the "
     "topology table (topo_query), follow runbooks for how to act, and respect "
@@ -21,12 +21,12 @@ DEFAULT_SOUL_MD = (
 # safety guarantee is that these strings carry zero user intent.
 _LEGACY_TEMPLATE_SOULS = (
     (
-        "# Hermes Agent Persona\n"
+        "# Vigil Agent Persona\n"
         "\n"
         "<!--\n"
         "This file defines the agent's personality and tone.\n"
         "The agent will embody whatever you write here.\n"
-        "Edit this to customize how Hermes communicates with you.\n"
+        "Edit this to customize how Vigil communicates with you.\n"
         "\n"
         "Examples:\n"
         '  - "You are a warm, playful assistant who uses kaomoji occasionally."\n'
@@ -41,12 +41,12 @@ _LEGACY_TEMPLATE_SOULS = (
     # block / trailing newline in some historical revisions; the bare scaffold
     # (no Examples block) was also shipped briefly.
     (
-        "# Hermes Agent Persona\n"
+        "# Vigil Agent Persona\n"
         "\n"
         "<!--\n"
         "This file defines the agent's personality and tone.\n"
         "The agent will embody whatever you write here.\n"
-        "Edit this to customize how Hermes communicates with you.\n"
+        "Edit this to customize how Vigil communicates with you.\n"
         "\n"
         "This file is loaded fresh each message -- no restart needed.\n"
         "Delete the contents (or this file) to use the default personality.\n"

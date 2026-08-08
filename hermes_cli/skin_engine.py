@@ -1,6 +1,6 @@
-"""Hermes skin/theme engine — the theme SDK for every surface.
+"""Vigil skin/theme engine — the theme SDK for every surface.
 
-A data-driven skin system that lets users (and Hermes itself) customize the
+A data-driven skin system that lets users (and Vigil itself) customize the
 visual appearance across the CLI, the TUI, and the desktop GUI from a single
 file. Skins are defined as YAML files in ~/.hermes/skins/ or as built-in presets.
 No code changes are needed to add a new skin.
@@ -94,10 +94,10 @@ All fields are optional. Missing values inherit from the ``default`` skin.
 
     # Branding: text strings used throughout the CLI
     branding:
-      agent_name: "Argus"                      # Banner title, status display
+      agent_name: "Vigil"                      # Banner title, status display
       welcome: "Welcome message"          # Shown at CLI startup
       goodbye: "Goodbye! ⚕"              # Shown on exit
-      response_label: " ⚕ Hermes "       # Response box header label
+      response_label: " ⚕ Vigil "       # Response box header label
       prompt_symbol: "❯"                 # Input prompt symbol (bare token; renderers add trailing space)
       help_header: "(^_^)? Commands"      # /help header text
 
@@ -119,7 +119,7 @@ USAGE
 
     skin = get_active_skin()
     print(skin.colors["banner_title"])    # "#FFD700"
-    print(skin.get_branding("agent_name"))  # "Argus"
+    print(skin.get_branding("agent_name"))  # "Vigil"
 
     set_active_skin("ares")               # Switch to built-in ares skin
     set_active_skin("mytheme")            # Switch to user skin from ~/.hermes/skins/
@@ -127,7 +127,7 @@ USAGE
 BUILT-IN SKINS
 ==============
 
-- ``default`` — Classic Hermes gold/kawaii (the current look)
+- ``default`` — Classic Vigil gold/kawaii (the current look)
 - ``ares``    — Crimson/bronze war-god theme with custom spinner wings
 - ``mono``    — Clean grayscale monochrome
 - ``slate``   — Cool blue developer-focused theme
@@ -201,9 +201,9 @@ class SkinConfig:
 _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
     "default": {
         "name": "default",
-        "description": "Classic Hermes — gold and kawaii",
+        "description": "Classic Vigil — gold and kawaii",
         # Dark-authored. Values match the TUI's DARK_THEME so the classic CLI
-        # and the TUI render the same Hermes gold.
+        # and the TUI render the same Vigil gold.
         "colors": {
             "banner_border": "#CD7F32",
             "banner_title": "#FFD700",
@@ -274,21 +274,21 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
             # Empty = use hardcoded defaults in display.py
         },
         "branding": {
-            "agent_name": "Argus",
-            "welcome": "欢迎使用 Argus——记住整个平台，安全地动生产。输入消息或 /help 查看命令。",
+            "agent_name": "Vigil",
+            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
             "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Argus ",
+            "response_label": " ◉ Vigil ",
             "prompt_symbol": "❯",
             "help_header": "(^_^)? Available Commands",
         },
         "tool_prefix": "┊",
     },
-    "argus": {
-        "name": "argus",
-        "description": "Argus ops theme — slate blue-gray on dark gray",
+    "vigil": {
+        "name": "vigil",
+        "description": "Vigil ops theme — slate blue-gray on dark gray",
         # 蓝灰系 ops 主题：主色 #4A90D9，深色暗灰底（非纯黑）。层次阶梯：
         # 边框暗蓝灰 < 标题亮蓝灰 < accent 中蓝 < 正文浅灰白；工具指示亮蓝；
-        # 状态栏中性灰蓝。banner 标识（◉ ARGUS）与欢迎语继承 default（品牌一致）。
+        # 状态栏中性灰蓝。banner 标识（◉ VIGIL）与欢迎语继承 default（品牌一致）。
         "colors": {
             "banner_border": "#3E6B9B",
             "banner_title": "#8FB8E8",
@@ -332,7 +332,18 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
             "ops_env_uat": "#E0A060",
             "ops_env_prod": "#E06C6C",
         },
-        # 冷静的运维 spinner（不 kawaii）——API 等待/思考期间显示的 faces 与动词
+                "banner_logo": """[bold #8FB8E8]VIGIL[/]
+[bold #5B9BD5]  /\\_/\\\\[/]
+[bold #8FB8E8]  ( ◉.◉ )[/]
+[dim #6B7F99]  > ^ <[/]
+[dim #6B7F99]记住整个平台，安全地动生产[/]""",
+        "banner_hero": """[bold #8FB8E8]◉[/]
+[bold #8FB8E8]VIGIL[/]
+[dim #6B7F99]记住整个平台[/]
+[dim #6B7F99]安全地动生产[/]""",
+        "branding": {
+            "prompt_symbol": "◉ Vigil >",
+        },
         "spinner": {
             "waiting_faces": ["(·)", "(·|)", "(·/)", "(·\\)"],
             "thinking_faces": ["(·)", "(⌁)", "(∘)", "(○)"],
@@ -461,10 +472,10 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "spinner": {},
         "branding": {
-            "agent_name": "Argus",
-            "welcome": "欢迎使用 Argus——记住整个平台，安全地动生产。输入消息或 /help 查看命令。",
+            "agent_name": "Vigil",
+            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
             "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Argus ",
+            "response_label": " ◉ Vigil ",
             "prompt_symbol": "❯",
             "help_header": "[?] Available Commands",
         },
@@ -505,10 +516,10 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "spinner": {},
         "branding": {
-            "agent_name": "Argus",
-            "welcome": "欢迎使用 Argus——记住整个平台，安全地动生产。输入消息或 /help 查看命令。",
+            "agent_name": "Vigil",
+            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
             "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Argus ",
+            "response_label": " ◉ Vigil ",
             "prompt_symbol": "❯",
             "help_header": "(^_^)? Available Commands",
         },
@@ -551,10 +562,10 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "spinner": {},
         "branding": {
-            "agent_name": "Argus",
-            "welcome": "欢迎使用 Argus——记住整个平台，安全地动生产。输入消息或 /help 查看命令。",
+            "agent_name": "Vigil",
+            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
             "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Argus ",
+            "response_label": " ◉ Vigil ",
             "prompt_symbol": "❯",
             "help_header": "[?] Available Commands",
         },
@@ -597,10 +608,10 @@ _BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
         },
         "spinner": {},
         "branding": {
-            "agent_name": "Argus",
-            "welcome": "欢迎使用 Argus——记住整个平台，安全地动生产。输入消息或 /help 查看命令。",
+            "agent_name": "Vigil",
+            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
             "goodbye": "Goodbye! \u2695",
-            "response_label": " \u2695 Hermes ",
+            "response_label": " \u2695 Vigil ",
             "prompt_symbol": "\u276f",
             "help_header": "(^_^)? Available Commands",
         },

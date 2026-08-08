@@ -48,9 +48,13 @@
 - **核销方式**：`ops.runbooks.enabled` 为 false（默认）时工具零影响（check_fn 门控）。
 
 
-## 产品外壳品牌化（Argus 一期，2026-08-08）
+## 产品外壳品牌化（Vigil 一期，2026-08-08）
 
-- **为什么**：产品是 Argus（运维 agent harness），但外壳还是 Hermes（CLI 入口 /
+> ※ 更名沿革：2026-08-08 当天，产品名由 Argus 统一更名为 Vigil（定位语不变：
+> 「记住整个平台，安全地动生产」）。本文档历史条目均按当前名 Vigil 记载，
+> git 历史保留 Argus 阶段。
+
+- **为什么**：产品是 Vigil（运维 agent harness），但外壳还是 Hermes（CLI 入口 /
   banner / 版本号 / README）。本次只动产品外壳表面层（入口、banner、help、README、
   SOUL 措辞），**零逻辑改动**：topo/runbook/权限矩阵代码未动，`hermes -p ops`
   行为不变。
@@ -58,60 +62,60 @@
 
 | 文件 | 改了哪 | 为什么 / 怎么改 |
 |---|---|---|
-| `pyproject.toml` | `version 0.20.0→0.1.0`、`description` 改为 Argus 定位；`[project.scripts]` 增加 `argus = hermes_cli.main:main` | 产品一期完成（拓扑+runbook+权限矩阵），版本号归 Argus 所有。发行包名**沿用** `hermes-agent`（fork 兼容：importlib.metadata、dist-info、release 脚本均按此名解析；产品名是 Argus）。`hermes` 入口保留，行为不变 |
-| `hermes_cli/__init__.py` | `__version__ = "0.1.0"`、`__release_date__ = "2026.8.8"`、模块 docstring 改 Argus | 运行时版本单一来源；CLI/gateway/dashboard/ACP 的版本串都从这里取 |
-| `hermes_cli/_startup_fast.py` | 快速 `--version` 输出 `Hermes Agent v…` → `Argus v…`，提示命令 `hermes version` → `argus version` | `argus --version` 必须显示 Argus（快速路径先于重导入执行，是首屏） |
-| `hermes_cli/banner.py` | `HERMES_AGENT_LOGO`（ASCII 大图）→ `ARGUS_LOGO`（简洁文字：名字 + 「记住整个平台，安全地动生产」）；`HERMES_CADUCEUS` → `ARGUS_HERO`（简洁标识）；`format_banner_version_label()` 版本标签 `Hermes Agent v…` → `Argus v…` | 任务硬约束：banner 换 Argus 标识，风格简洁，不要花哨 ASCII 大图 |
-| `cli.py` | 紧凑 banner 文案（`NOUS HERMES` / `Hermes Agent` / `Nous Research`）→ Argus + 运维定位；欢迎语 → 中文「欢迎使用 Argus——记住整个平台，安全地动生产」；class/module docstring；dead 的 ASCII 常量换成 Argus 简洁标识 | 交互 CLI 首屏与欢迎语品牌化；纯字符串，无逻辑改动 |
-| `hermes_cli/skin_engine.py` | 默认皮肤 branding：`agent_name: Hermes Agent`→`Argus`，`welcome`→中文欢迎语，`response_label` 去 Hermes | 皮肤引擎的默认品牌串是 banner/状态栏的回退来源 |
-| `hermes_cli/_parser.py` | `prog="hermes"`→`"argus"`；顶层 description 改为 Argus 运维定位；epilogue 示例命令 `hermes`→`argus`；chat 子命令 description | `argus --help` 显示 Argus；`hermes --help` 同样显示 argus（同一产品） |
-| `hermes_cli/main.py` | 模块 docstring 用法示例 `hermes`→`argus`；`cmd_uninstall`/`cmd_update`/ACP docstring 与 WhatsApp 引导 Tip 改 Argus | 入口文档与命令名一致 |
-| `hermes_cli/config.py` | `recommended_update_command()` 的 git 安装回退 `hermes update`→`argus update` | `argus version` 的更新提示指向正确命令 |
-| `hermes_cli/commands.py` | `/update`、`/version` CommandDef 描述 `Hermes Agent`→`Argus` | help/命令描述品牌化 |
-| `hermes_cli/profiles.py` | `create_wrapper_script()` 生成的 profile 包装命令从 `hermes -p` → `argus -p`（优先解析 `argus`，回退 `hermes`）；`build_alias_map()` / `remove_wrapper_script()` 的 wrapper 识别针同步兼容 `argus -p ` 与 `hermes -p ` | 包装命令不再依赖 hermes 命令名；反向识别（alias→profile）与删除校验跟上新命令名 |
-| `hermes_cli/default_soul.py` | `DEFAULT_SOUL_MD` 改为 Argus 视角 persona | 新 profile 的 SOUL 从出生就是 Argus；不影响 `_LEGACY_TEMPLATE_SOULS` 旧模板迁移匹配 |
-| `acp_adapter/server.py` | ACP `version` 能力返回 `Hermes Agent v…`→`Argus v…` | 编辑器集成侧的版本串 |
-| `gateway/slash_commands.py`、`gateway/platforms/api_server.py` | /version、/update 相关文案与 docstring 改 Argus | 网关侧命令文案（/version 正文走 banner 版本标签，自动变 Argus） |
-| `hermes_cli/uninstall.py` | 卸载器标题与致谢文案 `Hermes Agent`→`Argus`（shell rc 的 `# Hermes Agent` 注释匹配保持不动） | 卸载界面品牌化；注释匹配是清理逻辑的一部分，不能动 |
-| `scripts/ops_init.py` | 提示文案 `hermes -p ops`→`argus -p ops` | 初始化脚本引导用新命令名 |
-| `README.md` | 重写为中文为主的 Argus 介绍（fork 说明 + 三层核心 + 安装/开发/验证） | 产品门面 |
-| `hermes`（仓库根 launcher） | docstring 改 Argus | 开发入口说明 |
-| 测试断言同步 | `test_startup_fast_guards.py` / `test_banner.py` / `test_cli_skin_integration.py` / `test_skin_engine.py` 中表面字符串 `Hermes Agent`→`Argus` | 表面字符串测试跟随品牌化（断言的是产品外壳，非行为契约） |
+| `pyproject.toml` | `version 0.20.0→0.1.0`、`description` 改为 Vigil 定位；`[project.scripts]` 增加 `vigil = hermes_cli.main:main` | 产品一期完成（拓扑+runbook+权限矩阵），版本号归 Vigil 所有。发行包名**沿用** `hermes-agent`（fork 兼容：importlib.metadata、dist-info、release 脚本均按此名解析；产品名是 Vigil）。`hermes` 入口保留，行为不变 |
+| `hermes_cli/__init__.py` | `__version__ = "0.1.0"`、`__release_date__ = "2026.8.8"`、模块 docstring 改 Vigil | 运行时版本单一来源；CLI/gateway/dashboard/ACP 的版本串都从这里取 |
+| `hermes_cli/_startup_fast.py` | 快速 `--version` 输出 `Hermes Agent v…` → `Vigil v…`，提示命令 `hermes version` → `vigil version` | `vigil --version` 必须显示 Vigil（快速路径先于重导入执行，是首屏） |
+| `hermes_cli/banner.py` | `HERMES_AGENT_LOGO`（ASCII 大图）→ `VIGIL_LOGO`（简洁文字：名字 + 「记住整个平台，安全地动生产」）；`HERMES_CADUCEUS` → `VIGIL_HERO`（简洁标识）；`format_banner_version_label()` 版本标签 `Hermes Agent v…` → `Vigil v…` | 任务硬约束：banner 换 Vigil 标识，风格简洁，不要花哨 ASCII 大图 |
+| `cli.py` | 紧凑 banner 文案（`NOUS HERMES` / `Hermes Agent` / `Nous Research`）→ Vigil + 运维定位；欢迎语 → 中文「欢迎使用 Vigil——记住整个平台，安全地动生产」；class/module docstring；dead 的 ASCII 常量换成 Vigil 简洁标识 | 交互 CLI 首屏与欢迎语品牌化；纯字符串，无逻辑改动 |
+| `hermes_cli/skin_engine.py` | 默认皮肤 branding：`agent_name: Hermes Agent`→`Vigil`，`welcome`→中文欢迎语，`response_label` 去 Hermes | 皮肤引擎的默认品牌串是 banner/状态栏的回退来源 |
+| `hermes_cli/_parser.py` | `prog="hermes"`→`"vigil"`；顶层 description 改为 Vigil 运维定位；epilogue 示例命令 `hermes`→`vigil`；chat 子命令 description | `vigil --help` 显示 Vigil；`hermes --help` 同样显示 vigil（同一产品） |
+| `hermes_cli/main.py` | 模块 docstring 用法示例 `hermes`→`vigil`；`cmd_uninstall`/`cmd_update`/ACP docstring 与 WhatsApp 引导 Tip 改 Vigil | 入口文档与命令名一致 |
+| `hermes_cli/config.py` | `recommended_update_command()` 的 git 安装回退 `hermes update`→`vigil update` | `vigil version` 的更新提示指向正确命令 |
+| `hermes_cli/commands.py` | `/update`、`/version` CommandDef 描述 `Hermes Agent`→`Vigil` | help/命令描述品牌化 |
+| `hermes_cli/profiles.py` | `create_wrapper_script()` 生成的 profile 包装命令从 `hermes -p` → `vigil -p`（优先解析 `vigil`，回退 `hermes`）；`build_alias_map()` / `remove_wrapper_script()` 的 wrapper 识别针同步兼容 `vigil -p ` 与 `hermes -p ` | 包装命令不再依赖 hermes 命令名；反向识别（alias→profile）与删除校验跟上新命令名 |
+| `hermes_cli/default_soul.py` | `DEFAULT_SOUL_MD` 改为 Vigil 视角 persona | 新 profile 的 SOUL 从出生就是 Vigil；不影响 `_LEGACY_TEMPLATE_SOULS` 旧模板迁移匹配 |
+| `acp_adapter/server.py` | ACP `version` 能力返回 `Hermes Agent v…`→`Vigil v…` | 编辑器集成侧的版本串 |
+| `gateway/slash_commands.py`、`gateway/platforms/api_server.py` | /version、/update 相关文案与 docstring 改 Vigil | 网关侧命令文案（/version 正文走 banner 版本标签，自动变 Vigil） |
+| `hermes_cli/uninstall.py` | 卸载器标题与致谢文案 `Hermes Agent`→`Vigil`（shell rc 的 `# Hermes Agent` 注释匹配保持不动） | 卸载界面品牌化；注释匹配是清理逻辑的一部分，不能动 |
+| `scripts/ops_init.py` | 提示文案 `hermes -p ops`→`vigil -p ops` | 初始化脚本引导用新命令名 |
+| `README.md` | 重写为中文为主的 Vigil 介绍（fork 说明 + 三层核心 + 安装/开发/验证） | 产品门面 |
+| `hermes`（仓库根 launcher） | docstring 改 Vigil | 开发入口说明 |
+| 测试断言同步 | `test_startup_fast_guards.py` / `test_banner.py` / `test_cli_skin_integration.py` / `test_skin_engine.py` 中表面字符串 `Hermes Agent`→`Vigil` | 表面字符串测试跟随品牌化（断言的是产品外壳，非行为契约） |
 
-- **用户级文件（不在 repo）**：`~/.local/bin/argus` 更新为
-  `exec <repo>/.venv/bin/argus -p ops "$@"`（不再依赖 `hermes` 命令名）；
-  `~/.hermes/profiles/ops/SOUL.md` 改写为 Argus 运维视角（三层能力 + fail-closed 行为准则）。
-- **核销方式**：`argus --version` 显示 `Argus v0.1.0`；`argus --help` / `argus version`
-  无 Hermes 字样；banner 首屏为 Argus 标识；`hermes -p ops` 仍可用（入口保留，行为不变）。
+- **用户级文件（不在 repo）**：`~/.local/bin/vigil` 更新为
+  `exec <repo>/.venv/bin/vigil -p ops "$@"`（不再依赖 `hermes` 命令名）；
+  `~/.hermes/profiles/ops/SOUL.md` 改写为 Vigil 运维视角（三层能力 + fail-closed 行为准则）。
+- **核销方式**：`vigil --version` 显示 `Vigil v0.1.0`；`vigil --help` / `vigil version`
+  无 Hermes 字样；banner 首屏为 Vigil 标识；`hermes -p ops` 仍可用（入口保留，行为不变）。
 
 
-### 5. Argus 蓝灰系 ops 皮肤（纯数据 + 配置生成）
+### 5. Vigil 蓝灰系 ops 皮肤（纯数据 + 配置生成）
 
-- **为什么**：产品外壳已品牌化为 Argus，但默认皮肤还是 Hermes 暖金系。新增内置
-  `argus` 皮肤（蓝灰系：主色 `#4A90D9`、深色暗灰底 `#1A202A`、边框/标题蓝灰、
+- **为什么**：产品外壳已品牌化为 Vigil，但默认皮肤还是 Hermes 暖金系。新增内置
+  `vigil` 皮肤（蓝灰系：主色 `#4A90D9`、深色暗灰底 `#1A202A`、边框/标题蓝灰、
   正文浅色，区域间明度分层），并让 ops profile 默认激活。
 - **怎么改**：
   1. `hermes_cli/skin_engine.py` — `_BUILTIN_SKINS` 中 `default` 之后新增
-     `"argus"` 条目（纯数据：colors 全套蓝灰 + 继承 default 的 spinner/branding）。
+     `"vigil"` 条目（纯数据：colors 全套蓝灰 + 继承 default 的 spinner/branding）。
      零逻辑改动；`/skin`、TUI、desktop 通过既有 list_skins/load_skin 自动可见。
-  2. `scripts/ops_init.py` — `_CONFIG_TPL` 增加 `display.skin: argus`，新生成的
-     ops profile config.yaml 默认激活 argus 皮肤。
-  3. 用户级文件：`~/.hermes/profiles/ops/config.yaml` 补 `display.skin: argus`
+  2. `scripts/ops_init.py` — `_CONFIG_TPL` 增加 `display.skin: vigil`，新生成的
+     ops profile config.yaml 默认激活 vigil 皮肤。
+  3. 用户级文件：`~/.hermes/profiles/ops/config.yaml` 补 `display.skin: vigil`
      （幂等补丁，不影响既有拓扑/runbook/权限矩阵配置）。
-- **品牌一致**：argus 皮肤不写 branding 块，继承 default 的
-  `agent_name: Argus` / 中文欢迎语 / `◉ Argus` response_label；banner 的
-  `◉ ARGUS` 标识（ARGUS_LOGO/ARGUS_HERO）与欢迎语不动。
-- **核销方式**：`argus -p ops` 会话启动时 `init_skin_from_config` 读到
-  `display.skin: argus`；`argus skin` 列表可见 argus（builtin）并可 `/skin argus`
+- **品牌一致**：vigil 皮肤不写 branding 块，继承 default 的
+  `agent_name: Vigil` / 中文欢迎语 / `◉ Vigil` response_label；banner 的
+  `◉ VIGIL` 标识（VIGIL_LOGO/VIGIL_HERO）与欢迎语不动。
+- **核销方式**：`vigil -p ops` 会话启动时 `init_skin_from_config` 读到
+  `display.skin: vigil`；`vigil skin` 列表可见 vigil（builtin）并可 `/skin vigil`
   切换；banner/提示符/工具指示为蓝灰系。
 
 
-### 6. Argus 统一控制台 CLI（所有 profile 一套控制台头）
+### 6. Vigil 统一控制台 CLI（所有 profile 一套控制台头）
 
 - **为什么**：品牌化二期把界面结构统一了——之前只有 ops 模式是控制台头，非 ops
   仍保留 Hermes 经典大面板（Available Tools / Available Skills 列表），观感还是
   像 Hermes。运维定位的 CLI 需要的不是「AI 助手仪表盘」，而是「我在哪个环境、
-  Argus 记得什么、安全门是否开着」——改为所有 profile 共用一套 Argus 控制台头，
+  Vigil 记得什么、安全门是否开着」——改为所有 profile 共用一套 Vigil 控制台头，
   ops 能力按实际状态显示（开启显示实测值，未开启显示 off + 引导）。
 - **怎么改**（全部显示层 + 皮肤数据，零核心逻辑改动）：
   1. `hermes_cli/banner.py` — 删除 ops/非 ops 双分支，收敛为统一的
@@ -119,7 +123,7 @@
      topology.yaml / runbooks/ 快照，带 5s TTL 缓存，任何 profile 都返回 dict：
      `ops_enabled` 标志 + env / matrix / topology / runbook / profile / home /
      entity_count / runbook_count）和 `_render_banner()`：左侧 hero 标识
-     （◉ ARGUS / 记住整个平台 / 安全地动生产）+ model/cwd/session，右侧
+     （◉ VIGIL / 记住整个平台 / 安全地动生产）+ model/cwd/session，右侧
      `PROFILE / ENV / GATES / TOPOLOGY / RUNBOOKS / HOME` 状态行——ops 开启显示
      实测值（`[env] badge`、`matrix ON · L1–L4`、`N entities`、`N loaded`），
      未开启显示 off 态；底部统一能力行（ops：`◈ topo_query · runbook_load ·
@@ -131,19 +135,64 @@
      `_get_tui_prompt_fragments()` 正常态：ops 开启且有 env 时提示符前插 env
      badge（`[test] ops ❯ `，`class:ops-env-<env>` 皮肤驱动），其余 profile
      保持 `❯ `。
-  3. `hermes_cli/skin_engine.py` — argus 皮肤补 `ops_env_test/uat/prod` 颜色键、
+  3. `hermes_cli/skin_engine.py` — vigil 皮肤补 `ops_env_test/uat/prod` 颜色键、
      冷静 spinner（`(·)` 系列 + 运维动词，去 kawaii）、topo/runbook 工具 emoji
      （🧭/📋）；`get_prompt_toolkit_style_overrides()` 注册 `ops-env-*` 样式类
-     （数据驱动，非 argus 皮肤回退默认蓝/金/红）。
+     （数据驱动，非 vigil 皮肤回退默认蓝/金/红）。
   4. 测试 — `tests/hermes_cli/test_banner_ops.py` 重写为统一版（状态快照、
      ops off 返回 off 态 dict、ops 控制台头、matrix OFF 警示、非 ops 共用
      控制台头 + 能力汇总行）；`tests/hermes_cli/test_banner_skills_width.py`
      改为断言技能清单不再渲染、能力行只报计数。
-- **核销方式**：任意 profile 启动都显示同一套 Argus 控制台头（ops：ENV badge /
-  matrix / 拓扑计数；非 ops：off 态 + N tools · N skills）；`argus -p ops` 提示符
-  `[test] ops ❯ `；`/skin` 切换不受影响；banner 的 ◉ ARGUS 标识与欢迎语不动。
+- **核销方式**：任意 profile 启动都显示同一套 Vigil 控制台头（ops：ENV badge /
+  matrix / 拓扑计数；非 ops：off 态 + N tools · N skills）；`vigil -p ops` 提示符
+  `[test] ops ❯ `；`/skin` 切换不受影响；banner 的 ◉ VIGIL 标识与欢迎语不动。
 - **未碰**：conversation loop / 上下文压缩 / prompt 缓存 / `system_prompt.py`；
   topo/runbook/权限矩阵逻辑零改动。
+
+### 7. Argus → Vigil 全库更名（2026-08-08）
+
+- **为什么**：产品名定为 Vigil（保留定位语「记住整个平台，安全地动生产」）。
+  全库清品牌残留：产品外壳（banner/help/README/SOUL/skin/入口）统一为 Vigil。
+- **怎么改**（全部表面层 + 数据，零核心逻辑改动）：
+  1. 全库文本替换：`Argus`→`Vigil`、`argus`→`vigil`、`ARGUS`→`VIGIL`（banner 常量、
+     help 文案、README、SOUL、皮肤名 `argus`→`vigil`、cli-config 示例、ops_init 文案、
+     测试断言）。版本号保持 `v0.1.0`。
+  2. `hermes_cli/setup.py` — 产品文案 `Hermes`→`Vigil`（33 处大写 Hermes + 113 处
+     命令示例 `hermes xxx`→`vigil xxx` + 4 处向导标题符号 `⚕`→`◉`）；保留
+     OpenClaw（迁移来源系统）与基础设施标识（hermes_cli / HERMES_HOME /
+     openclaw_to_hermes / ~/.hermes）。
+  3. 吉祥物：`hermes_cli/banner.py` 猫头鹰 ASCII 采用用户定稿（/\_/\ + ◉.◉ 眼，蓝灰着色，
+     行尾反斜杠在 Rich markup 中双写转义）。启动 banner 收敛为单面板：猫头鹰渲染在
+     面板左列（PROFILE/ENV 状态列旁），移除面板上方 VIGIL/标语 logo 块与金色
+     VIGIL_HERO（含「记住整个平台，安全地动生产」黄字）；`get_vigil_owl_markup()`
+     （VIGIL/猫头鹰/标语）保留给 `/help` 顶部；TUI（`ui-tui/src/banner.ts`）
+     LOGO_ART 同款猫头鹰；vigil 皮肤数据保留 `banner_logo`/`banner_hero`
+     （TUI/自定义皮肤消费）；眼睛行 `( ◉.◉ )` 前置两空格与上下行对齐。
+
+  3b. prompt 品牌化（纯显示层，零数据影响）：vigil 皮肤新增 `branding.prompt_symbol` =
+     `◉ Vigil >`；`cli.py` prepend 逻辑改为——prompt 已含品牌标识（Vigil/◉）时不再
+     前置 profile 名。效果：ops 会话提示符 `[test] ops ❯` → `[test] ◉ Vigil >`；
+     切回其他皮肤仍保持 `ops ❯` 原行为。runbook/topo/权限数据位置不变。
+  3c. 欢迎语英文化（5 处皮肤：default/mono/slate/daylight/warm-lightmode）：删除
+     「安全地动生产」中文口号，统一为 `Welcome to Vigil — topology loaded, runbooks
+     ready, permission gates armed. Type a message or /help.`（geek/international
+     风格，保留拓扑/runbook/权限矩阵定位）；vigil 皮肤 welcome 继承 default。
+  4. 入口：`pyproject.toml [project.scripts]` 增加 `vigil`（主入口），保留
+     `argus`/`hermes` 别名（行为不变）；`hermes_cli/profiles.py` wrapper 生成
+     `vigil -p`，反向识别兼容 `vigil/argus/hermes -p`。
+  5. 仓库目录 `/home/wpwang/projects/argus_agent` → `/home/wpwang/projects/vigil-agent`；
+     `.venv` shebang 与 pyvenv.cfg 路径同步；用户级 `~/.local/bin/argus` →
+     `~/.local/bin/vigil`（exec .venv/bin/vigil -p ops）；ops profile
+     config.yaml `display.skin: argus`→`vigil`；SOUL.md 措辞核对。
+  6. 保留（fork 兼容 / 上游归属，非品牌残留）：`hermes_cli` 包名、`hermes-agent`
+     发行包名、`HERMES_HOME`/`HERMES_*` env、`hermes` 命令别名、上游文档
+     website/、`hermes` 压缩模式值（agent 校验集）、Discord User-Agent。
+  7. 范围裁定：`apps/`（desktop / bootstrap-installer）不在任务点名面（banner/help/README/
+     SOUL/skin/向导/gateway），且 desktop 是 hermes 运行时的客户端；全库清扫误伤的
+     207 个 apps 文件已 `git restore` 整体回滚，desktop 保持 Hermes 品牌与可构建一致。
+- **核销方式**：`vigil --version` = `Vigil v0.1.0`；`vigil -p ops` 会话 banner 面板左列
+  蓝灰猫头鹰；`/skin` 可见 vigil 皮肤；测试全过；`hermes -p ops` 与 `argus -p ops`
+  别名仍可进 ops profile。
 
 ## 未碰的核心区（按 §6.5 硬约束）
 

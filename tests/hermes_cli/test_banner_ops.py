@@ -1,4 +1,4 @@
-"""Unified Argus console header — one visual language for every profile."""
+"""Unified Vigil console header — one visual language for every profile."""
 
 import io
 from unittest.mock import patch
@@ -24,7 +24,7 @@ def _render(state=None, *, model="gpt-5", cwd="/srv/ops", session_id="ops-001"):
         )
     with (
         patch.object(banner, "_load_banner_state", return_value=state),
-        patch.object(banner, "format_banner_version_label", return_value="Argus v0.1.0 (test)"),
+        patch.object(banner, "format_banner_version_label", return_value="Vigil v0.1.0 (test)"),
         patch.object(banner, "get_git_banner_state", return_value=None),
         patch.object(banner, "get_latest_release_tag", return_value=None),
         patch.object(banner, "get_available_skills", return_value={"general": ["skill-a"]}),

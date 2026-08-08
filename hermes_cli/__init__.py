@@ -1,17 +1,17 @@
 """
-Argus CLI - Unified command-line interface for Argus (ops agent harness).
+Vigil CLI - Unified command-line interface for Vigil (ops agent harness).
 
-Fork of Hermes Agent (MIT). Core = topology table (facts) + runbooks (procedures)
+Fork of Vigil Agent (MIT). Core = topology table (facts) + runbooks (procedures)
 + permission matrix (defense in depth). 记住整个平台，安全地动生产。
 
 Provides subcommands for:
-- argus chat          - Interactive chat (same as ./hermes)
-- argus gateway       - Run gateway in foreground
-- argus gateway start - Start gateway service
-- argus gateway stop  - Stop gateway service
-- argus setup         - Interactive setup wizard
-- argus status        - Show status of all components
-- argus cron          - Manage cron jobs
+- vigil chat          - Interactive chat (same as ./hermes)
+- vigil gateway       - Run gateway in foreground
+- vigil gateway start - Start gateway service
+- vigil gateway stop  - Stop gateway service
+- vigil setup         - Interactive setup wizard
+- vigil status        - Show status of all components
+- vigil cron          - Manage cron jobs
 """
 
 import os

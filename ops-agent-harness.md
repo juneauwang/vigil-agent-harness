@@ -1,20 +1,20 @@
-1. 只允许在 /home/wpwang/projects/argus_agent 内工作；
+1. 只允许在 /home/wpwang/projects/vigil-agent 内工作；
 禁止读取/修改 ~/.hermes、~/.ssh、~/.kube、任何 .env 文件
 2. 开工前先 git commit 一个 baseline（回滚锚点），
 之后随便改，随时能 reset
 3. 依赖装进项目 venv，不碰系统 Python；
-禁止执行 run_agent.py 等任何会启动 Hermes 本体的命令
+禁止执行 run_agent.py 等任何会启动 Vigil 本体的命令
 
 
 # Ops Agent Harness —— 设计文档 v0.1
 
-> 给 IT 运维用的 Agent Harness。Fork 自 Hermes Agent（MIT License）。
+> 给 IT 运维用的 Agent Harness。Fork 自 Vigil Agent（MIT License）。
 > 代码交付给 Codex 实现，本文档是唯一交接材料（数据契约 + 改动地图）。
 > 源码位置: /home/wpwang/projects/hermes-source_1（upstream: NousResearch/hermes-agent）
 
 ## 0. 决策记录
 
-- **从 0 还是 fork：Fork Hermes。** LLM 调用循环、工具系统、消息网关、cron、
+- **从 0 还是 fork：Fork Vigil。** LLM 调用循环、工具系统、消息网关、cron、
   memory/skills、命令审批、profile 隔离全是现成的且经过生产验证（公司机器跑了两套）。
   运维 harness 的差异化价值在执行层（SSH 多目标管理、审计、CMDB 对接、runbook），
   不在 LLM 编排层。类比：造救护车不需要造底盘。
@@ -41,7 +41,7 @@
 | 事实层 = 拓扑表 | 平台长什么样（机器/服务/依赖） | "这是什么" | session 启动必读（第一层） |
 | 程序层 = runbook | 出事怎么办（步骤/命令/回滚） | "怎么处理" | 告警/任务触发时按需加载 |
 
-- Hermes 的 memory（~2KB）只存人的偏好，平台事实一律不进 memory（容量小、会被冲没）。
+- Vigil 的 memory（~2KB）只存人的偏好，平台事实一律不进 memory（容量小、会被冲没）。
 - skill 散文格式不适合运维；runbook 用结构化 YAML（触发条件 + 步骤 + 命令 + 回滚），
   因为 runbook 是要被执行的，不是被参考的。
 
