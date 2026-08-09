@@ -81,29 +81,36 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 
 ## 快速开始
 
-> 安装脚本 `setup-vigil.sh` 正在打包，下面先给手动安装路径。
-
 **前置**：Python 3.11+、git
 
 ```bash
-git clone <repo-url> vigil-agent && cd vigil-agent
-
 # 1. 安装（生成 vigil 命令入口）
-python3 -m venv .venv
-.venv/bin/pip install -e .
+pip install vigil-agent-harness
 
 # 2. 初始化 ops profile（拓扑表 + 样例 runbook）
-.venv/bin/python scripts/ops_init.py
+vigil setup            # 或 python scripts/ops_init.py
 
 # 3. 配置模型（如 DeepSeek）——在 ~/.hermes/profiles/ops/config.yaml
 #    添加 model 段，并在同目录 .env 放 API key
 
 # 4. 进入 Vigil
-.venv/bin/vigil -p ops
+vigil -p ops
 ```
 
 首次进入后，把拓扑表改成你自己的平台（`topology.yaml` + `entities/`），
 然后让它干第一件真活：**"检查拓扑里哪些实体 last_verified 过期了"**。
+
+### 从源码安装（开发者 / 自托管）
+
+想改代码、跑测试、自定义 fork 时用这条路（一键脚本 `setup-vigil.sh` 规划中）：
+
+```bash
+git clone https://github.com/juneauwang/vigil-agent-harness.git
+cd vigil-agent-harness
+python3 -m venv .venv && .venv/bin/pip install -e .
+.venv/bin/python scripts/ops_init.py
+.venv/bin/vigil -p ops
+```
 
 ## 一次会话长什么样
 
@@ -148,7 +155,8 @@ Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
 - [x] runbook 程序层 + L4 部署阶段门
 - [x] 目标级权限矩阵（跨环境硬约束）
 - [x] 品牌化（Vigil 入口 / banner / 皮肤）
-- [ ] 一键安装脚本 `setup-vigil.sh`
+- [x] PyPI 分发（pip install vigil-agent-harness）
+- [ ] 一键安装脚本 `setup-vigil.sh`（源码安装/自托管路径：clone → 装依赖 → 初始化）
 - [ ] 同步 adapter（terraform.tfstate / k8s API）
 - [ ] 拓扑体检 cron（自动检查实体 freshness）
 - [ ] 数据目录独立（脱离 hermes profile 体系）
