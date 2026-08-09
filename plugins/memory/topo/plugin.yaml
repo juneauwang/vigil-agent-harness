@@ -1,0 +1,3 @@
+name: topo
+version: 0.1.0
+description: "Topo — Ops Agent Harness 平台拓扑表（事实层）注入：system prompt 的 external memory provider block 渲染 topology.yaml 第一层总览；工具走 topo toolset。"
