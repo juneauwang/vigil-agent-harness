@@ -1,100 +1,157 @@
 # Vigil ☉ —— 运维 Agent Harness
 
-```text
-        /\    /\
-       /  \  /  \
-      |  ◉    ◉  |
-      |    ^     |
-       \   ‾    /
-        '-....-'
-      .-'      '-.
-     /  ▓▓▓▓▓▓▓▓  \
-    |   ▓▓▓▓▓▓▓▓   |
-     \  ▓▓▓▓▓▓▓▓  /
-      '-.      .-'
-         |  |  |
-         |  |  |
-         ‾‾‾‾‾‾‾
-```
+![Vigil](assets/banner.png)
 
 > **记住整个平台，安全地动生产。**
 
-Vigil 是一个**运维 agent harness**：它让 AI agent 在真实的服务器环境里干活时，
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.11%2B-blue)
+
+Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实服务器环境里干活时，
 既「记得住整个平台」，又「动得安全」。Vigil 完全 fork 自
 [Hermes Agent](https://hermes-agent.nousresearch.com/)（MIT License），
-在保留其 agent 内核（终端、工具调用、会话、网关、插件）的基础上，独立演进出
-**面向生产运维的三层核心能力**。
+保留其成熟的 agent 内核（终端、工具调用、会话、记忆、插件），独立演进出面向
+生产运维的三层核心能力。
 
-## 核心 = 三层纵深
+---
+
+## 目录
+
+- [为什么需要 Vigil](#为什么需要-vigil)
+- [核心特性](#核心特性)
+- [工作原理](#工作原理)
+- [快速开始](#快速开始)
+- [一次会话长什么样](#一次会话长什么样)
+- [安全模型](#安全模型)
+- [Roadmap](#roadmap)
+- [License](#license)
+
+---
+
+## 为什么需要 Vigil
+
+很多小团队**没有专职运维**：服务器是开发顺手管的，CMDB 不存在，故障手册不存在，
+半夜出事靠回忆。Vigil 给这类团队三样最缺的东西：
+
+- **记忆** —— 平台的户口本和关系图（拓扑表），agent 不会"换了会话就失忆"
+- **经验** —— 出过的故障沉淀成可执行的 runbook，下次不再从头查
+- **护栏** —— 权限矩阵硬性拦截危险命令，手滑删生产这件事从"靠自觉"变成"靠机制"
+
+如果你有专职 SRE、完整 CMDB 和工单系统——Vigil 对你可能是锦上添花；
+如果你一个人扛着几台服务器——Vigil 就是给你做的。
+
+## 核心特性
 
 | 层 | 载体 | 职责 |
 |---|---|---|
-| **事实层** | 平台拓扑表（`plugins/memory/topo` + `topo_query` / `topo_update`） | 长记忆地记住平台：实体、环境、依赖、归属。任何运维动作前先 `topo_query` 确认目标身份与环境；跨环境操作默认拒绝 |
-| **程序层** | runbook（`tools/runbook_tools.py`：`runbook_load` / `runbook_checkpoint`） | 唯一允许的「怎么动」：事故处理按 runbook 匹配流程执行；L4 部署按 checklist 阶段门推进，不允许跳过 |
-| **纵深防御** | 权限矩阵（`tools/ops_permissions.py`） | 命令分级（L1–L4）× 环境（test/uat/prod）→ **执行 / 审批 / 拒绝**。矩阵 DENY 不可被 yolo、mode=off 或永久 allowlist 绕过；approve 必须有真人在场 |
+| **事实层** | 平台拓扑表（`topo_query` / `topo_update`） | 长记忆地记住平台：实体、环境、依赖、归属。任何运维动作前先确认目标身份与环境；跨环境操作默认拒绝 |
+| **程序层** | runbook（`runbook_load` / `runbook_checkpoint`） | 唯一允许的「怎么动」：事故处理按 runbook 匹配流程执行；部署按 checklist 阶段门推进，不允许跳过 |
+| **纵深防御** | 权限矩阵（命令分级 L1–L4 × 环境 test/uat/prod） | 命令 → **执行 / 审批 / 拒绝** 三态裁决。矩阵 DENY 不可被 yolo、mode=off 或 allowlist 绕过；approve 必须有真人在场 |
 
-设计原则（详见 [`ops-agent-harness.md`](ops-agent-harness.md) 与
-[`OPS-DELTA.md`](OPS-DELTA.md)）：
+额外两个让它"越用越强"的机制：
 
-- **零侵入优先**：核心能力全部以 memory provider 块 / registry 工具 /
-  配置开关的形式接入，不碰 conversation loop、prompt 缓存与 system prompt。
-- **配置走 `config.yaml`**：所有行为开关（拓扑、runbook、权限矩阵、环境级别）
-  都在 ops profile 的 `config.yaml` 里，不新增 `HERMES_*` env var。
-- **默认 fail-closed**：权限矩阵默认 `env: test`，核对通过后再切 prod。
+- **自进化**：每次真实排障会沉淀成 runbook / skill——Vigil 用一天，强一点
+- **会话记忆**：平台事实（拓扑）与人的偏好（memory）分离存储，互不挤占
+
+## 工作原理
+
+```text
+               ┌─────────────────────────────────────┐
+               │        Vigil 会话（每个 session）      │
+               │                                     │
+  启动时注入 ───▶  TOPO 段（拓扑表第一层）              │
+               │        │                           │
+  用户指令 ────▶  topo_query 确认目标身份/环境 ──▶ 权限矩阵
+               │        │                    (目标级 env 判定)
+               │   runbook_load 匹配处置流程          │
+               │        │                    execute / approve / deny
+               │   工具执行（ssh / kubectl / docker）│
+               │        │                           │
+  执行后 ─────▶  topo_update 更新事实 + 审计戳        │
+               │        │                           │
+               │   经验沉淀：runbook / skill 自动成长  │
+               └─────────────────────────────────────┘
+```
+
+两条铁律贯穿始终：
+
+- **先确认，再动手**：任何运维操作前先查拓扑确认目标；命令的目标是谁，就用谁的
+  环境来裁决（test 会话操作 prod 节点？矩阵直接拦）
+- **默认 fail-closed**：不确定就拒绝。权限矩阵默认 `env: test`，核对通过后再切 prod
 
 ## 快速开始
 
-### 1. 安装（开发 / 自托管）
+> 安装脚本 `setup-vigil.sh` 正在打包，下面先给手动安装路径。
+
+**前置**：Python 3.11+、git
 
 ```bash
-cd vigil-agent
+git clone <repo-url> vigil-agent && cd vigil-agent
+
+# 1. 安装（生成 vigil 命令入口）
 python3 -m venv .venv
-.venv/bin/pip install -e .          # 生成 vigil / hermes 两个命令入口
+.venv/bin/pip install -e .
+
+# 2. 初始化 ops profile（拓扑表 + 样例 runbook）
+.venv/bin/python scripts/ops_init.py
+
+# 3. 配置模型（如 DeepSeek）——在 ~/.hermes/profiles/ops/config.yaml
+#    添加 model 段，并在同目录 .env 放 API key
+
+# 4. 进入 Vigil
+.venv/bin/vigil -p ops
 ```
 
-> 发行包名沿用 `hermes-agent`（fork 兼容），产品名是 **Vigil**。
-> `hermes` 命令保留作为兼容入口，行为不变；日常请用 `vigil`。
+首次进入后，把拓扑表改成你自己的平台（`topology.yaml` + `entities/`），
+然后让它干第一件真活：**"检查拓扑里哪些实体 last_verified 过期了"**。
 
-### 2. 初始化 ops profile
+## 一次会话长什么样
 
-```bash
-.venv/bin/python scripts/ops_init.py            # 建 ops profile + 铺样例拓扑/runbook
-.venv/bin/vigil -p ops                          # 进入 ops profile 会话
+启动 `vigil -p ops` 后,控制台头部(取自真实渲染逻辑)长这样:
+
+```text
+┌─ Vigil v0.1.0 ─────────────────────────────────────────────┐
+│         /\    /\        PROFILE     ops                    │
+│        /  \  /  \       ENV         [test]                 │
+│       | ◉    ◉ |        GATES       matrix ON · L1–L4 × env │
+│       |    ^   |                    → execute/approve/deny │
+│        \   ‾  /        TOPOLOGY    8 entities              │
+│         '-..-'         RUNBOOKS    3 loaded                │
+│   deepseek-v4-flash    HOME        ~/.hermes/profiles/ops  │
+│   ~/projects/vigil-agent                                   │
+│   Session: 20260809_...                                   │
+│                                 ◈ topo_query · runbook_load│
+│                                   · permission matrix      │
+└────────────────────────────────────────────────────────────┘
+
+你：帮我排查 node2 的 sshd 为什么连不上
+Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
+       "ssh-idle-hang" → 诊断（sshd -T / 保活配置）→ 修复 → 验证
 ```
 
-`ops_init.py` 会写入 `~/.hermes/profiles/ops/` 下的配置、样例拓扑
-（`topology.yaml` + `entities/`）与样例 runbook（`runbooks/`），全程幂等。
+左边是模型/工作目录/会话锚点,右边是运维能力实时状态——在哪个环境、
+权限门开没开、记住了多少实体、有哪些 runbook,一眼可见。
 
-### 3. 验证（对应 [OPS-VERIFY.md](OPS-VERIFY.md)）
+## 安全模型
 
-```bash
-vigil --version        # Vigil v0.1.0
-vigil -p ops chat      # 起会话后核对：TOPO 段注入 / topo_query / topo_update / 权限矩阵 / runbook_load
-```
+| 层 | 机制 | 说明 |
+|---|---|---|
+| L1 | toolset 裁剪 | 会话按角色加载最小工具集，减少攻击面 |
+| L2 | 静态规则硬 gate | 危险命令模式（rm -rf / drop table / delete namespace）直接拦截，0 token |
+| L3 | 目标级权限矩阵 | 命令目标（拓扑实体）的 env 决定裁决：prod 的 L3/L4 硬拒、L2 审批 |
+| L4 | 部署 checklist | 生产部署强制走 runbook 阶段门：前置核对 → 发布 → 真实验证 → 回滚预案 |
 
-## 开发
+## Roadmap
 
-```bash
-source .venv/bin/activate
-scripts/run_tests.sh               # 优先 .venv，其次 venv
-```
-
-重点测试套件：
-
-- `tests/tools/test_topo_tools.py` —— 拓扑表数据契约 + `topo_query` / `topo_update`
-- `tests/tools/test_ops_permissions.py` / `test_ops_permissions_guard.py` —— 权限矩阵
-- `tests/tools/test_runbook_tools.py` —— runbook 加载 / 匹配 / L4 阶段门
-- `tests/plugins/memory/test_topo_provider.py` —— TOPO 段注入
-- `tests/scripts/test_ops_init.py` —— ops profile 初始化
-
-## 项目结构与品牌说明
-
-- 代码目录沿用 fork 的 `hermes_*` 命名（`hermes_cli/`、`hermes_state.py` 等），
-  这是内核兼容性的一部分，不改名。
-- 产品外壳已品牌化为 Vigil：CLI 入口 `vigil`、启动 banner、`--version`、
-  help 文本、README 与 ops profile 的 SOUL.md。
-- 运维专属改动全部登记在 [`OPS-DELTA.md`](OPS-DELTA.md)，季度体检核销。
+- [x] 拓扑表（事实层）+ topo_query / topo_update
+- [x] runbook 程序层 + L4 部署阶段门
+- [x] 目标级权限矩阵（跨环境硬约束）
+- [x] 品牌化（Vigil 入口 / banner / 皮肤）
+- [ ] 一键安装脚本 `setup-vigil.sh`
+- [ ] 同步 adapter（terraform.tfstate / k8s API）
+- [ ] 拓扑体检 cron（自动检查实体 freshness）
+- [ ] 数据目录独立（脱离 hermes profile 体系）
 
 ## License
 
-MIT。Vigil 是 Hermes Agent 的独立 fork，遵守上游 [LICENSE](LICENSE)。
+MIT。Vigil 是 [Hermes Agent](https://hermes-agent.nousresearch.com/) 的独立 fork，版权声明见 [LICENSE](LICENSE)。
