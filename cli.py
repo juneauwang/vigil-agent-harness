@@ -7192,17 +7192,19 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return
         self._tirith_security_checked = True
         try:
-            from tools.tirith_security import ensure_installed, is_platform_supported
+            from tools.tirith_security import ensure_installed, tirith_install_status
 
-            tirith_path = ensure_installed(log_failures=False)
-            if tirith_path is None and is_platform_supported():
-                security_cfg = self.config.get("security", {}) or {}
-                tirith_enabled = security_cfg.get("tirith_enabled", True)
-                if tirith_enabled:
-                    _cprint(
-                        f"  {_DIM}⚠ tirith security scanner enabled but not available "
-                        f"— command scanning will use pattern matching only{_RST}"
-                    )
+            ensure_installed(log_failures=False)
+            # Only surface a hint when the install genuinely failed. A
+            # background download still in flight (first run) or an
+            # unsupported platform are silent — there is nothing the user
+            # can do, and the ⚠-style warning just scared people on every
+            # startup while the async install was still running.
+            if tirith_install_status() == "failed":
+                _cprint(
+                    f"  {_DIM}tirith scanner unavailable — command scanning uses "
+                    f"built-in patterns only{_RST}"
+                )
         except Exception:
             pass
 

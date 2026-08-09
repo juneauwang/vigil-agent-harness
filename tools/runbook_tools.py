@@ -287,7 +287,7 @@ def runbook_load(
     if not runbooks_dir.is_dir():
         return tool_error(
             f"runbooks 目录不存在: {runbooks_dir}。"
-            "运维会话需要先铺 runbook（scripts/ops_init.py 会复制样例到 ops profile）。"
+            "运维会话需要先铺 runbook（vigil ops-init 会复制样例到 ops profile）。"
         )
 
     if runbook:

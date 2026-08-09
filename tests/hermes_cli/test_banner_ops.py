@@ -134,4 +134,4 @@ def test_unified_banner_non_ops_shares_console_header():
     assert "off（未启用 ops harness）" in out
     # Capability summary + onboarding hint replace the tool/skill inventory
     assert "1 tools · 1 skills" in out
-    assert "scripts/ops_init.py" in out
+    assert "vigil ops-init" in out

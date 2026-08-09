@@ -8,16 +8,19 @@ web_dist, tui_dist, plugin manifests) since those are resolved at runtime
 via env-var overrides set by the nix wrapper or the source-checkout layout.
 
 This file overrides the ``bdist_wheel`` and ``sdist`` setuptools commands
-to raise an error when run outside a Nix build. The PEP 517
-``build_wheel`` / ``build_sdist`` hooks in
-``setuptools.build_meta`` call these commands internally, so the guard
-fires for ``uv build``, ``pip wheel``, ``python -m build``, and direct
-``setup.py`` invocations alike.
+to raise an error when run outside a sanctioned build. The PEP 517
+``build_wheel`` / ``build_sdist`` hooks in ``setuptools.build_meta`` call
+these commands internally, so the guard fires for ``uv build``,
+``pip wheel``, ``python -m build``, and direct ``setup.py`` invocations
+alike unless one of the two sanctioned build flags is set:
 
-The one legitimate consumer of ``build_wheel`` is uv2nix, which calls
-``setuptools.build_meta.build_wheel`` (→ ``bdist_wheel``) inside a Nix
-build sandbox. ``nix/python.nix`` sets ``HERMES_NIX_BUILD=1`` on the
-Hermes package derivation, so only that build may create an artifact.
+- ``HERMES_NIX_BUILD=1`` — uv2nix calls ``setuptools.build_meta.build_wheel``
+  (→ ``bdist_wheel``) inside a Nix build sandbox; ``nix/python.nix`` sets
+  this on the Hermes package derivation.
+- ``VIGIL_BUILD=1`` — Vigil ships on PyPI as ``vigil-agent-harness``
+  (v0.1.1+, 2026-08-09 发布修复); the release workflow runs
+  ``VIGIL_BUILD=1 python -m build`` so the wheel ships the packaged
+  ops-init module + ``hermes_cli/ops_samples/`` sample data.
 
 Editable installs (``uv sync``, ``pip install -e .``, ``nix develop``)
 use ``build_editable``, which does NOT call ``bdist_wheel`` — it calls
@@ -30,6 +33,8 @@ from setuptools import setup
 from setuptools.command.sdist import sdist
 
 _IN_NIX_BUILD = os.environ.get("HERMES_NIX_BUILD") == "1"
+_IN_VIGIL_BUILD = os.environ.get("VIGIL_BUILD") == "1"
+_ALLOW_BUILD = _IN_NIX_BUILD or _IN_VIGIL_BUILD
 
 _BLOCK_MESSAGE = (
     "Building wheels or sdists for hermes-agent is not supported.\n"
@@ -46,7 +51,7 @@ _BLOCK_MESSAGE = (
 
 class _GuardedSdist(sdist):
     def run(self, *args, **kwargs):
-        if not _IN_NIX_BUILD:
+        if not _ALLOW_BUILD:
             raise RuntimeError(_BLOCK_MESSAGE)
         return super().run(*args, **kwargs)
 
@@ -63,7 +68,7 @@ try:
 
     class _GuardedBdistWheel(bdist_wheel):
         def run(self, *args, **kwargs):
-            if not _IN_NIX_BUILD:
+            if not _ALLOW_BUILD:
                 raise RuntimeError(_BLOCK_MESSAGE)
             return super().run(*args, **kwargs)
 

@@ -9,7 +9,7 @@
 ```bash
 cd /home/wpwang/projects/vigil-agent
 source .venv/bin/activate
-python3 scripts/ops_init.py            # 默认写到 ~/.hermes/profiles/ops
+vigil ops-init                        # 默认写到 ~/.hermes/profiles/ops（旧入口：python3 scripts/ops_init.py 同效）
 ```
 
 输出应包含：创建 profile、写入 config.yaml、写入 topology.yaml、写入 entities/（8 个实体档案）、
@@ -120,10 +120,10 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
 **前置**：初始化脚本已升级（runbook toolset + `ops.runbooks.enabled` + 样例 runbooks）。
 已有 ops profile 需要先补上新配置，二选一：
 
-- 没改过样例拓扑：`python3 scripts/ops_init.py --force`（重铺 config/拓扑/runbooks 样例）。
+- 没改过样例拓扑：`vigil ops-init --force`（重铺 config/拓扑/runbooks 样例）。
 - 改过拓扑/实体（保留你的修改）：手工在 `~/.hermes/profiles/ops/config.yaml` 加两处——
   `platform_toolsets.cli` 改为 `[hermes-cli, topo, runbook]`，并在 `ops:` 下加
-  `runbooks: {enabled: true}`；然后 `python3 scripts/ops_init.py`（不带 --force，
+  `runbooks: {enabled: true}`；然后 `vigil ops-init`（不带 --force，
   会自动铺缺失的 runbooks/）。
 
 重新 `hermes -p ops chat`，依次验证：

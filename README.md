@@ -88,7 +88,7 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 pip install vigil-agent-harness
 
 # 2. 初始化 ops profile（拓扑表 + 样例 runbook）
-vigil setup            # 或 python scripts/ops_init.py
+vigil ops-init         # 生成 ~/.hermes/profiles/ops 下的配置 + 样例拓扑 + 样例 runbook
 
 # 3. 配置模型（如 DeepSeek）——在 ~/.hermes/profiles/ops/config.yaml
 #    添加 model 段，并在同目录 .env 放 API key
@@ -108,7 +108,7 @@ vigil -p ops
 git clone https://github.com/juneauwang/vigil-agent-harness.git
 cd vigil-agent-harness
 python3 -m venv .venv && .venv/bin/pip install -e .
-.venv/bin/python scripts/ops_init.py
+.venv/bin/vigil ops-init          # 或 .venv/bin/python scripts/ops_init.py（同入口）
 .venv/bin/vigil -p ops
 ```
 

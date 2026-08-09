@@ -721,6 +721,56 @@ def ensure_installed(*, log_failures: bool = True):
 
 
 # ---------------------------------------------------------------------------
+# Availability probe (no side effects)
+# ---------------------------------------------------------------------------
+
+
+def tirith_install_status() -> str:
+    """Return a short tag describing tirith availability, without side effects.
+
+    Unlike ``ensure_installed()`` this never starts a background download —
+    it only reports the current state so the CLI startup hint can distinguish
+    "download in flight" (stay silent; it may succeed any second) from
+    "install failed" (one dim hint) from "nothing we can do" (silent).
+
+    Values:
+      "disabled"          — security.tirith_enabled is false
+      "installed"         — binary resolved on PATH or in $HERMES_HOME/bin
+      "installing"        — background download thread is running
+      "failed"            — install attempted and failed (in-memory sentinel
+                            or fresh disk marker)
+      "unsupported"       — no prebuilt binary for this OS/arch
+      "missing"           — never attempted and nothing in flight
+    """
+    cfg = _load_security_config()
+    if not cfg["tirith_enabled"]:
+        return "disabled"
+    if not is_platform_supported():
+        return "unsupported"
+
+    if _resolved_path is not None and _resolved_path is not _INSTALL_FAILED:
+        path = _resolved_path
+        if os.path.isfile(path) and os.access(path, os.X_OK):
+            return "installed"
+        return "missing"
+    if _resolved_path is _INSTALL_FAILED:
+        return "failed"
+    if _install_thread is not None and _install_thread.is_alive():
+        return "installing"
+
+    # Nothing resolved in-process yet — re-run the cheap local checks (a
+    # sibling process may have installed the binary since we last looked).
+    if shutil.which("tirith"):
+        return "installed"
+    hermes_bin = os.path.join(_hermes_bin_dir(), "tirith")
+    if os.path.isfile(hermes_bin) and os.access(hermes_bin, os.X_OK):
+        return "installed"
+    if _read_failure_reason() is not None:
+        return "failed"
+    return "missing"
+
+
+# ---------------------------------------------------------------------------
 # Main API
 # ---------------------------------------------------------------------------
 

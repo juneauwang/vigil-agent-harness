@@ -6,6 +6,7 @@ venv/
 .pytest_cache/
 .pytest-cache/
 *.egg-info/
+build/
 
 # Gateway conformance runner writes a per-run duration map (absolute tmp paths)
 test_durations.json
