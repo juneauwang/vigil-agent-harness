@@ -59,14 +59,22 @@ def _host_candidates(command: str) -> List[str]:
     return hosts
 
 
-def _endpoint_host(endpoint: Any) -> Optional[str]:
-    """Strip scheme/port from an endpoint value → bare host (or None)."""
+def _endpoint_raw(endpoint: Any) -> Optional[str]:
+    """Strip scheme and trailing slash from an endpoint, keeping the port."""
     if not endpoint:
         return None
     host = str(endpoint).strip()
     host = _SCHEME_RE.sub("", host)
-    host = host.split(":", 1)[0].rstrip("/")
+    host = host.rstrip("/")
     return host.lower() or None
+
+
+def _endpoint_host(endpoint: Any) -> Optional[str]:
+    """Strip scheme/port from an endpoint value → bare host (or None)."""
+    host = _endpoint_raw(endpoint)
+    if not host:
+        return None
+    return host.split(":", 1)[0] or None
 
 
 def _entity_ids(entity: Dict[str, Any], attrs: Optional[Dict[str, Any]]) -> List[str]:
@@ -86,8 +94,39 @@ def _entity_ids(entity: Dict[str, Any], attrs: Optional[Dict[str, Any]]) -> List
     return ids
 
 
+def _exact_ids(entity: Dict[str, Any], attrs: Optional[Dict[str, Any]]) -> List[str]:
+    """Identifiers compared by full equality — the raw endpoint keeps its port.
+
+    ``node1.endpoint == "39.106.217.32"`` is an exact endpoint for the bare
+    host needle, while ``harbor.endpoint == "39.106.217.32:30443"`` is not —
+    the port makes it a different string, so it only ever matches in the
+    contains fallback pass.
+    """
+    ids: List[str] = []
+    name = entity.get("name")
+    if name:
+        ids.append(str(name).lower())
+    raw_ep = _endpoint_raw(entity.get("endpoint"))
+    if raw_ep:
+        ids.append(raw_ep)
+    attrs_map = (attrs or {}).get("attrs") if isinstance(attrs, dict) else None
+    for key in ("public_ip", "internal_ip"):
+        val = (attrs_map or {}).get(key)
+        if val:
+            ids.append(str(val).strip().lower())
+    return ids
+
+
 def _match_entity(entities: List[Dict[str, Any]], host: str) -> Optional[Dict[str, Any]]:
-    """Return the first topology entity whose identifiers include ``host``."""
+    """Return the topology entity matching ``host``, exact equality first.
+
+    Exact-equality identifiers win over substring matches: a bare IP that is
+    one entity's full endpoint (e.g. ``node1.endpoint == "39.106.217.32"``)
+    must not be captured by an earlier entity whose endpoint merely contains
+    it (e.g. ``harbor.endpoint == "39.106.217.32:30443"``). Substring matching
+    over the port-stripped identifiers stays as the fallback so ported
+    service endpoints and partial hostnames still resolve.
+    """
     needle = host.strip().lower()
     if not needle:
         return None
@@ -97,13 +136,21 @@ def _match_entity(entities: List[Dict[str, Any]], host: str) -> Optional[Dict[st
         logger.debug("ops_target: topo_tools unavailable: %s", exc)
         return None
     home = _hermes_home()
-    for entity in entities:
+
+    def _loaded(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         attrs = None
         try:
             attrs = _load_entity_file(home, entity)
         except Exception as exc:
             logger.debug("ops_target: entity detail load failed for %s: %s",
                          entity.get("name"), exc)
+        return attrs
+
+    loaded = [_loaded(entity) for entity in entities]
+    for entity, attrs in zip(entities, loaded):
+        if needle in _exact_ids(entity, attrs):
+            return entity
+    for entity, attrs in zip(entities, loaded):
         if needle in _entity_ids(entity, attrs):
             return entity
     return None

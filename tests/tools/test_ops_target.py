@@ -84,6 +84,64 @@ def test_ssh_endpoint_ip_maps_to_node1_prod(topo_home):
     assert target["entity"] == "node1" and target["env"] == "prod"
 
 
+def test_ssh_bare_ip_prefers_exact_endpoint_over_ported_service(topo_home):
+    # harbor 的 endpoint "39.106.217.32:30443" 端口剥离后与 node1 的裸 IP
+    # endpoint 同 host——含匹配按列表序会先命中 harbor；全等匹配必须赢。
+    home = topo_home
+    topo = home / "topology.yaml"
+    topo.write_text(
+        """version: 1
+sources: [test]
+environments:
+  - name: prod
+    entry: "ssh jump@39.106.217.32"
+    isolation: strict
+    role: prod
+    core_entities: [harbor, node1]
+core_entities:
+  - {name: harbor, type: registry, env: prod, endpoint: "39.106.217.32:30443", detail: entities/harbor.yaml}
+  - {name: node1, type: k8s-node, env: prod, endpoint: "39.106.217.32", detail: entities/node1.yaml}
+""",
+        encoding="utf-8",
+    )
+    (home / "entities" / "harbor.yaml").write_text(
+        'name: harbor\nendpoint: "39.106.217.32:30443"\n', encoding="utf-8"
+    )
+    (home / "entities" / "node1.yaml").write_text(
+        'name: node1\nendpoint: "39.106.217.32"\nattrs:\n  public_ip: 39.106.217.32\n',
+        encoding="utf-8",
+    )
+    target = resolve_command_target("ssh root@39.106.217.32 'df -h'")
+    assert target is not None
+    assert target["entity"] == "node1" and target["env"] == "prod"
+
+
+def test_ssh_bare_ip_falls_back_to_ported_service_endpoint(topo_home):
+    # 拓扑里没有裸 IP 实体时，包含匹配兜底仍把 IP 归到同 host 的端口服务。
+    home = topo_home
+    topo = home / "topology.yaml"
+    topo.write_text(
+        """version: 1
+sources: [test]
+environments:
+  - name: prod
+    entry: "ssh jump@39.106.217.32"
+    isolation: strict
+    role: prod
+    core_entities: [harbor]
+core_entities:
+  - {name: harbor, type: registry, env: prod, endpoint: "39.106.217.32:30443", detail: entities/harbor.yaml}
+""",
+        encoding="utf-8",
+    )
+    (home / "entities" / "harbor.yaml").write_text(
+        'name: harbor\nendpoint: "39.106.217.32:30443"\n', encoding="utf-8"
+    )
+    target = resolve_command_target("ssh root@39.106.217.32 'curl -s localhost:5000'")
+    assert target is not None
+    assert target["entity"] == "harbor" and target["env"] == "prod"
+
+
 def test_ssh_hostname_maps_by_entity_name(topo_home):
     target = resolve_command_target("ssh root@node2 whoami")
     assert target["entity"] == "node2" and target["env"] == "prod"
