@@ -107,30 +107,31 @@ python3 -m venv .venv
 
 ## 一次会话长什么样
 
-启动 `vigil -p ops` 后,控制台头部(取自真实渲染逻辑)长这样:
+启动 `vigil -p ops` 后,控制台头部长这样(真实输出):
 
 ```text
-┌─ Vigil v0.1.0 ─────────────────────────────────────────────┐
-│         /\    /\        PROFILE     ops                    │
-│        /  \  /  \       ENV         [test]                 │
-│       | ◉    ◉ |        GATES       matrix ON · L1–L4 × env │
-│       |    ^   |                    → execute/approve/deny │
-│        \   ‾  /        TOPOLOGY    8 entities              │
-│         '-..-'         RUNBOOKS    3 loaded                │
-│   deepseek-v4-flash    HOME        ~/.hermes/profiles/ops  │
-│   ~/projects/vigil-agent                                   │
-│   Session: 20260809_...                                   │
-│                                 ◈ topo_query · runbook_load│
-│                                   · permission matrix      │
-└────────────────────────────────────────────────────────────┘
+╭──────────────────── Vigil v0.1.0 (2026.8.8) ────────────────────╮
+│                PROFILE     ops                                   │
+│       /\_/\    ENV         [test]                                │
+│      ( ◉.◉ )   GATES       matrix ON · L1–L4 × env               │
+│       > ^ <                → execute / approve / deny            │
+│                TOPOLOGY    20 entities                           │
+│                RUNBOOKS    6 loaded                              │
+│ deepseek-v4-flash          HOME  ~/.hermes/profiles/ops          │
+│ /home/wpwang                                                     │
+│ Session: 20260809_171603   ◈ topo_query · runbook_load           │
+│                                · permission matrix · /help       │
+╰──────────────────────────────────────────────────────────────────╯
+
+Welcome to Vigil — topology loaded, runbooks ready, permission gates armed.
 
 你：帮我排查 node2 的 sshd 为什么连不上
 Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
        "ssh-idle-hang" → 诊断（sshd -T / 保活配置）→ 修复 → 验证
 ```
 
-左边是模型/工作目录/会话锚点,右边是运维能力实时状态——在哪个环境、
-权限门开没开、记住了多少实体、有哪些 runbook,一眼可见。
+左边是模型/工作目录/会话锚点，右边是运维能力实时状态——在哪个环境、
+权限门开没开、记住了多少实体、有哪些 runbook，一眼可见。
 
 ## 安全模型
 
