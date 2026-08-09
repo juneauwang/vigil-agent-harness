@@ -81,7 +81,7 @@ def test_frontmatter_slug_matched_even_when_dir_name_differs(
         "the old code compared the dir name 'stable-diffusion' and returned None"
     )
     assert "disabled" in msg.lower()
-    assert "hermes skills config" in msg
+    assert "vigil skills config" in msg
 
 
 def test_unknown_command_still_returns_none(
@@ -98,5 +98,4 @@ def test_unknown_command_still_returns_none(
         "agent.skill_utils.get_all_skills_dirs", return_value=[tmp_skills]
     ):
         assert gateway_run._check_unavailable_skill("no-such-skill") is None
-
 

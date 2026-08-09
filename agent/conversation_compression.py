@@ -1634,7 +1634,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
                 msg = (
                     "⚠ No auxiliary LLM provider configured — context "
                     "compression will drop middle turns without a summary. "
-                    "Run `hermes setup` or set OPENROUTER_API_KEY."
+                    "Run `vigil setup` or set OPENROUTER_API_KEY."
                 )
             agent._compression_warning = msg
             agent._emit_status(msg)
@@ -2420,7 +2420,7 @@ def compress_context(
                     "compression lock subsystem unavailable for session=%s "
                     "— proceeding without lock. This usually means a stale "
                     "in-memory module after an update; restart the process "
-                    "(or `hermes update`) to resync.",
+                    "(or `vigil update`) to resync.",
                     _lock_sid,
                 )
             _lock_acquired = True  # acquired-but-unlocked compatibility path

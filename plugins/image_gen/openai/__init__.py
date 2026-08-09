@@ -240,8 +240,8 @@ class OpenAIImageGenProvider(ImageGenProvider):
         if not api_key:
             return error_response(
                 error=(
-                    "OPENAI_API_KEY not set. Run `hermes tools` → Image "
-                    "Generation → OpenAI to configure, or `hermes setup` "
+                    "OPENAI_API_KEY not set. Run `vigil tools` → Image "
+                    "Generation → OpenAI to configure, or `vigil setup` "
                     "to add the key."
                 ),
                 error_type="auth_required",

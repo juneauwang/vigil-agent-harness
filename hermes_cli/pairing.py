@@ -24,8 +24,8 @@ def pairing_command(args):
     elif action == "clear-pending":
         _cmd_clear_pending(store)
     else:
-        print("Usage: hermes pairing {list|approve|revoke|clear-pending}")
-        print("Run 'hermes pairing --help' for details.")
+        print("Usage: vigil pairing {list|approve|revoke|clear-pending}")
+        print("Run 'vigil pairing --help' for details.")
 
 
 def _cmd_list(store):
@@ -46,7 +46,7 @@ def _cmd_list(store):
                 f"  {p['platform']:<12} {(p.get('request_id') or '-'):<18} {p['user_id']:<20} "
                 f"{(p.get('user_name') or ''):<20} {p['age_minutes']}m ago"
             )
-        print("\n  Approve with: hermes pairing approve <platform> <request-id>")
+        print("\n  Approve with: vigil pairing approve <platform> <request-id>")
         print("  The code the bot DM'd the user also works if they relay it.")
     else:
         print("\n  No pending pairing requests.")
@@ -98,7 +98,7 @@ def _cmd_approve(store, platform: str, code: str):
         )
     else:
         print(f"\n  Pairing request or code '{code}' not found or expired for platform '{platform}'.")
-        print("  Run 'hermes pairing list' to see pending requests.\n")
+        print("  Run 'vigil pairing list' to see pending requests.\n")
 
 
 def _cmd_revoke(store, platform: str, user_id: str):

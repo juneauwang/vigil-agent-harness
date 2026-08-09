@@ -17,6 +17,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+pytest.importorskip("acp", reason="agent-client-protocol not installed (pip install hermes-agent[acp])")
+
 from acp_adapter.server import HermesACPAgent
 from acp_adapter.session import SessionManager, SessionState
 from hermes_cli import mcp_startup

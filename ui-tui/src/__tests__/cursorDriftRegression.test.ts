@@ -38,7 +38,7 @@ const USER_REPORT_MESSAGE =
   // Paraphrase of the user's actual bug report, included verbatim so the
   // test is grounded in a realistic typing pattern (long single line,
   // mixed-length words, punctuation, no hard newlines).
-  'im in cursor terminal using hermes --tui and as i type multiline my caret at the end will often ' +
+  'im in cursor terminal using vigil --tui and as i type multiline my caret at the end will often ' +
   'go.. randomly.. like multiple spaces away lol and idk why. theres no rhyme/reason really but ' +
   'there should literally never be a non-user added space at the end of my composer input right? ' +
   'i dont think it happens on new sessions but only existing ones. there have been a few prs to ' +

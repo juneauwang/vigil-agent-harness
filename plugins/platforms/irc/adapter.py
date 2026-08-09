@@ -617,7 +617,7 @@ def interactive_setup() -> None:
     save_env_value("IRC_NICKNAME", nickname.strip())
 
     channel = prompt(
-        "Channel to join (e.g. #hermes — comma-separate for multiple)",
+        "Channel to join (e.g. #vigil — comma-separate for multiple)",
         default=get_env_value("IRC_CHANNEL") or "",
     )
     if not channel:
@@ -663,7 +663,7 @@ def interactive_setup() -> None:
 
     print()
     print_success("IRC configuration saved to ~/.hermes/.env")
-    print_info("Restart the gateway for changes to take effect: hermes gateway restart")
+    print_info("Restart the gateway for changes to take effect: vigil gateway restart")
 
 
 def is_connected(config) -> bool:

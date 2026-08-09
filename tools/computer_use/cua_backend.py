@@ -812,7 +812,7 @@ def cua_driver_update_nudge() -> Optional[str]:
     current = state.get("current_version") or "?"
     return (
         f"cua-driver {latest} is available (you have {current}); "
-        f"update with `hermes computer-use install --upgrade`."
+        f"update with `vigil computer-use install --upgrade`."
     )
 
 
@@ -854,10 +854,10 @@ def cua_driver_install_hint() -> str:
         )
     return (
         "cua-driver is not installed. Install with one of:\n"
-        "  hermes computer-use install\n"
+        "  vigil computer-use install\n"
         "Or run the upstream installer directly:\n"
         f"{installer}\n"
-        "Or run `hermes tools` and enable the Computer Use toolset to install it automatically."
+        "Or run `vigil tools` and enable the Computer Use toolset to install it automatically."
     )
 
 
@@ -1296,7 +1296,7 @@ class _CuaDriverSession:
             raise RuntimeError(
                 "cua-driver session never reached ready (timeout 30s; "
                 f"stuck in phase: {phase}). "
-                "Run `hermes computer-use doctor` and check "
+                "Run `vigil computer-use doctor` and check "
                 f"{display_hermes_home()}/logs/agent.log for the phase timings."
             )
         # If setup failed, the lifecycle coroutine set _setup_error

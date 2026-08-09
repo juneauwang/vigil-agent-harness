@@ -118,7 +118,7 @@ TOOLSETS = {
             "x_search Responses tool. Read-only public X discovery; use the "
             "xurl skill for authenticated X API reads and account actions. "
             "Available when xAI credentials are configured (SuperGrok OAuth "
-            "or XAI_API_KEY). Off by default; enable in `hermes tools` → "
+            "or XAI_API_KEY). Off by default; enable in `vigil tools` → "
             "X (Twitter) Search."
         ),
         "tools": ["x_search"],
@@ -149,7 +149,7 @@ TOOLSETS = {
             "text-to-video (prompt only) and image-to-video (prompt + "
             "image_url), plus reference-to-video. Provider-specific edit/"
             "extend workflows may appear as separate tools. Configure via "
-            "``hermes tools`` → Video Generation."
+            "``vigil tools`` → Video Generation."
         ),
         "tools": ["video_generate", "xai_video_edit", "xai_video_extend"],
         "includes": []
@@ -495,7 +495,7 @@ TOOLSETS = {
         # them down per the platform config. _DEFAULT_OFF_TOOLSETS (moa,
         # homeassistant) are excluded by _get_platform_tools() unless
         # the user explicitly enables them.
-        "description": "Default cron toolset - same core tools as hermes-cli; gated by `hermes tools`",
+        "description": "Default cron toolset - same core tools as hermes-cli; gated by `vigil tools`",
         "tools": _HERMES_CORE_TOOLS,
         "includes": []
     },

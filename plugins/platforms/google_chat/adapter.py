@@ -3509,7 +3509,7 @@ def interactive_setup() -> None:
 
     print()
     print_success("Google Chat configuration saved to ~/.hermes/.env")
-    print_info("Restart the gateway: hermes gateway restart")
+    print_info("Restart the gateway: vigil gateway restart")
 
 
 # Strict resource-name pattern.  ``spaces/<id>`` and ``users/<id>`` must
@@ -3689,7 +3689,7 @@ def register(ctx) -> None:
         required_env=[
             "GOOGLE_CHAT_SERVICE_ACCOUNT_JSON",
         ],
-        install_hint="Run `hermes setup` to install Google Chat support.",
+        install_hint="Run `vigil setup` to install Google Chat support.",
         setup_fn=interactive_setup,
         # Env-driven auto-configuration — the core env-populator hook calls
         # this during ``_apply_env_overrides`` and seeds

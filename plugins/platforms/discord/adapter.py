@@ -2474,7 +2474,7 @@ class DiscordAdapter(BasePlatformAdapter):
     def _is_down_notice_content(self, content: str) -> bool:
         """Recognize only explicit Hermes/gateway outage notices."""
         text = (content or "").lower()
-        subject = r"(?:hermes|the agent|agent|the gateway|gateway|bmo)"
+        subject = r"(?:hermes|vigil|the agent|agent|the gateway|gateway|bmo)"
         state = r"(?:is|was|appears to be|is currently|was currently)"
         condition = r"(?:down|offline|unavailable|not running)"
         return re.search(rf"\b{subject}\s+{state}\s+{condition}\b", text) is not None
@@ -10109,7 +10109,7 @@ def register(ctx) -> None:
         check_fn=check_discord_requirements,
         is_connected=_is_connected,
         required_env=["DISCORD_BOT_TOKEN"],
-        install_hint="Run `hermes setup` to install Discord support.",
+        install_hint="Run `vigil setup` to install Discord support.",
         # Interactive setup wizard — replaces the central
         # hermes_cli/setup.py::_setup_discord function.  Same shape as Teams.
         setup_fn=interactive_setup,

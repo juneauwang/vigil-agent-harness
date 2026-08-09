@@ -248,7 +248,7 @@ _DEFAULT_EXPORT_INCLUDE_ROOT = frozenset({
 
 # Names that cannot be used as profile aliases
 _RESERVED_NAMES = frozenset({
-    "hermes", "default", "test", "tmp", "root", "sudo",
+    "vigil", "hermes", "default", "test", "tmp", "root", "sudo",
 })
 
 # Vigil subcommands that cannot be used as profile names/aliases
@@ -401,7 +401,7 @@ def check_alias_collision(name: str) -> Optional[str]:
     if canon in _RESERVED_NAMES:
         return f"'{canon}' is a reserved name"
     if canon in _HERMES_SUBCOMMANDS:
-        return f"'{canon}' conflicts with a hermes subcommand"
+        return f"'{canon}' conflicts with a vigil subcommand"
 
     # Check existing commands in PATH
     wrapper_dir = _get_wrapper_dir()
@@ -418,7 +418,7 @@ def check_alias_collision(name: str) -> Optional[str]:
             if existing_path == str(expected):
                 try:
                     content = expected.read_text(encoding="utf-8")
-                    if "hermes -p" in content:
+                    if any(pfx in content for pfx in ("vigil -p", "argus -p", "hermes -p")):
                         return None  # it's our wrapper, safe to overwrite
                 except Exception:
                     pass
@@ -1152,8 +1152,8 @@ def create_profile(
         try:
             (profile_dir / NO_BUNDLED_SKILLS_MARKER).write_text(
                 "This profile opted out of bundled-skill seeding "
-                "(`hermes profile create --no-skills`).\n"
-                "Delete this file to re-enable sync on the next `hermes update`.\n",
+                "(`vigil profile create --no-skills`).\n"
+                "Delete this file to re-enable sync on the next `vigil update`.\n",
                 encoding="utf-8",
             )
         except OSError:
@@ -1355,6 +1355,8 @@ def _profile_bound_backend_pids(canon: str, profile_dir: Path) -> list[int]:
             exe_name = os.path.basename(argv[0]).lower()
             is_hermes = (
                 any(marker in joined for marker in hermes_markers)
+                or exe_name == "vigil"
+                or exe_name.startswith("vigil")
                 or exe_name == "hermes"
                 or exe_name.startswith("hermes")
             )
@@ -1485,7 +1487,7 @@ def delete_profile(name: str, yes: bool = False) -> Path:
     if canon == "default":
         raise ValueError(
             "Cannot delete the default profile (~/.hermes).\n"
-            "To remove everything, use: hermes uninstall"
+            "To remove everything, use: vigil uninstall"
         )
 
     profile_dir = get_profile_dir(canon)
@@ -1825,7 +1827,7 @@ def set_active_profile(name: str) -> None:
     if canon != "default" and not profile_exists(canon):
         raise FileNotFoundError(
             f"Profile '{canon}' does not exist. "
-            f"Create it with: hermes profile create {canon}"
+            f"Create it with: vigil profile create {canon}"
         )
 
     path = _get_active_profile_path()
@@ -2078,7 +2080,7 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
     if not inferred_name:
         raise ValueError(
             "Cannot determine profile name from archive. "
-            "Specify it explicitly: hermes profile import <archive> --name <name>"
+            "Specify it explicitly: vigil profile import <archive> --name <name>"
         )
     if archive_root is None:
         raise ValueError(
@@ -2093,7 +2095,7 @@ def import_profile(archive_path: str, name: Optional[str] = None) -> Path:
     if canon == "default":
         raise ValueError(
             "Cannot import as 'default' — that is the built-in root profile (~/.hermes). "
-            "Specify a different name: hermes profile import <archive> --name <name>"
+            "Specify a different name: vigil profile import <archive> --name <name>"
         )
 
     profile_dir = get_profile_dir(canon)
@@ -2259,7 +2261,7 @@ def resolve_profile_env(profile_name: str) -> str:
     if canon != "default" and not profile_dir.is_dir():
         raise FileNotFoundError(
             f"Profile '{canon}' does not exist. "
-            f"Create it with: hermes profile create {canon}"
+            f"Create it with: vigil profile create {canon}"
         )
 
     return str(profile_dir)

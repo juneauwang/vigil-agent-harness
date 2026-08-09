@@ -114,7 +114,7 @@ def resolve_hermes_bin() -> Optional[str]:
                 return abs_path
 
     # PATH lookup
-    path_bin = shutil.which("hermes")
+    path_bin = shutil.which("vigil") or shutil.which("hermes")
     if path_bin:
         return path_bin
 

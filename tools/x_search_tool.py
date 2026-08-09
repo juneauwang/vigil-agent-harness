@@ -133,7 +133,7 @@ def _resolve_xai_bearer() -> Tuple[str, str, str]:
     api_key = str(creds.get("api_key") or "").strip()
     if not api_key:
         raise RuntimeError(
-            "No xAI credentials available. Run `hermes auth add xai-oauth` "
+            "No xAI credentials available. Run `vigil auth add xai-oauth` "
             "to sign in with your SuperGrok subscription, or set XAI_API_KEY."
         )
     base_url = str(creds.get("base_url") or DEFAULT_XAI_BASE_URL).strip().rstrip("/")

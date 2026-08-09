@@ -8865,7 +8865,11 @@ def _resolve_hermes_argv() -> list[str]:
             return _hermes_path_argv(resolved_env_bin)
         return _module_hermes_argv()
 
-    hermes_bin = _safe_which_no_cwd("hermes") if _IS_WINDOWS else shutil.which("hermes")
+    hermes_bin = (
+        (_safe_which_no_cwd("vigil") or _safe_which_no_cwd("hermes"))
+        if _IS_WINDOWS
+        else (shutil.which("vigil") or shutil.which("hermes"))
+    )
     if hermes_bin:
         return _hermes_path_argv(hermes_bin)
     return _module_hermes_argv()
@@ -9165,7 +9169,7 @@ def _default_spawn(
     except FileNotFoundError:
         log_f.close()
         raise RuntimeError(
-            "`hermes` executable not found on PATH. "
+            "`vigil` executable not found on PATH. "
             "Install Hermes Agent or activate its venv before running the kanban dispatcher."
         )
     # NOTE: we intentionally do NOT close log_f here — we want Popen's

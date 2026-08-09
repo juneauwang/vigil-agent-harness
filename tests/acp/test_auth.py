@@ -1,5 +1,9 @@
 """Tests for acp_adapter.auth — provider detection."""
 
+import pytest
+
+pytest.importorskip("acp", reason="agent-client-protocol not installed (pip install hermes-agent[acp])")
+
 from acp_adapter.auth import (
     TERMINAL_SETUP_AUTH_METHOD_ID,
     build_auth_methods,
@@ -45,4 +49,3 @@ class TestBuildAuthMethods:
         terminal = next(payload for payload in payloads if payload["id"] == TERMINAL_SETUP_AUTH_METHOD_ID)
         assert terminal["type"] == "terminal"
         assert terminal["args"] == ["--setup"]
-

@@ -916,7 +916,7 @@ def _log_wal_reset_bug_once(
         "%s: linked SQLite %s is vulnerable to the WAL-reset corruption "
         "bug (https://sqlite.org/wal.html#walresetbug) — %s. "
         "Upgrade to SQLite 3.51.3+ (or backports 3.50.7 / 3.44.6); "
-        "%s. See `hermes doctor`. This warning fires once per "
+        "%s. See `vigil doctor`. This warning fires once per "
         "process per database.",
         db_label,
         sqlite3.sqlite_version,
@@ -1820,8 +1820,8 @@ def quarantine_zeroed_state_db(path: Path) -> Optional[Path]:
                 "quarantine lock for %s not acquired within 5s — refusing to "
                 "quarantine without the cross-process lock. The zeroed file "
                 "is left in place. If sessions fail to load, restore from "
-                "state-snapshots via `hermes snapshot list` / "
-                "`hermes snapshot restore <id>`.",
+                "state-snapshots via `vigil snapshot list` / "
+                "`vigil snapshot restore <id>`.",
                 path,
             )
             return None
@@ -2128,8 +2128,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 msg = (
                     f"state.db looks ZEROED ({zsize} bytes, no SQLite header). "
                     f"Preserved at {qpath or '(quarantine failed — file left in place)'}. "
-                    f"Restore from {snaps} via `hermes snapshot list` / "
-                    f"`hermes snapshot restore <id>` if available. "
+                    f"Restore from {snaps} via `vigil snapshot list` / "
+                    f"`vigil snapshot restore <id>` if available. "
                     "Opening a fresh empty database so the agent can start."
                 )
                 logger.error(msg)
@@ -2399,7 +2399,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         self._fts_unavailable_warned = True
         logger.warning(
             "SQLite FTS5 unavailable for %s; full-text session search "
-            "disabled. Run `hermes update` to rebuild the venv with a "
+            "disabled. Run `vigil update` to rebuild the venv with a "
             "current Python (managed uv guarantees FTS5). "
             "(underlying error: %s)",
             self.db_path,
@@ -2453,7 +2453,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                         "cjk_unicode61 tokenizer is unavailable (%s) — "
                         "dropping the cjk triggers so message writes keep "
                         "working. CJK search falls back to trigram/LIKE; "
-                        "run `hermes sessions optimize-storage` on a host "
+                        "run `vigil sessions optimize-storage` on a host "
                         "with the extension to rebuild.",
                         fts5_cjk_so_path(),
                     )

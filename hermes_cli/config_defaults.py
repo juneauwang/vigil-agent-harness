@@ -1579,7 +1579,7 @@ DEFAULT_CONFIG = {
         "input_device": None,          # PortAudio input device index/name; null uses the process default
         "capture": "auto",            # auto | local | client — where PCM is captured (client = desktop streams mic via wake.feed)
         "provider": "openwakeword",   # "openwakeword" (free, local) | "sherpa" (free, ANY phrase, no training) | "porcupine" (premium; needs PORCUPINE_ACCESS_KEY)
-        "phrase": "hey hermes",       # for "sherpa" this IS the detected phrase (any text works); for other engines it's a cosmetic label — detection is keyed by the model/keyword below
+        "phrase": "hey vigil",       # for "sherpa" this IS the detected phrase (any text works); for other engines it's a cosmetic label — detection is keyed by the model/keyword below
         "sensitivity": 0.6,           # 0.0-1.0 detection threshold, consistent across engines (higher = stricter, fewer false triggers)
         "confirmation_frames": 3,     # openWakeWord only: consecutive over-threshold frames required to fire (higher = fewer false triggers on ambient speech, slightly more latency; 1 = old single-frame behavior)
         "start_new_session": True,    # start a fresh session on wake vs. continue the current one
@@ -3544,7 +3544,7 @@ OPTIONAL_ENV_VARS = {
         "category": "provider",
     },
     "AZURE_FOUNDRY_BASE_URL": {
-        "description": "Azure Foundry base URL (set via 'hermes model' for endpoint-specific config)",
+        "description": "Azure Foundry base URL (set via 'vigil model' for endpoint-specific config)",
         "prompt": "Azure Foundry base URL",
         "url": None,
         "password": False,
@@ -4025,7 +4025,7 @@ OPTIONAL_ENV_VARS = {
         "category": "messaging",
     },
     "MATRIX_USER_ID": {
-        "description": "Matrix user ID (e.g. @hermes:example.org)",
+        "description": "Matrix user ID (e.g. @vigil:example.org)",
         "prompt": "Matrix user ID (@user:server)",
         "url": None,
         "password": False,
@@ -4162,7 +4162,7 @@ OPTIONAL_ENV_VARS = {
         "category": "messaging",
     },
     "IRC_CHANNEL": {
-        "description": "IRC channel to join (e.g. #hermes)",
+        "description": "IRC channel to join (e.g. #vigil)",
         "prompt": "IRC channel",
         "url": None,
         "password": False,

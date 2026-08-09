@@ -52,7 +52,7 @@ def _default_gateway_id() -> str:
         host = socket.gethostname().strip()
     except Exception:
         host = ""
-    return f"gw-{host or 'hermes'}"
+    return f"gw-{host or 'vigil'}"
 
 
 def _resolve_connector_url(override: Optional[str]) -> Optional[str]:
@@ -138,7 +138,7 @@ def _post_enroll(
         if exc.code == 401:
             raise RuntimeError(
                 "Connector rejected the caller identity (401). Your Nous Portal "
-                "token could not be verified — try `hermes auth add nous` and retry."
+                "token could not be verified — try `vigil auth add nous` and retry."
             ) from exc
         if exc.code == 403:
             raise RuntimeError(
@@ -169,7 +169,7 @@ def cmd_gateway_enroll(args) -> None:
     # write anyway.
     if is_managed():
         print(
-            "✗ `hermes gateway enroll` is not available in a managed/hosted install.\n"
+            "✗ `vigil gateway enroll` is not available in a managed/hosted install.\n"
             "  The relay gateway secret is provisioned by the hosting platform."
         )
         sys.exit(1)
@@ -202,7 +202,7 @@ def cmd_gateway_enroll(args) -> None:
     except AuthError as exc:
         if getattr(exc, "relogin_required", False):
             print("✗ You're not logged into Nous Portal.")
-            print("  Run `hermes setup` (or `hermes auth add nous`) first, then retry.")
+            print("  Run `vigil setup` (or `vigil auth add nous`) first, then retry.")
         else:
             print(f"✗ Could not resolve a Nous Portal access token: {exc}")
         sys.exit(1)

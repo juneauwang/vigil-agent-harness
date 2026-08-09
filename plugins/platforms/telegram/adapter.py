@@ -3192,7 +3192,7 @@ class TelegramAdapter(BasePlatformAdapter):
             "The previous gateway session is still held open on Telegram's servers, "
             "or another process is using the same bot token. "
             "To recover: ensure no other Hermes or OpenClaw instance is running "
-            "with this token, then restart the gateway with 'hermes gateway restart'."
+            "with this token, then restart the gateway with 'vigil gateway restart'."
             % (MAX_CONFLICT_RETRIES, sum(10 + i * 10 for i in range(1, MAX_CONFLICT_RETRIES + 1)))
         )
         logger.error(
@@ -10134,7 +10134,7 @@ def register(ctx) -> None:
         check_fn=check_telegram_requirements,
         is_connected=_is_connected,
         required_env=["TELEGRAM_BOT_TOKEN"],
-        install_hint="Run `hermes setup` to install Telegram support.",
+        install_hint="Run `vigil setup` to install Telegram support.",
         setup_fn=interactive_setup,
         apply_yaml_config_fn=_apply_yaml_config,
         allowed_users_env="TELEGRAM_ALLOWED_USERS",

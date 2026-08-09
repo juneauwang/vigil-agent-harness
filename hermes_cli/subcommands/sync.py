@@ -41,10 +41,10 @@ def build_sync_parser(subparsers, *, cmd_sync: Callable) -> None:
         ),
         epilog=(
             "Examples:\n"
-            "  hermes sync status            what is synced, and from where\n"
-            "  hermes sync enable my-skill   include a skill in your sync\n"
-            "  hermes sync now               pull, then push\n"
-            "  hermes sync propose my-skill  share a skill with your team\n"
+            "  vigil sync status            what is synced, and from where\n"
+            "  vigil sync enable my-skill   include a skill in your sync\n"
+            "  vigil sync now               pull, then push\n"
+            "  vigil sync propose my-skill  share a skill with your team\n"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )

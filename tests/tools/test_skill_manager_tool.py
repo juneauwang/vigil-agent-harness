@@ -755,7 +755,7 @@ class TestPinnedGuard:
         assert result["success"] is False
         assert "pinned" in result["error"].lower()
         assert "cannot be deleted" in result["error"]
-        assert "hermes curator unpin my-skill" in result["error"]
+        assert "vigil curator unpin my-skill" in result["error"]
         # Skill still exists
         assert (tmp_path / "my-skill" / "SKILL.md").exists()
 

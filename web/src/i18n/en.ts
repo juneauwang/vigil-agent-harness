@@ -133,7 +133,7 @@ export const en: Translations = {
     stopped: "Stopped",
     updateHermes: "Update Hermes",
     updateHermesConfirmMessage:
-      "This runs hermes update and restarts the gateway when it finishes. Active sessions keep their prompt cache until then.",
+      "This runs vigil update and restarts the gateway when it finishes. Active sessions keep their prompt cache until then.",
     updateHermesConfirmNow: "Update now",
     updateHermesConfirmTitle: "Update Hermes?",
     updatingHermes: "Updating Hermes…",
@@ -377,7 +377,7 @@ export const en: Translations = {
     enableRuntime: "Enable",
     forceReinstall: "Force reinstall (delete existing folder first)",
     headline:
-      "Discover, install, enable, and update Hermes plugins (`hermes plugins` parity).",
+      "Discover, install, enable, and update Hermes plugins (`vigil plugins` parity).",
     identifierLabel: "Git URL or owner/repo",
     inactive: "inactive",
     installBtn: "Install",

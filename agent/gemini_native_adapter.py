@@ -970,7 +970,7 @@ class GeminiNativeClient:
             raise RuntimeError(
                 "Gemini native client requires an API key, but none was provided. "
                 "Set GOOGLE_API_KEY or GEMINI_API_KEY in your environment / ~/.hermes/.env "
-                "(get one at https://aistudio.google.com/app/apikey), or run `hermes setup` "
+                "(get one at https://aistudio.google.com/app/apikey), or run `vigil setup` "
                 "to configure the Google provider."
             )
         self.api_key = api_key

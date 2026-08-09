@@ -81,7 +81,7 @@ class TestSystemdServiceRefresh:
 
         output = capsys.readouterr().out
         assert "still restarting after 90s" in output
-        assert "hermes gateway status" in output
+        assert "vigil gateway status" in output
 
 
     def test_refresh_refuses_to_bake_pytest_tmpdir_into_real_user_unit(
@@ -173,7 +173,7 @@ class TestRequireServiceInstalled:
         assert exc_info.value.code == 1
         out = capsys.readouterr().out
         assert "not installed" in out
-        assert "hermes gateway install" in out
+        assert "vigil gateway install" in out
 
     def test_passes_when_unit_exists(self, tmp_path, monkeypatch):
         unit_path = tmp_path / "hermes-gateway.service"
@@ -923,7 +923,7 @@ class TestPreflightUserSystemd:
 
         msg = str(exc_info.value)
         assert "sudo loginctl enable-linger" in msg
-        assert "hermes gateway run" in msg  # foreground fallback mentioned
+        assert "vigil gateway run" in msg  # foreground fallback mentioned
         assert "Interactive authentication required" in msg
 
 
@@ -1203,7 +1203,7 @@ class TestLegacyHermesUnitDetection:
 
         assert "Legacy" in out
         assert "hermes.service" in out
-        assert "hermes gateway migrate-legacy" in out
+        assert "vigil gateway migrate-legacy" in out
 
 
 
@@ -1578,8 +1578,8 @@ class TestSystemScopeRemediationOutput:
         assert "system-wide service" in out
         assert "start requires root" in out
         assert "sudo systemctl start hermes-gateway" in out
-        assert "sudo hermes gateway uninstall --system" in out
-        assert "hermes gateway install" in out
+        assert "sudo vigil gateway uninstall --system" in out
+        assert "vigil gateway install" in out
 
 
 class TestGatewayCommandCatchesSystemScopeError:
@@ -1759,4 +1759,3 @@ class TestRetryLaunchctlBootstrapUntilRegistered:
         )
         assert ok is True
         assert attempts["bootstrap"] >= 2  # the timeout was retried, not raised
-

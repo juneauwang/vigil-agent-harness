@@ -112,7 +112,7 @@ def test_install_without_source_icon_uses_themed_name(tmp_path, xdg_home, monkey
 
     # A broken absolute path renders as no icon. The themed name resolves
     # when Hermes is installed some other way.
-    assert _parse(entry.read_text(encoding="utf-8"))["Icon"] == "hermes"
+    assert _parse(entry.read_text(encoding="utf-8"))["Icon"] == "vigil"
 
 
 @pytest.mark.parametrize("platform", ["darwin", "win32"])

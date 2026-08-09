@@ -913,7 +913,7 @@ def check_wake_word_requirements(cfg: Optional[Dict[str, Any]] = None) -> Dict[s
         missing = " and ".join(
             name for name, ok in (("speech-to-text", stt_ok), ("text-to-speech", tts_ok)) if not ok
         )
-        hint = (f"Wake word needs {missing} configured — run `hermes tools` "
+        hint = (f"Wake word needs {missing} configured — run `vigil tools` "
                 f"(Voice section) or see the voice-mode docs.")
 
     capture_mode = resolve_capture_mode(cfg)

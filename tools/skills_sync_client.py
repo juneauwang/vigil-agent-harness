@@ -1260,7 +1260,7 @@ def push_skills(
     *,
     skill_names: Optional[List[str]] = None,
     identity: Optional[Dict[str, Any]] = None,
-    message: str = "hermes skill sync",
+    message: str = "vigil skill sync",
 ) -> Dict[str, Any]:
     """Push opted-in skills to the owner's HEAD (sync contract).
 
@@ -1412,7 +1412,7 @@ def _resolve_push_conflict(
             "actual_head": actual_head,
             "message": (
                 f"{len(overlaps)} skill(s) changed on both sides; wrote "
-                f"{conflict_ref}. Resolve out-of-band (hermes sync / NAS UI)."
+                f"{conflict_ref}. Resolve out-of-band (vigil sync / NAS UI)."
             ),
         }
 
@@ -1610,7 +1610,7 @@ def _opted_in_rel_paths() -> List[str]:
 # (no push, no pull, no-op) unless the signed-in user is a Nous admin.
 # ---------------------------------------------------------------------------
 
-def maybe_push_skills(*, message: str = "hermes skill sync") -> Optional[Dict[str, Any]]:
+def maybe_push_skills(*, message: str = "vigil skill sync") -> Optional[Dict[str, Any]]:
     """Best-effort push if all gates pass. Returns a result dict or None.
     Never raises. Called from the debounced skill_manage push hook."""
     try:

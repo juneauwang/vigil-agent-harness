@@ -153,7 +153,7 @@ def install_desktop_entry(project_root: Path) -> Optional[Path]:
     icon = icon_path(project_root)
     # Use the themed name when the checkout has no icon (a lite or
     # packaged install). A broken absolute path renders as no icon.
-    icon_value = str(icon) if icon.is_file() else "hermes"
+    icon_value = str(icon) if icon.is_file() else "vigil"
     contents = render_desktop_entry(resolve_exec_command(), icon_value)
 
     try:

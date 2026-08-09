@@ -790,7 +790,7 @@ export const ja = defineLocale({
       sshKeyTitle: '鍵ファイル',
       sshKeyDesc: '秘密鍵のパス。空欄 = ssh-agent または ~/.ssh/config。',
       sshHermesPathTitle: 'Hermes パス（任意）',
-      sshHermesPathDesc: 'リモートの hermes バイナリへのフルパス。空欄 = 自動検出。',
+      sshHermesPathDesc: 'リモートの vigil バイナリへのフルパス。空欄 = 自動検出。',
       sshHermesPathPlaceholder: '自動検出',
       sshRemoteProfileTitle: 'リモートプロファイル（任意）',
       sshRemoteProfileDesc: 'リモートホスト上のプロファイル名。空欄 = Desktop のプロファイル名を使用。',
@@ -1069,7 +1069,7 @@ export const ja = defineLocale({
     edit: '編集',
     archive: 'アーカイブ',
     skillArchivedTitle: 'スキルをアーカイブしました',
-    skillArchivedMessage: 'hermes curator restore で復元できます。'
+    skillArchivedMessage: 'vigil curator restore で復元できます。'
   },
 
   starmap: {
@@ -1867,7 +1867,7 @@ export const ja = defineLocale({
       '/resume': '以前のセッションを再開',
       '/details': 'トランスクリプトの詳細レベルを制御',
       '/copy': '選択または最後のアシスタントメッセージをコピー',
-      '/quit': 'hermes を終了'
+      '/quit': 'vigil を終了'
     },
     hotkeyDescs: {
       'composer.mention': 'ファイル、フォルダー、URL、Git を参照',
@@ -2792,7 +2792,7 @@ export const ja = defineLocale({
       success: platform => `${platform} に引き継ぎました。いつでもここで再開できます。`,
       systemNote: platform => `↻ ${platform} に引き継ぎました — いつでもここで再開できます。`,
       failed: error => `引き継ぎに失敗しました: ${error}`,
-      timedOut: 'ゲートウェイの待機がタイムアウトしました。`hermes gateway` は起動していますか？'
+      timedOut: 'ゲートウェイの待機がタイムアウトしました。`vigil gateway` は起動していますか？'
     }
   },
 

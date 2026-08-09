@@ -929,20 +929,20 @@ def reload_proxy() -> bool:
     if not pid or not _pid_alive(pid):
         raise RuntimeError(
             "iron-proxy is not running — nothing to reload.  "
-            "Run `hermes egress start`."
+            "Run `vigil egress start`."
         )
     mgmt = _read_management_listen_from_config()
     if mgmt is None:
         raise RuntimeError(
             "The generated proxy.yaml has no management listener (written "
-            "before reload support).  Re-run `hermes egress setup` and use "
-            "`hermes egress restart` this one time."
+            "before reload support).  Re-run `vigil egress setup` and use "
+            "`vigil egress restart` this one time."
         )
     token = _read_management_token()
     if not token:
         raise RuntimeError(
-            "management.token is missing — re-run `hermes egress setup`, "
-            "then `hermes egress restart`."
+            "management.token is missing — re-run `vigil egress setup`, "
+            "then `vigil egress restart`."
         )
 
     import urllib.error
@@ -977,7 +977,7 @@ def reload_proxy() -> bool:
             raise RuntimeError(
                 "management API rejected our key (401).  The running "
                 "daemon was started with a different management.token — "
-                "run `hermes egress restart`."
+                "run `vigil egress restart`."
             ) from exc
         raise RuntimeError(
             f"management reload failed (HTTP {exc.code}): {body}"
@@ -988,7 +988,7 @@ def reload_proxy() -> bool:
         raise RuntimeError(
             f"could not reach the management API at {host}:{port} ({exc}).  "
             "If the daemon was started before reload support, run "
-            "`hermes egress restart` once."
+            "`vigil egress restart` once."
         ) from exc
 
 
@@ -1787,14 +1787,14 @@ def start_proxy(
     bin_path = binary or find_iron_proxy(install_if_missing=install_if_missing)
     if bin_path is None:
         raise RuntimeError(
-            "iron-proxy binary not available — run `hermes egress install`."
+            "iron-proxy binary not available — run `vigil egress install`."
         )
 
     cfg = config_path or (_proxy_state_dir() / "proxy.yaml")
     if not cfg.exists():
         raise RuntimeError(
             f"iron-proxy config not found at {cfg}. "
-            "Run `hermes egress setup` first."
+            "Run `vigil egress setup` first."
         )
 
     # Build a minimal subprocess env.  os.environ.copy() would ship every
@@ -2029,7 +2029,7 @@ def _write_pidfile_safely(pidfile: Path, pid: int) -> None:
             raise RuntimeError(
                 f"Another iron-proxy start appears to be in progress "
                 f"(pidfile {pidfile} -> pid {existing_pid}).  "
-                f"Run `hermes egress stop` if that proxy is stuck."
+                f"Run `vigil egress stop` if that proxy is stuck."
             )
         # Stale — unlink and retry.
         try:
@@ -2189,7 +2189,7 @@ def _build_proxy_subprocess_env(
                             f"Bitwarden refresh did not return secrets for "
                             f"{missing}.  Either add the secrets to your BWS "
                             f"project, switch to credential_source: env via "
-                            f"`hermes egress setup --no-bitwarden`, or set "
+                            f"`vigil egress setup --no-bitwarden`, or set "
                             f"`proxy.allow_env_fallback: true` in config.yaml "
                             f"to opt into the legacy host-env fallback."
                         )
@@ -2206,7 +2206,7 @@ def _build_proxy_subprocess_env(
                 if warnings:
                     logger.warning(
                         "Bitwarden refresh produced %d warning(s); "
-                        "run `hermes secrets bitwarden status` for detail.",
+                        "run `vigil secrets bitwarden status` for detail.",
                         len(warnings),
                     )
             else:

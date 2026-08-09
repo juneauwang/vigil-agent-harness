@@ -132,7 +132,7 @@ def load_yaml_file(path: Path) -> Dict[str, Any]:
     except yaml.YAMLError as exc:
         raise ConfigReadError(
             f"Refusing to overwrite {path}: the existing file is not valid YAML "
-            f"({exc}). Fix it with `hermes config edit` (or move it aside), then "
+            f"({exc}). Fix it with `vigil config edit` (or move it aside), then "
             f"re-run the import."
         ) from exc
     # An empty file parses to None — a legitimate state with nothing to lose.
@@ -142,7 +142,7 @@ def load_yaml_file(path: Path) -> Dict[str, Any]:
         raise ConfigReadError(
             f"Refusing to overwrite {path}: expected the existing file to hold a "
             f"YAML mapping but found {type(data).__name__}. Fix it with "
-            f"`hermes config edit` (or move it aside), then re-run the import."
+            f"`vigil config edit` (or move it aside), then re-run the import."
         )
     return data
 
@@ -867,12 +867,12 @@ def import_agent_command(args) -> None:
         if not detected:
             print()
             print_error("No supported agent setup found (~/.claude or ~/.codex).")
-            print_info("Specify one explicitly: hermes import-agent claude-code --source /path")
+            print_info("Specify one explicitly: vigil import-agent claude-code --source /path")
             return
         if len(detected) > 1 and explicit_source is None:
             print()
             print_info("Multiple agent setups detected: " + ", ".join(detected))
-            print_info("Pick one: hermes import-agent claude-code   or   hermes import-agent codex")
+            print_info("Pick one: vigil import-agent claude-code   or   vigil import-agent codex")
             return
         agent = detected[0]
 
@@ -886,7 +886,7 @@ def import_agent_command(args) -> None:
     if not source_dir.is_dir():
         print()
         print_error(f"Agent directory not found: {source_dir}")
-        print_info("Specify a custom path: hermes import-agent "
+        print_info("Specify a custom path: vigil import-agent "
                     f"{agent} --source /path/to/{_AGENT_DEFAULT_DIRS[agent]}")
         return
 
@@ -897,7 +897,7 @@ def import_agent_command(args) -> None:
     print_info(f"Source:      {source_dir}")
     print_info(f"Target:      {hermes_home}")
     print_info(f"Overwrite:   {'yes' if overwrite else 'no (skip conflicts)'}")
-    print_info("Secrets:     never imported — run 'hermes setup' for credentials")
+    print_info("Secrets:     never imported — run 'vigil setup' for credentials")
 
     # Ensure config.yaml exists before the import tries to merge into it
     config_path = get_config_path()
@@ -939,7 +939,7 @@ def import_agent_command(args) -> None:
     if not auto_yes:
         if not sys.stdin.isatty():
             print_info("Non-interactive session — preview only.")
-            print_info(f"To execute, re-run with: hermes import-agent {agent} --yes")
+            print_info(f"To execute, re-run with: vigil import-agent {agent} --yes")
             return
         if not prompt_yes_no("Proceed with import?", default=True):
             print_info("Import cancelled.")
@@ -962,7 +962,7 @@ def import_agent_command(args) -> None:
     print_import_report(report, dry_run=False)
     print()
     print_success("Import complete.")
-    print_info("API keys and credentials were NOT imported — run 'hermes setup' "
+    print_info("API keys and credentials were NOT imported — run 'vigil setup' "
                "to configure providers, or add them to ~/.hermes/.env.")
 
 
@@ -1007,7 +1007,7 @@ def print_import_report(report: Dict[str, Any], dry_run: bool) -> None:
         print(color("  ⚷ Secrets stripped (never imported):", Colors.YELLOW))
         for name in stripped:
             print(f"      {name}")
-        print_info("Re-add credentials deliberately via 'hermes setup' or ~/.hermes/.env.")
+        print_info("Re-add credentials deliberately via 'vigil setup' or ~/.hermes/.env.")
         print()
 
     parts = []

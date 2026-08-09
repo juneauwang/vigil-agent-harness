@@ -255,7 +255,7 @@ def cmd_setup_provider(provider_name: str) -> None:
 
     if not match:
         print(f"\n  Memory provider '{provider_name}' not found.")
-        print("  Run 'hermes memory setup' to see available providers.\n")
+        print("  Run 'vigil memory setup' to see available providers.\n")
         return
 
     name, _, provider = match

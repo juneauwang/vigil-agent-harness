@@ -303,10 +303,10 @@ class TestSkillSyncIsOneCommand:
 
     def test_sync_usage_lists_propose(self):
         main_src = self._src("hermes_cli", "main.py")
-        usage_start = main_src.index("usage: hermes sync ")
+        usage_start = main_src.index("usage: vigil sync ")
         usage_block = main_src[usage_start : usage_start + 1400]
         assert "propose" in usage_block, (
-            "`hermes sync` usage must list the propose verb."
+            "`vigil sync` usage must list the propose verb."
         )
 
 

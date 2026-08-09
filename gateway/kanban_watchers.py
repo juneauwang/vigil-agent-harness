@@ -1240,7 +1240,7 @@ class GatewayKanbanWatchersMixin:
                         "SQLite database; pausing dispatch for this board until "
                         "the file changes, the gateway restarts, or the "
                         "quarantine timer expires. Move or restore the file, "
-                        "then run `hermes kanban init` if you need a fresh board.",
+                        "then run `vigil kanban init` if you need a fresh board.",
                         slug,
                         fingerprint[0],
                     )
@@ -1255,7 +1255,7 @@ class GatewayKanbanWatchersMixin:
                         "SQLite database; pausing dispatch for this board until "
                         "the file changes, the gateway restarts, or the "
                         "quarantine timer expires. Move or restore the file, "
-                        "then run `hermes kanban init` if you need a fresh board.",
+                        "then run `vigil kanban init` if you need a fresh board.",
                         slug,
                         fingerprint[0],
                     )
@@ -1472,7 +1472,7 @@ class GatewayKanbanWatchersMixin:
                             "kanban dispatcher stuck: ready queue non-empty for "
                             "%d consecutive ticks but 0 workers spawned. Check "
                             "profile health (venv, PATH, credentials) and "
-                            "`hermes kanban list --status ready`.",
+                            "`vigil kanban list --status ready`.",
                             bad_ticks,
                         )
                         last_warn_at = now

@@ -326,7 +326,7 @@ export const tr: Translations = {
     enableRuntime: "Etkinleştir",
     forceReinstall: "Yeniden yüklemeyi zorla (önce mevcut klasörü sil)",
     headline:
-      "Hermes eklentilerini keşfedin, yükleyin, etkinleştirin ve güncelleyin (`hermes plugins` ile eşdeğer).",
+      "Hermes eklentilerini keşfedin, yükleyin, etkinleştirin ve güncelleyin (`vigil plugins` ile eşdeğer).",
     identifierLabel: "Git URL veya owner/repo",
     inactive: "pasif",
     installBtn: "Yükle",

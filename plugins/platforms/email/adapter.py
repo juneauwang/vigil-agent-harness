@@ -612,7 +612,7 @@ class EmailAdapter(BasePlatformAdapter):
             message = (
                 "Not configured — missing "
                 + ", ".join(missing)
-                + ". Set it via `hermes gateway setup` (env) or platforms.email "
+                + ". Set it via `vigil gateway setup` (env) or platforms.email "
                 "in config.yaml."
             )
             logger.error("[Email] %s", message)

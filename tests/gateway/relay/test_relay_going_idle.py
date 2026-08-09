@@ -13,6 +13,9 @@ import asyncio
 import json
 
 import pytest
+
+pytest.importorskip("pytest_asyncio", reason="pytest-asyncio not installed (pip install hermes-agent[dev])")
+
 import pytest_asyncio
 
 from gateway.relay.ws_transport import WebSocketRelayTransport, WEBSOCKETS_AVAILABLE
@@ -260,5 +263,4 @@ async def test_adapter_go_dormant_delegates_to_transport(server):
         assert transport._dormant is True
     finally:
         await adapter.disconnect()
-
 

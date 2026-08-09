@@ -545,7 +545,7 @@ def _append_unconfigured_rows(
                 f"Configured provider missing usable credentials; paste {key_env} to reactivate. "
                 "Showing the saved model only."
                 if auth_type == "api_key" and key_env
-                else "Configured provider is not authenticated; run `hermes model` to reactivate. "
+                else "Configured provider is not authenticated; run `vigil model` to reactivate. "
                 "Showing the saved model only."
             )
             extras.append(
@@ -691,7 +691,7 @@ def _apply_picker_hints(rows: list[dict]) -> None:
         row["warning"] = (
             f"paste {key_env} to activate"
             if auth_type == "api_key" and key_env
-            else f"run `hermes model` to configure ({auth_type})"
+            else f"run `vigil model` to configure ({auth_type})"
         )
 
 

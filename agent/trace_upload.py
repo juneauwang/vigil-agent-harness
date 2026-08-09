@@ -260,7 +260,7 @@ _NO_TOKEN_MESSAGE = (
     "   (New token -> type \"Write\" -> copy it).\n"
     "2. Add it to your environment as HF_TOKEN (e.g. in ~/.hermes/.env):\n"
     "     HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxx\n"
-    "3. Run /upload-trace again (or `hermes trace upload`)."
+    "3. Run /upload-trace again (or `vigil trace upload`)."
 )
 
 

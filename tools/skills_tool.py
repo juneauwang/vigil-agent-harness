@@ -872,7 +872,7 @@ def _serve_plugin_skill(
                 "success": False,
                 "error": (
                     f"Plugin '{namespace}' is disabled. "
-                    f"Re-enable with: hermes plugins enable {namespace}"
+                    f"Re-enable with: vigil plugins enable {namespace}"
                 ),
             },
             ensure_ascii=False,
@@ -1284,7 +1284,7 @@ def skill_view(
                     "success": False,
                     "error": (
                         f"Skill '{resolved_name}' is disabled. "
-                        "Enable it with `hermes skills` or inspect the files directly on disk."
+                        "Enable it with `vigil skills` or inspect the files directly on disk."
                     ),
                 },
                 ensure_ascii=False,
@@ -1621,7 +1621,7 @@ def skill_view(
                         "Your edits are kept locally\n"
                         "> and are never overwritten by org updates; share "
                         "them back with\n"
-                        "> `hermes sync propose` (or automatically, if your "
+                        "> `vigil sync propose` (or automatically, if your "
                         "org enables it).\n\n"
                     )
                     rendered_content = header + rendered_content

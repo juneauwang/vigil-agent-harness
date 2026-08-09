@@ -1593,7 +1593,7 @@ def _generate_deepinfra_tts(text: str, output_path: str, tts_config: Dict[str, A
     api_key = _resolve_provider_key("DEEPINFRA_API_KEY", "deepinfra")
     if not api_key:
         raise ValueError(
-            "DEEPINFRA_API_KEY not set. Run `hermes setup` to configure, "
+            "DEEPINFRA_API_KEY not set. Run `vigil setup` to configure, "
             "or set the env var directly."
         )
 
@@ -1755,7 +1755,7 @@ def _generate_xai_tts(text: str, output_path: str, tts_config: Dict[str, Any]) -
     creds = resolve_xai_http_credentials()
     api_key = str(creds.get("api_key") or "").strip()
     if not api_key:
-        raise ValueError("No xAI credentials found. Configure xAI OAuth in `hermes model` or set XAI_API_KEY.")
+        raise ValueError("No xAI credentials found. Configure xAI OAuth in `vigil model` or set XAI_API_KEY.")
 
     xai_config = tts_config.get("xai") or {}
     voice_id = str(xai_config.get("voice_id", DEFAULT_XAI_VOICE_ID)).strip() or DEFAULT_XAI_VOICE_ID
@@ -2996,7 +2996,7 @@ def text_to_speech_tool(
                 return json.dumps({
                     "success": False,
                     "error": "Mistral provider selected but 'mistralai' package not installed. "
-                             "Run `hermes setup` to install Mistral support."
+                             "Run `vigil setup` to install Mistral support."
                 }, ensure_ascii=False)
             logger.info("Generating speech with Mistral Voxtral TTS...")
             _generate_mistral_tts(text, file_str, tts_config)
@@ -3010,7 +3010,7 @@ def text_to_speech_tool(
                 return json.dumps({
                     "success": False,
                     "error": "NeuTTS provider selected but neutts is not installed. "
-                             "Run hermes setup and choose NeuTTS, or install espeak-ng and run python -m pip install -U neutts[all]."
+                             "Run vigil setup and choose NeuTTS, or install espeak-ng and run python -m pip install -U neutts[all]."
                 }, ensure_ascii=False)
             logger.info("Generating speech with NeuTTS (local)...")
             _generate_neutts(text, file_str, tts_config)
@@ -3022,7 +3022,7 @@ def text_to_speech_tool(
                 return json.dumps({
                     "success": False,
                     "error": "KittenTTS provider selected but 'kittentts' package not installed. "
-                             "Run 'hermes setup tts' and choose KittenTTS, or install manually: "
+                             "Run 'vigil setup tts' and choose KittenTTS, or install manually: "
                              "pip install https://github.com/KittenML/KittenTTS/releases/download/0.8.1/kittentts-0.8.1-py3-none-any.whl"
                 }, ensure_ascii=False)
             logger.info("Generating speech with KittenTTS (local, ~25MB)...")
@@ -3035,7 +3035,7 @@ def text_to_speech_tool(
                 return json.dumps({
                     "success": False,
                     "error": "Piper provider selected but 'piper-tts' package not installed. "
-                             "Run 'hermes tools' and select Piper under TTS, or install manually: "
+                             "Run 'vigil tools' and select Piper under TTS, or install manually: "
                              "pip install piper-tts",
                 }, ensure_ascii=False)
             logger.info("Generating speech with Piper (local)...")

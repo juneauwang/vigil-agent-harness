@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def _print_aiohttp_missing() -> None:
     print(
-        "hermes proxy requires aiohttp. Run `hermes setup` to install it.",
+        "vigil proxy requires aiohttp. Run `vigil setup` to install it.",
         file=sys.stderr,
     )
 
@@ -42,7 +42,7 @@ def cmd_proxy_start(args: Any) -> int:
         return 2
 
     if not adapter.is_authenticated():
-        auth_hint = getattr(adapter, "auth_hint", f"hermes auth add {adapter.name}")
+        auth_hint = getattr(adapter, "auth_hint", f"vigil auth add {adapter.name}")
         print(
             f"Not logged into {adapter.display_name}. "
             f"Run `{auth_hint}` first.",
@@ -92,7 +92,7 @@ def cmd_proxy_status(args: Any) -> int:
         expires = f" (bearer expires {cred.expires_at})" if cred.expires_at else ""
         print(f"  [{name:8s}] {adapter.display_name} — ready{expires}")
     print(
-        "\nStart the proxy with: hermes proxy start [--provider <name>]"
+        "\nStart the proxy with: vigil proxy start [--provider <name>]"
     )
     return 0
 
@@ -117,15 +117,15 @@ def cmd_proxy(args: Any) -> int:
         return cmd_proxy_list_providers(args)
     # No subcommand → print short help.
     print(
-        "hermes proxy — local OpenAI-compatible proxy that attaches your\n"
+        "vigil proxy — local OpenAI-compatible proxy that attaches your\n"
         "OAuth-authenticated provider credentials to outbound requests.\n"
         "\n"
         "Subcommands:\n"
-        "  hermes proxy start [--provider nous|xai] [--host 127.0.0.1] [--port 8645]\n"
+        "  vigil proxy start [--provider nous|xai] [--host 127.0.0.1] [--port 8645]\n"
         "      Run the proxy in the foreground.\n"
-        "  hermes proxy status\n"
+        "  vigil proxy status\n"
         "      Show which upstream adapters are ready.\n"
-        "  hermes proxy providers\n"
+        "  vigil proxy providers\n"
         "      List available upstream providers.\n",
         file=sys.stderr,
     )

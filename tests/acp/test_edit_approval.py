@@ -6,6 +6,10 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("acp", reason="agent-client-protocol not installed (pip install hermes-agent[acp])")
+
 from acp_adapter.edit_approval import (
     EditProposal,
     build_acp_edit_tool_call,

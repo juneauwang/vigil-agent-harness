@@ -560,7 +560,7 @@ def fetch_bitwarden_secrets(
             "bws binary not available — auto-install failed and `bws` is "
             "not on PATH.  Install manually from "
             "https://github.com/bitwarden/sdk-sm/releases or re-run "
-            "`hermes secrets bitwarden setup`."
+            "`vigil secrets bitwarden setup`."
         )
 
     try:
@@ -786,14 +786,14 @@ def apply_bitwarden_secrets(
     if not access_token:
         result.error = (
             f"secrets.bitwarden.enabled is true but {access_token_env} is "
-            "not set.  Run `hermes secrets bitwarden setup`."
+            "not set.  Run `vigil secrets bitwarden setup`."
         )
         return result
 
     if not project_id:
         result.error = (
             "secrets.bitwarden.project_id is empty.  "
-            "Run `hermes secrets bitwarden setup`."
+            "Run `vigil secrets bitwarden setup`."
         )
         return result
 
@@ -802,7 +802,7 @@ def apply_bitwarden_secrets(
     if binary is None:
         result.error = (
             "bws binary not available and auto-install is disabled.  "
-            "Run `hermes secrets bitwarden setup` to install."
+            "Run `vigil secrets bitwarden setup` to install."
         )
         return result
 
@@ -918,7 +918,7 @@ class BitwardenSource(SecretSource):
         if not access_token:
             result.error = (
                 f"secrets.bitwarden.enabled is true but {access_token_env} is "
-                "not set.  Run `hermes secrets bitwarden setup`."
+                "not set.  Run `vigil secrets bitwarden setup`."
             )
             result.error_kind = ErrorKind.NOT_CONFIGURED
             return result
@@ -927,7 +927,7 @@ class BitwardenSource(SecretSource):
         if not project_id:
             result.error = (
                 "secrets.bitwarden.project_id is empty.  "
-                "Run `hermes secrets bitwarden setup`."
+                "Run `vigil secrets bitwarden setup`."
             )
             result.error_kind = ErrorKind.NOT_CONFIGURED
             return result
@@ -938,7 +938,7 @@ class BitwardenSource(SecretSource):
         if binary is None:
             result.error = (
                 "bws binary not available and auto-install is disabled.  "
-                "Run `hermes secrets bitwarden setup` to install."
+                "Run `vigil secrets bitwarden setup` to install."
             )
             result.error_kind = ErrorKind.BINARY_MISSING
             return result
@@ -987,10 +987,10 @@ class BitwardenSource(SecretSource):
     def remediation(self, kind, cfg: dict) -> str:
         if kind in (ErrorKind.AUTH_FAILED, ErrorKind.AUTH_EXPIRED):
             return (
-                "Run `hermes secrets bitwarden token` to paste a fresh access "
+                "Run `vigil secrets bitwarden token` to paste a fresh access "
                 "token (create one in the Bitwarden web app: Secrets Manager → "
                 "Machine accounts → Access tokens).  Wrong region?  Re-run "
-                "`hermes secrets bitwarden setup` and pick EU/self-hosted."
+                "`vigil secrets bitwarden setup` and pick EU/self-hosted."
             )
         return super().remediation(kind, cfg)
 

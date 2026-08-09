@@ -2,7 +2,7 @@
   "$comment": "GENERATED — do not hand-edit. Regenerate with hermes-agent scripts/generate_conformance_vectors.py; the native renderers are the oracle (executable spec).",
   "oracle": {
     "repo": "NousResearch/hermes-agent",
-    "commit": "40eebc7d70f3d8e95c429c8aa482f31ba6c867f6",
+    "commit": "5febe36a7fdb775c68cfb1f1799954f5d1884096",
     "generator": "scripts/generate_conformance_vectors.py",
     "generator_version": 1
   },
@@ -47,8 +47,8 @@
       "id": "inline-code",
       "category": "grid",
       "expect": "semantic",
-      "input": "Run `pip install hermes` to start.",
-      "native_output": "Run `pip install hermes` to start\\."
+      "input": "Run `pip install vigil` to start.",
+      "native_output": "Run `pip install vigil` to start\\."
     },
     {
       "id": "fenced-code",

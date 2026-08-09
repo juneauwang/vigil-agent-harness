@@ -231,7 +231,7 @@ def invalidate_cached_token() -> None:
 def _billing_not_logged_in(exc: Optional[BaseException] = None) -> "BillingAuthError":
     """Build the canonical 'not logged in' BillingAuthError (single source)."""
     err = BillingAuthError(
-        "Not logged into Nous Portal — run `hermes portal` to log in.",
+        "Not logged into Nous Portal — run `vigil portal` to log in.",
         status=401,
         error="invalid_token",
     )

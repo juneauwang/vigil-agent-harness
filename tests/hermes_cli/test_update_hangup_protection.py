@@ -125,7 +125,7 @@ class TestInstallHangupProtection:
             assert log_path.exists()
             contents = log_path.read_text(encoding="utf-8")
             assert "checking mirror" in contents
-            assert "hermes update started" in contents
+            assert "vigil update started" in contents
         finally:
             _finalize_update_output(state)
             # Sanity-check restoration
@@ -230,4 +230,3 @@ class TestRunLoggedSubprocess:
         assert "LOUD BUILD OUTPUT" in (result.stdout or "")
         assert terminal.getvalue() == ""  # not echoed to terminal
         assert "LOUD BUILD OUTPUT" in log.getvalue()  # but kept in the log
-

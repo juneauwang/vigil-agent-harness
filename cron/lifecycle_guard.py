@@ -56,7 +56,7 @@ _GATEWAY_LIFECYCLE_PATTERN = re.compile(
     # `start` is intentionally excluded: starting a gateway from inside a
     # gateway is benign (a no-op or "already running" error), and a
     # legitimate cron job might start a sibling profile's gateway.
-    r"(?:hermes\s+gateway\s+(?:restart|stop))"
+    r"(?:(?:hermes|vigil)\s+gateway\s+(?:restart|stop))"
     # Branch B: launchctl ops on a hermes-gateway label. macOS launchd
     # labels look like `ai.hermes.gateway` / `hermes-gateway`. Requiring the
     # gateway identifier prevents blocking unrelated hermes services (e.g.
@@ -394,7 +394,7 @@ def _read_script_for_scanning(script_path: str) -> str:
     """
     script_text, unsafe = _read_referenced_script(_resolve_script_path(script_path))
     if unsafe:
-        return "hermes gateway restart"
+        return "vigil gateway restart"
     return script_text or ""
 
 
@@ -444,6 +444,6 @@ def check_gateway_lifecycle(
             "Blocked: cron job contains a gateway lifecycle command or persistent "
             "launchctl submit operation. This is blocked to prevent agent-driven "
             "SIGTERM-respawn loops under launchd/systemd supervision "
-            "(#30719). Run `hermes gateway restart` from a shell outside "
+            "(#30719). Run `vigil gateway restart` from a shell outside "
             "the running gateway instead."
         )

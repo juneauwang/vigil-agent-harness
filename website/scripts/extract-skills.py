@@ -167,26 +167,26 @@ def _install_command(source: str, identifier: str, name: str) -> str:
     to use the most idiomatic identifier per source.
     """
     if not identifier:
-        return f"hermes skills install {name}"
+        return f"vigil skills install {name}"
     src = source.lower()
     if src in {"official", "built-in", "optional"}:
         # OptionalSkillSource emits identifiers like "official/security/1password"
-        return f"hermes skills install {identifier}"
+        return f"vigil skills install {identifier}"
     if src in {"skills.sh", "skills-sh"}:
         # Already wrapped as "skills-sh/owner/repo/skill" by the source
-        return f"hermes skills install {identifier}"
+        return f"vigil skills install {identifier}"
     if src == "clawhub":
-        return f"hermes skills install clawhub/{identifier}"
+        return f"vigil skills install clawhub/{identifier}"
     if src == "browse-sh":
         # Identifier already includes the "browse-sh/" prefix from BrowseShSource
-        return f"hermes skills install {identifier}"
+        return f"vigil skills install {identifier}"
     if src == "lobehub":
-        return f"hermes skills install {identifier}"
+        return f"vigil skills install {identifier}"
     if src == "github":
-        return f"hermes skills install {identifier}"
+        return f"vigil skills install {identifier}"
     if src == "well-known":
-        return f"hermes skills install {identifier}"
-    return f"hermes skills install {identifier}"
+        return f"vigil skills install {identifier}"
+    return f"vigil skills install {identifier}"
 
 
 def _source_url(source: str, identifier: str, extra: dict) -> str:

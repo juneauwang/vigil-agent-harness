@@ -58,7 +58,7 @@ _TRANSPORT_CONNECT_TIMEOUT_SECONDS = 10.0
 
 _SIGN_IN_MESSAGE = (
     "BFL video generation needs a Nous Portal sign-in. "
-    "Ask the user to run `hermes model` and sign in to Nous, then retry."
+    "Ask the user to run `vigil model` and sign in to Nous, then retry."
 )
 
 # ---------------------------------------------------------------------------

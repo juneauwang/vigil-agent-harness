@@ -271,7 +271,7 @@ export const ar = defineLocale({
     enableRuntime: "تفعيل",
     forceReinstall: "إعادة تثبيت إجباري (حذف المجلد الموجود أولاً)",
     headline:
-      "اكتشف وثبِّت وفعِّل وحدِّث مكوِّنات Hermes الإضافية (مطابقة `hermes plugins`).",
+      "اكتشف وثبِّت وفعِّل وحدِّث مكوِّنات Hermes الإضافية (مطابقة `vigil plugins`).",
     identifierLabel: "رابط Git أو owner/repo",
     inactive: "غير نشط",
     installBtn: "تثبيت من Git",

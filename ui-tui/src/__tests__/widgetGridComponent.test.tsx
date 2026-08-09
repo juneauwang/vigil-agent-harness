@@ -131,7 +131,7 @@ describe('GridStreamsDemo', () => {
   it('renders every stream panel with the promoted panel in the header', () => {
     const output = renderToText(<GridStreamsDemo cols={90} state={streamsState} t={DEFAULT_THEME} />)
 
-    expect(output).toContain('hermes mission control')
+    expect(output).toContain('vigil mission control')
 
     for (const def of STREAM_DEFS) {
       expect(output).toContain(def.title)

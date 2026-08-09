@@ -35,7 +35,7 @@ class TestDashboardStatus:
             cmd_dashboard(_ns(status=True))
         assert exc.value.code == 0
         out = capsys.readouterr().out
-        assert "No hermes dashboard processes running" in out
+        assert "No vigil dashboard processes running" in out
 
     def test_status_with_processes(self, capsys):
         processes = [
@@ -50,7 +50,7 @@ class TestDashboardStatus:
         # Status is informational — always exits 0.
         assert exc.value.code == 0
         out = capsys.readouterr().out
-        assert "2 hermes dashboard process(es) running" in out
+        assert "2 vigil dashboard process(es) running" in out
         assert "PID 12345" in out
         assert "PID 12346" in out
 

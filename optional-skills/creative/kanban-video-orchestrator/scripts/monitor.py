@@ -172,7 +172,7 @@ def main():
     args = ap.parse_args()
 
     if not hermes_available():
-        print("ERROR: 'hermes' CLI not found in PATH", file=sys.stderr)
+        print("ERROR: 'vigil' CLI not found in PATH", file=sys.stderr)
         sys.exit(1)
 
     if args.once:

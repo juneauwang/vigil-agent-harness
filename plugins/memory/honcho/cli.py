@@ -173,7 +173,7 @@ def cmd_sync(args) -> None:
 
     cfg = _read_config()
     if not cfg:
-        print("  No Honcho config found. Run 'hermes honcho setup' first.\n")
+        print("  No Honcho config found. Run 'vigil honcho setup' first.\n")
         return
 
     hosts = cfg.get("hosts", {})
@@ -181,7 +181,7 @@ def cmd_sync(args) -> None:
     has_key = bool(cfg.get("apiKey") or os.environ.get("HONCHO_API_KEY"))
 
     if not default_block and not has_key:
-        print("  Honcho not configured on default profile. Run 'hermes honcho setup' first.\n")
+        print("  Honcho not configured on default profile. Run 'vigil honcho setup' first.\n")
         return
 
     created = 0
@@ -690,26 +690,26 @@ def cmd_setup(args) -> None:
                     on_poll=lambda: print(".", end="", flush=True),
                 )
             except KeyboardInterrupt:
-                print("\n  Cancelled. Re-run 'hermes honcho setup' to try again.\n")
+                print("\n  Cancelled. Re-run 'vigil honcho setup' to try again.\n")
                 return
             except (AuthorizationTimeout, DeviceCodeExpired):
                 print("\n  Device code expired before approval.")
-                print("  Re-run 'hermes honcho setup' to get a new code.\n")
+                print("  Re-run 'vigil honcho setup' to get a new code.\n")
                 return
             except AccessDenied:
                 print("\n  Sign-in was denied on the approval page.")
-                print("  Re-run 'hermes honcho setup' to retry, or choose an API key instead.\n")
+                print("  Re-run 'vigil honcho setup' to retry, or choose an API key instead.\n")
                 return
             except DeviceFlowError as e:
                 if e.error == "http_429":
                     print("\n  Too many device-code requests — wait a minute and re-run setup.\n")
                 else:
                     print(f"\n  Device sign-in failed: {e}")
-                    print("  Re-run 'hermes honcho setup' to retry, or choose an API key instead.\n")
+                    print("  Re-run 'vigil honcho setup' to retry, or choose an API key instead.\n")
                 return
             except Exception as e:
                 print(f"\n  Device sign-in failed: {e}")
-                print("  Re-run 'hermes honcho setup' to retry, or choose an API key instead.\n")
+                print("  Re-run 'vigil honcho setup' to retry, or choose an API key instead.\n")
                 return
             print(" approved")
             _apply_grant_to_host(hermes_host, cred)
@@ -737,7 +737,7 @@ def cmd_setup(args) -> None:
                 )
             except Exception as e:
                 print(f"  OAuth sign-in failed: {e}")
-                print("  Re-run 'hermes honcho setup' to retry, or choose an API key instead.\n")
+                print("  Re-run 'vigil honcho setup' to retry, or choose an API key instead.\n")
                 return
             _apply_grant_to_host(hermes_host, cred)
             print("  Authorized — token saved. Let's finish configuring.\n")
@@ -751,7 +751,7 @@ def cmd_setup(args) -> None:
 
             if not cfg.get("apiKey"):
                 print("\n  No API key configured. Get yours at https://app.honcho.dev")
-                print("  Run 'hermes honcho setup' again once you have a key.\n")
+                print("  Run 'vigil honcho setup' again once you have a key.\n")
                 return
 
     # --- 3. Identity ---
@@ -1011,7 +1011,7 @@ def cmd_setup(args) -> None:
         print("  Memory provider set to 'honcho' in config.yaml")
     except Exception as e:
         print(f"  Could not auto-enable in config.yaml: {e}")
-        print("  Run: hermes config set memory.provider honcho")
+        print("  Run: vigil config set memory.provider honcho")
 
     # --- Test connection ---
     print("  Testing connection... ", end="", flush=True)
@@ -1041,11 +1041,11 @@ def cmd_setup(args) -> None:
     print("    honcho_reasoning -- ask Honcho a question, synthesized answer")
     print("    honcho_conclude  -- persist a user fact to memory")
     print("\n  Other commands:")
-    print("    hermes honcho status     -- show full config")
-    print("    hermes honcho mode       -- change recall/observation mode")
-    print("    hermes honcho tokens     -- tune context and dialectic budgets")
-    print("    hermes honcho peer       -- update peer names")
-    print("    hermes honcho map <name> -- map this directory to a session name\n")
+    print("    vigil honcho status     -- show full config")
+    print("    vigil honcho mode       -- change recall/observation mode")
+    print("    vigil honcho tokens     -- tune context and dialectic budgets")
+    print("    vigil honcho peer       -- update peer names")
+    print("    vigil honcho map <name> -- map this directory to a session name\n")
 
 
 def _device_login_available() -> bool:
@@ -1127,7 +1127,7 @@ def cmd_status(args) -> None:
     try:
         import honcho  # noqa: F401
     except ImportError:
-        print("  honcho-ai is not installed. Run: hermes honcho setup\n")
+        print("  honcho-ai is not installed. Run: vigil honcho setup\n")
         return
 
     cfg = _read_config()
@@ -1145,11 +1145,11 @@ def cmd_status(args) -> None:
                 cfg = {"apiKey": _env_cfg.api_key, "enabled": _env_cfg.enabled}
             else:
                 print(f"  No Honcho config found at {active_path}")
-                print("  Run 'hermes honcho setup' to configure.\n")
+                print("  Run 'vigil honcho setup' to configure.\n")
                 return
         except Exception:
             print(f"  No Honcho config found at {active_path}")
-            print("  Run 'hermes honcho setup' to configure.\n")
+            print("  Run 'vigil honcho setup' to configure.\n")
             return
 
     try:
@@ -1312,7 +1312,7 @@ def cmd_sessions(args) -> None:
 
     if not sessions:
         print("  No session mappings configured.\n")
-        print("  Add one with: hermes honcho map <session-name>")
+        print("  Add one with: vigil honcho map <session-name>")
         print(f"  Or edit {_config_path()} directly.\n")
         return
 
@@ -1372,7 +1372,7 @@ def cmd_peer(args) -> None:
         print(f"  User peer:   {user}")
         print("    Your identity in Honcho. Messages you send build this peer's card.")
         print(f"  AI peer:     {ai}")
-        print("    Hermes' identity in Honcho. Seed with 'hermes honcho identity <file>'.")
+        print("    Hermes' identity in Honcho. Seed with 'vigil honcho identity <file>'.")
         print("    Dialectic calls ask this peer questions to warm session context.")
         print()
         print(f"  Dialectic reasoning:  {lvl}  ({', '.join(REASONING_LEVELS)})")
@@ -1425,7 +1425,7 @@ def cmd_mode(args) -> None:
         for m, desc in MODES.items():
             marker = " <-" if m == current else ""
             print(f"  {m:<10}  {desc}{marker}")
-        print("\n  Set with: hermes honcho mode [hybrid|context|tools]\n")
+        print("\n  Set with: vigil honcho mode [hybrid|context|tools]\n")
         return
 
     if mode_arg not in MODES:
@@ -1460,7 +1460,7 @@ def cmd_strategy(args) -> None:
         for s, desc in STRATEGIES.items():
             marker = " <-" if s == current else ""
             print(f"  {s:<15}  {desc}{marker}")
-        print("\n  Set with: hermes honcho strategy [per-session|per-directory|per-repo|global]\n")
+        print("\n  Set with: vigil honcho strategy [per-session|per-directory|per-repo|global]\n")
         return
 
     if strat_arg not in STRATEGIES:
@@ -1498,7 +1498,7 @@ def cmd_tokens(args) -> None:
         print("    (e.g. \"what were we working on?\") and Honcho runs its own model")
         print("    to synthesize an answer. Used for first-turn session continuity.")
         print("    Level controls how much reasoning Honcho spends on the answer.")
-        print("\n  Set with: hermes honcho tokens [--context N] [--dialectic N]\n")
+        print("\n  Set with: vigil honcho tokens [--context N] [--dialectic N]\n")
         return
 
     host = _host_key()
@@ -1522,7 +1522,7 @@ def cmd_identity(args) -> None:
     """Seed AI peer identity or show both peer representations."""
     cfg = _read_config()
     if not _resolve_api_key(cfg):
-        print("  No API key configured. Run 'hermes honcho setup' first.\n")
+        print("  No API key configured. Run 'vigil honcho setup' first.\n")
         return
 
     file_path = getattr(args, "file", None)
@@ -1559,7 +1559,7 @@ def cmd_identity(args) -> None:
             print(ai_rep["card"])
         else:
             print("  No representation built yet.")
-            print("  Run 'hermes honcho identity <file>' to seed one.")
+            print("  Run 'vigil honcho identity <file>' to seed one.")
         print()
         return
 
@@ -1568,8 +1568,8 @@ def cmd_identity(args) -> None:
         print(f"  User peer: {hcfg.peer_name or 'not set'}")
         print(f"  AI peer:   {hcfg.ai_peer}")
         print()
-        print("    hermes honcho identity --show        — show both peer representations")
-        print("    hermes honcho identity <file>        — seed AI peer from SOUL.md or any .md/.txt\n")
+        print("    vigil honcho identity --show        — show both peer representations")
+        print("    vigil honcho identity <file>        — seed AI peer from SOUL.md or any .md/.txt\n")
         return
 
     from pathlib import Path
@@ -1642,17 +1642,17 @@ def cmd_migrate(args) -> None:
         print("  across sessions. You need an API key to use it.")
         print()
         print("  1. Get your API key at https://app.honcho.dev")
-        print("  2. Run:  hermes honcho setup")
+        print("  2. Run:  vigil honcho setup")
         print("     Paste the key when prompted.")
         print()
-        answer = _prompt("  Run 'hermes honcho setup' now?", default="y")
+        answer = _prompt("  Run 'vigil honcho setup' now?", default="y")
         if answer.lower() in {"y", "yes"}:
             cmd_setup(args)
             cfg = _read_config()
             has_key = bool(cfg.get("apiKey", ""))
         else:
             print()
-            print("  Run 'hermes honcho setup' when ready, then re-run this walkthrough.")
+            print("  Run 'vigil honcho setup' when ready, then re-run this walkthrough.")
 
     # ── Step 2: Detected files ────────────────────────────────────────────────
     print()
@@ -1670,7 +1670,7 @@ def cmd_migrate(args) -> None:
     else:
         print("  No OpenClaw native memory files found in cwd or ~/.openclaw/.")
         print("  If your files are elsewhere, copy them here before continuing,")
-        print("  or seed them manually:  hermes honcho identity <path/to/file>")
+        print("  or seed them manually:  vigil honcho identity <path/to/file>")
 
     # ── Step 3: Migrate user memory ───────────────────────────────────────────
     print()
@@ -1683,13 +1683,13 @@ def cmd_migrate(args) -> None:
     if user_files:
         print(f"  Found: {', '.join(f.name for f in user_files)}")
         print()
-        print("  These are picked up automatically the first time you run 'hermes'")
+        print("  These are picked up automatically the first time you run 'vigil'")
         print("  with Honcho configured and no prior session history.")
         print("  (Hermes calls migrate_memory_files() on first session init.)")
         print()
         print("  If you want to migrate them now without starting a session:")
         for f in user_files:
-            print("    hermes honcho migrate  — this step handles it interactively")
+            print("    vigil honcho migrate  — this step handles it interactively")
         if has_key:
             answer = _prompt("  Upload user memory files to Honcho now?", default="y")
             if answer.lower() in {"y", "yes"}:
@@ -1720,7 +1720,7 @@ def cmd_migrate(args) -> None:
                 except Exception as e:
                     print(f"  Failed: {e}")
         else:
-            print("  Run 'hermes honcho setup' first, then re-run this step.")
+            print("  Run 'vigil honcho setup' first, then re-run this step.")
     else:
         print("  No user memory files detected. Nothing to migrate here.")
 
@@ -1766,12 +1766,12 @@ def cmd_migrate(args) -> None:
                 except Exception as e:
                     print(f"  Failed: {e}")
         else:
-            print("  Run 'hermes honcho setup' first, then seed manually:")
+            print("  Run 'vigil honcho setup' first, then seed manually:")
             for f in agent_files:
-                print(f"    hermes honcho identity {f}")
+                print(f"    vigil honcho identity {f}")
     else:
         print("  No agent identity files detected.")
-        print("  To seed manually:  hermes honcho identity <path/to/SOUL.md>")
+        print("  To seed manually:  vigil honcho identity <path/to/SOUL.md>")
 
     # ── Step 5: What changes ──────────────────────────────────────────────────
     print()
@@ -1802,22 +1802,22 @@ def cmd_migrate(args) -> None:
     print("  Session naming")
     print("    OpenClaw: no persistent session concept — files are global.")
     print("    Hermes:   per-session by default — each run gets its own session")
-    print("              Map a custom name:  hermes honcho map <session-name>")
+    print("              Map a custom name:  vigil honcho map <session-name>")
 
     # ── Step 6: Next steps ────────────────────────────────────────────────────
     print()
     print("Step 6  Next steps")
     print()
     if not has_key:
-        print("  1. hermes honcho setup              — configure API key (required)")
-        print("  2. hermes honcho migrate            — re-run this walkthrough")
+        print("  1. vigil honcho setup              — configure API key (required)")
+        print("  2. vigil honcho migrate            — re-run this walkthrough")
     else:
-        print("  1. hermes honcho status             — verify Honcho connection")
-        print("  2. hermes                           — start a session")
+        print("  1. vigil honcho status             — verify Honcho connection")
+        print("  2. vigil                           — start a session")
         print("     (user memory files auto-uploaded on first turn if not done above)")
-        print("  3. hermes honcho identity --show    — verify AI peer representation")
-        print("  4. hermes honcho tokens             — tune context and dialectic budgets")
-        print("  5. hermes honcho mode               — view or change memory mode")
+        print("  3. vigil honcho identity --show    — verify AI peer representation")
+        print("  4. vigil honcho tokens             — tune context and dialectic budgets")
+        print("  5. vigil honcho mode               — view or change memory mode")
     print()
 
 
@@ -1830,7 +1830,7 @@ def honcho_command(args) -> None:
     if sub == "setup":
         # Redirect to memory setup — honcho setup goes through the unified path
         print("\n  Honcho is configured via the memory provider system.")
-        print("  Running 'hermes memory setup'...\n")
+        print("  Running 'vigil memory setup'...\n")
         from hermes_cli.memory_setup import cmd_setup_provider
         cmd_setup_provider("honcho")
         return
@@ -1882,7 +1882,7 @@ def register_cli(subparser) -> None:
 
     subs.add_parser(
         "setup",
-        help="Initial Honcho setup (redirects to hermes memory setup)",
+        help="Initial Honcho setup (redirects to vigil memory setup)",
     )
 
     status_parser = subs.add_parser(

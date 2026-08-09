@@ -1559,7 +1559,7 @@ class SessionStore:
                 "Maps messaging session keys (agent:main:<platform>:...) to "
                 "active session IDs. This is NOT the session list. ALL "
                 "sessions (CLI, TUI, and gateway) live in ~/.hermes/state.db "
-                "and are shown by `hermes sessions list` and `/sessions`. "
+                "and are shown by `vigil sessions list` and `/sessions`. "
                 "Disable this file with `gateway.write_sessions_json: false` "
                 "in config.yaml."
             ),

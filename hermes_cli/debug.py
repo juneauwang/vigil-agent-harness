@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 # Visible in the public paste so reviewers know the content was sanitized.
 # Kept short; the trailing newline guarantees the banner sits on its own line.
 _REDACTION_BANNER = (
-    "[hermes debug share: log content redacted at upload time. "
+    "[vigil debug share: log content redacted at upload time. "
     "run with --no-redact to disable]\n"
 )
 
@@ -214,7 +214,7 @@ Use --local to view the report without uploading.
 _GATEWAY_PRIVACY_NOTICE = (
     "⚠️ **Privacy notice:** This uploads system info + recent log tails "
     "(may contain conversation fragments) to a public paste service. "
-    "Full logs are NOT included from the gateway — use `hermes debug share` "
+    "Full logs are NOT included from the gateway — use `vigil debug share` "
     "from the CLI for full log uploads.\n"
     "Pastes auto-delete after 6 hours."
 )
@@ -778,7 +778,7 @@ def build_debug_share(
 
     if redact:
         logger.info(
-            "hermes debug share: applied force-mode redaction to log snapshots before upload"
+            "vigil debug share: applied force-mode redaction to log snapshots before upload"
         )
 
     report = bundle["report"]
@@ -891,7 +891,7 @@ def run_debug_share(args):
         )
     except RuntimeError as exc:
         print(f"\nUpload failed: {exc}", file=sys.stderr)
-        print("\nRun `hermes debug share --local` to print the report instead.\n")
+        print("\nRun `vigil debug share --local` to print the report instead.\n")
         sys.exit(1)
 
     # Print results
@@ -907,7 +907,7 @@ def run_debug_share(args):
     print(f"\n⏱  Pastes will auto-delete in {hours} hours.")
 
     # Manual delete fallback
-    print("To delete now:  hermes debug delete <url>")
+    print("To delete now:  vigil debug delete <url>")
 
     print("\nShare these links with the Hermes team for support.")
 
@@ -951,7 +951,7 @@ def _run_debug_share_nous(args, *, log_lines: int, redact: bool) -> None:
     bundle = collect_share_bundle(log_lines=log_lines, redact=redact)
     if redact:
         logger.info(
-            "hermes debug share --nous: applied force-mode redaction before upload"
+            "vigil debug share --nous: applied force-mode redaction before upload"
         )
     blob = build_nous_bundle(bundle, redact=redact)
 
@@ -963,8 +963,8 @@ def _run_debug_share_nous(args, *, log_lines: int, redact: bool) -> None:
             f"\nNous upload failed: {exc}\n"
             "\nThe Nous diagnostics service may be unavailable or not yet "
             "provisioned.\n"
-            "Run `hermes debug share --local` to print the report instead, "
-            "or `hermes debug share` to upload to a public paste service.\n",
+            "Run `vigil debug share --local` to print the report instead, "
+            "or `vigil debug share` to upload to a public paste service.\n",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -992,8 +992,8 @@ def run_debug_delete(args):
     """Delete one or more paste URLs uploaded by /debug."""
     urls = getattr(args, "urls", [])
     if not urls:
-        print("Usage: hermes debug delete <url> [<url> ...]")
-        print("  Deletes paste.rs pastes uploaded by 'hermes debug share'.")
+        print("Usage: vigil debug delete <url> [<url> ...]")
+        print("  Deletes paste.rs pastes uploaded by 'vigil debug share'.")
         return
 
     for url in urls:
@@ -1028,7 +1028,7 @@ def run_debug(args):
         run_debug_delete(args)
     else:
         # Default: show help
-        print("Usage: hermes debug <command>")
+        print("Usage: vigil debug <command>")
         print()
         print("Commands:")
         print("  share    Upload debug report to a paste service and print URL")

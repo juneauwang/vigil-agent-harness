@@ -15,6 +15,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("mcp", reason="mcp SDK not installed (pip install hermes-agent[dev])")
+
 
 # ---------------------------------------------------------------------------
 # Helpers

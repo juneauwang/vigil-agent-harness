@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytest.importorskip("acp", reason="agent-client-protocol not installed (pip install hermes-agent[acp])")
+
 from acp_adapter.server import HermesACPAgent, _named_custom_provider_catalogs
 from acp_adapter.session import SessionManager
 from acp.schema import SessionModelState

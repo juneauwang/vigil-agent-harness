@@ -326,7 +326,7 @@ export const hu: Translations = {
     enableRuntime: "Engedélyezés",
     forceReinstall: "Kényszerített újratelepítés (a meglévő mappa előbb törlődik)",
     headline:
-      "Hermes-bővítmények felfedezése, telepítése, engedélyezése és frissítése (a `hermes plugins` paritás).",
+      "Hermes-bővítmények felfedezése, telepítése, engedélyezése és frissítése (a `vigil plugins` paritás).",
     identifierLabel: "Git URL vagy owner/repo",
     inactive: "inaktív",
     installBtn: "Telepítés",

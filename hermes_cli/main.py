@@ -478,7 +478,7 @@ def _require_tty(command_name: str) -> None:
     """
     if not sys.stdin.isatty():
         print(
-            f"Error: 'hermes {command_name}' requires an interactive terminal.\n"
+            f"Error: 'vigil {command_name}' requires an interactive terminal.\n"
             f"It cannot be run through a pipe or non-interactive subprocess.\n"
             f"Run it directly in your terminal instead.",
             file=sys.stderr,
@@ -1434,14 +1434,14 @@ def _exec_in_container(container_info: dict, cli_args: list):
                     f'    commands = [{{ command = "{runtime}"; options = [ "NOPASSWD" ]; }}];\n'
                     f"  }}];\n"
                     f"\n"
-                    f"Or run: sudo hermes {' '.join(cli_args)}",
+                    f"Or run: sudo vigil {' '.join(cli_args)}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
         else:
             print(
                 f"Error: container '{container_name}' not found via {backend}.\n"
-                f"The container may be running under root. Try: sudo hermes {' '.join(cli_args)}",
+                f"The container may be running under root. Try: sudo vigil {' '.join(cli_args)}",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -1908,12 +1908,12 @@ def _ensure_tui_workspace(tui_dir: Path) -> None:
     print(
         "Error: the TUI workspace is missing from this Vigil checkout.\n"
         f"Expected directory: {tui_dir}\n"
-        "This usually means `hermes update` left tracked ui-tui files deleted.\n"
+        "This usually means `vigil update` left tracked ui-tui files deleted.\n"
         "Recovery:\n"
         "  1. From the Vigil checkout, run `git restore -- ui-tui`\n"
         "  2. Run `npm install --silent --no-fund --no-audit --progress=false`\n"
-        "  3. Retry `hermes --tui`\n"
-        "If the checkout is still inconsistent, run `hermes update --force`.",
+        "  3. Retry `vigil --tui`\n"
+        "If the checkout is still inconsistent, run `vigil update --force`.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -2527,7 +2527,7 @@ def cmd_chat(args):
                 args.resume = resolved
             else:
                 print(f"No session found matching '{continue_val}'.")
-                print("Use 'hermes sessions list' to see available sessions.")
+                print("Use 'vigil sessions list' to see available sessions.")
                 sys.exit(1)
         else:
             # -c with no argument — continue the most recent session
@@ -2591,7 +2591,7 @@ def cmd_chat(args):
             for _ref in _retired_xai_refs:
                 sys.stderr.write(f"  \033[33m⚠\033[0m {format_issue(_ref)}\n")
             sys.stderr.write(f"  \033[2mMigration guide: {MIGRATION_GUIDE_URL}\033[0m\n")
-            sys.stderr.write("  \033[2mRun 'hermes doctor' for details.\033[0m\n\n")
+            sys.stderr.write("  \033[2mRun 'vigil doctor' for details.\033[0m\n\n")
     except Exception:
         pass
 
@@ -2602,7 +2602,7 @@ def cmd_chat(args):
             "It looks like Vigil isn't configured yet -- no API keys or providers found."
         )
         print()
-        print("  Run:  hermes setup")
+        print("  Run:  vigil setup")
         print()
 
         from hermes_cli.setup import (
@@ -2624,7 +2624,7 @@ def cmd_chat(args):
             cmd_setup(args)
             return
         print()
-        print("You can run 'hermes setup' at any time to configure.")
+        print("You can run 'vigil setup' at any time to configure.")
         sys.exit(1)
 
     # Start update check in background (runs while other init happens).
@@ -2915,7 +2915,7 @@ def cmd_whatsapp(args):
             if (get_env_value("WHATSAPP_ENABLED") or "").lower() != "true":
                 save_env_value("WHATSAPP_ENABLED", "true")
             print("\n✓ WhatsApp is configured and paired!")
-            print("  Start the gateway with: hermes gateway")
+            print("  Start the gateway with: vigil gateway")
             return
 
     # ── Step 6: QR code pairing ──────────────────────────────────────────
@@ -2958,23 +2958,23 @@ def cmd_whatsapp(args):
         print()
         if wa_mode == "bot":
             print("  Next steps:")
-            print("    1. Start the gateway:  hermes gateway")
+            print("    1. Start the gateway:  vigil gateway")
             print("    2. Send a message to the bot's WhatsApp number")
             print("    3. The agent will reply automatically")
             print()
             print("  Tip: Agent responses are prefixed with '◉ Vigil'")
         else:
             print("  Next steps:")
-            print("    1. Start the gateway:  hermes gateway")
+            print("    1. Start the gateway:  vigil gateway")
             print("    2. Open WhatsApp → Message Yourself")
             print("    3. Type a message — the agent will reply")
             print()
             print("  Tip: Agent responses are prefixed with '◉ Vigil'")
             print("  so you can tell them apart from your own messages.")
         print()
-        print("  Or install as a service: hermes gateway install")
+        print("  Or install as a service: vigil gateway install")
     else:
-        print("⚠ Pairing may not have completed. Run 'hermes whatsapp' to try again.")
+        print("⚠ Pairing may not have completed. Run 'vigil whatsapp' to try again.")
 
 
 def cmd_whatsapp_cloud(args):
@@ -3238,8 +3238,8 @@ def select_provider_and_model(args=None):
                 active = _canonical_named_custom_key(active)
         else:
             warning = (
-                f"Unknown provider '{effective_provider}'. Check 'hermes model' for "
-                "available providers, or run 'hermes doctor' to diagnose config "
+                f"Unknown provider '{effective_provider}'. Check 'vigil model' for "
+                "available providers, or run 'vigil doctor' to diagnose config "
                 "issues."
             )
             print(f"Warning: {warning} Falling back to auto provider detection.")
@@ -4401,7 +4401,7 @@ def _prompt_api_key(
     if choice.startswith("c") and not pool_backed:
         save_env_value(key_env, "")
         print(
-            f"  API key cleared.  Re-run `hermes setup` to configure {pconfig.name} again."
+            f"  API key cleared.  Re-run `vigil setup` to configure {pconfig.name} again."
         )
         return "", True
 
@@ -4515,7 +4515,7 @@ def _run_anthropic_oauth_flow(save_env_value):
         print("    1. Install Claude Code:  npm install -g @anthropic-ai/claude-code")
         print("    2. Run:                  claude setup-token")
         print("    3. Follow the browser prompts to authorize")
-        print("    4. Re-run:               hermes model")
+        print("    4. Re-run:               vigil model")
         print()
         print("  Or paste an existing setup-token now (sk-ant-oat-...):")
         print()
@@ -4579,7 +4579,7 @@ def cmd_sync(args):
 
     if sub in {None, ""}:
         print(
-            "usage: hermes sync "
+            "usage: vigil sync "
             "<status|pull|push|now|enable|disable|device|propose>\n"
             "\n"
             "Your skills, across your devices:\n"
@@ -4674,7 +4674,7 @@ def cmd_sync(args):
                 print(
                     f"  {len(modified)} with local edits not yet shared: "
                     f"{', '.join(modified)}\n"
-                    f"  Share them back with `hermes sync propose <skill>`. "
+                    f"  Share them back with `vigil sync propose <skill>`. "
                     f"Org updates will not overwrite them.",
                     file=sys.stderr,
                 )
@@ -4750,10 +4750,10 @@ def cmd_sync(args):
                         file=sys.stderr,
                     )
         elif sub == "push":
-            result = ssc.push_skills(identity=identity, message="hermes sync push")
+            result = ssc.push_skills(identity=identity, message="vigil sync push")
         elif sub == "now":
             pull_res = ssc.pull_skills(identity=identity)
-            push_res = ssc.push_skills(identity=identity, message="hermes sync now")
+            push_res = ssc.push_skills(identity=identity, message="vigil sync now")
             result = {"pull": pull_res, "push": push_res}
         else:
             print(f"Unknown sync subcommand: {sub}", file=sys.stderr)
@@ -4784,13 +4784,13 @@ def cmd_slack(args):
     if sub in {None, ""}:
         # No subcommand — print usage hint.
         print(
-            "usage: hermes slack <subcommand>\n"
+            "usage: vigil slack <subcommand>\n"
             "\n"
             "subcommands:\n"
             "  manifest   Generate a Slack app manifest with every gateway\n"
             "             command registered as a native slash\n"
             "\n"
-            "Run `hermes slack manifest -h` for details.",
+            "Run `vigil slack manifest -h` for details.",
             file=sys.stderr,
         )
         return 1
@@ -5709,7 +5709,7 @@ def _do_build_web_ui(web_dir: Path, *, fatal: bool = False) -> bool:
     if r1.returncode != 0:
         _say(
             f"  {'✗' if fatal else '⚠'} Web UI npm install failed"
-            + ("" if fatal else " (hermes web will not be available)")
+            + ("" if fatal else " (vigil web will not be available)")
         )
         _relay(r1)
         if fatal:
@@ -5762,7 +5762,7 @@ def _do_build_web_ui(web_dir: Path, *, fatal: bool = False) -> bool:
 
         _say(
             f"  {'✗' if fatal else '⚠'} Web UI build failed"
-            + ("" if fatal else " (hermes web will not be available)")
+            + ("" if fatal else " (vigil web will not be available)")
         )
         _relay(r2)
         if fatal:
@@ -5934,8 +5934,10 @@ def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
     else:
         candidates = [
             release_dir / "linux-unpacked" / "hermes",
+            release_dir / "linux-unpacked" / "vigil",
             release_dir / "linux-unpacked" / "Vigil",
             release_dir / "linux-arm64-unpacked" / "hermes",
+            release_dir / "linux-arm64-unpacked" / "vigil",
             release_dir / "linux-arm64-unpacked" / "Vigil",
         ]
 
@@ -6282,12 +6284,12 @@ def _ensure_desktop_exe_launchable(
     restored = _rollback_desktop_from_backup(packaged_executable)
     if restored is not None:
         print("  ↩ Update aborted — restored the previous working Vigil.exe from backup.")
-        print("    Your existing version was kept and still works. Run `hermes desktop`")
+        print("    Your existing version was kept and still works. Run `vigil desktop`")
         print("    (or the in-app update) again to retry with a fresh Electron download.")
         return restored, True
 
     print("  ✗ No usable backup was found to restore.")
-    print("    Run `hermes desktop --force-build` to rebuild, or re-run the Vigil")
+    print("    Run `vigil desktop --force-build` to rebuild, or re-run the Vigil")
     print("    installer to repair the install.")
     return None, False
 
@@ -7031,7 +7033,7 @@ def cmd_gui(args: argparse.Namespace):
         npm = _resolve_node_runtime_npm()
         if not npm:
             print("Desktop GUI requires Node.js/npm, but npm was not found on PATH.")
-            print("Install Node.js, then run:  hermes gui")
+            print("Install Node.js, then run:  vigil gui")
             sys.exit(1)
     else:
         npm = None
@@ -7158,7 +7160,7 @@ def cmd_gui(args: argparse.Namespace):
                     print("  If this says \"Access is denied\" on Vigil.exe, close any")
                     print("  running Vigil desktop window and retry.")
                 print("  If the log shows Electron download retries, rebuild via a mirror:")
-                print("    ELECTRON_MIRROR=<mirror-base-url> hermes desktop --force-build")
+                print("    ELECTRON_MIRROR=<mirror-base-url> vigil desktop --force-build")
                 sys.exit(build_result.returncode or 1)
             packaged_executable = _desktop_packaged_executable(desktop_dir)
             if not source_mode:
@@ -7259,6 +7261,7 @@ def _parse_dashboard_runtime(command: str) -> tuple[str, str, int] | None:
         pattern in command
         for pattern in (
             "hermes dashboard",
+            "vigil dashboard",
             "hermes_cli.main dashboard",
             "hermes_cli/main.py dashboard",
         )
@@ -7268,6 +7271,7 @@ def _parse_dashboard_runtime(command: str) -> tuple[str, str, int] | None:
         pattern in command
         for pattern in (
             "hermes serve",
+            "vigil serve",
             "hermes_cli.main serve",
             "hermes_cli/main.py serve",
         )
@@ -7832,7 +7836,7 @@ def _recover_core_update_marker_locked() -> None:
     would otherwise look healthy and clear the breadcrumb too early.
     """
     print(
-        "⚠ A previous `hermes update` was interrupted mid-install — "
+        "⚠ A previous `vigil update` was interrupted mid-install — "
         "finishing dependency installation now..."
     )
 
@@ -8022,7 +8026,7 @@ def _hermes_exe_shims(scripts_dir: Path) -> list[Path]:
     if not _is_windows():
         return []
 
-    names = set(_load_console_script_names()) or {"hermes", "hermes-agent", "hermes-acp"}
+    names = set(_load_console_script_names()) or {"vigil", "hermes-agent", "hermes-acp"}
     # The gateway shim is not a [project.scripts] entry point, but older
     # update/install paths still rewrite and quarantine it.
     names.add("hermes-gateway")
@@ -8125,8 +8129,8 @@ def _quarantine_running_hermes_exe(
             f"another process is holding it open)."
         )
         print(
-            "    Close Vigil Desktop, exit other `hermes` REPLs, stop the "
-            "gateway, or pause AV scanning, then re-run `hermes update`."
+            "    Close Vigil Desktop, exit other `vigil` REPLs, stop the "
+            "gateway, or pause AV scanning, then re-run `vigil update`."
         )
 
     return moved
@@ -8443,7 +8447,7 @@ def _repair_venv_via_import_probes(
     manual = " ".join(
         shlex.quote(s) for s in _lazy_refresh_repair_specs(broken)
     )
-    print("  ⚠ Venv repair incomplete. Run manually, then `hermes update`:")
+    print("  ⚠ Venv repair incomplete. Run manually, then `vigil update`:")
     print(
         f"    {' '.join(install_cmd_prefix)} install --force-reinstall {manual}"
     )
@@ -8591,8 +8595,8 @@ def _verify_console_scripts_installed(
     except subprocess.CalledProcessError as e:
         logger.warning("console script verification: repair install failed: %s", e)
         print(
-            "  ⚠ Entry point repair failed; try `hermes update --force` after "
-            "closing other hermes processes."
+            "  ⚠ Entry point repair failed; try `vigil update --force` after "
+            "closing other vigil processes."
         )
         return
 
@@ -8742,7 +8746,7 @@ def _verify_core_dependencies_installed(
         )
     except subprocess.CalledProcessError as e:
         logger.warning("dep verification: repair install failed: %s", e)
-        print("  ⚠ Repair install failed; check `hermes update` output above.")
+        print("  ⚠ Repair install failed; check `vigil update` output above.")
         return
 
     still_missing = _missing_deps()
@@ -8775,7 +8779,7 @@ def _verify_core_dependencies_installed(
         logger.warning("dep verification: per-package repair failed: %s", e)
         print(
             f"  ⚠ Could not install: {', '.join(still_missing)}. "
-            "Run `hermes update --force` after closing other hermes processes."
+            "Run `vigil update --force` after closing other vigil processes."
         )
         return
 
@@ -8783,7 +8787,7 @@ def _verify_core_dependencies_installed(
     if final_missing:
         print(
             f"  ⚠ Still missing after repair: {', '.join(final_missing)}. "
-            "Run `hermes update --force` after closing other hermes processes."
+            "Run `vigil update --force` after closing other vigil processes."
         )
     else:
         print("  ✓ All declared core dependencies now installed")
@@ -9017,7 +9021,7 @@ def _install_hangup_protection(gateway_mode: bool = False):
         import datetime as _dt
 
         log_file.write(
-            f"\n=== hermes update started "
+            f"\n=== vigil update started "
             f"{_dt.datetime.now().isoformat(timespec='seconds')} ===\n"
         )
 
@@ -9273,7 +9277,7 @@ def cmd_profile(args):
                 print(f"Skills:         {p.skill_count} installed")
                 if p.alias_path:
                     alias_display = p.alias_name or p.name
-                    print(f"Alias:          {alias_display} → hermes -p {p.name}")
+                    print(f"Alias:          {alias_display} → vigil -p {p.name}")
                 break
         print()
         return
@@ -9400,9 +9404,9 @@ def cmd_profile(args):
                 if collision:
                     print(f"\n⚠ Cannot create alias '{name}' — {collision}")
                     print(
-                        f"  Choose a custom alias:  hermes profile alias {name} --name <custom>"
+                        f"  Choose a custom alias:  vigil profile alias {name} --name <custom>"
                     )
-                    print(f"  Or access via flag:     hermes -p {name} chat")
+                    print(f"  Or access via flag:     vigil -p {name} chat")
                 else:
                     wrapper_path = create_wrapper_script(name)
                     if wrapper_path:
@@ -9589,11 +9593,11 @@ def cmd_profile(args):
             print(f"Distribution: {dist_name}@{dist_version or '?'}")
             if dist_source:
                 print(f"Installed from: {dist_source}")
-            print(f"  (run `hermes profile info {name}` for full manifest)")
+            print(f"  (run `vigil profile info {name}` for full manifest)")
         if alias_name:
             is_windows = sys.platform == "win32"
             wrapper = _get_wrapper_dir() / (f"{alias_name}.bat" if is_windows else alias_name)
-            print(f"Alias:   {alias_name} → hermes -p {name}  ({wrapper})")
+            print(f"Alias:   {alias_name} → vigil -p {name}  ({wrapper})")
         print()
 
     elif action == "alias":
@@ -9722,9 +9726,9 @@ def cmd_profile(args):
             if plan.has_cron:
                 print(
                     "  Cron jobs were included but are NOT scheduled automatically.\n"
-                    f"  Review them with:  hermes -p {plan.manifest.name} cron list"
+                    f"  Review them with:  vigil -p {plan.manifest.name} cron list"
                 )
-            print(f"\n  Use with:      hermes -p {plan.manifest.name} chat")
+            print(f"\n  Use with:      vigil -p {plan.manifest.name} chat")
         except (DistributionError, ValueError) as e:
             print(f"Error: {e}")
             sys.exit(1)
@@ -9744,7 +9748,7 @@ def cmd_profile(args):
             if current is None:
                 print(
                     f"Error: Profile '{canon}' is not a distribution (no distribution.yaml). "
-                    "Only profiles installed via `hermes profile install` can be updated."
+                    "Only profiles installed via `vigil profile install` can be updated."
                 )
                 sys.exit(1)
 
@@ -9770,7 +9774,7 @@ def cmd_profile(args):
             if plan.has_cron:
                 print(
                     "  Cron files were refreshed.  Review with:  "
-                    f"hermes -p {plan.manifest.name} cron list"
+                    f"vigil -p {plan.manifest.name} cron list"
                 )
         except (DistributionError, ValueError) as e:
             print(f"Error: {e}")
@@ -9906,10 +9910,10 @@ def _report_dashboard_status() -> int:
         live.append((pid, command))
 
     if not live:
-        print("No hermes dashboard processes running.")
+        print("No vigil dashboard processes running.")
         return 0
 
-    print(f"{len(live)} hermes dashboard process(es) running:")
+    print(f"{len(live)} vigil dashboard process(es) running:")
     for pid, command in live:
         print(f"    PID {pid}: {command}")
     return len(live)
@@ -9980,7 +9984,7 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
     print()
     print("  How do you want to authenticate the dashboard?")
     print("    [1] Username & password (quickest; for a trusted LAN / VPN)")
-    print("    [2] OAuth via Nous Portal (run `hermes dashboard register`)")
+    print("    [2] OAuth via Nous Portal (run `vigil dashboard register`)")
     print("    [3] Cancel")
     print()
 
@@ -9995,7 +9999,7 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
         print(
             "  Run this on the host where the dashboard lives, then start "
             "the dashboard again:\n"
-            "    hermes dashboard register\n"
+            "    vigil dashboard register\n"
             "  It provisions a Nous Portal OAuth client and writes "
             "HERMES_DASHBOARD_OAUTH_CLIENT_ID into ~/.hermes/.env for you.\n"
             "  Docs: https://hermes-agent.nousresearch.com/docs/"
@@ -10203,7 +10207,7 @@ def cmd_dashboard(args):
     if getattr(args, "stop", False):
         pids = _find_stale_dashboard_pids()
         if not pids:
-            print("No hermes dashboard processes running.")
+            print("No vigil dashboard processes running.")
             sys.exit(0)
         # Reuse the same SIGTERM-grace-SIGKILL path used after `hermes update`.
         _kill_stale_dashboard_processes(reason="requested via --stop")
@@ -10221,7 +10225,7 @@ def cmd_dashboard(args):
         raise SystemExit("--ssh-owner-nonce must be 16 lowercase hex characters")
     _ssh_session_token = None
     if _token_file and not _headless_backend:
-        raise SystemExit("--ssh-session-token-file is only valid with hermes serve")
+        raise SystemExit("--ssh-session-token-file is only valid with vigil serve")
 
     # ── Sanitize Desktop-inherited env that hijacks a standalone launch ─
     # Desktop Electron spawns its backend with HERMES_DESKTOP=1 plus
@@ -11429,7 +11433,7 @@ def main():
         description=(
             "Configure the official Meta WhatsApp Business Cloud API "
             "adapter (Business account required, public webhook URL "
-            "required). Distinct from `hermes whatsapp` which sets up "
+            "required). Distinct from `vigil whatsapp` which sets up "
             "the Baileys bridge for personal accounts."
         ),
     )
@@ -11545,7 +11549,7 @@ def main():
         "checkpoints",
         help="Inspect / prune / clear ~/.hermes/checkpoints/",
         description="Manage the filesystem checkpoint store — the shadow git "
-        "repo hermes uses to snapshot working directories before "
+        "repo vigil uses to snapshot working directories before "
         "write_file/patch/terminal calls. Lets you see how much "
         "space checkpoints occupy, force a prune, or wipe the base.",
     )
@@ -11744,13 +11748,13 @@ def main():
             "Install or check the cua-driver binary used by the\n"
             "`computer_use` toolset. Supported on macOS, Windows, and\n"
             "Linux.\n\n"
-            "Use `hermes computer-use install` to fetch and run the\n"
+            "Use `vigil computer-use install` to fetch and run the\n"
             "upstream cua-driver installer. This is equivalent to the\n"
-            "post-setup hook that `hermes tools` runs when you first\n"
+            "post-setup hook that `vigil tools` runs when you first\n"
             "enable the Computer Use toolset, and is a stable target\n"
             "for re-running the install if it didn't fire (e.g. when\n"
             "toggling the toolset on a returning-user setup).\n\n"
-            "Use `hermes computer-use doctor` to run cua-driver's\n"
+            "Use `vigil computer-use doctor` to run cua-driver's\n"
             "`health_report` MCP tool and surface its check matrix\n"
             "(TCC, bundle identity, version, platform support, ...)\n"
             "in human-readable form."
@@ -11874,17 +11878,17 @@ def main():
                     if st and st.get("update_available"):
                         latest = st.get("latest_version") or "?"
                         print(f"  ⬆ Update available: cua-driver {latest}.")
-                        print("    Run: hermes computer-use install --upgrade")
+                        print("    Run: vigil computer-use install --upgrade")
                     elif st:
                         print("  ✓ Up to date.")
                     else:
                         # Older driver (no check-update verb) or offline.
-                        print("  Refresh to latest: hermes computer-use install --upgrade")
+                        print("  Refresh to latest: vigil computer-use install --upgrade")
                 except Exception:
-                    print("  Refresh to latest: hermes computer-use install --upgrade")
+                    print("  Refresh to latest: vigil computer-use install --upgrade")
                 return
             print("cua-driver: not installed")
-            print("  Run: hermes computer-use install")
+            print("  Run: vigil computer-use install")
             return
         if action == "doctor":
             from tools.computer_use.doctor import run_doctor
@@ -11910,7 +11914,7 @@ def main():
                     print(f"Computer Use is not supported on {st['platform']}.")
                     sys.exit(1)
                 if not st["installed"]:
-                    print("cua-driver: not installed. Run: hermes computer-use install")
+                    print("cua-driver: not installed. Run: vigil computer-use install")
                     sys.exit(1)
                 glyph = lambda v: "✅" if v is True else ("❌" if v is False else "•")  # noqa: E731
                 print(f"cua-driver: {st['version'] or 'installed'} ({st['platform']})")
@@ -11918,7 +11922,7 @@ def main():
                     print(f"  {glyph(st['accessibility'])} Accessibility")
                     print(f"  {glyph(st['screen_recording'])} Screen Recording")
                     if not st["ready"]:
-                        print("  Grant: hermes computer-use permissions grant")
+                        print("  Grant: vigil computer-use permissions grant")
                 else:  # no TCC model — readiness is driver health
                     print(f"  {glyph(st['ready'])} driver health (no permission toggles on {st['platform']})")
                 for c in st["checks"]:

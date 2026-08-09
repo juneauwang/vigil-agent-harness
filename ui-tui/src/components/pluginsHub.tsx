@@ -172,7 +172,7 @@ export function PluginsHub({ gw, maxWidth, onClose, t }: PluginsHubProps) {
           Plugins Hub
         </Text>
         <Text color={t.color.muted}>no plugins installed</Text>
-        <Text color={t.color.muted}>install: hermes plugins install owner/repo</Text>
+        <Text color={t.color.muted}>install: vigil plugins install owner/repo</Text>
         <OverlayHint t={t}>Esc/q close</OverlayHint>
       </Box>
     )

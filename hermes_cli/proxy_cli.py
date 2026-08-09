@@ -91,7 +91,7 @@ def register_cli(parent_parser: argparse.ArgumentParser) -> None:
     setup.add_argument(
         "--no-restart", dest="restart", action="store_false",
         help="Do not restart a running daemon after setup; you'll need to run "
-             "`hermes egress restart` yourself for changes to take effect.",
+             "`vigil egress restart` yourself for changes to take effect.",
     )
     setup.set_defaults(func=cmd_setup)
 
@@ -197,7 +197,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 "secrets.bitwarden.enabled is false.[/red]"
             )
             console.print(
-                "  Run `hermes secrets bitwarden setup` first, or omit "
+                "  Run `vigil secrets bitwarden setup` first, or omit "
                 "--from-bitwarden."
             )
             return 1
@@ -509,7 +509,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
                 f"config: {exc}[/yellow]"
             )
             console.print(
-                "  Run [cyan]hermes egress start[/cyan] manually before "
+                "  Run [cyan]vigil egress start[/cyan] manually before "
                 "launching new Docker sandboxes."
             )
         else:
@@ -522,7 +522,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     elif was_running:
         console.print(
             "  [yellow]⚠ stopped the running iron-proxy; config or tokens "
-            "changed.  Run [cyan]hermes egress restart[/cyan] (or "
+            "changed.  Run [cyan]vigil egress restart[/cyan] (or "
             "[cyan]start[/cyan]) before launching new Docker sandboxes.[/yellow]"
         )
 
@@ -532,13 +532,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
         "Sandboxes will route outbound traffic through it."
     )
     console.print(
-        "  Start:   [cyan]hermes egress start[/cyan]\n"
-        "  Restart: [cyan]hermes egress restart[/cyan]  (after any re-setup)\n"
-        "  Reload:  [cyan]hermes egress reload[/cyan]   (apply ruleset edits "
+        "  Start:   [cyan]vigil egress start[/cyan]\n"
+        "  Restart: [cyan]vigil egress restart[/cyan]  (after any re-setup)\n"
+        "  Reload:  [cyan]vigil egress reload[/cyan]   (apply ruleset edits "
         "in-place, no restart)\n"
-        "  Status:  [cyan]hermes egress status[/cyan]\n"
-        "  Stop:    [cyan]hermes egress stop[/cyan]\n"
-        "  Disable: [cyan]hermes egress disable[/cyan]"
+        "  Status:  [cyan]vigil egress status[/cyan]\n"
+        "  Stop:    [cyan]vigil egress stop[/cyan]\n"
+        "  Disable: [cyan]vigil egress disable[/cyan]"
     )
     return 0
 
@@ -549,7 +549,7 @@ def cmd_start(args: argparse.Namespace) -> int:
     proxy_cfg = cfg.get("proxy") or {}
     if not proxy_cfg.get("enabled"):
         console.print(
-            "[yellow]proxy.enabled is false — run `hermes egress setup` "
+            "[yellow]proxy.enabled is false — run `vigil egress setup` "
             "first.[/yellow]"
         )
         return 1
@@ -587,7 +587,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             )
             console.print(
                 "  Re-enable it (`secrets.bitwarden.enabled: true`), switch "
-                "back to env credentials with `hermes egress setup "
+                "back to env credentials with `vigil egress setup "
                 "--no-bitwarden`, or set `proxy.allow_env_fallback: true` "
                 "to opt into the host-env fallback."
             )
@@ -622,7 +622,7 @@ def cmd_start(args: argparse.Namespace) -> int:
             )
             console.print(
                 "  Either export the access token, or run "
-                "`hermes egress setup --no-bitwarden` to switch back to "
+                "`vigil egress setup --no-bitwarden` to switch back to "
                 "env-based credentials."
             )
             return 1
@@ -632,8 +632,8 @@ def cmd_start(args: argparse.Namespace) -> int:
                 "secrets.bitwarden.project_id is empty.[/red]"
             )
             console.print(
-                "  Run `hermes secrets bitwarden setup` to configure the "
-                "project, or switch back via `hermes egress setup "
+                "  Run `vigil secrets bitwarden setup` to configure the "
+                "project, or switch back via `vigil egress setup "
                 "--no-bitwarden`."
             )
             return 1
@@ -710,7 +710,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
     )
     console.print(
         "[dim]Note: new upstream secrets (rotated keys, new providers) "
-        "still need `hermes egress restart` — the daemon reads real "
+        "still need `vigil egress restart` — the daemon reads real "
         "credentials from its environment at spawn time.[/dim]"
     )
     return 0
@@ -758,9 +758,9 @@ def format_status_text(*, show_tokens: bool = False) -> str:
             lines.append(f"  - {name}")
 
     if bool(proxy_cfg.get("enabled")) and not status.configured:
-        lines.extend(["", "Next: run `hermes egress setup` to mint tokens and write proxy.yaml."])
+        lines.extend(["", "Next: run `vigil egress setup` to mint tokens and write proxy.yaml."])
     elif bool(proxy_cfg.get("enabled")) and not (status.pid and status.listening):
-        lines.extend(["", "Next: run `hermes egress start` before launching Docker sandboxes."])
+        lines.extend(["", "Next: run `vigil egress start` before launching Docker sandboxes."])
 
     return "\n".join(lines)
 
@@ -838,7 +838,7 @@ def cmd_disable(args: argparse.Namespace) -> int:
     if ip.get_status().pid is not None:
         console.print(
             "  iron-proxy is still running — stop it with "
-            "[cyan]hermes egress stop[/cyan] if you want it down too."
+            "[cyan]vigil egress stop[/cyan] if you want it down too."
         )
     return 0
 
@@ -848,7 +848,7 @@ def cmd_config(args: argparse.Namespace) -> int:
     status = ip.get_status()
     if status.config_path is None:
         console.print(
-            "[yellow](no config generated — run `hermes egress setup`)[/yellow]"
+            "[yellow](no config generated — run `vigil egress setup`)[/yellow]"
         )
         return 1
     console.print(str(status.config_path))

@@ -1679,7 +1679,7 @@ class SlackAdapter(BasePlatformAdapter):
                     "and 'message.mpim' event. Add 'mpim:history' (and "
                     "'mpim:read') to bot scopes, add 'message.mpim' to event "
                     "subscriptions, then REINSTALL the app to the workspace. "
-                    "Regenerating the app from `hermes slack` produces a "
+                    "Regenerating the app from `vigil slack` produces a "
                     "manifest with these already included.",
                     team_key or "this workspace",
                 )
@@ -1775,13 +1775,13 @@ class SlackAdapter(BasePlatformAdapter):
         if not raw_token:
             logger.error(
                 "[Slack] SLACK_BOT_TOKEN not set — this is a permanent config "
-                "error; set SLACK_BOT_TOKEN via `hermes gateway setup` "
+                "error; set SLACK_BOT_TOKEN via `vigil gateway setup` "
                 "or in the active profile's ~/.hermes/.env file, then restart "
                 "the gateway.",
             )
             self._set_fatal_error(
                 "missing_slack_bot_token",
-                "SLACK_BOT_TOKEN not configured. Use `hermes gateway setup` "
+                "SLACK_BOT_TOKEN not configured. Use `vigil gateway setup` "
                 "or add it to your active profile's ~/.hermes/.env file, "
                 "then restart the gateway.",
                 retryable=False,
@@ -1790,13 +1790,13 @@ class SlackAdapter(BasePlatformAdapter):
         if not app_token:
             logger.error(
                 "[Slack] SLACK_APP_TOKEN not set — this is a permanent config "
-                "error; set SLACK_APP_TOKEN via `hermes gateway setup` "
+                "error; set SLACK_APP_TOKEN via `vigil gateway setup` "
                 "or in the active profile's ~/.hermes/.env file, then restart "
                 "the gateway.",
             )
             self._set_fatal_error(
                 "missing_slack_app_token",
-                "SLACK_APP_TOKEN not configured. Use `hermes gateway setup` "
+                "SLACK_APP_TOKEN not configured. Use `vigil gateway setup` "
                 "or add it to your active profile's ~/.hermes/.env file, "
                 "then restart the gateway.",
                 retryable=False,
@@ -2031,7 +2031,7 @@ class SlackAdapter(BasePlatformAdapter):
                     "[Slack] Ignoring unhandled event type=%s (no listener "
                     "registered; subscribed events not handled by Hermes can "
                     "be removed from the Slack app manifest via "
-                    "`hermes slack manifest`)",
+                    "`vigil slack manifest`)",
                     (event or {}).get(
                         "type",
                         (body or {}).get("event", {}).get("type", "unknown"),
@@ -2202,7 +2202,7 @@ class SlackAdapter(BasePlatformAdapter):
                     "[Slack] allow_bots=%s — for bot-to-bot interop also ensure: "
                     "(a) the Slack app manifest subscribes to message.channels / "
                     "message.groups / message.im as appropriate (run "
-                    "'hermes slack manifest' if unsure), and (b) the other bot's "
+                    "'vigil slack manifest' if unsure), and (b) the other bot's "
                     "Slack user id is in SLACK_ALLOWED_USERS or "
                     "GATEWAY_ALLOW_ALL_USERS=true. Without these, bot events are "
                     "silently dropped upstream of the allow_bots gate.",
@@ -8887,7 +8887,7 @@ def interactive_setup() -> None:
                 "reinstall if scopes or slash commands changed."
             )
             print_info(
-                "   Re-run `hermes slack manifest --write` anytime to refresh after "
+                "   Re-run `vigil slack manifest --write` anytime to refresh after "
                 "Hermes adds new commands."
             )
         except Exception as e:
@@ -8902,7 +8902,7 @@ def interactive_setup() -> None:
             # new commands (e.g. /btw, /stop, ...) get registered in Slack.
             if prompt_yes_no(
                 "Regenerate the Slack app manifest with the latest command "
-                "list? (recommended after `hermes update`)",
+                "list? (recommended after `vigil update`)",
                 True,
             ):
                 _write_slack_manifest_and_instruct()
@@ -9058,7 +9058,7 @@ def register(ctx) -> None:
         check_fn=check_slack_requirements,
         is_connected=_is_connected,
         required_env=["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"],
-        install_hint="Run `hermes setup` to install Slack support.",
+        install_hint="Run `vigil setup` to install Slack support.",
         # Interactive setup wizard — replaces hermes_cli/setup.py::_setup_slack
         # and the static _PLATFORMS["slack"] dict in hermes_cli/gateway.py.
         setup_fn=interactive_setup,

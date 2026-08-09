@@ -327,7 +327,7 @@ export const uk: Translations = {
     enableRuntime: "Увімкнути",
     forceReinstall: "Примусово перевстановити (спершу видалити наявну теку)",
     headline:
-      "Знаходьте, встановлюйте, вмикайте та оновлюйте плагіни Hermes (паритет з `hermes plugins`).",
+      "Знаходьте, встановлюйте, вмикайте та оновлюйте плагіни Hermes (паритет з `vigil plugins`).",
     identifierLabel: "Git URL або owner/repo",
     inactive: "неактивний",
     installBtn: "Встановити",

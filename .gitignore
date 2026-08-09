@@ -4,4 +4,17 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.pytest-cache/
 *.egg-info/
+
+# Gateway conformance runner writes a per-run duration map (absolute tmp paths)
+test_durations.json
+
+# Serialize web UI builds across concurrent `hermes dashboard` invocations
+.web_ui_build.lock
+
+# Build/test artifacts (bytecode hash of the checked-out tree; regenerated on every commit)
+.bytecode-fingerprint
+
+# First-run bootstrap marker — `git stash -u` (hermes update autostash) must skip it
+.hermes-bootstrap-complete

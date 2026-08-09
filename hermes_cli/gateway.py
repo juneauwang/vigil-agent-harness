@@ -1150,7 +1150,7 @@ def _wait_for_systemd_service_restart(
 
     print(
         f"⚠ {scope_label} service did not become active within {int(timeout)}s.\n"
-        f"  Check status: {'sudo ' if system else ''}hermes gateway status\n"
+        f"  Check status: {'sudo ' if system else ''}vigil gateway status\n"
         f"  Check logs:   journalctl {'--user ' if not system else ''}-u {svc} -l --since '2 min ago'"
     )
     return False
@@ -1192,7 +1192,7 @@ def _print_systemd_start_limit_wait(system: bool = False) -> None:
     print(f"⏳ {scope_label} service is temporarily rate-limited by systemd.")
     print("  systemd is refusing another immediate start after repeated exits.")
     print(
-        f"  Wait for the start-limit window to expire, then run: {'sudo ' if system else ''}hermes gateway restart{scope_flag}"
+        f"  Wait for the start-limit window to expire, then run: {'sudo ' if system else ''}vigil gateway restart{scope_flag}"
     )
     print(f"  Or clear the failed state manually: {systemctl_prefix}reset-failed {svc}")
     print(f"  Check logs: {journal_prefix}-u {svc} -l --since '5 min ago'")
@@ -1403,13 +1403,13 @@ def _print_gateway_process_mismatch(snapshot: GatewayRuntimeSnapshot) -> None:
         )
         print(f"  PID(s): {_format_gateway_pids(snapshot.gateway_pids, limit=None)}")
         print("  Auto-start at login and auto-restart on crash are NOT available.")
-        print("  Stop it with: hermes gateway stop")
+        print("  Stop it with: vigil gateway stop")
     else:
         print(
             "⚠ Gateway process is running for this profile, but the service is not active"
         )
         print(f"  PID(s): {_format_gateway_pids(snapshot.gateway_pids, limit=None)}")
-        print("  This is usually a manual foreground/tmux/nohup run, so `hermes gateway`")
+        print("  This is usually a manual foreground/tmux/nohup run, so `vigil gateway`")
         print("  can refuse to start another copy until this process stops.")
 
 
@@ -2038,7 +2038,7 @@ def _raise_user_systemd_unavailable(
         "\n"
         "  Alternative: run the gateway in the foreground (stays up until\n"
         "  you exit / close the terminal):\n"
-        "    hermes gateway run"
+        "    vigil gateway run"
     )
     raise UserSystemdUnavailableError(msg)
 
@@ -2101,7 +2101,7 @@ _LEGACY_UNIT_EXECSTART_MARKERS: tuple[str, ...] = (
     "hermes_cli.main gateway",
     "hermes_cli/main.py gateway",
     "gateway/run.py",
-    " hermes gateway ",
+    " vigil gateway ",
     "/hermes gateway ",
 )
 
@@ -2177,7 +2177,7 @@ def print_legacy_unit_warning() -> None:
     print_info("  These run alongside the current hermes-gateway service and")
     print_info("  cause SIGTERM flap loops — both try to use the same bot token.")
     print_info("  Remove them with:")
-    print_info("    hermes gateway migrate-legacy")
+    print_info("    vigil gateway migrate-legacy")
 
 
 def remove_legacy_hermes_units(
@@ -2220,7 +2220,7 @@ def remove_legacy_hermes_units(
         return 0, [p for _, p, _ in legacy]
 
     if interactive and not prompt_yes_no("Remove these legacy units?", True):
-        print("Skipped. Run again with: hermes gateway migrate-legacy")
+        print("Skipped. Run again with: vigil gateway migrate-legacy")
         return 0, [p for _, p, _ in legacy]
 
     removed = 0
@@ -2249,7 +2249,7 @@ def remove_legacy_hermes_units(
         if os.geteuid() != 0:  # windows-footgun: ok — Linux systemd removal path, guarded by `if system == "Linux"` / systemd-only branch
             print()
             print_warning("System-scope legacy units require root to remove.")
-            print_info("  Re-run with: sudo hermes gateway migrate-legacy")
+            print_info("  Re-run with: sudo vigil gateway migrate-legacy")
             for _, path in system_units:
                 remaining.append(path)
         else:
@@ -2296,8 +2296,8 @@ def print_systemd_scope_conflict_warning() -> None:
         "  Default gateway commands target the user service unless you pass --system."
     )
     print_info("  Keep one of these:")
-    print_info("    hermes gateway uninstall")
-    print_info("    sudo hermes gateway uninstall --system")
+    print_info("    vigil gateway uninstall")
+    print_info("    sudo vigil gateway uninstall --system")
 
 
 def _require_root_for_system_service(action: str) -> None:
@@ -2409,7 +2409,7 @@ def install_linux_gateway_from_setup(force: bool = False, enable_on_startup: boo
             # direct caller — we do NOT print a self-elevation recipe.
             print_warning(
                 "  System service install requires root. Re-run setup from a "
-                "root shell, or install a user service instead: hermes gateway install"
+                "root shell, or install a user service instead: vigil gateway install"
             )
             return scope, False
 
@@ -3262,9 +3262,9 @@ def _print_system_scope_remediation(action: str) -> None:
     else:
         print_info(f"         sudo systemctl {action} {svc}")
     print_info("    2. Switch to a per-user service (recommended for personal use):")
-    print_info("         sudo hermes gateway uninstall --system")
-    print_info("         hermes gateway install")
-    print_info("         hermes gateway start")
+    print_info("         sudo vigil gateway uninstall --system")
+    print_info("         vigil gateway install")
+    print_info("         vigil gateway start")
 
 
 def _get_restart_drain_timeout() -> float:
@@ -3367,10 +3367,10 @@ def systemd_install(
     print()
     print("Next steps:")
     print(
-        f"  {'sudo ' if system else ''}hermes gateway start{scope_flag}              # Start the service"
+        f"  {'sudo ' if system else ''}vigil gateway start{scope_flag}              # Start the service"
     )
     print(
-        f"  {'sudo ' if system else ''}hermes gateway status{scope_flag}             # Check status"
+        f"  {'sudo ' if system else ''}vigil gateway status{scope_flag}             # Check status"
     )
     print(
         f"  {'journalctl' if system else 'journalctl --user'} -u {get_service_name()} -f  # View logs"
@@ -3412,7 +3412,7 @@ def _require_service_installed(action: str, system: bool = False) -> None:
     if not unit_path.exists():
         scope_flag = " --system" if system else ""
         print("✗ Gateway service is not installed")
-        print(f"  Run: {'sudo ' if system else ''}hermes gateway install{scope_flag}")
+        print(f"  Run: {'sudo ' if system else ''}vigil gateway install{scope_flag}")
         sys.exit(1)
 
 
@@ -3456,7 +3456,7 @@ def systemd_stop(system: bool = False):
         label = _service_scope_label(system)
         print(
             f"Gateway {label} service is still stopping after 90s; "
-            "check `hermes gateway status` or logs for final shutdown state."
+            "check `vigil gateway status` or logs for final shutdown state."
         )
         return
     print(f"✓ {_service_scope_label(system).capitalize()} service stopped")
@@ -3531,7 +3531,7 @@ def systemd_restart(system: bool = False):
             label = _service_scope_label(system)
             print(
                 f"Gateway {label} service is still restarting after 90s; "
-                "check `hermes gateway status` or logs for final state."
+                "check `vigil gateway status` or logs for final state."
             )
             return
         _wait_for_systemd_service_restart(system=system, previous_pid=pid)
@@ -3561,7 +3561,7 @@ def systemd_restart(system: bool = False):
         label = _service_scope_label(system)
         print(
             f"Gateway {label} service is still restarting after 90s; "
-            "check `hermes gateway status` or logs for final state."
+            "check `vigil gateway status` or logs for final state."
         )
         return
     _wait_for_systemd_service_restart(system=system, previous_pid=pid)
@@ -3574,7 +3574,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
 
     if not unit_path.exists():
         print("✗ Gateway service is not installed")
-        print(f"  Run: {'sudo ' if system else ''}hermes gateway install{scope_flag}")
+        print(f"  Run: {'sudo ' if system else ''}vigil gateway install{scope_flag}")
         return
 
     if has_conflicting_systemd_units():
@@ -3588,7 +3588,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
     if not systemd_unit_is_current(system=system):
         print("⚠ Installed gateway service definition is outdated")
         print(
-            f"  Run: {'sudo ' if system else ''}hermes gateway restart{scope_flag}  # auto-refreshes the unit"
+            f"  Run: {'sudo ' if system else ''}vigil gateway restart{scope_flag}  # auto-refreshes the unit"
         )
         print()
 
@@ -3621,7 +3621,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
         print(
             f"✗ {_service_scope_label(system).capitalize()} gateway service is stopped"
         )
-        print(f"  Run: {'sudo ' if system else ''}hermes gateway start{scope_flag}")
+        print(f"  Run: {'sudo ' if system else ''}vigil gateway start{scope_flag}")
 
     configured_user = _read_systemd_user_from_unit(unit_path) if system else None
     if configured_user:
@@ -3644,7 +3644,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
     elif _systemd_unit_is_start_limited(unit_props):
         print("  ⏳ Restart pending: systemd is temporarily rate-limiting starts")
         print(
-            f"  Run after the start-limit window expires: {'sudo ' if system else ''}hermes gateway restart{scope_flag}"
+            f"  Run after the start-limit window expires: {'sudo ' if system else ''}vigil gateway restart{scope_flag}"
         )
         print(
             f"  Or clear it manually: systemctl {'--user ' if not system else ''}reset-failed {get_service_name()}"
@@ -3654,7 +3654,7 @@ def systemd_status(deep: bool = False, system: bool = False, full: bool = False)
     ):
         print("  ⚠ Planned restart is stuck in systemd failed state (exit 75)")
         print(
-            f"  Run: systemctl {'--user ' if not system else ''}reset-failed {get_service_name()} && {'sudo ' if system else ''}hermes gateway start{scope_flag}"
+            f"  Run: systemctl {'--user ' if not system else ''}reset-failed {get_service_name()} && {'sudo ' if system else ''}vigil gateway start{scope_flag}"
         )
     elif active_state == "failed" and result_code:
         print(f"  ⚠ Systemd unit result: {result_code}")
@@ -4038,11 +4038,11 @@ def _launchd_fallback_to_detached(reason: str, *, exit_on_failure: bool = True) 
         print("✓ Started gateway as a background process instead")
         print("  It will NOT auto-start at login or auto-restart on crash.")
         print(f"  Logs: {_dhh()}/logs/gateway.log")
-        print("  Stop it with: hermes gateway stop")
+        print("  Stop it with: vigil gateway stop")
         return True
     print_error("Failed to start the gateway as a background process.")
     print(
-        f"  Try manually: nohup hermes gateway run --replace "
+        f"  Try manually: nohup vigil gateway run --replace "
         f"> {_dhh()}/logs/gateway.log 2>&1 &"
     )
     if exit_on_failure:
@@ -4367,7 +4367,7 @@ def launchd_install(force: bool = False):
     _clear_launchd_unsupported_marker()
     print()
     print("Next steps:")
-    print("  hermes gateway status             # Check status")
+    print("  vigil gateway status             # Check status")
     from hermes_constants import display_hermes_home as _dhh
 
     print(f"  tail -f {_dhh()}/logs/gateway.log  # View logs")
@@ -4648,7 +4648,7 @@ def launchd_status(deep: bool = False):
         print("✓ Service definition matches the current Hermes install")
     else:
         print("⚠ Service definition is stale relative to the current Hermes install")
-        print("  Run: hermes gateway start")
+        print("  Run: vigil gateway start")
 
     if service_listed:
         if launchd_pid is not None:
@@ -4661,10 +4661,10 @@ def launchd_status(deep: bool = False):
             print("  launchd cannot manage the gateway on this macOS version.")
             if fallback_pid:
                 print(f"✓ Detached fallback process is running (PID {fallback_pid})")
-                print("  Cron jobs will fire. Stop with: hermes gateway stop")
+                print("  Cron jobs will fire. Stop with: vigil gateway stop")
             else:
                 print("✗ No fallback process is running")
-                print("  Run: hermes gateway start")
+                print("  Run: vigil gateway start")
             print("  ⚠ Auto-start at login and auto-restart on crash are NOT available.")
         else:
             print("✓ Gateway service is registered with launchd")
@@ -4674,7 +4674,7 @@ def launchd_status(deep: bool = False):
     else:
         print("✗ Gateway service is not loaded")
         print("  Service definition exists locally but launchd has not loaded it.")
-        print("  Run: hermes gateway start")
+        print("  Run: vigil gateway start")
         if fallback_pid:
             print(f"  Note: a detached gateway process is running (PID {fallback_pid})")
 
@@ -4809,7 +4809,7 @@ def _guard_named_profile_under_multiplexer(force: bool = False) -> None:
     )
     print("  Manage the multiplexer instead (from the default profile):")
     print()
-    print("    hermes gateway restart")
+    print("    vigil gateway restart")
     print()
     print("  Pass --force to start a separate profile gateway anyway (not")
     print("  recommended while the multiplexer is running).")
@@ -4847,7 +4847,7 @@ def _guard_supervised_gateway_conflict(force: bool = False) -> None:
         "  instead:"
     )
     print()
-    print("    hermes gateway restart")
+    print("    vigil gateway restart")
     print()
     print(
         "  Pass --force to start a foreground gateway anyway (not recommended\n"
@@ -4882,9 +4882,9 @@ def _guard_existing_gateway_process_conflict(replace: bool = False) -> None:
     print_error(
         f"Another gateway instance is already running (PID {pid})."
     )
-    print("  Use 'hermes gateway restart' to replace it,")
-    print("  or 'hermes gateway stop' first.")
-    print("  Or use 'hermes gateway run --replace' to auto-replace.")
+    print("  Use 'vigil gateway restart' to replace it,")
+    print("  or 'vigil gateway stop' first.")
+    print("  Or use 'vigil gateway run --replace' to auto-replace.")
     sys.exit(1)
 
 
@@ -5192,7 +5192,7 @@ _PLATFORMS = [
         "setup_instructions": [
             "1. In Mattermost: Integrations → Bot Accounts → Add Bot Account",
             "   (System Console → Integrations → Bot Accounts must be enabled)",
-            "2. Give it a username (e.g. hermes) and copy the bot token",
+            "2. Give it a username (e.g. vigil) and copy the bot token",
             "3. Works with any self-hosted Mattermost instance — enter your server URL",
             "4. To find your user ID: click your avatar (top-left) → Profile",
             "   Your user ID is displayed there — click it to copy.",
@@ -5264,7 +5264,7 @@ _PLATFORMS = [
             "4. The server URL is typically http://<your-mac-ip>:1234",
             "5. Hermes connects via the BlueBubbles REST API and receives",
             "   incoming messages via a local webhook",
-            "6. To authorize users, use DM pairing: hermes pairing generate bluebubbles",
+            "6. To authorize users, use DM pairing: vigil pairing generate bluebubbles",
             "   Share the code — the user sends it via iMessage to get approved",
         ],
         "vars": [
@@ -5708,7 +5708,7 @@ def _setup_standard_platform(platform: dict):
                 else:
                     access_choices = [
                         "Enable open access (anyone can message the bot)",
-                        "Use DM pairing (unknown users request access, you approve with 'hermes pairing approve')",
+                        "Use DM pairing (unknown users request access, you approve with 'vigil pairing approve')",
                         "Skip for now (bot will deny all users until configured)",
                     ]
                     default_access_idx = 1
@@ -5730,13 +5730,13 @@ def _setup_standard_platform(platform: dict):
                         "  DM pairing mode — users will receive a code to request access."
                     )
                     print_info(
-                        "  Approve with: hermes pairing approve <platform> <code>"
+                        "  Approve with: vigil pairing approve <platform> <code>"
                     )
                 elif is_email:
                     print_success("  Unknown email senders will be ignored.")
                 else:
                     print_info(
-                        "  Skipped — configure later with 'hermes gateway setup'"
+                        "  Skipped — configure later with 'vigil gateway setup'"
                     )
             continue
 
@@ -5879,7 +5879,7 @@ def _setup_weixin():
 
     if not check_weixin_requirements():
         print_error("  Missing dependencies: Weixin needs aiohttp and cryptography.")
-        print_info("  Install them, then rerun `hermes gateway setup`.")
+        print_info("  Install them, then rerun `vigil gateway setup`.")
         return
 
     print()
@@ -5933,7 +5933,7 @@ def _setup_weixin():
         save_env_value("WEIXIN_ALLOWED_USERS", "")
         print_success("  DM pairing enabled.")
         print_info(
-            "  Unknown DM users can request access and you approve them with `hermes pairing approve`."
+            "  Unknown DM users can request access and you approve them with `vigil pairing approve`."
         )
     elif access_idx == 1:
         save_env_value("WEIXIN_DM_POLICY", "open")
@@ -6108,7 +6108,7 @@ def _setup_qqbot():
             save_env_value("QQ_ALLOWED_USERS", "")
         print_success("  DM pairing enabled.")
         print_info(
-            "  Unknown users can request access; approve with `hermes pairing approve`."
+            "  Unknown users can request access; approve with `vigil pairing approve`."
         )
     elif access_idx == 1:
         save_env_value("QQ_ALLOW_ALL_USERS", "true")
@@ -6497,7 +6497,7 @@ def gateway_setup():
                         gateway_windows.restart()
                     else:
                         stop_profile_gateway()
-                        print_info("Start manually: hermes gateway")
+                        print_info("Start manually: vigil gateway")
                 except UserSystemdUnavailableError as e:
                     print_error("  Restart failed — user systemd not reachable:")
                     for line in str(e).splitlines():
@@ -6581,20 +6581,20 @@ def gateway_setup():
                                 print_error(f"  Start failed: {e}")
                     except subprocess.CalledProcessError as e:
                         print_error(f"  Install failed: {e}")
-                        print_info("  You can try manually: hermes gateway install")
+                        print_info("  You can try manually: vigil gateway install")
                 else:
                     print_info("  Skipped start and auto-start setup.")
-                    print_info("  You can install later: hermes gateway install")
+                    print_info("  You can install later: vigil gateway install")
                     if supports_systemd_services():
                         print_info(
-                            "  Or as a boot-time service: sudo hermes gateway install --system"
+                            "  Or as a boot-time service: sudo vigil gateway install --system"
                         )
-                    print_info("  Or run in foreground:  hermes gateway run")
+                    print_info("  Or run in foreground:  vigil gateway run")
             elif is_wsl():
                 print_info("  WSL detected but systemd is not running.")
-                print_info("  Run in foreground: hermes gateway run")
+                print_info("  Run in foreground: vigil gateway run")
                 print_info(
-                    "  For persistence:   tmux new -s hermes 'hermes gateway run'"
+                    "  For persistence:   tmux new -s vigil 'vigil gateway run'"
                 )
                 print_info(
                     "  To enable systemd: add systemd=true to /etc/wsl.conf, then 'wsl --shutdown'"
@@ -6603,16 +6603,16 @@ def gateway_setup():
                 from hermes_constants import display_hermes_home as _dhh
 
                 print_info("  Termux does not use systemd/launchd services.")
-                print_info("  Run in foreground: hermes gateway run")
+                print_info("  Run in foreground: vigil gateway run")
                 print_info(
-                    f"  Or start it manually in the background (best effort): nohup hermes gateway run >{_dhh()}/logs/gateway.log 2>&1 &"
+                    f"  Or start it manually in the background (best effort): nohup vigil gateway run >{_dhh()}/logs/gateway.log 2>&1 &"
                 )
             else:
                 print_info("  Service install not supported on this platform.")
-                print_info("  Run in foreground: hermes gateway run")
+                print_info("  Run in foreground: vigil gateway run")
     else:
         print()
-        print_info("No platforms configured. Run 'hermes gateway setup' when ready.")
+        print_info("No platforms configured. Run 'vigil gateway setup' when ready.")
 
     print()
 
@@ -6890,7 +6890,7 @@ def _gateway_command_inner(args):
         run_as_user = getattr(args, "run_as_user", None)
         if is_termux():
             print("Gateway service installation is not supported on Termux.")
-            print("Run manually: hermes gateway")
+            print("Run manually: vigil gateway")
             sys.exit(1)
         if supports_systemd_services():
             if is_wsl():
@@ -6898,10 +6898,10 @@ def _gateway_command_inner(args):
                     "WSL detected — systemd services may not survive WSL restarts."
                 )
                 print_info(
-                    "  Consider running in foreground instead: hermes gateway run"
+                    "  Consider running in foreground instead: vigil gateway run"
                 )
                 print_info(
-                    "  Or use tmux/screen for persistence: tmux new -s hermes 'hermes gateway run'"
+                    "  Or use tmux/screen for persistence: tmux new -s vigil 'vigil gateway run'"
                 )
                 print()
             # Honor CLI flags (--start-now / --no-start-now, --start-on-login /
@@ -6951,13 +6951,13 @@ def _gateway_command_inner(args):
             print("or run the gateway in foreground mode:")
             print()
             print(
-                "  hermes gateway run                              # direct foreground"
+                "  vigil gateway run                              # direct foreground"
             )
             print(
-                "  tmux new -s hermes 'hermes gateway run'         # persistent via tmux"
+                "  tmux new -s vigil 'vigil gateway run'         # persistent via tmux"
             )
             print(
-                "  nohup hermes gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # background"
+                "  nohup vigil gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # background"
             )
             sys.exit(1)
         elif is_container():
@@ -6968,9 +6968,9 @@ def _gateway_command_inner(args):
             if detect_service_manager() == "s6":
                 print("Per-profile gateways are auto-registered when you create a profile.")
                 print()
-                print("  hermes profile create <name>     # creates the s6 service slot")
-                print("  hermes -p <name> gateway start   # bring it up via s6")
-                print("  hermes status                    # see currently-supervised gateways")
+                print("  vigil profile create <name>     # creates the s6 service slot")
+                print("  vigil -p <name> gateway start   # bring it up via s6")
+                print("  vigil status                    # see currently-supervised gateways")
                 return
             # Fallback for pre-s6 containers or other container runtimes
             # we haven't taught about supervision (Podman without our
@@ -6986,11 +6986,11 @@ def _gateway_command_inner(args):
             )
             print("  docker restart <container>                # manual restart")
             print()
-            print("To run the gateway: hermes gateway run")
+            print("To run the gateway: vigil gateway run")
             sys.exit(0)
         else:
             print("Service installation not supported on this platform.")
-            print("Run manually: hermes gateway run")
+            print("Run manually: vigil gateway run")
             sys.exit(1)
 
     elif subcmd == "uninstall":
@@ -7002,7 +7002,7 @@ def _gateway_command_inner(args):
             print(
                 "Gateway service uninstall is not supported on Termux because there is no managed service to remove."
             )
-            print("Stop manual runs with: hermes gateway stop")
+            print("Stop manual runs with: vigil gateway stop")
             sys.exit(1)
         if supports_systemd_services():
             systemd_uninstall(system=system)
@@ -7017,8 +7017,8 @@ def _gateway_command_inner(args):
             if detect_service_manager() == "s6":
                 print("Per-profile gateways are auto-unregistered when you delete the profile.")
                 print()
-                print("  hermes profile delete <name>     # tears down the s6 service slot")
-                print("  hermes -p <name> gateway stop    # stop without deleting the profile")
+                print("  vigil profile delete <name>     # tears down the s6 service slot")
+                print("  vigil -p <name> gateway stop    # stop without deleting the profile")
                 return
             print("Service uninstall is not applicable inside a Docker container.")
             print("To stop the gateway, stop or remove the container:")
@@ -7055,7 +7055,7 @@ def _gateway_command_inner(args):
             print(
                 "Gateway service start is not supported on Termux because there is no system service manager."
             )
-            print("Run manually: hermes gateway")
+            print("Run manually: vigil gateway")
             sys.exit(1)
         if supports_systemd_services():
             systemd_start(system=system)
@@ -7070,13 +7070,13 @@ def _gateway_command_inner(args):
             print("Run the gateway in foreground mode instead:")
             print()
             print(
-                "  hermes gateway run                              # direct foreground"
+                "  vigil gateway run                              # direct foreground"
             )
             print(
-                "  tmux new -s hermes 'hermes gateway run'         # persistent via tmux"
+                "  tmux new -s vigil 'vigil gateway run'         # persistent via tmux"
             )
             print(
-                "  nohup hermes gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # background"
+                "  nohup vigil gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # background"
             )
             print()
             print(
@@ -7095,7 +7095,7 @@ def _gateway_command_inner(args):
             print("  docker start <container>     # start a stopped container")
             print("  docker restart <container>   # restart a running container")
             print()
-            print("Or run the gateway directly: hermes gateway run")
+            print("Or run the gateway directly: vigil gateway run")
             sys.exit(0)
         else:
             print("Not supported on this platform.")
@@ -7108,7 +7108,7 @@ def _gateway_command_inner(args):
             print_error(
                 "Refusing to stop the gateway from inside the gateway process.\n"
                 "This command was blocked to prevent restart loops.\n"
-                "Use `hermes gateway stop` from a shell outside the running gateway."
+                "Use `vigil gateway stop` from a shell outside the running gateway."
             )
             sys.exit(1)
 
@@ -7201,7 +7201,7 @@ def _gateway_command_inner(args):
             print_error(
                 "Refusing to restart the gateway from inside the gateway process.\n"
                 "This command was blocked to prevent restart loops.\n"
-                "Use `hermes gateway restart` from a shell outside the running gateway."
+                "Use `vigil gateway restart` from a shell outside the running gateway."
             )
             sys.exit(1)
 
@@ -7330,7 +7330,7 @@ def _gateway_command_inner(args):
                     print(f"  Run:  sudo loginctl enable-linger {_username}")
                     print()
                     print("  Then restart the gateway:")
-                    print("    hermes gateway restart")
+                    print("    vigil gateway restart")
                     return
 
             if service_configured:
@@ -7339,7 +7339,7 @@ def _gateway_command_inner(args):
                 print(
                     "  The service definition exists, but the service manager did not recover it."
                 )
-                print("  Fix the service, then retry: hermes gateway start")
+                print("  Fix the service, then retry: vigil gateway start")
                 sys.exit(1)
 
             # Manual restart: stop only this profile's gateway
@@ -7406,11 +7406,11 @@ def _gateway_command_inner(args):
                     print(
                         "To install as a Windows Scheduled Task (auto-start on login):"
                     )
-                    print("  hermes gateway install")
+                    print("  vigil gateway install")
                 else:
                     print("To install as a service:")
-                    print("  hermes gateway install")
-                    print("  sudo hermes gateway install --system")
+                    print("  vigil gateway install")
+                    print("  sudo vigil gateway install --system")
             else:
                 print("✗ Gateway is not running")
                 runtime_lines = _runtime_health_lines()
@@ -7421,26 +7421,26 @@ def _gateway_command_inner(args):
                         print(f"  {line}")
                 print()
                 print("To start:")
-                print("  hermes gateway run      # Run in foreground")
+                print("  vigil gateway run      # Run in foreground")
                 if is_termux():
                     print(
-                        "  nohup hermes gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # Best-effort background start"
+                        "  nohup vigil gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # Best-effort background start"
                     )
                 elif is_wsl():
                     print(
-                        "  tmux new -s hermes 'hermes gateway run'         # persistent via tmux"
+                        "  tmux new -s vigil 'vigil gateway run'         # persistent via tmux"
                     )
                     print(
-                        "  nohup hermes gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # background"
+                        "  nohup vigil gateway run > ~/.hermes/logs/gateway.log 2>&1 &  # background"
                     )
                 elif is_windows():
                     print(
-                        "  hermes gateway install  # Install as Windows Scheduled Task (auto-start on login)"
+                        "  vigil gateway install  # Install as Windows Scheduled Task (auto-start on login)"
                     )
                 else:
-                    print("  hermes gateway install  # Install as user service")
+                    print("  vigil gateway install  # Install as user service")
                     print(
-                        "  sudo hermes gateway install --system  # Install as boot-time system service"
+                        "  sudo vigil gateway install --system  # Install as boot-time system service"
                     )
 
         # Show other profiles' gateway status for multi-profile awareness

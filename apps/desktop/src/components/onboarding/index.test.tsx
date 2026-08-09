@@ -8,7 +8,7 @@ import { Picker } from '.'
 
 function provider(id: string, name = id): OAuthProvider {
   return {
-    cli_command: `hermes login ${id}`,
+    cli_command: `vigil login ${id}`,
     docs_url: `https://example.com/${id}`,
     flow: 'pkce',
     id,

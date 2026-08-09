@@ -131,7 +131,7 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "cron-jobs": {
         "label": "Cron / scheduled tasks",
-        "description": "Import cron job definitions. Archive for manual recreation via 'hermes cron'.",
+        "description": "Import cron job definitions. Archive for manual recreation via 'vigil cron'.",
     },
     "hooks-config": {
         "label": "Hooks and webhooks",
@@ -390,7 +390,7 @@ def load_yaml_file(path: Path) -> Dict[str, Any]:
     except yaml.YAMLError as exc:
         raise ConfigReadError(
             f"Refusing to overwrite {path}: the existing file is not valid YAML "
-            f"({exc}). Fix it with `hermes config edit` (or move it aside), then "
+            f"({exc}). Fix it with `vigil config edit` (or move it aside), then "
             f"re-run the migration."
         ) from exc
     # An empty file parses to None — a legitimate state with nothing to lose.
@@ -400,7 +400,7 @@ def load_yaml_file(path: Path) -> Dict[str, Any]:
         raise ConfigReadError(
             f"Refusing to overwrite {path}: expected the existing file to hold a "
             f"YAML mapping but found {type(data).__name__}. Fix it with "
-            f"`hermes config edit` (or move it aside), then re-run the migration."
+            f"`vigil config edit` (or move it aside), then re-run the migration."
         )
     return data
 
@@ -1678,7 +1678,7 @@ class Migrator:
                             None,
                             "skipped",
                             f"Provider '{provider_name}' uses a {raw_key['source']}-backed SecretRef "
-                            f"that cannot be auto-migrated. Add this key manually via: hermes config set",
+                            f"that cannot be auto-migrated. Add this key manually via: vigil config set",
                         )
                     continue
 
@@ -2378,7 +2378,7 @@ class Migrator:
                 dest = self.archive_dir / "cron-config.json"
                 dest.write_text(json.dumps(cron, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
                 self.record("cron-jobs", "openclaw.json cron.*", str(dest), "archived",
-                            "Cron config archived. Use 'hermes cron' to recreate jobs manually.")
+                            "Cron config archived. Use 'vigil cron' to recreate jobs manually.")
             else:
                 self.record("cron-jobs", "openclaw.json cron.*", "archive/cron-config.json",
                             "archived", "Would archive cron config")
@@ -2558,7 +2558,7 @@ class Migrator:
             dest = self.archive_dir / "gateway-config.json"
             dest.write_text(json.dumps(gateway, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         self.record("gateway-config", "openclaw.json gateway.*", "archive/gateway-config.json",
-                    "archived", "Gateway config archived. Use 'hermes gateway' to configure.")
+                    "archived", "Gateway config archived. Use 'vigil gateway' to configure.")
 
         # Extract gateway auth token to .env if present
         auth = gateway.get("auth") or {}
@@ -3047,25 +3047,25 @@ class Migrator:
             "directories, it may read/write to them instead of the Hermes state, causing",
             "confusion (e.g., cron jobs reading a different todo list than interactive sessions).",
             "",
-            "**Strongly recommended:** Run `hermes claw cleanup` to rename the OpenClaw",
+            "**Strongly recommended:** Run `vigil claw cleanup` to rename the OpenClaw",
             "directory to `.openclaw.pre-migration`. This prevents the agent from finding it.",
             "The directory is renamed, not deleted — you can undo this at any time.",
             "",
             "If you skip this step and notice the agent getting confused about workspaces",
-            "or todo lists, run `hermes claw cleanup` to fix it.",
+            "or todo lists, run `vigil claw cleanup` to fix it.",
             "",
             "## Hermes-Specific Setup",
             "",
             "After migration, you may want to:",
-            "- Run `hermes claw cleanup` to archive the OpenClaw directory (prevents state confusion)",
-            "- Run `hermes setup` to configure any remaining settings",
-            "- Run `hermes mcp list` to verify MCP servers were imported correctly",
+            "- Run `vigil claw cleanup` to archive the OpenClaw directory (prevents state confusion)",
+            "- Run `vigil setup` to configure any remaining settings",
+            "- Run `vigil mcp list` to verify MCP servers were imported correctly",
         ])
 
         if has_cron_config_archive:
-            notes.append("- Run `hermes cron` to recreate scheduled tasks (see archive/cron-config.json)")
+            notes.append("- Run `vigil cron` to recreate scheduled tasks (see archive/cron-config.json)")
         elif has_cron_store_archive:
-            notes.append("- Run `hermes cron` to recreate scheduled tasks (see archived cron-store)")
+            notes.append("- Run `vigil cron` to recreate scheduled tasks (see archived cron-store)")
 
         # Check if skills were imported
         has_skills = any(i.kind == "skills" and i.status == "migrated" for i in self.items)
@@ -3090,12 +3090,12 @@ class Migrator:
                 "WhatsApp uses QR-code pairing, not token-based auth. Your allowlist",
                 "was migrated, but you must re-pair the device by running:",
                 "",
-                "    hermes whatsapp",
+                "    vigil whatsapp",
                 "",
             ])
 
         notes.extend([
-            "- Run `hermes gateway install` if you need the gateway service",
+            "- Run `vigil gateway install` if you need the gateway service",
             "- Review `~/.hermes/config.yaml` for any adjustments",
             "",
         ])
@@ -3264,9 +3264,9 @@ def main() -> int:
         print()
         print("  Next steps:")
         print("    1. Review ~/.hermes/config.yaml")
-        print("    2. Run: hermes mcp list")
+        print("    2. Run: vigil mcp list")
         if any(i["kind"] == "cron-jobs" and i["status"] == "archived" for i in items):
-            print("    3. Recreate cron jobs: hermes cron")
+            print("    3. Recreate cron jobs: vigil cron")
         if report.get("output_dir"):
             print(f"    → Full report: {report['output_dir']}/MIGRATION_NOTES.md")
     elif not args.execute:

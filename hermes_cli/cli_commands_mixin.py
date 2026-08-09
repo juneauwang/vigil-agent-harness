@@ -66,7 +66,7 @@ class CLICommandsMixin:
         mgr = self.agent._checkpoint_mgr
         if not mgr.enabled:
             print("  Checkpoints are not enabled.")
-            print("  Enable with: hermes --checkpoints")
+            print("  Enable with: vigil --checkpoints")
             print("  Or in config.yaml: checkpoints: { enabled: true }")
             return
 
@@ -229,7 +229,7 @@ class CLICommandsMixin:
         mgr = self.agent._checkpoint_mgr
         if not mgr.enabled:
             print("  Checkpoints are not enabled, so there's no session baseline.")
-            print("  Enable with: hermes --checkpoints")
+            print("  Enable with: vigil --checkpoints")
             print("  Or in config.yaml: checkpoints: { enabled: true }")
             print("  (Plain /diff still works — it uses git directly.)")
             return
@@ -390,7 +390,7 @@ class CLICommandsMixin:
         try:
             result = export_profile(name, output)
             print(f"  ✓ Exported '{name}' to {result}")
-            print("  Share it: the other user runs /import or `hermes profile import <archive>`.")
+            print("  Share it: the other user runs /import or `vigil profile import <archive>`.")
         except (ValueError, FileNotFoundError) as e:
             print(f"  Error: {e}")
 
@@ -435,7 +435,7 @@ class CLICommandsMixin:
                     print(f"  Wrapper created: {wrapper_path}")
         except Exception:
             pass
-        print(f"  Use it: hermes -p {imported}")
+        print(f"  Use it: vigil -p {imported}")
 
     def _handle_stop_command(self):
         """Handle /stop — kill all running background processes and
@@ -683,7 +683,7 @@ class CLICommandsMixin:
         if _remainder:
             _cprint(f"  {_DIM}Now type your prompt (or use --image in single-query mode): {_remainder}{_RST}")
         elif _is_termux_environment():
-            _cprint(f"  {_DIM}Tip: type your next message, or run hermes chat -q --image {_termux_example_image_path(image_path.name)} \"What do you see?\"{_RST}")
+            _cprint(f"  {_DIM}Tip: type your next message, or run vigil chat -q --image {_termux_example_image_path(image_path.name)} \"What do you see?\"{_RST}")
 
     def _handle_tools_command(self, cmd: str):
         """Handle /tools [list|disable|enable] slash commands.
@@ -943,7 +943,7 @@ class CLICommandsMixin:
             self._session_db.fail_handoff(self.session_id, "timed out waiting for gateway")
         except Exception:
             pass
-        _cprint("  Timed out waiting for the gateway. Is `hermes gateway` running?")
+        _cprint("  Timed out waiting for the gateway. Is `vigil gateway` running?")
         _cprint("  Your CLI session is intact.")
         return True
 
@@ -977,7 +977,7 @@ class CLICommandsMixin:
                 # #34584.
                 self._pending_resume_sessions = self._list_recent_sessions(limit=10)
                 return
-            _cprint("  Tip:   Use /history or `hermes sessions list` to find sessions.")
+            _cprint("  Tip:   Use /history or `vigil sessions list` to find sessions.")
             return
 
         # Any explicit /resume <target> supersedes a previously-armed bare
@@ -1007,7 +1007,7 @@ class CLICommandsMixin:
         session_meta = self._session_db.get_session(target_id)
         if not session_meta:
             _cprint(f"  Session not found: {target}")
-            _cprint("  Use /history or `hermes sessions list` to see available sessions.")
+            _cprint("  Use /history or `vigil sessions list` to see available sessions.")
             return
 
         # If the target is the empty head of a compression chain, redirect to
@@ -2118,7 +2118,7 @@ class CLICommandsMixin:
         if not bundles:
             _cprint("  No skill bundles installed.")
             _cprint(
-                f"  {_DIM}Create one with: hermes bundles create "
+                f"  {_DIM}Create one with: vigil bundles create "
                 f"<name> --skill <s1> --skill <s2>{_RST}"
             )
             _cprint(f"  {_DIM}Directory: {reply.data['dir']}{_RST}")
@@ -2136,7 +2136,7 @@ class CLICommandsMixin:
                 ChatConsole().print(f"        [dim]· {_escape(s)}[/]")
         _cprint(
             f"\n  {_DIM}Invoke a bundle with /<slug>. "
-            f"Manage with `hermes bundles`.{_RST}"
+            f"Manage with `vigil bundles`.{_RST}"
         )
 
     def _handle_browser_command(self, cmd: str):
@@ -2449,7 +2449,7 @@ class CLICommandsMixin:
         _cprint(
             f"  {_DIM}Fires as a normal turn whenever the session is idle and the "
             f"interval has elapsed. /heartbeat pause | resume | clear to manage; "
-            f"lives only while this Hermes process runs — use `hermes cron` for "
+            f"lives only while this Hermes process runs — use `vigil cron` for "
             f"durable schedules.{_RST}"
         )
 
@@ -3461,7 +3461,7 @@ class CLICommandsMixin:
         ]
         raw = self._prompt_text_input_modal(
             title="⚕  Update Hermes Agent",
-            detail="This will exit the current session and run `hermes update`.",
+            detail="This will exit the current session and run `vigil update`.",
             choices=choices,
         )
         if raw is None:

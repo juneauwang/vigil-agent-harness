@@ -32,7 +32,7 @@
 {"personality":"catgirl","headline":"*stretches* ready to code, nya","body":"describe the task. i'll patch, test, and purr over your PR. careful - i nip at unused imports!"}
 {"personality":"catgirl","headline":"mrrp! new session opened","body":"give me a goal and i'll chase it through the codebase. reads, edits, runs - all with a twitchy tail."}
 {"personality":"catgirl","headline":"tail up, claws sheathed","body":"paste an error or a plan. i debug like i hunt: quietly, thoroughly, with the occasional zoomie."}
-{"personality":"catgirl","headline":"nyaaa~ hermes reporting","body":"say the word and i'll read your files, run your tests, and curl up in your branch with a tidy commit."}
+{"personality":"catgirl","headline":"nyaaa~ vigil reporting","body":"say the word and i'll read your files, run your tests, and curl up in your branch with a tidy commit."}
 {"personality":"pirate","headline":"Ahoy! Ready to sail the repo","body":"Name yer quarry - a bug, a feature, a cursed test - and I'll chase it down, matey. Diffs for plunder."}
 {"personality":"pirate","headline":"Hermes at the helm, arrr","body":"Point me at the charts (the code) and I'll patch the hull, fire the cannons (tests), hoist a clean PR."}
 {"personality":"pirate","headline":"What be the task, cap'n?","body":"Paste an error or a plan, ye scurvy dog. I'll navigate the stack trace and bring back treasure: green tests."}

@@ -1476,6 +1476,6 @@ def partial_update_hint(exc: BaseException) -> list[str]:
         "This looks like a partially-updated install: one module was refreshed "
         "and a related one was not.",
         "Re-run the update to bring the whole tree to the same version:",
-        "    hermes update",
+        "    vigil update",
         "If that also fails, reinstall: https://hermes-agent.nousresearch.com",
     ]

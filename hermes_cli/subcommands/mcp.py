@@ -20,8 +20,8 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
         description=(
             "Manage MCP server connections and run Hermes as an MCP server.\n\n"
             "MCP servers provide additional tools via the Model Context Protocol.\n"
-            "Use 'hermes mcp add' to connect to a new server, or\n"
-            "'hermes mcp serve' to expose Hermes conversations over MCP."
+            "Use 'vigil mcp add' to connect to a new server, or\n"
+            "'vigil mcp serve' to expose Hermes conversations over MCP."
         ),
     )
     mcp_sub = mcp_parser.add_subparsers(dest="mcp_action")
@@ -107,7 +107,7 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
     # ── Catalog (Nous-approved MCPs shipped with the repo) ─────────────────
     mcp_sub.add_parser(
         "picker",
-        help="Interactive catalog picker (also the default for `hermes mcp`)",
+        help="Interactive catalog picker (also the default for `vigil mcp`)",
     )
     mcp_sub.add_parser(
         "catalog",
@@ -115,7 +115,7 @@ def build_mcp_parser(subparsers, *, cmd_mcp: Callable) -> None:
     )
     mcp_install_p = mcp_sub.add_parser(
         "install",
-        help="Install a catalog MCP by name (e.g. `hermes mcp install n8n`)",
+        help="Install a catalog MCP by name (e.g. `vigil mcp install n8n`)",
     )
     mcp_install_p.add_argument(
         "identifier",

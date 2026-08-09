@@ -17,7 +17,7 @@ export interface RunExternalSetupOptions {
 export async function runExternalSetup({ args, ctx, done, launcher, suspend }: RunExternalSetupOptions) {
   const { gateway, session, transcript } = ctx
 
-  transcript.sys(`launching \`hermes ${args.join(' ')}\`…`)
+  transcript.sys(`launching \`vigil ${args.join(' ')}\`…`)
   patchUiState({ status: 'setup running…' })
 
   let result: LaunchResult = { code: null }
@@ -34,7 +34,7 @@ export async function runExternalSetup({ args, ctx, done, launcher, suspend }: R
   }
 
   if (result.code !== 0) {
-    transcript.sys(`hermes ${args[0]} exited with code ${result.code}`)
+    transcript.sys(`vigil ${args[0]} exited with code ${result.code}`)
     patchUiState({ status: 'setup required' })
 
     return

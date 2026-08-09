@@ -325,7 +325,7 @@ def _model_flow_moa(config, current_model=""):
     moa = normalize_moa_config(config.get("moa") if isinstance(config, dict) else {})
     presets = moa.get("presets") or {}
     if not presets:
-        print("No MoA presets configured. Run `hermes moa configure <name>` first.")
+        print("No MoA presets configured. Run `vigil moa configure <name>` first.")
         return
 
     names = list(presets.keys())
@@ -1116,7 +1116,7 @@ def _model_flow_custom(config):
         else:
             _caller_model.pop("api_mode", None)
         config["model"] = _caller_model
-        print("Endpoint saved. Use `/model` in chat or `hermes model` to set a model.")
+        print("Endpoint saved. Use `/model` in chat or `vigil model` to set a model.")
 
     # Auto-save to custom_providers so it appears in the menu next time
     _save_custom_provider(

@@ -665,8 +665,8 @@ export default function SystemPage() {
         title="Update Hermes?"
         description={
           updateInfo && updateInfo.behind && updateInfo.behind > 0
-            ? `This will run 'hermes update' (${updateInfo.update_command}) and pull ${updateInfo.behind} new commit${updateInfo.behind === 1 ? "" : "s"}. The gateway restarts when the update finishes; the current session keeps its prompt cache until then.`
-            : `This will run 'hermes update' (${updateInfo?.update_command ?? "hermes update"}) and restart the gateway when it finishes.`
+            ? `This will run 'vigil update' (${updateInfo.update_command}) and pull ${updateInfo.behind} new commit${updateInfo.behind === 1 ? "" : "s"}. The gateway restarts when the update finishes; the current session keeps its prompt cache until then.`
+            : `This will run 'vigil update' (${updateInfo?.update_command ?? "vigil update"}) and restart the gateway when it finishes.`
         }
         confirmLabel="Update now"
       />
@@ -995,7 +995,7 @@ export default function SystemPage() {
             )}
             {!portal?.logged_in && (
               <p className="text-xs text-muted-foreground">
-                Log in with <span className="font-mono">hermes portal</span>.
+                Log in with <span className="font-mono">vigil portal</span>.
               </p>
             )}
           </CardContent>

@@ -224,17 +224,17 @@ class SecretSource(ABC):
         """
         generic = {
             ErrorKind.NOT_CONFIGURED: (
-                f"Run `hermes secrets {self.name} setup` to finish configuration."
+                f"Run `vigil secrets {self.name} setup` to finish configuration."
             ),
             ErrorKind.BINARY_MISSING: (
-                f"Run `hermes secrets {self.name} setup` to install the helper CLI."
+                f"Run `vigil secrets {self.name} setup` to install the helper CLI."
             ),
             ErrorKind.AUTH_FAILED: (
-                f"Credentials rejected — run `hermes secrets {self.name} setup` "
+                f"Credentials rejected — run `vigil secrets {self.name} setup` "
                 "to re-authenticate."
             ),
             ErrorKind.AUTH_EXPIRED: (
-                f"Credentials expired — run `hermes secrets {self.name} setup` "
+                f"Credentials expired — run `vigil secrets {self.name} setup` "
                 "to re-authenticate."
             ),
             ErrorKind.NETWORK: (

@@ -659,7 +659,7 @@ class TestConfigSupportFloor:
         )
         assert expected_fragment in captured.out
         assert expected_fragment in captured.err
-        assert "run `hermes setup` to regenerate" in captured.out
+        assert "run `vigil setup` to regenerate" in captured.out
         assert "_config_version: 12" in captured.out
         assert any(expected_fragment in w for w in results["warnings"])
         # No 'Config version: X → Y' line — nothing was migrated.

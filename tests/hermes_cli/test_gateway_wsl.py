@@ -112,7 +112,7 @@ class TestGatewayCommandWSLMessages:
         out = capsys.readouterr().out
         assert "WSL detected" in out
         assert "systemd is not running" in out
-        assert "hermes gateway run" in out
+        assert "vigil gateway run" in out
         assert "tmux" in out
 
 
@@ -143,4 +143,3 @@ class TestGatewayCommandWSLMessages:
         out = capsys.readouterr().out
         assert "WSL note" in out
         assert "tmux or screen" in out
-

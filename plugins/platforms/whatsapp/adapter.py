@@ -516,7 +516,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
             logger.warning("[%s] Node.js not found. WhatsApp requires Node.js.", self.name)
             self._set_fatal_error(
                 "whatsapp_node_missing",
-                "Node.js is not installed — install Node.js and re-run `hermes gateway`.",
+                "Node.js is not installed — install Node.js and re-run `vigil gateway`.",
                 retryable=False,
             )
             return False
@@ -542,13 +542,13 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         if not creds_path.exists():
             logger.warning(
                 "[%s] WhatsApp is enabled but not paired (no creds.json at %s). "
-                "Pair from the dashboard or run `hermes whatsapp`; remove "
+                "Pair from the dashboard or run `vigil whatsapp`; remove "
                 "WHATSAPP_ENABLED from your .env to disable.",
                 self.name, creds_path,
             )
             self._set_fatal_error(
                 "whatsapp_not_paired",
-                "WhatsApp enabled but not paired — pair from the dashboard or run `hermes whatsapp`.",
+                "WhatsApp enabled but not paired — pair from the dashboard or run `vigil whatsapp`.",
                 retryable=False,
             )
             return False
@@ -800,7 +800,7 @@ class WhatsAppAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
                     # auto-reconnect later, e.g. after a code 515 restart).
                     print(f"[{self.name}] ⚠ WhatsApp not connected after 30s")
                     print(f"[{self.name}]   Bridge log: {self._bridge_log}")
-                    print(f"[{self.name}]   If session expired, re-pair: hermes whatsapp")
+                    print(f"[{self.name}]   If session expired, re-pair: vigil whatsapp")
             
             # Create a persistent HTTP session for all bridge communication
             self._http_session = aiohttp.ClientSession()

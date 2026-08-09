@@ -541,7 +541,7 @@ class TestExistingConfigPreserved:
             assert str(config_path) in reason
             assert "not valid YAML" in reason
             # Points the user at a way out.
-            assert "hermes config edit" in reason
+            assert "vigil config edit" in reason
 
     def test_unreadable_config_is_left_byte_identical(
             self, claude_tree, hermes_home, config_path):

@@ -1211,7 +1211,7 @@ def interactive_setup() -> None:
     else:
         if remove_env_value("MATTERMOST_HOME_CHANNEL"):
             print_info("Home channel cleared.")
-    print_info("   Open config in your editor:  hermes config edit")
+    print_info("   Open config in your editor:  vigil config edit")
 
 
 # ---------------------------------------------------------------------------

@@ -1,6 +1,9 @@
 import base64
 
 import pytest
+
+pytest.importorskip("acp", reason="agent-client-protocol not installed (pip install hermes-agent[acp])")
+
 from acp.schema import (
     BlobResourceContents,
     EmbeddedResourceContentBlock,
@@ -75,7 +78,6 @@ _ONE_PX_PNG = bytes.fromhex(
     "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
     "890000000a49444154789c6300010000000500010d0a2db40000000049454e44ae426082"
 )
-
 
 
 

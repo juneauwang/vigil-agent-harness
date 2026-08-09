@@ -121,7 +121,7 @@ def _exec_bundles(ctx: CommandContext) -> CommandReply:
     if not bundles:
         return CommandReply(
             "No skill bundles installed.\n"
-            "Create one with: hermes bundles create <name> --skill <s1> --skill <s2>\n"
+            "Create one with: vigil bundles create <name> --skill <s1> --skill <s2>\n"
             f"Directory: {bundles_dir}",
             data={"bundles": [], "dir": bundles_dir},
         )

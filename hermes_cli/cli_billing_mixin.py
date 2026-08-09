@@ -124,7 +124,7 @@ class CLIBillingMixin:
                 _cprint(f"  💳 {_d(f'Could not load subscription: {state.error}')}")
             else:
                 _cprint(f"  💳 {_d('Not logged into Nous Portal.')}")
-                print("  Run `hermes portal` to log in, then /subscription.")
+                print("  Run `vigil portal` to log in, then /subscription.")
             return
 
         # Team context: no personal plan — teams run on a shared balance.
@@ -666,7 +666,7 @@ class CLIBillingMixin:
         print("  ! One-time setup")
         _cprint(f"  {_d('To change your plan from the terminal, allow Remote Spending once. It opens your browser to authorize, then your change picks up right here.')}")
         if not getattr(self, "_app", None):
-            print("  Run `hermes portal` and allow Remote Spending, then re-run /subscription.")
+            print("  Run `vigil portal` and allow Remote Spending, then re-run /subscription.")
             return
         confirm_choices = [
             ("yes", "Allow Remote Spending", "open your browser to authorize"),
@@ -777,7 +777,7 @@ class CLIBillingMixin:
                 _cprint(f"  💳 {_d(_msg)}")
             else:
                 _cprint(f"  💳 {_d('Not logged into Nous Portal.')}")
-                print("  Run `hermes portal` to log in, then /topup.")
+                print("  Run `vigil portal` to log in, then /topup.")
             return
 
         # Any sub-arg is intentionally ignored — always open the menu.
@@ -1233,9 +1233,9 @@ class CLIBillingMixin:
             who = ("An admin stopped this terminal's spending."
                    if actor == "admin"
                    else "You stopped this terminal's spending.")
-            print(f"  🔴 {who} Reconnect to restore — run `hermes portal` to re-authorize.")
+            print(f"  🔴 {who} Reconnect to restore — run `vigil portal` to re-authorize.")
         elif isinstance(exc, BillingSessionRevoked) or code == "session_revoked":
-            print("  🔴 Your session was logged out. Run `hermes portal` to log in again.")
+            print("  🔴 Your session was logged out. Run `vigil portal` to log in again.")
         elif code == "no_payment_method":
             print("  💳 No card on file — top up and manage billing on the portal.")
         elif code in ("cli_billing_disabled", "remote_spending_disabled") or \
@@ -1283,7 +1283,7 @@ class CLIBillingMixin:
         print("  ! One-time setup")
         _cprint(f"  {_d(f'To charge from this terminal, allow Remote Spending once. It opens your browser to authorize, then {amount_str} picks up right here.')}")
         if not getattr(self, "_app", None):
-            print("  Run `hermes portal` and allow Remote Spending, then retry.")
+            print("  Run `vigil portal` and allow Remote Spending, then retry.")
             return
         confirm_choices = [
             ("yes", "Allow Remote Spending", "open your browser to authorize"),

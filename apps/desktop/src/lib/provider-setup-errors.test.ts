@@ -4,7 +4,7 @@ import { isProviderSetupErrorMessage } from './provider-setup-errors'
 
 describe('isProviderSetupErrorMessage', () => {
   it('matches generic missing-provider copy', () => {
-    expect(isProviderSetupErrorMessage('No inference provider configured. Run `hermes model` to choose one.')).toBe(
+    expect(isProviderSetupErrorMessage('No inference provider configured. Run `vigil model` to choose one.')).toBe(
       true
     )
     expect(isProviderSetupErrorMessage('No inference provider is configured.')).toBe(true)
@@ -20,10 +20,10 @@ describe('isProviderSetupErrorMessage', () => {
 
   it('does not match bare env var mentions from auxiliary warnings', () => {
     expect(isProviderSetupErrorMessage('OPENROUTER_API_KEY not set')).toBe(false)
-    expect(isProviderSetupErrorMessage('Run `hermes setup` or set OPENROUTER_API_KEY.')).toBe(false)
+    expect(isProviderSetupErrorMessage('Run `vigil setup` or set OPENROUTER_API_KEY.')).toBe(false)
     expect(
       isProviderSetupErrorMessage(
-        '⚠ No auxiliary LLM provider configured — context compression will drop middle turns without a summary. Run `hermes setup` or set OPENROUTER_API_KEY.'
+        '⚠ No auxiliary LLM provider configured — context compression will drop middle turns without a summary. Run `vigil setup` or set OPENROUTER_API_KEY.'
       )
     ).toBe(false)
     expect(isProviderSetupErrorMessage('OPENAI_API_KEY missing')).toBe(false)

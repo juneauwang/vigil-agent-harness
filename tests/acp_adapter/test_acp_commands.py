@@ -2,6 +2,9 @@ import sys
 from types import ModuleType, SimpleNamespace
 
 import pytest
+
+pytest.importorskip("acp", reason="agent-client-protocol not installed (pip install hermes-agent[acp])")
+
 from acp.schema import TextContentBlock
 
 from acp_adapter.server import HermesACPAgent
@@ -161,7 +164,6 @@ async def test_acp_cancel_publishes_hard_stop_while_holding_runtime_lock():
     assert observed["lock_held"] is True
     assert state.cancel_event.is_set()
     assert state.interrupted_prompt_text == "original request"
-
 
 
 

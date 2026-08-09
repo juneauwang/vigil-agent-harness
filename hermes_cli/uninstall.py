@@ -576,8 +576,8 @@ def run_gui_uninstall(args):
     print(color("│            ✓ Chat GUI Uninstalled!                      │", Colors.GREEN, Colors.BOLD))
     print(color("└─────────────────────────────────────────────────────────┘", Colors.GREEN, Colors.BOLD))
     print()
-    print("The Vigil agent is still installed. Run 'hermes' to use the CLI,")
-    print("or 'hermes uninstall' to remove the agent too.")
+    print("The Vigil agent is still installed. Run 'vigil' to use the CLI,")
+    print("or 'vigil uninstall' to remove the agent too.")
     print()
 
 

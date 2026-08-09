@@ -1622,7 +1622,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True) -> Optional[D
     repo_root = repo_root or _git_repo_root()
     if not repo_root:
         print("\033[31m✗ --worktree requires being inside a git repository.\033[0m")
-        print("  cd into your project repo first, then run hermes -w")
+        print("  cd into your project repo first, then run vigil -w")
         return None
 
     short_id = uuid.uuid4().hex[:8]
@@ -4625,7 +4625,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     "this conversation will [bold]NOT be saved[/bold] to disk and "
                     "cannot be resumed later. Searching past sessions is also disabled.\n"
                     f"  Reason: {e}\n"
-                    "  Fix the state.db store (e.g. `hermes update` to rebuild the venv) to restore persistence."
+                    "  Fix the state.db store (e.g. `vigil update` to rebuild the venv) to restore persistence."
                 )
             except Exception:
                 # Never let the warning path itself break startup.
@@ -7608,7 +7608,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     if len(item["tools"]) > 2:
                         tools_str += f", +{len(item['tools'])-2} more"
                     self._console_print(f"   [dim]• {item['name']}[/] [dim italic]({', '.join(item['missing_vars'])})[/]")
-                self._console_print("[dim]   Run 'hermes setup' to configure[/]")
+                self._console_print("[dim]   Run 'vigil setup' to configure[/]")
         except Exception:
             pass  # Don't crash on import errors
     
@@ -8434,7 +8434,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 }, f, indent=2, ensure_ascii=False)
             print(f"(^_^)v Conversation snapshot saved to: {path}")
             if self.session_id:
-                print(f"       Resume the live session with: hermes --resume {self.session_id}")
+                print(f"       Resume the live session with: vigil --resume {self.session_id}")
         except Exception as e:
             print(f"(x_x) Failed to save: {e}")
     
@@ -10251,10 +10251,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
                 if not user_entries:
                     print("No user plugins installed.")
-                    print("  Install one: hermes plugins install owner/repo")
+                    print("  Install one: vigil plugins install owner/repo")
                     print(f"  Or drop a plugin directory into {display_hermes_home()}/plugins/")
                     if bundled_count:
-                        print(f"  ({bundled_count} bundled plugins available — see: hermes plugins list)")
+                        print(f"  ({bundled_count} bundled plugins available — see: vigil plugins list)")
                 else:
                     # Loaded-plugin details (tools/hooks/commands counts, errors)
                     # keyed by name, when available.
@@ -10284,8 +10284,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         error = f" — {info['error']}" if info.get("error") else ""
                         print(f"  {glyph} {name}{ver}{label}{detail}{error}")
                     if bundled_count:
-                        print(f"  (+{bundled_count} bundled — see: hermes plugins list)")
-                    print("  Enable/disable: hermes plugins enable/disable <name>")
+                        print(f"  (+{bundled_count} bundled — see: vigil plugins list)")
+                    print("  Enable/disable: vigil plugins enable/disable <name>")
             except Exception as e:
                 print(f"Plugin system error: {e}")
         elif canonical == "rollback":
@@ -11338,7 +11338,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         normalized = str(provider or "").strip().lower()
         if normalized != "openai-codex":
             print("  Banked usage resets are only available on the openai-codex provider.")
-            print("  Switch with `/model` or `hermes auth` first.")
+            print("  Switch with `/model` or `vigil auth` first.")
             return
         base_url = (getattr(self.agent, "base_url", None) if self.agent else None) or getattr(self, "base_url", None)
         api_key = (getattr(self.agent, "api_key", None) if self.agent else None) or getattr(self, "api_key", None)
@@ -13063,7 +13063,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             from tools.wake_word import _active_profile_name
             if _match[1] != _active_profile_name():
                 _cprint(f"\n{_DIM}Wake phrase for profile '{_match[1]}' — "
-                        f"run: hermes -p {_match[1]}{_RST}")
+                        f"run: vigil -p {_match[1]}{_RST}")
                 self._wake_suspended = True  # watchdog resumes the listener
                 return
 
@@ -17804,7 +17804,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             print(
                 "Error: stdin (fd 0) is not available.\n"
                 "This can happen with certain Python installations (e.g. uv-managed cPython on macOS).\n"
-                "Try reinstalling Python via pyenv or Homebrew, then re-run: hermes setup"
+                "Try reinstalling Python via pyenv or Homebrew, then re-run: vigil setup"
             )
             _run_cleanup()
             self._print_exit_summary()
@@ -17873,7 +17873,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     f"\nError: stdin is not usable ({_stdin_err}).\n"
                     "This can happen with certain Python installations (e.g. uv-managed cPython on macOS)\n"
                     "where kqueue cannot register fd 0.\n"
-                    "Try reinstalling Python via pyenv or Homebrew, then re-run: hermes setup"
+                    "Try reinstalling Python via pyenv or Homebrew, then re-run: vigil setup"
                 )
             else:
                 raise
@@ -18255,7 +18255,7 @@ def main(
                 logger.warning(
                     "Unknown skill(s) requested, skipping: %s. "
                     "Continuing with: %s. "
-                    "List available skills with `hermes skills list`.",
+                    "List available skills with `vigil skills list`.",
                     missing_display,
                     ", ".join(loaded_skills),
                 )

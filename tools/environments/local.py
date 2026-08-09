@@ -1095,7 +1095,7 @@ def _resolve_hermes_bin_dir() -> str | None:
 
     candidate: str | None = None
 
-    which = shutil.which("hermes")
+    which = shutil.which("vigil") or shutil.which("hermes")
     if which:
         candidate = os.path.dirname(which)
 
@@ -1104,7 +1104,7 @@ def _resolve_hermes_bin_dir() -> str | None:
         base = os.path.basename(argv0).lower()
         if (
             os.path.isabs(argv0)
-            and (base == "hermes" or base.startswith("hermes."))
+            and (base in {"hermes", "vigil"} or base.startswith(("hermes.", "vigil.")))
             and os.path.isfile(argv0)
         ):
             candidate = os.path.dirname(argv0)
@@ -1112,9 +1112,10 @@ def _resolve_hermes_bin_dir() -> str | None:
     if candidate is None:
         exe_dir = os.path.dirname(sys.executable) if sys.executable else ""
         if exe_dir:
-            shim = "hermes.exe" if _IS_WINDOWS else "hermes"
-            if os.path.isfile(os.path.join(exe_dir, shim)):
-                candidate = exe_dir
+            for shim in (("vigil.exe", "hermes.exe") if _IS_WINDOWS else ("vigil", "hermes")):
+                if os.path.isfile(os.path.join(exe_dir, shim)):
+                    candidate = exe_dir
+                    break
 
     if candidate and not os.path.isdir(candidate):
         candidate = None

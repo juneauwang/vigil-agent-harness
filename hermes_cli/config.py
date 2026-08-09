@@ -149,7 +149,7 @@ def _warn_config_parse_failure(
         msg += f" A copy of the corrupted file was saved to {backup_path}."
     logger.warning(msg)
     try:
-        sys.stderr.write(f"⚠️  hermes config: {msg}\n")
+        sys.stderr.write(f"⚠️  vigil config: {msg}\n")
         sys.stderr.flush()
     except Exception:
         pass
@@ -574,7 +574,7 @@ def recommended_update_command() -> str:
 #     helper spells that out, with notes on tag pinning and config
 #     persistence so users don't get blindsided.
 _DOCKER_UPDATE_MESSAGE = """\
-✗ ``hermes update`` doesn't apply inside the Docker container.
+✗ ``vigil update`` doesn't apply inside the Docker container.
 
 Vigil Agent runs as a published image (nousresearch/hermes-agent), not a
 git checkout — the container has no working tree to pull into.  Update by
@@ -672,7 +672,7 @@ def get_container_exec_info() -> Optional[dict]:
 
     backend = info.get("backend", "docker")
     container_name = info.get("container_name", "hermes-agent")
-    exec_user = info.get("exec_user", "hermes")
+    exec_user = info.get("exec_user", "vigil")
     hermes_bin = info.get("hermes_bin", "/data/current-package/bin/hermes")
 
     return {
@@ -1915,7 +1915,7 @@ def validate_config_structure(config: Optional[Dict[str, Any]] = None) -> List["
         try:
             config = load_config()
         except Exception:
-            return [ConfigIssue("error", "Could not load config.yaml", "Run 'hermes setup' to create a valid config")]
+            return [ConfigIssue("error", "Could not load config.yaml", "Run 'vigil setup' to create a valid config")]
 
     issues: List[ConfigIssue] = []
 
@@ -2070,7 +2070,7 @@ def print_config_warnings(config: Optional[Dict[str, Any]] = None) -> None:
     for ci in issues:
         marker = "\033[31m✗\033[0m" if ci.severity == "error" else "\033[33m⚠\033[0m"
         lines.append(f"  {marker} {ci.message}")
-    lines.append("  \033[2mRun 'hermes doctor' for fix suggestions.\033[0m")
+    lines.append("  \033[2mRun 'vigil doctor' for fix suggestions.\033[0m")
     sys.stderr.write("\n".join(lines) + "\n\n")
 
 
@@ -2204,7 +2204,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
         results["warnings"].append(msg)
         # stderr so it is visible even on quiet startup paths, matching the
         # corrupt-config warning posture in _warn_config_parse_failure().
-        sys.stderr.write(f"⚠ hermes config: {msg}\n")
+        sys.stderr.write(f"⚠ vigil config: {msg}\n")
         if not quiet:
             print(f"  ⚠ {msg}")
     else:
@@ -2349,7 +2349,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
                         print(f"  ✓ Saved {name}")
                     print()
             else:
-                print("  Set later with: hermes config set <key> <value>")
+                print("  Set later with: vigil config set <key> <value>")
     
     # Check for missing config fields.
     #
@@ -2408,7 +2408,7 @@ def migrate_config(interactive: bool = True, quiet: bool = False) -> Dict[str, A
                 print()
             _persist_migration(config)
         else:
-            print("  Set later with: hermes config set <key> <value>")
+            print("  Set later with: vigil config set <key> <value>")
 
     return results
 
@@ -3453,8 +3453,8 @@ _FALLBACK_COMMENT = """
 #
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — hermes auth) — OpenAI Codex
-#   nous         (OAuth — hermes auth) — Nous Portal
+#   openai-codex (OAuth — vigil auth) — OpenAI Codex
+#   nous         (OAuth — vigil auth) — Nous Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
 #   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
@@ -3485,8 +3485,8 @@ _COMMENTED_SECTIONS = """
 #
 # Supported providers:
 #   openrouter   (OPENROUTER_API_KEY)  — routes to any model
-#   openai-codex (OAuth — hermes auth) — OpenAI Codex
-#   nous         (OAuth — hermes auth) — Nous Portal
+#   openai-codex (OAuth — vigil auth) — OpenAI Codex
+#   nous         (OAuth — vigil auth) — Nous Portal
 #   zai          (ZAI_API_KEY)         — Z.AI / GLM
 #   kimi-coding  (KIMI_API_KEY)        — Kimi / Moonshot
 #   kimi-coding-cn (KIMI_CN_API_KEY)   — Kimi / Moonshot (China)
@@ -4324,7 +4324,7 @@ def show_config():
         if _env_ghost is not None and str(_env_ghost).strip() != str(_cfg_max_turns).strip():
             print(color(
                 f"                ⚠ .env has stale HERMES_MAX_ITERATIONS={_env_ghost} "
-                f"(run 'hermes doctor --fix' to remove)",
+                f"(run 'vigil doctor --fix' to remove)",
                 Colors.YELLOW,
             ))
     except Exception:
@@ -4457,9 +4457,9 @@ def show_config():
 
     print()
     print(color("─" * 60, Colors.DIM))
-    print(color("  hermes config edit     # Edit config file", Colors.DIM))
-    print(color("  hermes config set <key> <value>", Colors.DIM))
-    print(color("  hermes setup           # Run setup wizard", Colors.DIM))
+    print(color("  vigil config edit     # Edit config file", Colors.DIM))
+    print(color("  vigil config set <key> <value>", Colors.DIM))
+    print(color("  vigil setup           # Run setup wizard", Colors.DIM))
     print()
 
 
@@ -4626,7 +4626,7 @@ def warn_unpinned_cron_jobs_after_model_config_change(
         f"⚠️  {affected} enabled unpinned cron {noun} {verb} stored "
         f"{snapshot_field} values that differ from the new global {axis}. "
         "They will fail closed on their next run instead of silently using the "
-        "changed model/provider. Inspect with `hermes cron list`, then pin the "
+        "changed model/provider. Inspect with `vigil cron list`, then pin the "
         "intended values with `cronjob action=update job_id=<job_id> "
         "provider=<provider> model=<model>`."
     )
@@ -4887,7 +4887,7 @@ def set_config_value(key: str, value: str, force: bool = False):
                 f"✗ Cannot parse {config_path}: {exc}\n"
                 f"  The file contains a YAML syntax error. Fix the error\n"
                 f"  in your config file first, then retry.\n"
-                f"  (hermes config edit will open it in your editor.)",
+                f"  (vigil config edit will open it in your editor.)",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4967,7 +4967,7 @@ def set_config_value(key: str, value: str, force: bool = False):
                     file=sys.stderr,
                 )
                 print(
-                    f"    hermes config set {key}.<sub-key> <value>",
+                    f"    vigil config set {key}.<sub-key> <value>",
                     file=sys.stderr,
                 )
                 print(
@@ -4975,7 +4975,7 @@ def set_config_value(key: str, value: str, force: bool = False):
                     file=sys.stderr,
                 )
                 print(
-                    f"    hermes config set --force {key} {value!r}",
+                    f"    vigil config set --force {key} {value!r}",
                     file=sys.stderr,
                 )
                 sys.exit(1)
@@ -5102,7 +5102,7 @@ def unset_config_value(key: str):
                 f"✗ Cannot parse {config_path}: {exc}\n"
                 f"  The file contains a YAML syntax error. Fix the error\n"
                 f"  in your config file first, then retry.\n"
-                f"  (hermes config edit will open it in your editor.)",
+                f"  (vigil config edit will open it in your editor.)",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -5141,12 +5141,12 @@ def config_command(args):
     elif subcmd == "get":
         key = getattr(args, 'key', None)
         if not key:
-            print("Usage: hermes config get <key> [--json]")
+            print("Usage: vigil config get <key> [--json]")
             print()
             print("Examples:")
-            print("  hermes config get model")
-            print("  hermes config get terminal.backend")
-            print("  hermes config get skills.config --json")
+            print("  vigil config get model")
+            print("  vigil config get terminal.backend")
+            print("  vigil config get skills.config --json")
             sys.exit(1)
         get_config_value(key, as_json=getattr(args, 'json', False))
 
@@ -5155,12 +5155,12 @@ def config_command(args):
         value = getattr(args, 'value', None)
         force = bool(getattr(args, 'force', False))
         if not key or value is None:
-            print("Usage: hermes config set [--force] <key> <value>")
+            print("Usage: vigil config set [--force] <key> <value>")
             print()
             print("Examples:")
-            print("  hermes config set model anthropic/claude-sonnet-4")
-            print("  hermes config set terminal.backend docker")
-            print("  hermes config set OPENROUTER_API_KEY sk-or-...")
+            print("  vigil config set model anthropic/claude-sonnet-4")
+            print("  vigil config set terminal.backend docker")
+            print("  vigil config set OPENROUTER_API_KEY sk-or-...")
             print()
             print("  --force: skip the unknown-key notice for unrecognized keys,")
             print("           and allow a scalar to replace a whole mapping section")
@@ -5170,12 +5170,12 @@ def config_command(args):
     elif subcmd == "unset":
         key = getattr(args, 'key', None)
         if not key:
-            print("Usage: hermes config unset <key>")
+            print("Usage: vigil config unset <key>")
             print()
             print("Examples:")
-            print("  hermes config unset model")
-            print("  hermes config unset terminal.backend")
-            print("  hermes config unset OPENROUTER_API_KEY")
+            print("  vigil config unset model")
+            print("  vigil config unset terminal.backend")
+            print("  vigil config unset OPENROUTER_API_KEY")
             sys.exit(1)
         unset_config_value(key)
     
@@ -5275,7 +5275,7 @@ def config_command(args):
         if missing_config:
             print()
             print(color(f"  {len(missing_config)} new config option(s) available", Colors.YELLOW))
-            print("    Run 'hermes config migrate' to add them")
+            print("    Run 'vigil config migrate' to add them")
         
         print()
     
@@ -5283,15 +5283,15 @@ def config_command(args):
         print(f"Unknown config command: {subcmd}")
         print()
         print("Available commands:")
-        print("  hermes config           Show current configuration")
-        print("  hermes config edit      Open config in editor")
-        print("  hermes config get <key>          Print a resolved config value")
-        print("  hermes config set <key> <value>   Set a config value")
-        print("  hermes config unset <key>        Remove a config value")
-        print("  hermes config check     Check for missing/outdated config")
-        print("  hermes config migrate   Update config with new options")
-        print("  hermes config path      Show config file path")
-        print("  hermes config env-path  Show .env file path")
+        print("  vigil config           Show current configuration")
+        print("  vigil config edit      Open config in editor")
+        print("  vigil config get <key>          Print a resolved config value")
+        print("  vigil config set <key> <value>   Set a config value")
+        print("  vigil config unset <key>        Remove a config value")
+        print("  vigil config check     Check for missing/outdated config")
+        print("  vigil config migrate   Update config with new options")
+        print("  vigil config path      Show config file path")
+        print("  vigil config env-path  Show .env file path")
         sys.exit(1)
 
 

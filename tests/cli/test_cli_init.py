@@ -276,11 +276,11 @@ class TestHistoryDisplay:
         output = capsys.readouterr().out
 
         assert "[You #1]" in output
-        assert "[Hermes #2]" in output
+        assert "[Vigil #2]" in output
         assert "(requested 2 tool calls)" in output
         assert "[Tools]" in output
         assert "(2 tool messages hidden)" in output
-        assert "[Hermes #3]" in output
+        assert "[Vigil #3]" in output
         assert "[You #4]" in output
         assert "[You #5]" not in output
         assert "A" * 250 in output
@@ -521,7 +521,6 @@ class TestRootLevelProviderOverride:
         result = _normalize_root_model_keys({"model": {"model": "m-key", "name": "n-key"}})
         assert result["model"]["default"] == "m-key"
         assert "model" not in result["model"] and "name" not in result["model"]
-
 
 
 

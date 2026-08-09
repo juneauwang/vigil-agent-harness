@@ -289,7 +289,7 @@ def _pinned_guard(name: str) -> Optional[str]:
             return (
                 f"Skill '{name}' is pinned and cannot be deleted by "
                 f"skill_manage. Ask the user to run "
-                f"`hermes curator unpin {name}` if they want to delete it. "
+                f"`vigil curator unpin {name}` if they want to delete it. "
                 f"Patches and edits are allowed on pinned skills; only "
                 f"deletion is blocked."
             )
@@ -332,7 +332,7 @@ def _background_review_write_guard(
                     f"Refusing background curator {action} for pinned skill "
                     f"'{name}': pinned skills are off-limits to autonomous "
                     "maintenance. Ask the user to run "
-                    f"`hermes curator unpin {name}` if they want it changed."
+                    f"`vigil curator unpin {name}` if they want it changed."
                 ),
             }
     except Exception:
@@ -405,7 +405,7 @@ def _background_review_write_guard(
                     f"Refusing background curator {action} for skill "
                     f"'{name}': the skill is not curator-managed ({_detail}). "
                     "User-owned skills are off-limits to autonomous curation. "
-                    f"Run `hermes curator adopt {name}` to opt it in."
+                    f"Run `vigil curator adopt {name}` to opt it in."
                 ),
             }
     except Exception:
@@ -679,7 +679,7 @@ def _maybe_auto_propose_org_edit(name: str, skill_path: Path) -> Optional[str]:
             return (
                 f"This skill is shared by your organisation. Your edit is "
                 f"saved locally and will not be overwritten by org updates. "
-                f"Run `hermes sync propose {name}` to share it back."
+                f"Run `vigil sync propose {name}` to share it back."
             )
         result = ssc.propose_skill(name)
         if result.get("proposal_pending"):
@@ -692,7 +692,7 @@ def _maybe_auto_propose_org_edit(name: str, skill_path: Path) -> Optional[str]:
         logger.debug("auto-propose skipped for %s: %s", name, e)
         return (
             f"Edit saved locally. Could not submit it to your organisation "
-            f"right now — run `hermes sync propose {name}` to retry."
+            f"right now — run `vigil sync propose {name}` to retry."
         )
 
 
@@ -728,7 +728,7 @@ def _org_mirror_write_guard(name: str, skill_path: Path, action: str) -> Optiona
                     "organisation, so a local delete would just come back on "
                     "the next sync. Ask an org admin to remove it for "
                     "everyone. (Editing it IS allowed — your changes are kept "
-                    "and can be proposed back with `hermes sync propose "
+                    "and can be proposed back with `vigil sync propose "
                     f"{name}`.)"
                 ),
             }
@@ -822,7 +822,7 @@ def _skill_not_found_error(name: str, suffix: str = "") -> str:
             base += (
                 f" A skill by that name exists in profile "
                 f"'{other_profile}' ({other_path}). To edit a skill in "
-                f"another profile, switch profiles (`hermes -p "
+                f"another profile, switch profiles (`vigil -p "
                 f"{other_profile}`) or operate via explicit file tools "
                 f"with ``cross_profile=True``."
             )
@@ -830,7 +830,7 @@ def _skill_not_found_error(name: str, suffix: str = "") -> str:
             names = ", ".join(f"'{p}'" for p, _ in others)
             base += (
                 f" Skills by that name exist in other profiles: {names}. "
-                f"Switch profiles (`hermes -p <name>`) to edit there, or "
+                f"Switch profiles (`vigil -p <name>`) to edit there, or "
                 f"operate via explicit file tools with ``cross_profile=True``."
             )
     else:
@@ -1670,7 +1670,7 @@ SKILL_MANAGE_SCHEMA = {
         "via skills_list/skill_view. Keep the trigger self-contained in that "
         "first 57-char window: 'Use when <trigger>. <one-line behavior>.'\n\n"
         "Pinned skills are protected from deletion only — skill_manage(action='delete') "
-        "will refuse with a message pointing the user to `hermes curator unpin <name>`. "
+        "will refuse with a message pointing the user to `vigil curator unpin <name>`. "
         "Patches and edits go through on pinned skills so you can still improve them as "
         "pitfalls come up; pin only guards against irrecoverable loss."
     ),

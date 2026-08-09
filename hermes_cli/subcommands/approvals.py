@@ -17,7 +17,7 @@ def build_approvals_parser(subparsers, *, cmd_approvals: Callable) -> None:
         help="Approval-prompt tools (mine history into allowlist proposals)",
         description=(
             "Tools for the dangerous-command approval system. "
-            "`hermes approvals suggest` mines past approval decisions from "
+            "`vigil approvals suggest` mines past approval decisions from "
             "the session database and proposes command_allowlist entries so "
             "repeatedly-approved commands stop prompting."
         ),

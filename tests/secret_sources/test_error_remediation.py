@@ -94,7 +94,7 @@ def test_fetch_auth_failure_gets_friendly_error(monkeypatch, tmp_path):
 
 def test_onepassword_auth_remediation_points_at_token_command():
     hint = OnePasswordSource().remediation(ErrorKind.AUTH_FAILED, {})
-    assert "hermes secrets onepassword token" in hint
+    assert "vigil secrets onepassword token" in hint
     assert "OP_SERVICE_ACCOUNT_TOKEN" in hint
 
 
@@ -146,6 +146,5 @@ def test_env_loader_prints_remediation_hint(tmp_path, monkeypatch, capsys):
 
     err = capsys.readouterr().err
     assert "rejected the machine-account access token" in err
-    assert "hermes secrets bitwarden token" in err
-
+    assert "vigil secrets bitwarden token" in err
 

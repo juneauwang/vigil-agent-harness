@@ -796,7 +796,7 @@ def _run_backup_locked(args, hermes_root: Path) -> None:
             print(f"  ... and {len(errors) - 10} more")
 
     if not errors:
-        print(f"\nRestore with: hermes import {out_path.name}")
+        print(f"\nRestore with: vigil import {out_path.name}")
 
 
 # ---------------------------------------------------------------------------
@@ -1057,19 +1057,19 @@ def run_import(args) -> None:
                 # hermes_cli.profiles might not be available (fresh install)
                 if any(profiles_dir.iterdir()):
                     print("\n  Profiles detected but aliases could not be created.")
-                    print("  Run: hermes profile list  (after installing hermes)")
+                    print("  Run: vigil profile list  (after installing vigil)")
 
         # Guidance
         print()
         if not (hermes_root / "hermes-agent").is_dir():
             print("Note: The hermes-agent codebase was not included in the backup.")
-            print("  If this is a fresh install, run: hermes update")
+            print("  If this is a fresh install, run: vigil update")
 
         if restored_profiles:
             gw_profiles = [n for n, _ in restored_profiles]
             print("\nTo re-enable gateway services for profiles:")
             for pname in gw_profiles:
-                print(f"  hermes -p {pname} gateway install")
+                print(f"  vigil -p {pname} gateway install")
 
         print("Done. Your Hermes configuration has been restored.")
 
@@ -1303,7 +1303,7 @@ def _create_quick_snapshot_locked(
         )
         print(
             "  ⚠ If sessions disappear after update, check "
-            f"{root} and run: hermes snapshot list"
+            f"{root} and run: vigil snapshot list"
         )
         logger.error(
             "Quick snapshot failed to capture DB file(s): %s",

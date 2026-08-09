@@ -93,7 +93,7 @@ def _model_switch_skew_guard() -> Optional[str]:
         error=(
             f"This gateway is running code from {boot_rev} but the checkout on "
             f"disk is now {disk_rev}. Switching models would risk a stale-module "
-            f"crash — restart the gateway to load the new code: hermes gateway restart"
+            f"crash — restart the gateway to load the new code: vigil gateway restart"
         ),
     )
 
@@ -1498,7 +1498,7 @@ class GatewaySlashCommandsMixin:
                 return (
                     f"✓ {platform.value} paused. "
                     f"Resume with `/platform resume {platform.value}` or "
-                    f"`hermes gateway restart` to reset."
+                    f"`vigil gateway restart` to reset."
                 )
             # action == "resume"
             if platform not in failed:
@@ -2841,7 +2841,7 @@ class GatewaySlashCommandsMixin:
         return (
             f"♥ Heartbeat set (every {format_interval(state.interval_seconds)}): {state.prompt}\n"
             "Fires as a normal turn whenever this session is idle and the interval has "
-            "elapsed. Lives while the gateway runs — use `hermes cron` for durable schedules."
+            "elapsed. Lives while the gateway runs — use `vigil cron` for durable schedules."
         )
 
     async def _handle_refine_command(self, event: "MessageEvent") -> str:
@@ -5357,7 +5357,7 @@ class GatewaySlashCommandsMixin:
             return (
                 "No skill bundles installed.\n"
                 "Create one on the host with:\n"
-                "  `hermes bundles create <name> --skill <s1> --skill <s2>`\n"
+                "  `vigil bundles create <name> --skill <s1> --skill <s2>`\n"
                 f"Directory: `{reply.data['dir']}`"
             )
 

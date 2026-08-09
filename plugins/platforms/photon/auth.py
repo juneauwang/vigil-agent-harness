@@ -1103,7 +1103,7 @@ def print_credential_summary(emit: Any = print) -> None:
     labels: Dict[str, str] = {}
     labels["device_token"] = (
         "✓ stored" if load_photon_token()
-        else "✗ missing (run `hermes photon setup`)"
+        else "✗ missing (run `vigil photon setup`)"
     )
     sid, sec = load_project_credentials()
     # Dashboard id and Spectrum id are the same value now (ids unified), so
@@ -1112,10 +1112,10 @@ def print_credential_summary(emit: Any = print) -> None:
     labels["project_key"] = "✓ stored" if sec else "✗ missing"
     phone, assigned = load_user_numbers()
     labels["phone_number"] = (
-        phone if phone else "✗ missing (run `hermes photon setup --phone ...`)"
+        phone if phone else "✗ missing (run `vigil photon setup --phone ...`)"
     )
     labels["assigned_phone_number"] = (
-        assigned if assigned else "✗ missing (run `hermes photon setup`)"
+        assigned if assigned else "✗ missing (run `vigil photon setup`)"
     )
 
     rows = [
@@ -1135,7 +1135,7 @@ def credential_summary() -> Dict[str, str]:
     def _present_token() -> str:
         return (
             "✓ stored" if load_photon_token()
-            else "✗ missing (run `hermes photon setup`)"
+            else "✗ missing (run `vigil photon setup`)"
         )
 
     def _present_project_id() -> str:
@@ -1148,11 +1148,11 @@ def credential_summary() -> Dict[str, str]:
 
     def _present_phone() -> str:
         phone, _assigned = load_user_numbers()
-        return phone or "✗ missing (run `hermes photon setup --phone ...`)"
+        return phone or "✗ missing (run `vigil photon setup --phone ...`)"
 
     def _present_assigned_phone() -> str:
         _phone, assigned = load_user_numbers()
-        return assigned or "✗ missing (run `hermes photon setup`)"
+        return assigned or "✗ missing (run `vigil photon setup`)"
 
     return {
         "device_token": _present_token(),

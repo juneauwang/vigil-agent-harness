@@ -37,7 +37,7 @@ class TestDoctorPlatformHints:
     def test_sqlite_upgrade_hint_keeps_git_runtime_repair(self):
         hint = doctor._sqlite_upgrade_hint("git")
 
-        assert "run `hermes update`" in hint
+        assert "run `vigil update`" in hint
 
 
 class TestProviderEnvDetection:

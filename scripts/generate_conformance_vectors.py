@@ -56,7 +56,7 @@ GRID: List[tuple] = [
     ("italic", "This is *italic* text."),
     ("bold-italic", "Mix of **bold** and *italic* in one line."),
     ("strikethrough", "This is ~~struck~~ text."),
-    ("inline-code", "Run `pip install hermes` to start."),
+    ("inline-code", "Run `pip install vigil` to start."),
     ("fenced-code", "```\nprint('hello')\n```"),
     ("fenced-code-lang", "```python\ndef f(x):\n    return x * 2\n```"),
     ("link", "See [the docs](https://example.com/docs) for more."),

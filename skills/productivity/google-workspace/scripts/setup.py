@@ -178,7 +178,7 @@ def install_deps():
         "On environments without pip (e.g. Nix, or the Hermes Docker image's "
         "uv-managed venv), install the optional extra instead:"
     )
-    print("  hermes setup")
+    print("  vigil setup")
     print(f"Or manually: {sys.executable} -m pip install {' '.join(REQUIRED_PACKAGES)}")
     return False
 

@@ -1894,7 +1894,7 @@ class CredentialPool:
                         _label = entry.label or entry.id[:8]
                         logger.warning(
                             "credential pool: pruning DEAD manual entry %s "
-                            "(reason=%s, age=%.1fh) — re-add via `hermes auth add %s`",
+                            "(reason=%s, age=%.1fh) — re-add via `vigil auth add %s`",
                             _label,
                             entry.last_error_reason or "unknown",
                             (now - dead_at) / 3600.0,

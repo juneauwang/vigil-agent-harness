@@ -269,7 +269,7 @@ def _build_codex_gpt5_autoraise_notice(
         f"ℹ Codex {model} caps context at {cap}, so auto-compaction was raised "
         f"to {to_pct}% (from {from_pct}%) to use more of the window before "
         f"summarizing.\n"
-        f"  Opt back out: hermes config set compression.codex_gpt55_autoraise false"
+        f"  Opt back out: vigil config set compression.codex_gpt55_autoraise false"
     )
 
 
@@ -1296,13 +1296,13 @@ def init_agent(
                         raise RuntimeError(
                             f"Provider '{_explicit}' is set in config.yaml but no API key "
                             f"was found. Set the {_env_hint} environment "
-                            f"variable, or switch to a different provider with `hermes model`."
+                            f"variable, or switch to a different provider with `vigil model`."
                         )
                 if not getattr(agent, "_fallback_activated", False):
                     # No provider configured — reject with a clear message.
                     raise RuntimeError(
-                        "No LLM provider configured. Run `hermes model` to "
-                        "select a provider, or run `hermes setup` for first-time "
+                        "No LLM provider configured. Run `vigil model` to "
+                        "select a provider, or run `vigil setup` for first-time "
                         "configuration."
                     )
         
@@ -2057,7 +2057,7 @@ def init_agent(
     if codex_app_server_auto_compaction not in {"native", "hermes", "off"}:
         _ra().logger.warning(
             "Invalid compression.codex_app_server_auto=%r; using 'native'. "
-            "Valid values are: native, hermes, off.",
+            "Valid values are: native, vigil, off.",
             codex_app_server_auto_compaction,
         )
         codex_app_server_auto_compaction = "native"

@@ -570,7 +570,7 @@ class GatewayNotRegisteredError(S6Error):
         self.profile = profile
         super().__init__(
             f"no such gateway {profile!r}: register it with "
-            f"`hermes profile create {profile}` first, or pass "
+            f"`vigil profile create {profile}` first, or pass "
             "an existing profile name via `-p <name>`",
             service=f"gateway-{profile}",
         )
@@ -700,9 +700,9 @@ class S6ServiceManager:
         # single supervised instance per slot, so there is no legitimate
         # supervised sibling for ``--replace`` to clobber.
         if profile == "default":
-            gateway_cmd = "hermes gateway run --replace"
+            gateway_cmd = "vigil gateway run --replace"
         else:
-            gateway_cmd = f"hermes -p {shlex.quote(profile)} gateway run --replace"
+            gateway_cmd = f"vigil -p {shlex.quote(profile)} gateway run --replace"
         # Skip the drop when already non-root (setgroups() lacks CAP_SETGID →
         # s6 boot-loop).
         lines.append(f'[ "$(id -u)" = 0 ] || exec {gateway_cmd}')

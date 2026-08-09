@@ -4389,7 +4389,7 @@ _DEEPINFRA_SURFACE_TAGS: frozenset[str] = frozenset({
 })
 
 _DEEPINFRA_DEFAULT_BASE_URL = "https://api.deepinfra.com/v1/openai"
-_DEEPINFRA_MODELS_QUERY = "filter=true&sort_by=hermes"
+_DEEPINFRA_MODELS_QUERY = "filter=true&sort_by=vigil"
 
 # Module-level cache for the full tagged catalog response, keyed by base URL.
 # Each value is the parsed ``data`` list. Surface-specific filters read from
@@ -4825,7 +4825,7 @@ def validate_requested_model(
                 return {"accepted": True, "persist": True, "recognized": True, "message": None}
             return {
                 "accepted": False, "persist": False, "recognized": False,
-                "message": f"MoA preset `{requested}` was not found. Run `hermes moa list`.",
+                "message": f"MoA preset `{requested}` was not found. Run `vigil moa list`.",
             }
         except Exception as exc:
             return {

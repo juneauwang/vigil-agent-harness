@@ -22,7 +22,7 @@ import hermes_cli.update_cmd as update_mod
 
 
 _COUNT_RE = re.compile(r"user-modified \(kept\)")
-_HINT_RE = re.compile(r"hermes skills list-modified")
+_HINT_RE = re.compile(r"vigil skills list-modified")
 
 
 def _source_lines() -> list[str]:

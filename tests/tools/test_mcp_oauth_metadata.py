@@ -24,6 +24,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+pytest.importorskip("mcp", reason="mcp SDK not installed (pip install hermes-agent[dev])")
+
 from mcp.shared.auth import OAuthMetadata
 
 from tools.mcp_oauth import HermesTokenStorage

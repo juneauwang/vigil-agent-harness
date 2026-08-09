@@ -317,7 +317,7 @@ def _raise_if_non_interactive(lead: str) -> None:
     if not _is_interactive():
         raise OAuthNonInteractiveError(
             f"{lead} "
-            "Run `hermes mcp login <server>` interactively to (re)authorize, "
+            "Run `vigil mcp login <server>` interactively to (re)authorize, "
             "then restart or reload the gateway."
         )
 
@@ -978,7 +978,7 @@ def _paste_callback_reader(result: dict) -> None:
             return
         result["error"] = _USER_SKIPPED_SENTINEL
         print(
-            "  OAuth skipped. Run `hermes mcp login <server>` later to "
+            "  OAuth skipped. Run `vigil mcp login <server>` later to "
             "authenticate, or set ``enabled: false`` on that server in "
             "config.yaml to disable persistently.",
             file=sys.stderr,
@@ -1291,7 +1291,7 @@ def humanize_oauth_registration_error(
             f"client_name: {_FIGMA_DCR_CLIENT_NAME!r} automatically. If you "
             "set oauth.client_name yourself, change it to one of those, or "
             "clear it and re-run:\n"
-            f"  hermes mcp login {server_name}"
+            f"  vigil mcp login {server_name}"
         )
 
     return (
@@ -1344,7 +1344,7 @@ def build_oauth_auth(
             "MCP OAuth for "
             f"'{server_name}': non-interactive environment and no cached tokens "
             "found. The OAuth flow requires browser authorization. Run "
-            f"`hermes mcp login {server_name}` interactively first to complete "
+            f"`vigil mcp login {server_name}` interactively first to complete "
             "initial authorization, then cached tokens will be reused."
         )
 

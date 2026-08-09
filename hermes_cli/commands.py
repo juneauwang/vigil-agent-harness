@@ -1313,8 +1313,8 @@ def slack_native_slashes() -> list[tuple[str, str, str]]:
     seen: set[str] = set()
 
     # Reserve /hermes as the catch-all top-level command.
-    entries.append(("hermes", "Talk to Vigil or run a subcommand", "[subcommand] [args]"))
-    seen.add("hermes")
+    entries.append(("vigil", "Talk to Vigil or run a subcommand", "[subcommand] [args]"))
+    seen.add("vigil")
 
     def _add(name: str, desc: str, hint: str) -> None:
         slack_name = _sanitize_slack_name(name)

@@ -4006,7 +4006,7 @@ class TestMissingCredentials:
         assert fatal_errors[0]["code"] == "missing_slack_app_token"
         assert fatal_errors[0]["retryable"] is False
         assert "SLACK_APP_TOKEN" in fatal_errors[0]["message"]
-        assert "hermes gateway setup" in fatal_errors[0]["message"].lower() or ".env" in fatal_errors[0]["message"]
+        assert "vigil gateway setup" in fatal_errors[0]["message"].lower() or ".env" in fatal_errors[0]["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -4558,4 +4558,3 @@ class TestSlackUserAgent:
         """Module constant matches the HermesAgent/<version> convention used
         elsewhere in the codebase for platform-partner attribution."""
         assert _slack_mod._HERMES_SLACK_USER_AGENT_PREFIX.startswith("HermesAgent/")
-

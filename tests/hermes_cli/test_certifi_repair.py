@@ -208,5 +208,5 @@ class TestSslGuardRepairHint:
         with pytest.raises(SSLConfigurationError) as excinfo:
             verify_ca_bundle()
         message = str(excinfo.value)
-        assert "hermes doctor --fix" in message
+        assert "vigil doctor --fix" in message
         assert "certifi" in message

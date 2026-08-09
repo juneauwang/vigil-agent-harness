@@ -787,8 +787,8 @@ DANGEROUS_PATTERNS = [
     # terminates all running agents mid-work.  Allow global flags between
     # `hermes` and `gateway` (e.g. `hermes -p ade gateway restart`) so a
     # profile flag can't slip the agent past the guard.
-    (r'\bhermes\s+(?:-{1,2}\S+(?:\s+\S+)?\s+)*gateway\s+(stop|restart)\b', "stop/restart hermes gateway (kills running agents)"),
-    (r'\bhermes\s+update\b', "hermes update (restarts gateway, kills running agents)"),
+    (r'\bhermes\s+(?:-{1,2}\S+(?:\s+\S+)?\s+)*gateway\s+(stop|restart)\b', "stop/restart vigil gateway (kills running agents)"),
+    (r'\bhermes\s+update\b', "vigil update (restarts gateway, kills running agents)"),
     # Docker container lifecycle — any user with docker.sock mounted (a common
     # Docker Compose pattern) gives the agent the ability to restart/stop/kill
     # containers without approval.  These are agent-initiated lifecycle operations

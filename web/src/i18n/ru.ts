@@ -326,7 +326,7 @@ export const ru: Translations = {
     enableRuntime: "Включить",
     forceReinstall: "Принудительная переустановка (сначала удалить существующую папку)",
     headline:
-      "Поиск, установка, включение и обновление плагинов Hermes (аналог `hermes plugins`).",
+      "Поиск, установка, включение и обновление плагинов Hermes (аналог `vigil plugins`).",
     identifierLabel: "Git URL или owner/repo",
     inactive: "неактивно",
     installBtn: "Установить",

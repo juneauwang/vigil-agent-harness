@@ -337,7 +337,7 @@ def _strip_container_argv_prefix(argv: Sequence[str]) -> list[str]:
         args = args[1:]
 
     # The wrapper re-execs `hermes <subcommand>`; peel an explicit hermes.
-    if args and Path(args[0]).name == "hermes":
+    if args and Path(args[0]).name in {"hermes", "vigil"}:
         args = args[1:]
     return args
 

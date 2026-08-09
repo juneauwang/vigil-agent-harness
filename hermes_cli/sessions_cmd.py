@@ -111,11 +111,11 @@ def cmd_sessions(args, sessions_parser=None):
             print("")
             print("  Next step — offline recovery (never modifies the source):")
             source_hint = report.get("backup_path") or db_path
-            print(f"    hermes sessions recover --source {source_hint} \\")
+            print(f"    vigil sessions recover --source {source_hint} \\")
             print("        --inspect-only")
             print("  If that reports the data is recoverable, rebuild it into")
             print("  a NEW database (the active one is left untouched):")
-            print(f"    hermes sessions recover --source {source_hint} \\")
+            print(f"    vigil sessions recover --source {source_hint} \\")
             print("        --output recovered-state.db")
         return
 
@@ -1157,7 +1157,7 @@ def cmd_sessions(args, sessions_parser=None):
         )
         if result.get("vacuumed") is False:
             print("  (VACUUM was skipped or failed — run "
-                  "`hermes sessions optimize` later to reclaim freed space.)")
+                  "`vigil sessions optimize` later to reclaim freed space.)")
 
     elif action == "stats":
         total = db.session_count()

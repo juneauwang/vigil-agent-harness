@@ -399,7 +399,7 @@ def _render_text(proposals: list[Proposal], days: int) -> None:
             print(f"       e.g. {ex}")
     print(
         "\nNothing has been changed. Apply selected entries with:\n"
-        "  hermes approvals suggest --apply 1,3\n"
+        "  vigil approvals suggest --apply 1,3\n"
         "Entries are merged into command_allowlist in ~/.hermes/config.yaml."
     )
 
@@ -471,12 +471,12 @@ def approvals_command(args) -> int:
     if sub == "suggest":
         return suggest_command(args)
     print(
-        "usage: hermes approvals <subcommand>\n"
+        "usage: vigil approvals <subcommand>\n"
         "\n"
         "subcommands:\n"
         "  suggest    Mine past approval decisions into a proposed\n"
         "             command_allowlist (dry by default; --apply N,M to merge)\n"
         "\n"
-        "Run `hermes approvals suggest -h` for details."
+        "Run `vigil approvals suggest -h` for details."
     )
     return 1

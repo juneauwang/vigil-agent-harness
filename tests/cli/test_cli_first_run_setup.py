@@ -249,4 +249,4 @@ def test_empty_key_error_names_actual_provider(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "fireworks" in out
     assert "OPENROUTER_API_KEY" not in out
-    assert "hermes model" in out or "hermes setup" in out
+    assert "vigil model" in out or "vigil setup" in out

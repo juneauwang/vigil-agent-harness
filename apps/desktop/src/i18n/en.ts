@@ -721,7 +721,7 @@ export const en: Translations = {
       sshKeyTitle: 'Identity file',
       sshKeyDesc: 'Private key path. Blank = ssh-agent or ~/.ssh/config.',
       sshHermesPathTitle: 'Hermes path (optional)',
-      sshHermesPathDesc: 'Full path to the remote hermes binary. Blank = auto-detect.',
+      sshHermesPathDesc: 'Full path to the remote vigil binary. Blank = auto-detect.',
       sshHermesPathPlaceholder: 'auto-detect',
       sshRemoteProfileTitle: 'Remote profile (optional)',
       sshRemoteProfileDesc: 'Profile name on the remote host. Blank = use the Desktop profile name.',
@@ -1041,7 +1041,7 @@ export const en: Translations = {
     edit: 'Edit',
     archive: 'Archive',
     skillArchivedTitle: 'Skill archived',
-    skillArchivedMessage: 'Restorable via hermes curator restore.',
+    skillArchivedMessage: 'Restorable via vigil curator restore.',
     hub: {
       searchPlaceholder: 'Search the skill hub',
       search: 'Search',
@@ -2952,7 +2952,7 @@ export const en: Translations = {
       success: platform => `Handed off to ${platform}. Resume here anytime.`,
       systemNote: platform => `↻ Handed off to ${platform} — resume here anytime.`,
       failed: error => `Handoff failed: ${error}`,
-      timedOut: 'Timed out waiting for the gateway. Is `hermes gateway` running?'
+      timedOut: 'Timed out waiting for the gateway. Is `vigil gateway` running?'
     }
   },
 

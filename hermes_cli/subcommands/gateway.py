@@ -262,7 +262,7 @@ def build_gateway_parser(
             "authoritative tenant from it), mints this gateway's per-gateway secret "
             "and per-tenant delivery key, and writes GATEWAY_RELAY_ID / "
             "GATEWAY_RELAY_SECRET / GATEWAY_RELAY_DELIVERY_KEY into ~/.hermes/.env. "
-            "Requires being logged in (hermes setup). Not available in managed installs."
+            "Requires being logged in (vigil setup). Not available in managed installs."
         ),
     )
     gateway_enroll.add_argument(
@@ -331,7 +331,7 @@ def build_gateway_parser(
     proxy_start.add_argument(
         "--provider",
         default="nous",
-        help="Upstream provider: nous or xai (default: nous). See `hermes proxy providers`.",
+        help="Upstream provider: nous or xai (default: nous). See `vigil proxy providers`.",
     )
     proxy_start.add_argument(
         "--host",

@@ -326,7 +326,7 @@ export const GridStreamsDemo = memo(function GridStreamsDemo({
           width={cell.width}
         >
           <Text bold color={t.color.primary}>
-            hermes mission control
+            vigil mission control
           </Text>
           <Text color={t.color.muted}>{`main: ${main.title}`}</Text>
         </Box>

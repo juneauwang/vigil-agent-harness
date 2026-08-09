@@ -2282,7 +2282,7 @@ if _config_path.exists():
         )
         print(
             "  Gateway will fall back to .env values, which may not match "
-            "your current config.yaml. Run `hermes doctor` to investigate.",
+            "your current config.yaml. Run `vigil doctor` to investigate.",
             file=sys.stderr,
         )
 
@@ -3092,7 +3092,7 @@ def _check_unavailable_skill(command_name: str) -> str | None:
                 if slug == normalized and declared_name in disabled:
                     return (
                         f"The **{command_name}** skill is installed but disabled.\n"
-                        f"Enable it with: `hermes skills config`"
+                        f"Enable it with: `vigil skills config`"
                     )
 
         # Check optional skills (shipped with repo but not installed)
@@ -3113,7 +3113,7 @@ def _check_unavailable_skill(command_name: str) -> str | None:
                     install_path = f"official/{'/'.join(parts)}"
                     return (
                         f"The **{command_name}** skill is available but not installed.\n"
-                        f"Install it with: `hermes skills install {install_path}`"
+                        f"Install it with: `vigil skills install {install_path}`"
                     )
     except Exception:
         pass
@@ -3334,7 +3334,7 @@ def _resolve_hermes_bin() -> Optional[list[str]]:
     """
     import shutil
 
-    hermes_bin = shutil.which("hermes")
+    hermes_bin = shutil.which("vigil") or shutil.which("hermes")
     if hermes_bin:
         return [hermes_bin]
 
@@ -7967,7 +7967,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         logger.warning(
             "%s paused after %d consecutive failures (%s) — "
             "fix the underlying issue then run `/platform resume %s` "
-            "to retry, or `hermes gateway restart` to restart the gateway.",
+            "to retry, or `vigil gateway restart` to restart the gateway.",
             platform.value, info.get("attempts", 0),
             info["pause_reason"], platform.value,
         )
@@ -9798,7 +9798,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         hermes_cmd = _resolve_hermes_bin()
         if not hermes_cmd:
-            logger.error("Could not locate hermes binary for detached /restart")
+            logger.error("Could not locate vigil binary for detached /restart")
             return
         if self._detached_restart_helper_started:
             return
@@ -10731,7 +10731,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.warning(
                     "Stale systemd unit detected: %s has TimeoutStopSec=%.0fs but "
                     "drain_timeout=%.0fs (expected >=%.0fs). systemd may SIGKILL the "
-                    "gateway mid-drain. Run `hermes gateway install --force` "
+                    "gateway mid-drain. Run `vigil gateway install --force` "
                     "to regenerate the unit, or shorten agent.restart_drain_timeout.",
                     _alignment.get("unit", "(unknown)"),
                     _alignment["timeout_stop_sec"],
@@ -10811,7 +10811,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if _adv_msg:
                 logger.warning("%s", _adv_msg)
                 logger.warning(
-                    "Run `hermes doctor` on the gateway host for full "
+                    "Run `vigil doctor` on the gateway host for full "
                     "remediation steps."
                 )
         except Exception:
@@ -14495,7 +14495,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             f"Hi~ I don't recognize you yet!\n\n"
                             f"Here's your pairing code: `{code}`\n\n"
                             f"Ask the bot owner to run:\n"
-                            f"`hermes {profile_arg}pairing approve "
+                            f"`vigil {profile_arg}pairing approve "
                             f"{platform_name} {code}`"
                         )
                 else:
@@ -15541,7 +15541,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         if _skill_name in _get_plat_disabled(platform=_plat):
                             return (
                                 f"The **{_skill_name}** skill is disabled for {_plat}.\n"
-                                f"Enable it with: `hermes skills config`"
+                                f"Enable it with: `vigil skills config`"
                             )
                     user_instruction = event.get_command_args().strip()
                     # Stacked slash-skill invocations: `/skill-a /skill-b do
@@ -15577,7 +15577,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                             return (
                                 f"The **{', '.join(_disabled_extra)}** skill(s) in this "
                                 f"stacked invocation are disabled for {_plat}.\n"
-                                f"Enable them with: `hermes skills config`"
+                                f"Enable them with: `vigil skills config`"
                             )
                     if extra_keys and _build_stacked is not None:
                         stacked_result = _build_stacked(
@@ -21145,7 +21145,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 elif exit_code == 0:
                     msg = "✅ Hermes update finished successfully."
                 else:
-                    msg = "❌ Hermes update failed. Check the gateway logs or run `hermes update` manually for details."
+                    msg = "❌ Hermes update failed. Check the gateway logs or run `vigil update` manually for details."
                 await adapter.send(
                     chat_id,
                     msg,
@@ -26529,14 +26529,14 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
             hermes_home = str(get_hermes_home())
             logger.error(
                 "Another gateway instance is already running (PID %d, HERMES_HOME=%s). "
-                "Use 'hermes gateway restart' to replace it, or 'hermes gateway stop' first.",
+                "Use 'vigil gateway restart' to replace it, or 'vigil gateway stop' first.",
                 existing_pid, hermes_home,
             )
             print(
                 f"\n❌ Gateway already running (PID {existing_pid}).\n"
-                f"   Use 'hermes gateway restart' to replace it,\n"
-                f"   or 'hermes gateway stop' to kill it first.\n"
-                f"   Or use 'hermes gateway run --replace' to auto-replace.\n"
+                f"   Use 'vigil gateway restart' to replace it,\n"
+                f"   or 'vigil gateway stop' to kill it first.\n"
+                f"   Or use 'vigil gateway run --replace' to auto-replace.\n"
             )
             return False
 

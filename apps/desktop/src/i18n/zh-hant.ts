@@ -766,7 +766,7 @@ export const zhHant = defineLocale({
       sshKeyTitle: '金鑰檔案',
       sshKeyDesc: '私密金鑰路徑。留空 = ssh-agent 或 ~/.ssh/config。',
       sshHermesPathTitle: 'Hermes 路徑（選用）',
-      sshHermesPathDesc: '遠端 hermes 執行檔的完整路徑。留空 = 自動偵測。',
+      sshHermesPathDesc: '遠端 vigil 執行檔的完整路徑。留空 = 自動偵測。',
       sshHermesPathPlaceholder: '自動偵測',
       sshRemoteProfileTitle: '遠端設定檔（選用）',
       sshRemoteProfileDesc: '遠端主機上的設定檔名稱。留空 = 使用 Desktop 設定檔名稱。',
@@ -1034,7 +1034,7 @@ export const zhHant = defineLocale({
     edit: '編輯',
     archive: '封存',
     skillArchivedTitle: '技能已封存',
-    skillArchivedMessage: '可透過 hermes curator restore 還原。'
+    skillArchivedMessage: '可透過 vigil curator restore 還原。'
   },
 
   starmap: {
@@ -2678,7 +2678,7 @@ export const zhHant = defineLocale({
       success: platform => `已移交到 ${platform}。隨時可在此處恢復。`,
       systemNote: platform => `↻ 已移交到 ${platform} — 隨時可在此處恢復。`,
       failed: error => `移交失敗：${error}`,
-      timedOut: '等待閘道逾時。`hermes gateway` 是否正在執行？'
+      timedOut: '等待閘道逾時。`vigil gateway` 是否正在執行？'
     }
   },
 

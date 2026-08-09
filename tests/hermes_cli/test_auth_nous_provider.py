@@ -803,7 +803,7 @@ def test_refresh_token_reuse_detection_surfaces_actionable_message():
     assert "refresh-token reuse" in message.lower() or "refresh token reuse" in message.lower()
     # The message must mention the external-process cause and give next steps.
     assert "external process" in message.lower() or "monitoring script" in message.lower()
-    assert "hermes auth add nous" in message.lower()
+    assert "vigil auth add nous" in message.lower()
     # Must still be classified as invalid_grant + relogin_required.
     assert exc_info.value.code == "invalid_grant"
     assert exc_info.value.relogin_required is True
@@ -1077,7 +1077,7 @@ class TestNousDeviceAuthTimeoutMessage:
 
         msg = _nous_device_auth_timeout_message("https://portal.nousresearch.com")
         assert "CAPTCHA" in msg
-        assert "hermes portal" in msg
+        assert "vigil portal" in msg
         assert "https://portal.nousresearch.com/login" in msg
         # Must NOT point at the nonexistent /device page (live Portal 404s it).
         assert "/device" not in msg
@@ -1124,7 +1124,7 @@ def test_poll_for_token_timeout_raises_actionable_message():
 
     msg = str(excinfo.value)
     assert "CAPTCHA" in msg
-    assert "hermes portal" in msg
+    assert "vigil portal" in msg
     assert "https://portal.nousresearch.com/login" in msg
 
 
@@ -1172,5 +1172,5 @@ def test_nous_device_code_login_timeout_raises_actionable_message(monkeypatch):
 
     msg = str(excinfo.value)
     assert "CAPTCHA" in msg
-    assert "hermes portal" in msg
+    assert "vigil portal" in msg
     assert "https://portal.nousresearch.com/login" in msg

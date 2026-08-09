@@ -577,7 +577,7 @@ class TestRunDebug:
         run_debug(args)
 
         out = capsys.readouterr().out
-        assert "hermes debug" in out
+        assert "vigil debug" in out
         assert "share" in out
         assert "delete" in out
 
@@ -1098,4 +1098,3 @@ class TestShareConsentGate:
 
         mock_upload.assert_not_called()
         assert "Aborted" not in capsys.readouterr().out
-

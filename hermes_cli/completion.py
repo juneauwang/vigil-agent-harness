@@ -99,7 +99,7 @@ def generate_bash(parser: argparse.ArgumentParser) -> str:
 
     return f"""# Hermes Agent bash completion
 # Add to ~/.bashrc:
-#   eval "$(hermes completion bash)"
+#   eval "$(vigil completion bash)"
 
 _hermes_profiles() {{
     local profiles_dir="$HOME/.hermes/profiles"
@@ -135,7 +135,7 @@ _hermes_completion() {{
     fi
 }}
 
-complete -F _hermes_completion hermes
+complete -F _hermes_completion hermes vigil
 """
 
 
@@ -199,10 +199,10 @@ def generate_zsh(parser: argparse.ArgumentParser) -> str:
             )
     sub_cases_str = "\n".join(sub_cases)
 
-    return f"""#compdef hermes
+    return f"""#compdef vigil
 # Hermes Agent zsh completion
 # Add to ~/.zshrc:
-#   eval "$(hermes completion zsh)"
+#   eval "$(vigil completion zsh)"
 
 _hermes_profiles() {{
     local -a profiles
@@ -230,7 +230,7 @@ _hermes() {{
             subcmds=(
 {top_cmds_str}
             )
-            _describe 'hermes command' subcmds
+            _describe 'vigil command' subcmds
             ;;
         args)
             case ${{line[1]}} in
@@ -240,7 +240,7 @@ _hermes() {{
     esac
 }}
 
-compdef _hermes hermes
+compdef _hermes hermes vigil
 """
 
 
@@ -256,7 +256,7 @@ def generate_fish(parser: argparse.ArgumentParser) -> str:
     lines: list[str] = [
         "# Hermes Agent fish completion",
         "# Add to your config:",
-        "#   hermes completion fish | source",
+        "#   vigil completion fish | source",
         "",
         "# Helper: list available profiles",
         "function __hermes_profiles",
@@ -269,10 +269,10 @@ def generate_fish(parser: argparse.ArgumentParser) -> str:
         "end",
         "",
         "# Disable file completion by default",
-        "complete -c hermes -f",
+        "complete -c vigil -f",
         "",
         "# Complete profile names after -p / --profile",
-        "complete -c hermes -f -s p -l profile"
+        "complete -c vigil -f -s p -l profile"
         " -d 'Profile name' -xa '(__hermes_profiles)'",
         "",
         "# Top-level subcommands",
@@ -282,7 +282,7 @@ def generate_fish(parser: argparse.ArgumentParser) -> str:
         info = tree["subcommands"][cmd]
         help_text = _clean(info.get("help", ""))
         lines.append(
-            f"complete -c hermes -f "
+            f"complete -c vigil -f "
             f"-n 'not __fish_seen_subcommand_from {top_cmds_str}' "
             f"-a {cmd} -d '{help_text}'"
         )
@@ -301,7 +301,7 @@ def generate_fish(parser: argparse.ArgumentParser) -> str:
             sinfo = info["subcommands"][sc]
             sh = _clean(sinfo.get("help", ""))
             lines.append(
-                f"complete -c hermes -f "
+                f"complete -c vigil -f "
                 f"-n '__fish_seen_subcommand_from {cmd}' "
                 f"-a {sc} -d '{sh}'"
             )
@@ -309,7 +309,7 @@ def generate_fish(parser: argparse.ArgumentParser) -> str:
         if cmd == "profile":
             for action in sorted(profile_name_actions):
                 lines.append(
-                    f"complete -c hermes -f "
+                    f"complete -c vigil -f "
                     f"-n '__fish_seen_subcommand_from {action}; "
                     f"and __fish_seen_subcommand_from profile' "
                     f"-a '(__hermes_profiles)' -d 'Profile name'"

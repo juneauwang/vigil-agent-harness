@@ -326,7 +326,7 @@ export const af: Translations = {
     enableRuntime: "Aktiveer",
     forceReinstall: "Forseer herinstallasie (skrap eers bestaande gids)",
     headline:
-      "Ontdek, installeer, aktiveer en werk Hermes-inproppe op (`hermes plugins` ekwivalent).",
+      "Ontdek, installeer, aktiveer en werk Hermes-inproppe op (`vigil plugins` ekwivalent).",
     identifierLabel: "Git-URL of owner/repo",
     inactive: "onaktief",
     installBtn: "Installeer",

@@ -96,8 +96,8 @@ def _strip_console_status_footer(text: str) -> str:
     last = _strip_ansi(lines[-1]).strip()
     prev = _strip_ansi(lines[-2]).strip()
     if not (
-        prev.startswith("Run 'hermes doctor'")
-        and last.startswith("Run 'hermes setup'")
+        prev.startswith("Run 'vigil doctor'")
+        and last.startswith("Run 'vigil setup'")
     ):
         return text.rstrip()
 
@@ -155,7 +155,7 @@ def _format_job(job: dict, action: str) -> str:
 
 
 def _parser_root() -> tuple[_ArgumentParser, argparse._SubParsersAction]:
-    parser = _ArgumentParser(prog="hermes", add_help=False)
+    parser = _ArgumentParser(prog="vigil", add_help=False)
     subparsers = parser.add_subparsers(dest="_console_command")
     return parser, subparsers
 
@@ -185,7 +185,7 @@ def _clean_summary(text: str | None) -> str:
     summary = " ".join(str(text).split())
     if not summary:
         return ""
-    if summary.startswith("Run `hermes "):
+    if summary.startswith("Run `vigil "):
         return ""
     return summary
 
@@ -475,14 +475,14 @@ def _register_command_family(
         child_key = tuple(child_path)
         full_path = (root, *tuple(child_path))
         usage = " ".join(full_path)
-        command_summary = summary or (summaries or {}).get(full_path) or f"Run `hermes {usage}`."
+        command_summary = summary or (summaries or {}).get(full_path) or f"Run `vigil {usage}`."
         engine.register(
             full_path,
             usage,
             command_summary,
             handler_factory(tuple(child_path)),
             mutating=child_key in mutating_paths,
-            confirmation=confirmation or f"Run `hermes {usage}`?",
+            confirmation=confirmation or f"Run `vigil {usage}`?",
         )
 
 
@@ -502,7 +502,7 @@ class HermesConsoleEngine:
 
         try:
             tokens = _split_line(raw_line)
-            if tokens and tokens[0] == "hermes":
+            if tokens and tokens[0] in {"vigil", "hermes"}:
                 tokens = tokens[1:]
             if not tokens:
                 return self._help_result()
@@ -1198,7 +1198,7 @@ class HermesConsoleEngine:
             "whatsapp-cloud",
         }
         if first in blocked_top:
-            return f"`hermes {first}` is not available in Hermes Console."
+            return f"`vigil {first}` is not available in Hermes Console."
         blocked_pairs = {
             ("config", "edit"): "`config edit` opens an editor and is not available in Hermes Console.",
             ("mcp", "serve"): "`mcp serve` starts a server and is not available in Hermes Console.",
@@ -1550,7 +1550,7 @@ def _cron_pause(_engine: HermesConsoleEngine, args: list[str]) -> str:
     from cron.jobs import AmbiguousJobReference, pause_job
 
     try:
-        job = pause_job(args[0], reason="paused from hermes console")
+        job = pause_job(args[0], reason="paused from vigil console")
     except AmbiguousJobReference as exc:
         raise ConsoleCommandError(str(exc)) from exc
     if not job:
@@ -1607,7 +1607,7 @@ def run_console_repl(
 
     while True:
         if interactive:
-            print("hermes> ", end="", file=stdout, flush=True)
+            print("vigil> ", end="", file=stdout, flush=True)
         line = stdin.readline()
         if line == "":
             if interactive:

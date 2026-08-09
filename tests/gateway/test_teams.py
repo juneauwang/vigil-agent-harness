@@ -170,7 +170,8 @@ _teams_mod = load_plugin_adapter("teams")
 
 _teams_mod.AIOHTTP_AVAILABLE = True
 # SDK import is deferred (#62935); bind mocked symbols the same way connect() does.
-assert _teams_mod.check_teams_requirements() is True
+if not _teams_mod.check_teams_requirements():
+    pytest.skip("microsoft-teams-apps distribution not installed; cannot bind SDK globals", allow_module_level=True)
 _teams_mod.TEAMS_SDK_AVAILABLE = True
 
 # Ensure SDK symbols that were None (import failed on Python <3.12) are
@@ -737,5 +738,4 @@ class TestTeamsMediaAttachments:
         result = await adapter.send_document("19:abc@thread.v2", str(doc))
         assert result.success
         adapter._app.send.assert_awaited_once()
-
 

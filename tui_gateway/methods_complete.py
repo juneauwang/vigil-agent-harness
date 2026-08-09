@@ -379,7 +379,7 @@ def _(rid, params: dict) -> dict:
                 rid,
                 4003,
                 f"{pconfig.name} uses {pconfig.auth_type} auth — "
-                f"run `hermes model` to configure",
+                f"run `vigil model` to configure",
             )
         if not pconfig.api_key_env_vars:
             return _err(rid, 4004, f"no env var defined for {pconfig.name}")

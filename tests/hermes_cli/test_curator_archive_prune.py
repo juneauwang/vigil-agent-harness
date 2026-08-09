@@ -38,7 +38,7 @@ def test_archive_refuses_pinned(monkeypatch, capsys):
     assert called == []
     out = capsys.readouterr().out
     assert "pinned" in out.lower()
-    assert "hermes curator unpin" in out
+    assert "vigil curator unpin" in out
 
 
 
@@ -87,5 +87,4 @@ def test_archive_and_prune_registered():
     assert args.yes is True
     assert args.dry_run is True
     assert args.func.__name__ == "_cmd_prune"
-
 

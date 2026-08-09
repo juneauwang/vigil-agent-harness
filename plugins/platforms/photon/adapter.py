@@ -275,8 +275,8 @@ _TYPING_COOLDOWN_SECONDS = 5.0
 # behavior and defaults as the BlueBubbles iMessage channel so the two
 # iMessage adapters gate group chats identically.
 _DEFAULT_MENTION_PATTERNS = [
-    r"(?<![\w@])@?hermes\s+agent\b[,:\-]?",
-    r"(?<![\w@])@?hermes\b[,:\-]?",
+    r"(?<![\w@])@?(?:hermes|vigil)\s+agent\b[,:\-]?",
+    r"(?<![\w@])@?(?:hermes|vigil)\b[,:\-]?",
 ]
 
 
@@ -442,13 +442,13 @@ def check_requirements() -> bool:
         if npm_error:
             logger.debug(
                 "photon: spectrum-ts not installed at %s "
-                "(last npm error: %s) — run: hermes photon setup",
+                "(last npm error: %s) — run: vigil photon setup",
                 _sidecar_dir(),
                 npm_error,
             )
         else:
             logger.debug(
-                "photon: spectrum-ts not installed at %s — run: hermes photon setup",
+                "photon: spectrum-ts not installed at %s — run: vigil photon setup",
                 _sidecar_dir(),
             )
         return False
@@ -886,7 +886,7 @@ class PhotonAdapter(BasePlatformAdapter):
             self._set_fatal_error(
                 "MISSING_CREDENTIALS",
                 "PHOTON_PROJECT_ID and PHOTON_PROJECT_SECRET are required. "
-                "Run: hermes photon setup",
+                "Run: vigil photon setup",
                 retryable=False,
             )
             return False
@@ -1578,7 +1578,7 @@ class PhotonAdapter(BasePlatformAdapter):
                 raise RuntimeError(
                     f"Photon sidecar deps could not be installed into "
                     f"{_sidecar_dir()} (see log for the npm error). "
-                    f"Run: cd {_sidecar_dir()} && npm ci   (or `hermes photon setup`)"
+                    f"Run: cd {_sidecar_dir()} && npm ci   (or `vigil photon setup`)"
                 )
         # A `hermes update` that bumps the spectrum-ts pin rewrites
         # package-lock.json but never reinstalls node_modules, so the sidecar
@@ -2872,7 +2872,7 @@ def register(ctx) -> None:
         is_connected=is_connected,
         required_env=["PHOTON_PROJECT_ID", "PHOTON_PROJECT_SECRET"],
         install_hint=(
-            "Run: hermes photon setup  (logs in via device flow, creates a "
+            "Run: vigil photon setup  (logs in via device flow, creates a "
             "Spectrum project, links your phone number, installs the "
             "spectrum-ts sidecar)."
         ),

@@ -61,19 +61,19 @@ def _read_message_body(
             return Path(file_path).read_text(encoding="utf-8")
         except UnicodeDecodeError:
             print(
-                f"hermes send: {file_path} is not a text file. --file reads the "
+                f"vigil send: {file_path} is not a text file. --file reads the "
                 "message *body* (logs, reports, markdown).\n"
                 "To send an image/document/audio file as a native attachment, "
                 "reference it with MEDIA: in the message text instead:\n"
-                f'  hermes send --to telegram "MEDIA:{file_path}"\n'
-                f'  hermes send --to telegram "optional caption MEDIA:{file_path}"\n'
+                f'  vigil send --to telegram "MEDIA:{file_path}"\n'
+                f'  vigil send --to telegram "optional caption MEDIA:{file_path}"\n'
                 "Add [[as_document]] to deliver an image as an uncompressed file:\n"
-                f'  hermes send --to telegram "[[as_document]] MEDIA:{file_path}"',
+                f'  vigil send --to telegram "[[as_document]] MEDIA:{file_path}"',
                 file=sys.stderr,
             )
             sys.exit(_USAGE_EXIT)
         except OSError as exc:
-            print(f"hermes send: cannot read {file_path}: {exc}", file=sys.stderr)
+            print(f"vigil send: cannot read {file_path}: {exc}", file=sys.stderr)
             sys.exit(_USAGE_EXIT)
 
     # Piped input: only consume stdin when it is not a TTY. Reading from a
@@ -118,7 +118,7 @@ def _emit_result(
         pass
     else:
         if payload.get("error"):
-            print(f"hermes send: {payload['error']}", file=sys.stderr)
+            print(f"vigil send: {payload['error']}", file=sys.stderr)
         elif payload.get("success"):
             note = payload.get("note")
             if note:
@@ -153,13 +153,13 @@ def _list_targets(platform_filter: Optional[str], *, json_mode: bool) -> int:
             load_directory,
         )
     except Exception as exc:
-        print(f"hermes send: failed to load channel directory: {exc}", file=sys.stderr)
+        print(f"vigil send: failed to load channel directory: {exc}", file=sys.stderr)
         return _FAILURE_EXIT
 
     try:
         raw = load_directory()
     except Exception as exc:
-        print(f"hermes send: failed to read channel directory: {exc}", file=sys.stderr)
+        print(f"vigil send: failed to read channel directory: {exc}", file=sys.stderr)
         return _FAILURE_EXIT
 
     platforms = dict(raw.get("platforms") or {})
@@ -189,7 +189,7 @@ def _list_targets(platform_filter: Optional[str], *, json_mode: bool) -> int:
         filtered = {k: v for k, v in platforms.items() if k.lower() == key}
         if not filtered:
             print(
-                f"hermes send: no targets found for platform '{platform_filter}'. "
+                f"vigil send: no targets found for platform '{platform_filter}'. "
                 f"Configured: {', '.join(sorted(platforms)) or '(none)'}",
                 file=sys.stderr,
             )
@@ -202,7 +202,7 @@ def _list_targets(platform_filter: Optional[str], *, json_mode: bool) -> int:
 
     if not platforms:
         print("No messaging platforms configured or no channels discovered yet.")
-        print("Set one up with `hermes gateway setup`, or run the gateway once so")
+        print("Set one up with `vigil gateway setup`, or run the gateway once so")
         print("channel discovery can populate ~/.hermes/channel_directory.json.")
         return _SUCCESS_EXIT
 
@@ -332,11 +332,11 @@ def cmd_send(args: argparse.Namespace) -> None:
     target = _resolve_target(getattr(args, "to", None))
     if not target:
         print(
-            "hermes send: --to PLATFORM[:channel[:thread]] is required\n"
+            "vigil send: --to PLATFORM[:channel[:thread]] is required\n"
             "Examples:\n"
-            "  hermes send --to telegram \"hello\"\n"
-            "  hermes send --to discord:#ops --file report.md\n"
-            "  hermes send --list      # list available targets",
+            "  vigil send --to telegram \"hello\"\n"
+            "  vigil send --to discord:#ops --file report.md\n"
+            "  vigil send --list      # list available targets",
             file=sys.stderr,
         )
         sys.exit(_USAGE_EXIT)
@@ -347,7 +347,7 @@ def cmd_send(args: argparse.Namespace) -> None:
     )
     if message is None or not message.strip():
         print(
-            "hermes send: no message provided. Pass text as a positional "
+            "vigil send: no message provided. Pass text as a positional "
             "argument, use --file PATH, or pipe data via stdin.",
             file=sys.stderr,
         )
@@ -402,13 +402,13 @@ def register_send_subparser(subparsers) -> argparse.ArgumentParser:
         ),
         epilog=(
             "Examples:\n"
-            "  hermes send --to telegram \"deploy finished\"\n"
-            "  echo \"RAM 92%\" | hermes send --to telegram:-1001234567890\n"
-            "  hermes send --to discord:#ops --file /tmp/report.md\n"
-            "  hermes send --to slack:#eng --subject \"[CI]\" --file build.log\n"
-            "  hermes send --to telegram \"MEDIA:/tmp/chart.png\"   # send a media attachment\n"
-            "  hermes send --list                  # all platforms\n"
-            "  hermes send --list telegram         # filter by platform\n"
+            "  vigil send --to telegram \"deploy finished\"\n"
+            "  echo \"RAM 92%\" | vigil send --to telegram:-1001234567890\n"
+            "  vigil send --to discord:#ops --file /tmp/report.md\n"
+            "  vigil send --to slack:#eng --subject \"[CI]\" --file build.log\n"
+            "  vigil send --to telegram \"MEDIA:/tmp/chart.png\"   # send a media attachment\n"
+            "  vigil send --list                  # all platforms\n"
+            "  vigil send --list telegram         # filter by platform\n"
             "\n"
             "Exit codes: 0 ok, 1 delivery/backend error, 2 usage error."
         ),
@@ -464,7 +464,7 @@ def register_send_subparser(subparsers) -> argparse.ArgumentParser:
         dest="list_targets",
         action="store_true",
         default=False,
-        help="List available targets. Optional positional filter: `hermes send --list telegram`.",
+        help="List available targets. Optional positional filter: `vigil send --list telegram`.",
     )
 
     parser.add_argument(

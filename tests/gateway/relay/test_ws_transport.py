@@ -15,6 +15,9 @@ import asyncio
 import json
 
 import pytest
+
+pytest.importorskip("pytest_asyncio", reason="pytest-asyncio not installed (pip install hermes-agent[dev])")
+
 import pytest_asyncio
 
 from gateway.relay.ws_transport import WebSocketRelayTransport, WEBSOCKETS_AVAILABLE
@@ -206,5 +209,4 @@ async def test_4401_after_handshake_is_terminal_no_reconnect():
     finally:
         await t.disconnect()
         await srv.stop()
-
 

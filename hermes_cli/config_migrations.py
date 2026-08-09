@@ -60,7 +60,7 @@ def support_floor_message() -> str:
     return (
         f"This config predates version {SUPPORT_FLOOR_VERSION} (~2 years old) "
         "and can no longer be auto-migrated. Back up "
-        f"{display_hermes_home()}/config.yaml and run `hermes setup` to "
+        f"{display_hermes_home()}/config.yaml and run `vigil setup` to "
         f"regenerate, or manually set _config_version: {SUPPORT_FLOOR_VERSION} "
         "after reviewing the changelog."
     )
@@ -376,7 +376,7 @@ def _migrate_to_21(results: Dict[str, Any], quiet: bool) -> None:
             else:
                 print(
                     "  ✓ Plugins now opt-in: no existing plugins to grandfather. "
-                    "Use `hermes plugins enable <name>` to activate."
+                    "Use `vigil plugins enable <name>` to activate."
                 )
 
 
@@ -458,7 +458,7 @@ def _migrate_to_23(results: Dict[str, Any], quiet: bool) -> None:
             if not quiet:
                 print(
                     "  ✓ Curator settings now available "
-                    f"({', '.join(added_curator)}) — edit via `hermes config set`"
+                    f"({', '.join(added_curator)}) — edit via `vigil config set`"
                 )
         if added_aux:
             results["config_added"].append(
@@ -467,7 +467,7 @@ def _migrate_to_23(results: Dict[str, Any], quiet: bool) -> None:
             if not quiet:
                 print(
                     "  ✓ auxiliary.curator settings now available "
-                    f"({', '.join(added_aux)}) — edit via `hermes config set`"
+                    f"({', '.join(added_aux)}) — edit via `vigil config set`"
                 )
 
 

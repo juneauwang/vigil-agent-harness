@@ -1013,7 +1013,7 @@ def install_cua_driver(
             "    /Applications is not writable; skipping cua-driver refresh."
         )
         _print_info(
-            "    Run `hermes computer-use install --upgrade` from an admin account to update it."
+            "    Run `vigil computer-use install --upgrade` from an admin account to update it."
         )
         return bool(binary)
 
@@ -1055,7 +1055,7 @@ def install_cua_driver(
                 "keeping the installed version."
             )
             _print_info(
-                "    Force a refresh with: hermes computer-use install --upgrade"
+                "    Force a refresh with: vigil computer-use install --upgrade"
             )
             return True
         if _state is not None and _state.get("update_available"):
@@ -1891,7 +1891,7 @@ def _run_post_setup(post_setup_key: str):
             from hermes_cli.auth import login_spotify_command
         except Exception as exc:
             _print_warning(f"    Could not load Spotify auth: {exc}")
-            _print_info("    Run manually: hermes auth spotify")
+            _print_info("    Run manually: vigil auth spotify")
             return
         _print_info("    Starting Spotify login...")
         try:
@@ -1904,10 +1904,10 @@ def _run_post_setup(post_setup_key: str):
             # User aborted the wizard, or OAuth failed — don't fail the
             # toolset enable; they can retry with `hermes auth spotify`.
             _print_warning(f"    Spotify login did not complete: {exc}")
-            _print_info("    Run later: hermes auth spotify")
+            _print_info("    Run later: vigil auth spotify")
         except Exception as exc:
             _print_warning(f"    Spotify login failed: {exc}")
-            _print_info("    Run manually: hermes auth spotify")
+            _print_info("    Run manually: vigil auth spotify")
 
     elif post_setup_key == "langfuse":
         # Install the langfuse SDK.
@@ -1935,9 +1935,9 @@ def _run_post_setup(post_setup_key: str):
                 _print_success("    Plugin observability/langfuse enabled")
         except Exception as exc:
             _print_warning(f"    Could not enable plugin automatically: {exc}")
-            _print_info("    Run manually: hermes plugins enable observability/langfuse")
+            _print_info("    Run manually: vigil plugins enable observability/langfuse")
         _print_info("    Restart Hermes for tracing to take effect.")
-        _print_info("    Verify: hermes plugins list")
+        _print_info("    Verify: vigil plugins list")
 
     elif post_setup_key == "xai_grok":
         # Shared credential bootstrap for any picker entry that talks to xAI
@@ -1972,7 +1972,7 @@ def _run_post_setup(post_setup_key: str):
             from hermes_cli.config import save_env_value
         except Exception as exc:
             _print_warning(f"    Could not load setup helpers: {exc}")
-            _print_info("    Run later: hermes auth add xai-oauth   (or set XAI_API_KEY)")
+            _print_info("    Run later: vigil auth add xai-oauth   (or set XAI_API_KEY)")
             return
 
         idx = prompt_choice(
@@ -1980,7 +1980,7 @@ def _run_post_setup(post_setup_key: str):
             choices=[
                 "Sign in with xAI Grok OAuth (SuperGrok / Premium+) — browser login",
                 "Paste an xAI API key (console.x.ai)",
-                "Skip — configure later via `hermes auth add xai-oauth`",
+                "Skip — configure later via `vigil auth add xai-oauth`",
             ],
             default=0,
         )
@@ -1992,7 +1992,7 @@ def _run_post_setup(post_setup_key: str):
             else:
                 _print_warning(
                     "    xAI Grok OAuth login did not complete. "
-                    "Run later: hermes auth add xai-oauth"
+                    "Run later: vigil auth add xai-oauth"
                 )
         elif idx == 1:
             api_key = _setup_prompt("    xAI API key", password=True)
@@ -2001,7 +2001,7 @@ def _run_post_setup(post_setup_key: str):
                 _print_success("    XAI_API_KEY saved")
             else:
                 _print_warning(
-                    "    No API key provided. Run later: hermes auth add xai-oauth"
+                    "    No API key provided. Run later: vigil auth add xai-oauth"
                 )
         else:
             _print_info("    xAI will remain inactive until credentials are configured.")
@@ -2050,7 +2050,7 @@ def run_post_setup_command(args) -> int:
     """
     key = getattr(args, "post_setup_key", None)
     if not key:
-        _print_error("Usage: hermes tools post-setup <key>")
+        _print_error("Usage: vigil tools post-setup <key>")
         return 2
     valid = valid_post_setup_keys()
     if key not in valid:
@@ -2509,7 +2509,7 @@ def _get_platform_tools(
             _warned_invalid_platform_toolsets.add(platform)
             logger.warning(
                 "platform '%s' has no valid toolsets configured (unknown "
-                "name(s): %s) - tools will be unavailable. Run `hermes tools` "
+                "name(s): %s) - tools will be unavailable. Run `vigil tools` "
                 "to reconfigure. See issue #38798.",
                 platform,
                 ", ".join(_named),
@@ -4444,7 +4444,7 @@ def _configure_vision_provider_model(config: dict, vision_cfg: dict) -> None:
     if not providers:
         _print_warning(
             "  No authenticated providers found. Configure a provider first "
-            "with `hermes model`, then re-run this."
+            "with `vigil model`, then re-run this."
         )
         return
 
@@ -5166,7 +5166,7 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
     print()
     from hermes_constants import display_hermes_home
     print(color(f"  Tool configuration saved to {display_hermes_home()}/config.yaml", Colors.DIM))
-    print(color("  Changes take effect on next 'hermes' or gateway restart.", Colors.DIM))
+    print(color("  Changes take effect on next 'vigil' or gateway restart.", Colors.DIM))
     print()
 
 
