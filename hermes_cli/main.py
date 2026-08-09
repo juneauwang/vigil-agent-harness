@@ -426,6 +426,7 @@ from hermes_cli.sessions_cmd import cmd_sessions  # noqa: F401
 from hermes_cli.subcommands._shared import add_accept_hooks_flag as _add_accept_hooks_flag
 from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
+from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
@@ -4562,6 +4563,18 @@ def cmd_status(args):
     from hermes_cli.status import show_status
 
     show_status(args)
+
+
+def cmd_ops_init(args):
+    """Initialize the ops profile (topology table + sample runbooks)."""
+    from hermes_cli.ops_init import main as ops_init_main
+
+    return ops_init_main([
+        *(("--root", args.root) if args.root else ()),
+        "--env", args.env,
+        *(["--force"] if args.force else []),
+        *(["--no-alias"] if args.no_alias else []),
+    ])
 
 
 def cmd_cron(args):
@@ -12394,6 +12407,11 @@ def main():
     # profile command  (parser built in hermes_cli/subcommands/profile.py)
     # =========================================================================
     build_profile_parser(subparsers, cmd_profile=cmd_profile)
+
+    # =========================================================================
+    # ops-init command  (parser built in hermes_cli/subcommands/ops_init.py)
+    # =========================================================================
+    build_ops_init_parser(subparsers, cmd_ops_init=cmd_ops_init)
 
     # =========================================================================
     # completion command

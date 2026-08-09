@@ -13,7 +13,7 @@ updated_at: 2026-08-06
 sources: [netbox, snipeit, agent]
 environments:
   - name: prod
-    entry: "ssh jump@203.0.113.10"
+    entry: "ssh jump@39.106.217.32"
     isolation: strict
     role: prod
     core_entities: [harbor]
@@ -25,8 +25,8 @@ core_entities:
   - name: harbor
     type: registry
     env: prod
-    endpoint: 203.0.113.10:30443
-    owner: your-name
+    endpoint: 39.106.217.32:30443
+    owner: wpwang
     source: manual
     last_verified: 2026-08-01
 key_paths:
@@ -73,7 +73,7 @@ def test_system_prompt_block_renders_topo_section(topo_home, monkeypatch):
     assert block.startswith("## TOPO — 平台拓扑总览")
     assert "harbor" in block
     assert "prod" in block and "test" in block
-    assert "ssh jump@203.0.113.10" in block
+    assert "ssh jump@39.106.217.32" in block
     assert "ingress → gateway-svc → order-db" in block
     # §4 C 行为约束随 TOPO 段注入
     assert "跨环境操作默认拒绝" in block

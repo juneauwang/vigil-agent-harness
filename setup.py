@@ -8,16 +8,19 @@ web_dist, tui_dist, plugin manifests) since those are resolved at runtime
 via env-var overrides set by the nix wrapper or the source-checkout layout.
 
 This file overrides the ``bdist_wheel`` and ``sdist`` setuptools commands
-to raise an error when run outside a Nix build. The PEP 517
-``build_wheel`` / ``build_sdist`` hooks in
-``setuptools.build_meta`` call these commands internally, so the guard
-fires for ``uv build``, ``pip wheel``, ``python -m build``, and direct
-``setup.py`` invocations alike.
+to raise an error when run outside a sanctioned build. The PEP 517
+``build_wheel`` / ``build_sdist`` hooks in ``setuptools.build_meta`` call
+these commands internally, so the guard fires for ``uv build``,
+``pip wheel``, ``python -m build``, and direct ``setup.py`` invocations
+alike unless one of the two sanctioned build flags is set:
 
-The one legitimate consumer of ``build_wheel`` is uv2nix, which calls
-``setuptools.build_meta.build_wheel`` (→ ``bdist_wheel``) inside a Nix
-build sandbox. ``nix/python.nix`` sets ``HERMES_NIX_BUILD=1`` on the
-Hermes package derivation, so only that build may create an artifact.
+- ``HERMES_NIX_BUILD=1`` — uv2nix calls ``setuptools.build_meta.build_wheel``
+  (→ ``bdist_wheel``) inside a Nix build sandbox; ``nix/python.nix`` sets
+  this on the Hermes package derivation.
+- ``VIGIL_BUILD=1`` — Vigil ships on PyPI as ``vigil-agent-harness``
+  (v0.1.1+, 2026-08-09 发布修复); the release workflow runs
+  ``VIGIL_BUILD=1 python -m build`` so the wheel ships the packaged
+  ops-init module + ``hermes_cli/ops_samples/`` sample data.
 
 Editable installs (``uv sync``, ``pip install -e .``, ``nix develop``)
 use ``build_editable``, which does NOT call ``bdist_wheel`` — it calls
@@ -30,30 +33,25 @@ from setuptools import setup
 from setuptools.command.sdist import sdist
 
 _IN_NIX_BUILD = os.environ.get("HERMES_NIX_BUILD") == "1"
-# Vigil fork decision (2026-08-09, OPS-DELTA §发布): PyPI is a supported
-# distribution channel for Vigil (upstream Hermes deliberately does not
-# ship wheels — see docstring above). The release pipeline sets
-# VIGIL_BUILD=1 when running `python -m build` / `pip wheel`, so the
-# guard still protects accidental non-release builds.
 _IN_VIGIL_BUILD = os.environ.get("VIGIL_BUILD") == "1"
+_ALLOW_BUILD = _IN_NIX_BUILD or _IN_VIGIL_BUILD
 
 _BLOCK_MESSAGE = (
-    "Building wheels or sdists requires the release pipeline.\n"
-    "Vigil: set VIGIL_BUILD=1 for a release build (pip/PyPI channel).\n"
-    "Hermes upstream: distributed via shell installer, Docker, or Nix.\n"
+    "Building wheels or sdists for hermes-agent is not supported.\n"
+    "Hermes is distributed via the shell installer, Docker image, or Nix.\n"
     "See: https://hermes-agent.nousresearch.com/docs/getting-started/installation\n"
     "\n"
     "If you are developing, use an editable install instead:\n"
     "  uv sync          # or: uv pip install -e .\n"
     "\n"
     "If you are building with Nix (uv2nix), this error should not fire —\n"
-    "the Nix derivation sets HERMES_NIX_BUILD=1. If it does, file a bug."
+    "the Hermes Nix derivation sets HERMES_NIX_BUILD=1. If it does, file a bug."
 )
 
 
 class _GuardedSdist(sdist):
     def run(self, *args, **kwargs):
-        if not (_IN_NIX_BUILD or _IN_VIGIL_BUILD):
+        if not _ALLOW_BUILD:
             raise RuntimeError(_BLOCK_MESSAGE)
         return super().run(*args, **kwargs)
 
@@ -70,7 +68,7 @@ try:
 
     class _GuardedBdistWheel(bdist_wheel):
         def run(self, *args, **kwargs):
-            if not (_IN_NIX_BUILD or _IN_VIGIL_BUILD):
+            if not _ALLOW_BUILD:
                 raise RuntimeError(_BLOCK_MESSAGE)
             return super().run(*args, **kwargs)
 

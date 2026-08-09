@@ -16,7 +16,7 @@ version: 1
 sources: [test]
 environments:
   - name: prod
-    entry: "ssh jump@203.0.113.10"
+    entry: "ssh jump@39.106.217.32"
     isolation: strict
     role: prod
     core_entities: [k3s-prod, node1, node2]
@@ -27,7 +27,7 @@ environments:
     core_entities: [test-web]
 core_entities:
   - {name: k3s-prod, type: k8s, env: prod, endpoint: "https://10.0.1.100:6443", detail: entities/k3s-prod.yaml}
-  - {name: node1, type: k8s-node, env: prod, endpoint: "203.0.113.10", detail: entities/node1.yaml}
+  - {name: node1, type: k8s-node, env: prod, endpoint: "39.106.217.32", detail: entities/node1.yaml}
   - {name: node2, type: k8s-node, env: prod, detail: entities/node2.yaml}
   - {name: test-web, type: service, env: test, detail: entities/test-web.yaml}
 """
@@ -38,7 +38,7 @@ type: k8s-node
 env: prod
 attrs:
   internal_ip: 10.0.1.30
-  public_ip: 203.0.113.11
+  public_ip: 39.107.92.54
 """
 
 TESTWEB_YAML = """\
@@ -46,7 +46,7 @@ name: test-web
 type: service
 env: test
 attrs:
-  public_ip: 203.0.113.20
+  public_ip: 39.106.200.10
 """
 
 
@@ -67,7 +67,7 @@ def topo_home(tmp_path, monkeypatch):
 
 
 def test_ssh_public_ip_maps_to_node2_prod(topo_home):
-    target = resolve_command_target("ssh user@203.0.113.11 'rm -rf /var/log'")
+    target = resolve_command_target("ssh root@39.107.92.54 'rm -rf /var/log'")
     assert target is not None
     assert target["entity"] == "node2"
     assert target["env"] == "prod"
@@ -75,17 +75,17 @@ def test_ssh_public_ip_maps_to_node2_prod(topo_home):
 
 
 def test_ssh_internal_ip_maps_to_node2_prod(topo_home):
-    target = resolve_command_target("ssh user@10.0.1.30 uptime")
+    target = resolve_command_target("ssh root@10.0.1.30 uptime")
     assert target["entity"] == "node2" and target["env"] == "prod"
 
 
 def test_ssh_endpoint_ip_maps_to_node1_prod(topo_home):
-    target = resolve_command_target("ssh user@203.0.113.10 'df -h'")
+    target = resolve_command_target("ssh root@39.106.217.32 'df -h'")
     assert target["entity"] == "node1" and target["env"] == "prod"
 
 
 def test_ssh_bare_ip_prefers_exact_endpoint_over_ported_service(topo_home):
-    # harbor 的 endpoint "203.0.113.10:30443" 端口剥离后与 node1 的裸 IP
+    # harbor 的 endpoint "39.106.217.32:30443" 端口剥离后与 node1 的裸 IP
     # endpoint 同 host——含匹配按列表序会先命中 harbor；全等匹配必须赢。
     home = topo_home
     topo = home / "topology.yaml"
@@ -94,24 +94,24 @@ def test_ssh_bare_ip_prefers_exact_endpoint_over_ported_service(topo_home):
 sources: [test]
 environments:
   - name: prod
-    entry: "ssh jump@203.0.113.10"
+    entry: "ssh jump@39.106.217.32"
     isolation: strict
     role: prod
     core_entities: [harbor, node1]
 core_entities:
-  - {name: harbor, type: registry, env: prod, endpoint: "203.0.113.10:30443", detail: entities/harbor.yaml}
-  - {name: node1, type: k8s-node, env: prod, endpoint: "203.0.113.10", detail: entities/node1.yaml}
+  - {name: harbor, type: registry, env: prod, endpoint: "39.106.217.32:30443", detail: entities/harbor.yaml}
+  - {name: node1, type: k8s-node, env: prod, endpoint: "39.106.217.32", detail: entities/node1.yaml}
 """,
         encoding="utf-8",
     )
     (home / "entities" / "harbor.yaml").write_text(
-        'name: harbor\nendpoint: "203.0.113.10:30443"\n', encoding="utf-8"
+        'name: harbor\nendpoint: "39.106.217.32:30443"\n', encoding="utf-8"
     )
     (home / "entities" / "node1.yaml").write_text(
-        'name: node1\nendpoint: "203.0.113.10"\nattrs:\n  public_ip: 203.0.113.10\n',
+        'name: node1\nendpoint: "39.106.217.32"\nattrs:\n  public_ip: 39.106.217.32\n',
         encoding="utf-8",
     )
-    target = resolve_command_target("ssh user@203.0.113.10 'df -h'")
+    target = resolve_command_target("ssh root@39.106.217.32 'df -h'")
     assert target is not None
     assert target["entity"] == "node1" and target["env"] == "prod"
 
@@ -125,35 +125,35 @@ def test_ssh_bare_ip_falls_back_to_ported_service_endpoint(topo_home):
 sources: [test]
 environments:
   - name: prod
-    entry: "ssh jump@203.0.113.10"
+    entry: "ssh jump@39.106.217.32"
     isolation: strict
     role: prod
     core_entities: [harbor]
 core_entities:
-  - {name: harbor, type: registry, env: prod, endpoint: "203.0.113.10:30443", detail: entities/harbor.yaml}
+  - {name: harbor, type: registry, env: prod, endpoint: "39.106.217.32:30443", detail: entities/harbor.yaml}
 """,
         encoding="utf-8",
     )
     (home / "entities" / "harbor.yaml").write_text(
-        'name: harbor\nendpoint: "203.0.113.10:30443"\n', encoding="utf-8"
+        'name: harbor\nendpoint: "39.106.217.32:30443"\n', encoding="utf-8"
     )
-    target = resolve_command_target("ssh user@203.0.113.10 'curl -s localhost:5000'")
+    target = resolve_command_target("ssh root@39.106.217.32 'curl -s localhost:5000'")
     assert target is not None
     assert target["entity"] == "harbor" and target["env"] == "prod"
 
 
 def test_ssh_hostname_maps_by_entity_name(topo_home):
-    target = resolve_command_target("ssh user@node2 whoami")
+    target = resolve_command_target("ssh root@node2 whoami")
     assert target["entity"] == "node2" and target["env"] == "prod"
 
 
 def test_ssh_test_web_ip_maps_to_test_env(topo_home):
-    target = resolve_command_target("ssh user@203.0.113.20 'rm -rf x'")
+    target = resolve_command_target("ssh root@39.106.200.10 'rm -rf x'")
     assert target["entity"] == "test-web" and target["env"] == "test"
 
 
 def test_ssh_test_web_hostname_maps_to_test_env(topo_home):
-    target = resolve_command_target("ssh user@test-web uptime")
+    target = resolve_command_target("ssh root@test-web uptime")
     assert target["entity"] == "test-web" and target["env"] == "test"
 
 
@@ -163,7 +163,7 @@ def test_kubectl_associates_k3s_prod(topo_home):
 
 
 def test_ssh_target_takes_precedence_over_kubectl(topo_home):
-    target = resolve_command_target("ssh user@203.0.113.11 'kubectl delete namespace foo'")
+    target = resolve_command_target("ssh root@39.107.92.54 'kubectl delete namespace foo'")
     assert target["entity"] == "node2" and target["env"] == "prod"
 
 
@@ -175,7 +175,7 @@ def test_no_target_returns_none(topo_home):
 
 def test_unknown_ip_not_in_topo_returns_none(topo_home):
     # 临时机器：拓扑查无此实体 → 走现状，不 fail-closed
-    assert resolve_command_target("ssh user@203.0.113.99 'df -h'") is None
+    assert resolve_command_target("ssh root@203.0.113.99 'df -h'") is None
 
 
 def test_non_ssh_user_at_host_ignored_unless_ip(topo_home):
@@ -195,6 +195,6 @@ def test_no_topology_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("HERMES_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
-        assert resolve_command_target("ssh user@203.0.113.11 'rm -rf /var/log'") is None
+        assert resolve_command_target("ssh root@39.107.92.54 'rm -rf /var/log'") is None
     finally:
         hc._LOAD_CONFIG_CACHE.clear()

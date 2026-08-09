@@ -743,7 +743,7 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
             f"[dim {dim}]◈ {len(tools)} tools · {total_skills} skills · /help for commands[/]"
         )
         right_lines.append(
-            f"[dim {dim}]  提示：运行 scripts/ops_init.py 启用运维能力（拓扑表 + runbook + 权限矩阵）[/]"
+            f"[dim {dim}]  提示：运行 vigil ops-init 启用运维能力（拓扑表 + runbook + 权限矩阵）[/]"
         )
     # Update check — use prefetched result if available
     try:

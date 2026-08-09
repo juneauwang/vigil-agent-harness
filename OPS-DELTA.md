@@ -218,7 +218,7 @@
   4. 入口：`pyproject.toml [project.scripts]` 增加 `vigil`（主入口），保留
      `argus`/`hermes` 别名（行为不变）；`hermes_cli/profiles.py` wrapper 生成
      `vigil -p`，反向识别兼容 `vigil/argus/hermes -p`。
-  5. 仓库目录 `/home/your-name/projects/argus_agent` → `/home/your-name/projects/vigil-agent`；
+  5. 仓库目录 `/home/wpwang/projects/argus_agent` → `/home/wpwang/projects/vigil-agent`；
      `.venv` shebang 与 pyvenv.cfg 路径同步；用户级 `~/.local/bin/argus` →
      `~/.local/bin/vigil`（exec .venv/bin/vigil -p ops）；ops profile
      config.yaml `display.skin: argus`→`vigil`；SOUL.md 措辞核对。
@@ -258,6 +258,55 @@
   里的 `hermes secrets ... token` 提示、`cli.py` `/save` 与 `main.py` 恢复错误文案
   中的同类残留不在本任务点名范围（后续可单独一轮清理）。
 
+## 发布修复：pip 安装体验（2026-08-09，对应 PyPI vigil-agent-harness v0.1.1）
+
+### A. tirith 启动警告降级（`cli.py` + `tools/tirith_security.py`）
+
+- **为什么**：每次启动都打印
+  `⚠ tirith security scanner enabled but not available — ...`。tirith 是
+  GitHub release 的外部二进制（非 pip 包），`ensure_installed()` 非阻塞——
+  首次运行时后台下载线程刚启动就返回 None，⚠ 警告照打；受限网络下下载失败
+  后，每次启动都拿警告吓用户。
+- **怎么改**：
+  1. `tools/tirith_security.py` 新增 `tirith_install_status()`（无副作用探针）：
+     区分 `disabled / installed / installing / failed / unsupported / missing`。
+  2. `cli.py` `_ensure_tirith_security()`：仅在 `failed`（磁盘 marker /
+     内存哨兵）时打印一行 dim 提示（无 ⚠）：
+     `tirith scanner unavailable — command scanning uses built-in patterns only`；
+     下载中 / 平台不支持 / 已禁用一律静默。
+- **安全不变式**：降级后命令扫描仍走 `tools/approval.py` 的 DANGEROUS_PATTERNS
+  模式匹配（现状）；`security.tirith_fail_open` 语义未动，tirith 缺失不放行更多。
+- **核销方式**：`tests/tools/test_tirith_security.py`（+8 状态探针用例）与
+  `tests/cli/test_tirith_startup_hint.py`（5 用例：installing/unsupported/
+  disabled 静默、failed 一行 dim 无 ⚠、只打一次）全过。
+
+### B. ops_init 打包进 wheel（`hermes_cli/ops_init.py` + 样例数据随包分发）
+
+- **为什么**：初始化靠仓库里 `scripts/ops_init.py` + `ops-profile/` 样例数据，
+  pip 安装的 wheel 里两者都不存在——`pip install vigil-agent-harness` 后用户
+  无法初始化拓扑表和样例 runbook。
+- **怎么改**：
+  1. 逻辑迁入包内模块 `hermes_cli/ops_init.py`（同参数：`--root / --env /
+     --force / --no-alias`，幂等；`--force` 覆盖保留、默认不覆盖），可
+     `python -m hermes_cli.ops_init` 直接跑。
+  2. 新增 `vigil ops-init` 子命令（`hermes_cli/subcommands/ops_init.py` +
+     `hermes_cli/main.py` 的 `cmd_ops_init`），console script 入口。
+  3. 样例数据 `ops-profile/` → `hermes_cli/ops_samples/`
+     （topology.yaml + entities/ + runbooks/），经 pyproject.toml
+     `package-data` 打进 wheel。
+  4. `scripts/ops_init.py` 改为薄 shim（`from hermes_cli.ops_init import main`），
+     旧命令 `python3 scripts/ops_init.py` 继续可用。
+  5. 用户可见提示同步：banner / runbook_load 错误文案 →
+     `vigil ops-init`；README 快速开始第 2 步 → `vigil ops-init`。
+  6. `setup.py` 构建守卫放行 `VIGIL_BUILD=1`（原有 `HERMES_NIX_BUILD=1`
+     保留）：Vigil 经 PyPI wheel 分发（vigil-agent-harness v0.1.1），发布
+     流程 `VIGIL_BUILD=1 python -m build` 才产出 wheel；未带任一标志的
+     普通构建仍被拒绝。
+- **核销方式**：`tests/scripts/test_ops_init.py` 全用例 × 3 种入口
+  （scripts shim / python -m hermes_cli.ops_init / vigil ops-init 子命令）
+  全过；wheel 构建后 `unzip -l` 验证 `hermes_cli/ops_samples/**` 在包内，
+  干净 venv `pip install dist/*.whl` 后 `vigil ops-init` 铺出完整 ops profile。
+
 ## 未碰的核心区（按 §6.5 硬约束）
 
 - 不碰 conversation_loop / 上下文压缩 / prompt 缓存逻辑。
@@ -272,11 +321,11 @@
 | `plugins/memory/topo/` | §4 A / §7 A | TOPO 段注入（system prompt 外部 memory block）+ §4 C 行为约束 |
 | `tools/ops_permissions.py` | §3 / §4 D | 命令分级矩阵（L1-L4 × env → execute/approve/deny） |
 | `tests/tools/test_topo_tools.py` 等 | §6.3 | 数据契约 + 矩阵验证 |
-| `scripts/ops_init.py` | §6.3 | ops profile 初始化：建 profile + 写 ops config + 铺样例拓扑（幂等，--force 重铺） |
-| `ops-profile/` | §2.2 | 样例拓扑：第一层 topology.yaml（203.0.113.10 集群实体）+ 第二层 entities/ |
+| `hermes_cli/ops_init.py` | §6.3 | ops profile 初始化（包内模块 + `vigil ops-init` 入口）：建 profile + 写 ops config + 铺样例拓扑（幂等，--force 重铺）；`scripts/ops_init.py` 为同入口薄 shim |
+| `hermes_cli/ops_samples/` | §2.2 | 样例拓扑（原 `ops-profile/`，随 wheel package-data 分发）：第一层 topology.yaml（39.106.217.32 集群实体）+ 第二层 entities/ |
 | `OPS-VERIFY.md` | §6.3 | 用户亲自验证步骤（TOPO 段 / topo_query / topo_update / 权限矩阵） |
 | `tools/runbook_tools.py` | §1 / §3 L4 | runbook_load（按名/触发关键字/列表）+ runbook_checkpoint（L4 checklist 阶段门），registry toolset=runbook |
-| `ops-profile/runbooks/` | §1 / §3 L4 | 样例 runbook：harbor-restart / gateway-svc-restart（事故）+ deploy-gateway-svc（L4 部署 checklist 模板） |
+| `hermes_cli/ops_samples/runbooks/` | §1 / §3 L4 | 样例 runbook：harbor-restart / gateway-svc-restart（事故）+ deploy-gateway-svc（L4 部署 checklist 模板） |
 | `tests/tools/test_runbook_tools.py` | §6.3 | runbook 加载/匹配/校验/L4 阶段门测试 |
 | `tools/ops_target.py` | §3 二期 | 命令目标解析：ssh/scp/sftp user@host、kubectl → k3s-prod，目标主机映射拓扑实体 → 目标级 env（只读零副作用） |
 | `tests/tools/test_ops_target.py` 等 | §3 二期 | 目标解析单测 + guard 目标级判定测试（test 会话对 prod 实体 L3/L4 硬拒绝） |

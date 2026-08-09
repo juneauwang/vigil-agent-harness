@@ -20,7 +20,7 @@ import hermes_cli.config as hc
 from tools.runbook_tools import runbook_checkpoint, runbook_load
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
-SAMPLE_RUNBOOKS = PROJECT_ROOT / "ops-profile" / "runbooks"
+SAMPLE_RUNBOOKS = PROJECT_ROOT / "hermes_cli" / "ops_samples" / "runbooks"
 
 
 @pytest.fixture

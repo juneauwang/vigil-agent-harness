@@ -6,6 +6,7 @@ venv/
 .pytest_cache/
 .pytest-cache/
 *.egg-info/
+build/
 
 # Gateway conformance runner writes a per-run duration map (absolute tmp paths)
 test_durations.json
@@ -18,7 +19,3 @@ test_durations.json
 
 # First-run bootstrap marker — `git stash -u` (hermes update autostash) must skip it
 .hermes-bootstrap-complete
-
-# Release build artifacts
-/dist/
-/build/

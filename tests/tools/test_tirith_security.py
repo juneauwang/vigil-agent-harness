@@ -11,7 +11,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import tools.tirith_security as _tirith_mod
-from tools.tirith_security import check_command_security, ensure_installed
+from tools.tirith_security import (
+    check_command_security,
+    ensure_installed,
+    tirith_install_status,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -286,6 +290,100 @@ class TestUnsupportedPlatform:
             result = _tirith_mod._resolve_tirith_path("/opt/custom/tirith")
             assert result == "/opt/custom/tirith"
             assert _tirith_mod._resolved_path == "/opt/custom/tirith"
+
+
+# ---------------------------------------------------------------------------
+# Availability probe (startup hint gate — no side effects)
+# ---------------------------------------------------------------------------
+
+class TestTirithInstallStatus:
+    """tirith_install_status() drives the CLI startup hint. It must be a pure
+    reader: never start a download thread, never write the disk marker, and
+    distinguish "install in flight" (silent) from "install failed" (one dim
+    hint) from "nothing we can do" (silent)."""
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_disabled(self, mock_cfg):
+        mock_cfg.return_value = {"tirith_enabled": False, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = None
+        _tirith_mod._install_thread = None
+        assert tirith_install_status() == "disabled"
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_unsupported_platform(self, mock_cfg):
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = None
+        _tirith_mod._install_thread = None
+        with patch("tools.tirith_security.is_platform_supported", return_value=False):
+            assert tirith_install_status() == "unsupported"
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_resolved_path_installed(self, mock_cfg):
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = "/hermes/bin/tirith"
+        _tirith_mod._install_thread = None
+        with patch("os.path.isfile", return_value=True), \
+             patch("os.access", return_value=True):
+            assert tirith_install_status() == "installed"
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_install_failed_sentinel(self, mock_cfg):
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = _tirith_mod._INSTALL_FAILED
+        _tirith_mod._install_thread = None
+        assert tirith_install_status() == "failed"
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_background_install_in_flight(self, mock_cfg):
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = None
+        alive_thread = MagicMock()
+        alive_thread.is_alive.return_value = True
+        _tirith_mod._install_thread = alive_thread
+        assert tirith_install_status() == "installing"
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_disk_marker_means_failed(self, mock_cfg):
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = None
+        _tirith_mod._install_thread = None
+        with patch("tools.tirith_security.shutil.which", return_value=None), \
+             patch("tools.tirith_security._read_failure_reason", return_value="download_failed"), \
+             patch("tools.tirith_security._hermes_bin_dir", return_value="/nonexistent/hermes/bin"), \
+             patch("os.path.isfile", return_value=False):
+            assert tirith_install_status() == "failed"
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_nothing_attempted_is_missing(self, mock_cfg):
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = None
+        _tirith_mod._install_thread = None
+        with patch("tools.tirith_security.shutil.which", return_value=None), \
+             patch("tools.tirith_security._read_failure_reason", return_value=None), \
+             patch("tools.tirith_security._hermes_bin_dir", return_value="/nonexistent/hermes/bin"), \
+             patch("os.path.isfile", return_value=False):
+            assert tirith_install_status() == "missing"
+
+    @patch("tools.tirith_security._load_security_config")
+    def test_never_starts_download_thread(self, mock_cfg):
+        """The probe must be a pure reader — no thread spawn, no marker write."""
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        _tirith_mod._resolved_path = None
+        _tirith_mod._install_thread = None
+        with patch("tools.tirith_security.shutil.which", return_value=None), \
+             patch("tools.tirith_security._read_failure_reason", return_value=None), \
+             patch("tools.tirith_security._hermes_bin_dir", return_value="/nonexistent/hermes/bin"), \
+             patch("os.path.isfile", return_value=False):
+            assert tirith_install_status() == "missing"
+        assert _tirith_mod._install_thread is None
 
 
 # ---------------------------------------------------------------------------

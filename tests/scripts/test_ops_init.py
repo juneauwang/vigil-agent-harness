@@ -27,14 +27,27 @@ from tools.topo_tools import topo_query, topo_update
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INIT_SCRIPT = PROJECT_ROOT / "scripts" / "ops_init.py"
-SAMPLE_DIR = PROJECT_ROOT / "ops-profile"
+SAMPLE_DIR = PROJECT_ROOT / "hermes_cli" / "ops_samples"
 SAMPLE_ENTITY_NAMES = sorted(p.stem for p in (SAMPLE_DIR / "entities").glob("*.yaml"))
 SAMPLE_RUNBOOK_NAMES = sorted(p.stem for p in (SAMPLE_DIR / "runbooks").glob("*.yaml"))
 
+ENTRIES = ["script", "module", "cli"]
 
-def _run_init(root: Path, *extra: str) -> subprocess.CompletedProcess:
+
+def _run_init(root: Path, *extra: str, entry: str = "script") -> subprocess.CompletedProcess:
+    """Run the ops initializer through one of three entry points:
+    - script:  legacy ``scripts/ops_init.py`` shim
+    - module:  packaged ``hermes_cli.ops_init`` module
+    - cli:     ``vigil ops-init`` subcommand (hermes_cli.main dispatch)
+    """
+    if entry == "script":
+        argv = [sys.executable, str(INIT_SCRIPT)]
+    elif entry == "module":
+        argv = [sys.executable, "-m", "hermes_cli.ops_init"]
+    else:
+        argv = [sys.executable, "-m", "hermes_cli.main", "ops-init"]
     return subprocess.run(
-        [sys.executable, str(INIT_SCRIPT), "--root", str(root), *extra],
+        [*argv, "--root", str(root), *extra],
         cwd=str(PROJECT_ROOT),
         env=dict(os.environ),
         capture_output=True,
@@ -43,10 +56,11 @@ def _run_init(root: Path, *extra: str) -> subprocess.CompletedProcess:
     )
 
 
-@pytest.fixture
-def ops_home(tmp_path, monkeypatch):
+@pytest.fixture(params=ENTRIES)
+def ops_home(tmp_path, monkeypatch, request):
     root = tmp_path / "hermes-root"
-    proc = _run_init(root, "--no-alias")
+    entry = request.param
+    proc = _run_init(root, "--no-alias", entry=entry)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     home = root / "profiles" / "ops"
     assert home.is_dir()
@@ -95,9 +109,10 @@ def test_init_creates_profile_config_and_topology(ops_home):
     assert ts_load().enabled == "off"
 
 
-def test_init_idempotent_and_force(tmp_path):
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_init_idempotent_and_force(tmp_path, entry):
     root = tmp_path / "hermes-root"
-    proc = _run_init(root, "--no-alias")
+    proc = _run_init(root, "--no-alias", entry=entry)
     assert proc.returncode == 0
     home = root / "profiles" / "ops"
     cfg_path, topo_path = home / "config.yaml", home / "topology.yaml"
@@ -107,14 +122,14 @@ def test_init_idempotent_and_force(tmp_path):
     cfg_path.write_text("custom: true\n", encoding="utf-8")
     topo_path.write_text("custom: true\n", encoding="utf-8")
     (runbooks_dir / "mine.yaml").write_text("custom: true\n", encoding="utf-8")
-    proc = _run_init(root, "--no-alias")
+    proc = _run_init(root, "--no-alias", entry=entry)
     assert proc.returncode == 0
     assert cfg_path.read_text(encoding="utf-8") == "custom: true\n"
     assert topo_path.read_text(encoding="utf-8") == "custom: true\n"
     assert (runbooks_dir / "mine.yaml").is_file()
 
     # --force 重新铺入样例（不触碰 .env / sessions 等用户数据）。
-    proc = _run_init(root, "--no-alias", "--force")
+    proc = _run_init(root, "--no-alias", "--force", entry=entry)
     assert proc.returncode == 0
     assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
     assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 1
@@ -138,9 +153,10 @@ def test_seeded_profile_runbook_load(ops_home):
     assert "前置步骤未全部通过" in blocked
 
 
-def test_env_flag_sets_permissions(tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry", ENTRIES)
+def test_env_flag_sets_permissions(tmp_path, monkeypatch, entry):
     root = tmp_path / "hermes-root"
-    proc = _run_init(root, "--no-alias", "--env", "prod")
+    proc = _run_init(root, "--no-alias", "--env", "prod", entry=entry)
     assert proc.returncode == 0
     home = root / "profiles" / "ops"
     monkeypatch.setenv("HERMES_HOME", str(home))
@@ -157,7 +173,7 @@ def test_seeded_profile_renders_topo_and_queries(ops_home):
 
     harbor = json.loads(topo_query(entity="harbor", detail=True))
     assert harbor["name"] == "harbor"
-    assert harbor["endpoint"] == "203.0.113.10:30443"
+    assert harbor["endpoint"] == "39.106.217.32:30443"
     assert harbor["stale"] is False
     assert harbor["detail"]["depends_on"] == ["postgres"]
     assert harbor["detail"]["ops"]["healthcheck"].startswith("curl")

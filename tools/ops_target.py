@@ -50,7 +50,7 @@ def _host_candidates(command: str) -> List[str]:
         host = host.rstrip(".")
         if host and (is_ssh_family or _IPV4_RE.fullmatch(host)) and host not in hosts:
             hosts.append(host)
-    # ssh 裸 IP（无 user 前缀，如 "ssh -i key 203.0.113.11"）
+    # ssh 裸 IP（无 user 前缀，如 "ssh -i key 39.107.92.54"）
     if is_ssh_family:
         for m in _IPV4_RE.finditer(command):
             host = m.group(0)
@@ -97,8 +97,8 @@ def _entity_ids(entity: Dict[str, Any], attrs: Optional[Dict[str, Any]]) -> List
 def _exact_ids(entity: Dict[str, Any], attrs: Optional[Dict[str, Any]]) -> List[str]:
     """Identifiers compared by full equality — the raw endpoint keeps its port.
 
-    ``node1.endpoint == "203.0.113.10"`` is an exact endpoint for the bare
-    host needle, while ``harbor.endpoint == "203.0.113.10:30443"`` is not —
+    ``node1.endpoint == "39.106.217.32"`` is an exact endpoint for the bare
+    host needle, while ``harbor.endpoint == "39.106.217.32:30443"`` is not —
     the port makes it a different string, so it only ever matches in the
     contains fallback pass.
     """
@@ -121,9 +121,9 @@ def _match_entity(entities: List[Dict[str, Any]], host: str) -> Optional[Dict[st
     """Return the topology entity matching ``host``, exact equality first.
 
     Exact-equality identifiers win over substring matches: a bare IP that is
-    one entity's full endpoint (e.g. ``node1.endpoint == "203.0.113.10"``)
+    one entity's full endpoint (e.g. ``node1.endpoint == "39.106.217.32"``)
     must not be captured by an earlier entity whose endpoint merely contains
-    it (e.g. ``harbor.endpoint == "203.0.113.10:30443"``). Substring matching
+    it (e.g. ``harbor.endpoint == "39.106.217.32:30443"``). Substring matching
     over the port-stripped identifiers stays as the fallback so ported
     service endpoints and partial hostnames still resolve.
     """

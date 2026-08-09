@@ -19,7 +19,7 @@ version: 1
 sources: [test]
 environments:
   - name: prod
-    entry: "ssh jump@203.0.113.10"
+    entry: "ssh jump@39.106.217.32"
     isolation: strict
     role: prod
     core_entities: [k3s-prod, node1, node2]
@@ -30,7 +30,7 @@ environments:
     core_entities: [test-web]
 core_entities:
   - {name: k3s-prod, type: k8s, env: prod, endpoint: "https://10.0.1.100:6443", detail: entities/k3s-prod.yaml}
-  - {name: node1, type: k8s-node, env: prod, endpoint: "203.0.113.10", detail: entities/node1.yaml}
+  - {name: node1, type: k8s-node, env: prod, endpoint: "39.106.217.32", detail: entities/node1.yaml}
   - {name: node2, type: k8s-node, env: prod, detail: entities/node2.yaml}
   - {name: test-web, type: service, env: test, detail: entities/test-web.yaml}
 """
@@ -41,7 +41,7 @@ type: k8s-node
 env: prod
 attrs:
   internal_ip: 10.0.1.30
-  public_ip: 203.0.113.11
+  public_ip: 39.107.92.54
 """
 
 TESTWEB_YAML = """\
@@ -49,7 +49,7 @@ name: test-web
 type: service
 env: test
 attrs:
-  public_ip: 203.0.113.20
+  public_ip: 39.106.200.10
 """
 
 
@@ -138,10 +138,10 @@ def test_matrix_deny_for_kubectl_prod_regardless_of_session_env(guard_env, monke
 
 
 def test_target_prod_l3_deny_in_test_session(guard_env, monkeypatch):
-    """test 会话 + ssh user@203.0.113.11 'rm -rf /var/log' → 目标 node2 (prod) L3 拒绝"""
+    """test 会话 + ssh root@39.107.92.54 'rm -rf /var/log' → 目标 node2 (prod) L3 拒绝"""
     guard_env("test")
     result = approval_module.check_all_command_guards(
-        "ssh user@203.0.113.11 'rm -rf /var/log'", "local")
+        "ssh root@39.107.92.54 'rm -rf /var/log'", "local")
     assert result["approved"] is False
     assert result["ops_matrix"]["action"] == "deny"
     assert result["ops_matrix"]["grade"] == "L3"
@@ -150,28 +150,28 @@ def test_target_prod_l3_deny_in_test_session(guard_env, monkeypatch):
 
 
 def test_target_prod_l4_deny_in_test_session(guard_env, monkeypatch):
-    """test 会话 + ssh user@203.0.113.11 'kubectl delete namespace foo' → L4 拒绝"""
+    """test 会话 + ssh root@39.107.92.54 'kubectl delete namespace foo' → L4 拒绝"""
     guard_env("test")
     result = approval_module.check_all_command_guards(
-        "ssh user@203.0.113.11 'kubectl delete namespace foo'", "local")
+        "ssh root@39.107.92.54 'kubectl delete namespace foo'", "local")
     assert result["approved"] is False
     assert result["ops_matrix"]["grade"] == "L4"
     assert result["ops_matrix"]["env"] == "prod"
 
 
 def test_target_test_l3_executes_in_test_session(guard_env, monkeypatch):
-    """test 会话 + ssh user@<test-web ip> 'rm -rf x' → 目标 test → L3 直接执行"""
+    """test 会话 + ssh root@<test-web ip> 'rm -rf x' → 目标 test → L3 直接执行"""
     guard_env("test")
     result = approval_module.check_all_command_guards(
-        "ssh user@203.0.113.20 'rm -rf x'", "local")
+        "ssh root@39.106.200.10 'rm -rf x'", "local")
     assert result["approved"] is True
 
 
 def test_target_prod_l1_executes_in_test_session(guard_env, monkeypatch):
-    """test 会话 + ssh user@203.0.113.10 'df -h' → 目标 prod L1 直接执行"""
+    """test 会话 + ssh root@39.106.217.32 'df -h' → 目标 prod L1 直接执行"""
     guard_env("test")
     result = approval_module.check_all_command_guards(
-        "ssh user@203.0.113.10 'df -h'", "local")
+        "ssh root@39.106.217.32 'df -h'", "local")
     assert result["approved"] is True
 
 
@@ -186,7 +186,7 @@ def test_gate_disabled_target_zero_impact(guard_env, monkeypatch):
     """ops.permissions.enabled=false → 目标解析零影响（ssh 到 prod 实体也放行）"""
     guard_env("test", enabled=False)
     result = approval_module.check_all_command_guards(
-        "ssh user@203.0.113.11 'rm -rf /var/log'", "local")
+        "ssh root@39.107.92.54 'rm -rf /var/log'", "local")
     assert result["approved"] is True
 
 
@@ -201,7 +201,7 @@ def test_target_prod_approve_notes_entity(guard_env, monkeypatch):
     approval_module.register_gateway_notify(SESSION, lambda data: notified.append(data))
     try:
         result = approval_module.check_all_command_guards(
-            "ssh user@203.0.113.11 'systemctl restart myapp'", "local")
+            "ssh root@39.107.92.54 'systemctl restart myapp'", "local")
         assert result["approved"] is False  # 超时 = 未授权，但审批提示已发出
         assert len(notified) == 1
         assert "目标: node2 (prod)" in notified[0]["description"]
