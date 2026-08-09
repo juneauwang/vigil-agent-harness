@@ -232,6 +232,32 @@
   蓝灰猫头鹰；`/skin` 可见 vigil 皮肤；测试全过；`hermes -p ops` 与 `argus -p ops`
   别名仍可进 ops profile。
 
+### 8. 品牌残留清理：会话退出提示 + fallback/secrets 帮助文本（2026-08-09）
+
+- **为什么**：Vigil 品牌化后，用户可见的"命令提示"里仍有 `hermes <子命令>` 残留——
+  最明显是会话退出时的 `Resume this session with: hermes --resume ...`（用户实测
+  输出），以及 `hermes fallback` / `hermes secrets bitwarden` 帮助文本。影响产品
+  形象，需清干净。`hermes` 命令别名本身保留（见 §7.6），仅改用户可见提示文案。
+- **怎么改**（全部纯文案，零逻辑；仅替换用户可见命令提示/帮助/测试断言里的
+  `hermes <子命令>` → `vigil <子命令>`；模块引用、`HERMES_HOME`、`~/.hermes`、
+  import、内部标识符一律不动）：
+  1. `cli.py` `_print_exit_summary()`（约 14769 行）：退出提示
+     `hermes --resume {id}[-p profile]` 与 `hermes -c "{title}"` → `vigil`（CLI 路径）。
+  2. `hermes_cli/main.py`（约 1567 行）：TUI 退出提示
+     `hermes --tui --resume {target}` 与 `hermes --tui -c "..."` → `vigil`。
+  3. `hermes_cli/fallback_cmd.py`（11 处）：模块 docstring 帮助、`fallback add` 提示、
+     `vigil model` 指引、`fallback list/remove` 提示 → `vigil`。
+  4. `hermes_cli/secrets_cli.py`（11 处）：docstring、`bitwarden setup/status/sync/
+     disable` 提示 → `vigil`。
+  5. 测试同步：`tests/cli/test_exit_summary_resume_hint.py`（7 处断言/docstring）与
+     `tests/hermes_cli/test_fallback_cmd.py`（1 处 `fallback add` 断言）→ `vigil`。
+- **核销方式**：`test_exit_summary_resume_hint.py` + fallback/secrets 相关套件全过
+  （41 passed）；`grep -rn 'hermes ' cli.py hermes_cli/fallback_cmd.py
+  hermes_cli/secrets_cli.py` 仅剩模块/路径/注释引用，无用户可见命令提示。
+- **未碰**：`conversation_loop` / 缓存 / `system_prompt.py`；`agent/secret_sources/`
+  里的 `hermes secrets ... token` 提示、`cli.py` `/save` 与 `main.py` 恢复错误文案
+  中的同类残留不在本任务点名范围（后续可单独一轮清理）。
+
 ## 未碰的核心区（按 §6.5 硬约束）
 
 - 不碰 conversation_loop / 上下文压缩 / prompt 缓存逻辑。

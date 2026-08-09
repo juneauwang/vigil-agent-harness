@@ -1565,9 +1565,9 @@ def _print_tui_exit_summary(
 
     print()
     print("Resume this session with:")
-    print(f"  hermes --tui --resume {target}")
+    print(f"  vigil --tui --resume {target}")
     if title:
-        print(f'  hermes --tui -c "{title}"')
+        print(f'  vigil --tui -c "{title}"')
     print()
     print(f"Session:        {target}")
     if title:
