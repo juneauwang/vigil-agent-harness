@@ -1,7 +1,7 @@
 
 
 [project]
-name = "hermes-agent"  # Vigil 为产品名；发行包名沿用 hermes-agent（fork 兼容，见 OPS-DELTA.md）
+name = "vigil-agent-harness"  # Vigil 为产品名；发行包名 vigil-agent-harness（2026-08-09 发布决策，见 OPS-DELTA.md）
 version = "0.1.0"
 description = "Vigil — 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）"
 readme = "README.md"
@@ -270,23 +270,23 @@ azure-identity = ["azure-identity==1.25.3"]
 termux = [
   # Baseline Android / Termux path for reliable fresh installs.
   "python-telegram-bot[webhooks]==22.6",
-  "hermes-agent[cron]",
-  "hermes-agent[cli]",
-  "hermes-agent[mcp]",
-  "hermes-agent[honcho]",
-  "hermes-agent[acp]",
+  "vigil-agent-harness[cron]",
+  "vigil-agent-harness[cli]",
+  "vigil-agent-harness[mcp]",
+  "vigil-agent-harness[honcho]",
+  "vigil-agent-harness[acp]",
 ]
 termux-all = [
   # Best-effort "install all" profile for Termux. Same policy as [all]:
   # only includes extras that aren't covered by `tools/lazy_deps.py`.
   # Backends like telegram/slack/dingtalk/feishu/honcho lazy-install at
   # first use, so they're no longer eager-installed here.
-  "hermes-agent[termux]",
-  "hermes-agent[google]",
-  "hermes-agent[homeassistant]",
-  "hermes-agent[sms]",
-  "hermes-agent[web]",
-  "hermes-agent[pty]",
+  "vigil-agent-harness[termux]",
+  "vigil-agent-harness[google]",
+  "vigil-agent-harness[homeassistant]",
+  "vigil-agent-harness[sms]",
+  "vigil-agent-harness[web]",
+  "vigil-agent-harness[pty]",
 ]
 dingtalk = ["dingtalk-stream==0.24.3", "alibabacloud-dingtalk==2.2.42", "qrcode==7.4.2"]
 feishu = ["lark-oapi==1.6.8", "qrcode==7.4.2"]

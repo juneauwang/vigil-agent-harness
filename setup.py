@@ -30,23 +30,30 @@ from setuptools import setup
 from setuptools.command.sdist import sdist
 
 _IN_NIX_BUILD = os.environ.get("HERMES_NIX_BUILD") == "1"
+# Vigil fork decision (2026-08-09, OPS-DELTA §发布): PyPI is a supported
+# distribution channel for Vigil (upstream Hermes deliberately does not
+# ship wheels — see docstring above). The release pipeline sets
+# VIGIL_BUILD=1 when running `python -m build` / `pip wheel`, so the
+# guard still protects accidental non-release builds.
+_IN_VIGIL_BUILD = os.environ.get("VIGIL_BUILD") == "1"
 
 _BLOCK_MESSAGE = (
-    "Building wheels or sdists for hermes-agent is not supported.\n"
-    "Hermes is distributed via the shell installer, Docker image, or Nix.\n"
+    "Building wheels or sdists requires the release pipeline.\n"
+    "Vigil: set VIGIL_BUILD=1 for a release build (pip/PyPI channel).\n"
+    "Hermes upstream: distributed via shell installer, Docker, or Nix.\n"
     "See: https://hermes-agent.nousresearch.com/docs/getting-started/installation\n"
     "\n"
     "If you are developing, use an editable install instead:\n"
     "  uv sync          # or: uv pip install -e .\n"
     "\n"
     "If you are building with Nix (uv2nix), this error should not fire —\n"
-    "the Hermes Nix derivation sets HERMES_NIX_BUILD=1. If it does, file a bug."
+    "the Nix derivation sets HERMES_NIX_BUILD=1. If it does, file a bug."
 )
 
 
 class _GuardedSdist(sdist):
     def run(self, *args, **kwargs):
-        if not _IN_NIX_BUILD:
+        if not (_IN_NIX_BUILD or _IN_VIGIL_BUILD):
             raise RuntimeError(_BLOCK_MESSAGE)
         return super().run(*args, **kwargs)
 
@@ -63,7 +70,7 @@ try:
 
     class _GuardedBdistWheel(bdist_wheel):
         def run(self, *args, **kwargs):
-            if not _IN_NIX_BUILD:
+            if not (_IN_NIX_BUILD or _IN_VIGIL_BUILD):
                 raise RuntimeError(_BLOCK_MESSAGE)
             return super().run(*args, **kwargs)
 
