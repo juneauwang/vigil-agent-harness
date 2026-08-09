@@ -131,3 +131,40 @@ def test_custom_grade_override(perm_env):
     result = check_ops_command_permission("customctl reload")
     assert result is not None and result["action"] == "approve"
     assert result["grade"] == "L2"
+
+
+def test_target_env_overrides_session_env(perm_env):
+    perm_env("test")
+    # test 会话 + 目标 prod → 按 prod 矩阵判定
+    deny = check_ops_command_permission("iptables -F", target_env="prod")
+    assert deny is not None and deny["action"] == "deny"
+    assert deny["env"] == "prod" and deny["grade"] == "L3"
+
+    approve = check_ops_command_permission("systemctl restart myapp", target_env="prod")
+    assert approve is not None and approve["action"] == "approve"
+    assert approve["env"] == "prod" and approve["grade"] == "L2"
+
+    # test 会话 + 目标 test → test 矩阵（L3 直接执行）
+    assert check_ops_command_permission("rm -rf /tmp/x", target_env="test") is None
+
+
+def test_target_env_matches_session_env(perm_env):
+    perm_env("prod")
+    deny = check_ops_command_permission("iptables -F", target_env="prod")
+    assert deny is not None and deny["action"] == "deny" and deny["env"] == "prod"
+
+
+def test_unknown_target_env_returns_none(perm_env):
+    perm_env("test")
+    assert check_ops_command_permission("iptables -F", target_env="edge") is None
+
+
+def test_target_env_with_gate_disabled_returns_none(perm_env):
+    perm_env("prod", enabled=False)
+    assert check_ops_command_permission("kubectl delete namespace prod", target_env="prod") is None
+
+
+def test_target_env_empty_falls_back_to_session_env(perm_env):
+    perm_env("prod")
+    result = check_ops_command_permission("systemctl restart myapp", target_env="")
+    assert result is not None and result["action"] == "approve" and result["env"] == "prod"

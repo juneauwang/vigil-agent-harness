@@ -162,8 +162,13 @@ def _active_role() -> str:
     return str(config.get("role") or _active_env() or "").strip().lower()
 
 
-def check_ops_command_permission(command: str) -> Optional[Dict[str, Any]]:
+def check_ops_command_permission(command: str, target_env: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Grade a terminal command and apply the environment matrix.
+
+    ``target_env`` overrides the session env（目标级 env 判定）: approval.py
+    先做命令目标解析（tools/ops_target.py），命中拓扑实体时传入该实体的 env；
+    为 None 或未命中时用会话 env（现状不变）。目标 env 未在矩阵声明时同样返回
+    None（交回原有检查），避免对未知环境误判。
 
     Returns:
       None                         — gate disabled / env unknown / grade execute
@@ -180,7 +185,7 @@ def check_ops_command_permission(command: str) -> Optional[Dict[str, Any]]:
     if not config.get("enabled", False):
         return None
 
-    env = _active_env()
+    env = (target_env or _active_env()).strip().lower()
     if env not in _DEFAULT_MATRIX and env not in (config.get("matrix") or {}):
         return None  # 未声明环境 → 不做矩阵判定（交回原有检查）
 

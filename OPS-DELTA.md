@@ -48,6 +48,44 @@
 - **核销方式**：`ops.runbooks.enabled` 为 false（默认）时工具零影响（check_fn 门控）。
 
 
+### 4. `tools/approval.py` — `check_all_command_guards` 增加命令目标解析钩子（加段，二期安全插队）
+
+- **为什么**：矩阵原本按会话 env 判定，test 会话对 prod 实体（node2）的 L3/L4
+  命令全放行——"跨环境操作默认拒绝"只有行为约束、没有硬 gate（会话开着人离开时
+  agent 可被诱导对 prod 实体执行 L3/L4）。ops-agent-harness.md §3 要求"每命令
+  env 强制参数 + 跨环境拒绝"，实现时记为二期，现在提前做。
+- **怎么改**（三处插入，均不改动既有分支行为）：
+  1. ops 检查之前：调用 `tools.ops_target.resolve_command_target(command)` 解析
+     命令目标（ssh/scp/sftp 的 user@host、kubectl → k3s-prod），命中拓扑实体则把
+     目标 env 传入 `check_ops_command_permission(target_env=...)`；解析不到 →
+     `target=None`，完全走现状（会话 env + TOPO 段行为约束兜底）。
+  2. deny / fail-closed 阻断消息：命中目标时附注 `目标: node2 (prod)`，让人工
+     一眼看到受影响实体（prod 行 L3/L4 deny、L2 审批复用现有流不变）。
+  3. ops approve 警告描述：命中目标时附注 `目标: node2 (prod)`，审批提示与
+     smart-approval 输入都带上目标实体。
+- **核销方式**：`ops.permissions.enabled=false` 时零影响；目标解析失败（临时机器 /
+  无拓扑 / 无目标命令）完全走现状；不 fail-closed 误伤拓扑外机器。
+
+### 5. `tools/ops_permissions.py` — `check_ops_command_permission` 增加 `target_env` 参数（加参数，行为不变）
+
+- **为什么**：命令目标级 env 判定需要矩阵按目标 env 查表（test 会话 + 目标 prod
+  → 按 prod 判定）；不传时维持会话 env（现状）。
+- **怎么改**：签名加 `target_env: Optional[str] = None`，env 解析改为
+  `(target_env or _active_env()).strip().lower()`；目标 env 未在矩阵声明时同样
+  返回 None（不误判未知环境）。docstring 补充目标级判定说明。
+- **核销方式**：现有测试全过；target_env 覆盖只在调用方显式传入时生效。
+
+### 6. `tools/ops_target.py` — 命令目标解析模块（新建，纯增量）
+
+- **为什么/怎么改**：见文件头注释。`resolve_command_target(command)` 从命令串解析
+  目标主机（ssh/scp/sftp 的 user@host、裸 `@<ipv4>`），映射到拓扑实体（第一层
+  `name` / `endpoint`，第二层 `attrs.public_ip` / `attrs.internal_ip`），返回
+  `{"entity", "env", "label", "matched_by"}`；含 `kubectl` 的命令关联 `k3s-prod`
+  （env=prod）。只读、无副作用，复用 `tools.topo_tools` 的加载器保证与
+  topo_query 看到同一份数据。
+- **边界**：解析不到目标 / 拓扑查无此实体 → None 走现状，不 fail-closed 误伤
+  临时机器；实体无 env（数据缺口）→ None 交回现状。
+
 ## 产品外壳品牌化（Vigil 一期，2026-08-08）
 
 > ※ 更名沿革：2026-08-08 当天，产品名由 Argus 统一更名为 Vigil（定位语不变：
@@ -214,3 +252,5 @@
 | `tools/runbook_tools.py` | §1 / §3 L4 | runbook_load（按名/触发关键字/列表）+ runbook_checkpoint（L4 checklist 阶段门），registry toolset=runbook |
 | `ops-profile/runbooks/` | §1 / §3 L4 | 样例 runbook：harbor-restart / gateway-svc-restart（事故）+ deploy-gateway-svc（L4 部署 checklist 模板） |
 | `tests/tools/test_runbook_tools.py` | §6.3 | runbook 加载/匹配/校验/L4 阶段门测试 |
+| `tools/ops_target.py` | §3 二期 | 命令目标解析：ssh/scp/sftp user@host、kubectl → k3s-prod，目标主机映射拓扑实体 → 目标级 env（只读零副作用） |
+| `tests/tools/test_ops_target.py` 等 | §3 二期 | 目标解析单测 + guard 目标级判定测试（test 会话对 prod 实体 L3/L4 硬拒绝） |

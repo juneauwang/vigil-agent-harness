@@ -3613,22 +3613,34 @@ def check_all_command_guards(command: str, env_type: str,
     # setting can override it. An APPROVE outcome rides the normal approval
     # flow (consumed in Phase 2 below); with no human present (cron/batch) it
     # fails closed, mirroring request_tool_approval.
+    # Ops command target resolution (跨环境硬约束 · 命令目标级 env 判定):
+    # 先解析命令目标（ssh/scp/sftp 的 user@host、kubectl → k3s-prod），命中拓扑
+    # 实体时把目标 env 传入矩阵（test 会话对 prod 实体照样按 prod 判定，跨环境
+    # 操作从行为约束升级为硬 gate）；解析不到 → target=None，完全走现状。
+    target = None
+    try:
+        from tools.ops_target import resolve_command_target
+        target = resolve_command_target(command)
+    except Exception as _tgt_exc:
+        logger.debug("Ops command target resolution failed: %s", _tgt_exc)
     ops_decision = None
     try:
         from tools.ops_permissions import check_ops_command_permission as _check_ops_permission
-        ops_decision = _check_ops_permission(command)
+        ops_decision = _check_ops_permission(command, target_env=(target or {}).get("env"))
     except Exception as _ops_exc:
         logger.debug("Ops permission matrix check failed: %s", _ops_exc)
     if ops_decision is not None:
         if ops_decision["action"] == "deny":
             logger.warning("Ops matrix deny (%s/%s): %s",
                            ops_decision["grade"], ops_decision["env"], command[:200])
+            target_note = f" 目标: {target['label']}。" if target else ""
             return {
                 "approved": False,
                 "ops_matrix": ops_decision,
                 "message": (
                     f"BLOCKED: {ops_decision['description']} (grade "
-                    f"{ops_decision['grade']}, env {ops_decision['env']}). "
+                    f"{ops_decision['grade']}, env {ops_decision['env']})."
+                    f"{target_note} "
                     "The ops permission matrix denies this command to the "
                     "agent; only a human operator can run it. Do NOT retry, "
                     "rephrase, or attempt the same outcome via a different "
@@ -3643,13 +3655,15 @@ def check_all_command_guards(command: str, env_type: str,
         if not _has_human:
             # No human present (cron/batch/non-interactive): an approval
             # requirement fails closed.
+            target_note = f" 目标: {target['label']};" if target else ""
             return {
                 "approved": False,
                 "ops_matrix": ops_decision,
                 "message": (
                     f"BLOCKED: {ops_decision['description']} (grade "
-                    f"{ops_decision['grade']}, env {ops_decision['env']}) but "
-                    "no interactive user or gateway is present to approve it. "
+                    f"{ops_decision['grade']}, env {ops_decision['env']})"
+                    f"{target_note} "
+                    "but no interactive user or gateway is present to approve it. "
                     "Find an alternative approach or run it manually."
                 ),
             }
@@ -3811,6 +3825,8 @@ def check_all_command_guards(command: str, env_type: str,
     if ops_decision is not None and ops_decision["action"] == "approve":
         ops_key = f"ops_matrix:{ops_decision['grade']}:{ops_decision['env']}"
         ops_desc = ops_decision["description"]
+        if target:
+            ops_desc = f"{ops_desc} 目标: {target['label']}"
         if not is_approved(session_key, ops_key):
             warnings.append((ops_key, ops_desc, False))
 
