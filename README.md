@@ -1,21 +1,6 @@
 # Vigil ☉ —— 运维 Agent Harness
 
-```text
-        /\    /\
-       /  \  /  \
-      |  ◉    ◉  |
-      |    ^     |
-       \   ‾    /
-        '-....-'
-      .-'      '-.
-     /  ▓▓▓▓▓▓▓▓  \
-    |   ▓▓▓▓▓▓▓▓   |
-     \  ▓▓▓▓▓▓▓▓  /
-      '-.      .-'
-         |  |  |
-         |  |  |
-         ‾‾‾‾‾‾‾
-```
+![Vigil](assets/banner.png)
 
 > **记住整个平台，安全地动生产。**
 
@@ -39,7 +24,6 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 - [一次会话长什么样](#一次会话长什么样)
 - [安全模型](#安全模型)
 - [Roadmap](#roadmap)
-- [开发](#开发)
 - [License](#license)
 
 ---
@@ -123,19 +107,30 @@ python3 -m venv .venv
 
 ## 一次会话长什么样
 
+启动 `vigil -p ops` 后,控制台头部(取自真实渲染逻辑)长这样:
+
 ```text
-╭── Vigil v0.1.0 ──────────────────────────────╮
-│  ◉          PROFILE  ops                     │
-│  VIGIL      ENV      [test]                  │
-│ 记住整个平台  GATES   matrix ON · L1–L4       │
-│ 安全地动生产  TOPOLOGY 20 entities            │
-│             RUNBOOKS 5 loaded                │
-╰──────────────────────────────────────────────╯
+┌─ Vigil v0.1.0 ─────────────────────────────────────────────┐
+│         /\    /\        PROFILE     ops                    │
+│        /  \  /  \       ENV         [test]                 │
+│       | ◉    ◉ |        GATES       matrix ON · L1–L4 × env │
+│       |    ^   |                    → execute/approve/deny │
+│        \   ‾  /        TOPOLOGY    8 entities              │
+│         '-..-'         RUNBOOKS    3 loaded                │
+│   deepseek-v4-flash    HOME        ~/.hermes/profiles/ops  │
+│   ~/projects/vigil-agent                                   │
+│   Session: 20260809_...                                   │
+│                                 ◈ topo_query · runbook_load│
+│                                   · permission matrix      │
+└────────────────────────────────────────────────────────────┘
 
 你：帮我排查 node2 的 sshd 为什么连不上
 Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
        "ssh-idle-hang" → 诊断（sshd -T / 保活配置）→ 修复 → 验证
 ```
+
+左边是模型/工作目录/会话锚点,右边是运维能力实时状态——在哪个环境、
+权限门开没开、记住了多少实体、有哪些 runbook,一眼可见。
 
 ## 安全模型
 
@@ -157,17 +152,6 @@ Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
 - [ ] 拓扑体检 cron（自动检查实体 freshness）
 - [ ] 数据目录独立（脱离 hermes profile 体系）
 
-## 开发
-
-```bash
-source .venv/bin/activate
-python -m pytest tests/tools/ tests/plugins/memory/test_topo_provider.py tests/scripts/ -q
-```
-
-运维专属改动全部登记在 [OPS-DELTA.md](OPS-DELTA.md)，季度体检核销。
-设计文档见 [ops-agent-harness.md](ops-agent-harness.md)。
-
 ## License
 
-MIT。Vigil 是 [Hermes Agent](https://hermes-agent.nousresearch.com/) 的独立 fork，
-遵守上游 [LICENSE](LICENSE)。`hermes` 命令保留为兼容入口（别名）。
+MIT。Vigil 是 [Hermes Agent](https://hermes-agent.nousresearch.com/) 的独立 fork，版权声明见 [LICENSE](LICENSE)。
