@@ -112,6 +112,31 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/vigil -p ops
 ```
 
+## 常见问题
+
+**国内镜像装不到？**
+新发布的包，国内镜像（阿里云/清华/中科大）同步有延迟（几小时到一天），装不到先换 pypi.org 直连：
+
+```bash
+pip install vigil-agent-harness -i https://pypi.org/simple/
+# 或：主包走 pypi.org，依赖走国内镜像（更快）
+pip install vigil-agent-harness \
+  --index-url https://pypi.org/simple/ \
+  --extra-index-url https://mirrors.aliyun.com/pypi/simple/
+```
+
+**报 "from versions: none"？**
+Vigil 要求 **Python >= 3.11 且 < 3.14**。Python 版本过低时，pip 会报
+`Could not find a version that satisfies the requirement ... (from versions: none)`——
+这是版本门槛，不是网络问题。先查 `python3 --version`，装 Python 3.11+ 再试。
+推荐用 uv 一步到位：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+uv venv --python 3.12 .venv && source .venv/bin/activate
+pip install vigil-agent-harness -i https://pypi.org/simple/
+```
+
 ## 一次会话长什么样
 
 启动 `vigil -p ops` 后,控制台头部长这样(真实输出):
