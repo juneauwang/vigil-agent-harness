@@ -194,24 +194,41 @@ def test_topo_query_no_topology_file(topo_home, monkeypatch):
     assert "topology.yaml" in result["error"]
 
 
-def test_check_topo_requirements_gates_on_config(tmp_path, monkeypatch):
+def test_check_topo_requirements_data_existence_gating(tmp_path, monkeypatch):
+    """OPS-DELTA #1：topo 工具默认按数据存在性可用，enabled 降级为显式覆盖。"""
     import hermes_cli.config as hc
 
     home = tmp_path / "cfg"
     home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+
+    def _check():
+        hc._LOAD_CONFIG_CACHE.clear()
+        try:
+            return topo_tools.check_topo_requirements()
+        finally:
+            hc._LOAD_CONFIG_CACHE.clear()
+
+    # 无 config 且无 topology.yaml → 不可用（数据缺失）
+    assert _check() is False
+
+    # 无 config（默认加载）但 topology.yaml 就位 → 可用
+    (home / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
+    assert _check() is True
+
+    # topology.yaml 存在但空（无 core_entities）→ 视为未就位
+    (home / "topology.yaml").write_text("version: 1\n", encoding="utf-8")
+    assert _check() is False
+
+    # 显式 enabled: false → 始终关闭（向后兼容）
+    (home / "config.yaml").write_text(
+        "ops:\n  topology:\n    enabled: false\n", encoding="utf-8"
+    )
+    assert _check() is False
+
+    # 显式 enabled: true 但数据缺失 → 仍不可用（工具无数据只会报错）
+    (home / "topology.yaml").unlink()
     (home / "config.yaml").write_text(
         "ops:\n  topology:\n    enabled: true\n", encoding="utf-8"
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    hc._LOAD_CONFIG_CACHE.clear()
-    try:
-        assert topo_tools.check_topo_requirements() is True
-    finally:
-        hc._LOAD_CONFIG_CACHE.clear()
-
-    (home / "config.yaml").write_text("ops:\n  topology:\n    enabled: false\n", encoding="utf-8")
-    hc._LOAD_CONFIG_CACHE.clear()
-    try:
-        assert topo_tools.check_topo_requirements() is False
-    finally:
-        hc._LOAD_CONFIG_CACHE.clear()
+    assert _check() is False

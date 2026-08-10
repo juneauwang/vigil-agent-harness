@@ -193,9 +193,30 @@ def _ops_config() -> Dict[str, Any]:
         return {}
 
 
+def _runbook_data_exists(home: Optional[Path] = None) -> bool:
+    """runbooks/ 目录存在且含至少一个 yaml。"""
+    runbooks_dir = (home or _hermes_home()) / _RUNBOOKS_DIRNAME
+    try:
+        if not runbooks_dir.is_dir():
+            return False
+        return any(runbooks_dir.glob("*.yaml"))
+    except Exception:
+        return False
+
+
 def check_runbook_requirements() -> bool:
-    """Runbook tools are gated on the ops runbooks being enabled in config.yaml."""
-    return bool(_ops_config().get("runbooks", {}).get("enabled", False))
+    """Runbook tools are available by default when runbook data exists.
+
+    OPS-DELTA #1：能力门控按数据存在性自动切换（装上即用，不再要求 ops-init
+    先行）。config 的 ``ops.runbooks.enabled`` 保留为覆盖开关：
+      - 缺省（无该键）→ 按数据存在性（runbooks/ 有 yaml 即可用）；
+      - 显式 ``enabled: true`` → 仍要求数据就位；
+      - 显式 ``enabled: false`` → 始终关闭（向后兼容既有关闭配置）。
+    """
+    ops = _ops_config()
+    if ops.get("runbooks", {}).get("enabled") is False:
+        return False
+    return _runbook_data_exists()
 
 
 # ---------------------------------------------------------------------------

@@ -340,7 +340,14 @@
 - **待改方向**：默认加载运维工具（topo/runbook/权限矩阵），ops-init 降级为
   "初始化拓扑数据/样例"而非"启用能力"；能力门控改为按数据存在性（topology.yaml
   是否就位）自动切换，而非手动 init。
-- **未实施**：待排期。
+- **已实施（2026-08-10）**：
+  - topo/runbook 工具 check_fn 改为数据存在性门控（topology.yaml 有 core_entities /
+    runbooks/ 有 yaml 即可用；`ops.*.enabled` 保留为显式覆盖，`false` 关闭、缺省
+    按数据判定），工具降级错误信息与 banner 引导改为"运行 vigil ops-init 铺样例"。
+  - 权限矩阵默认启用（`ops.permissions.enabled` 缺省视为 true，显式 false 仍关闭；
+    env 缺省读 config，未配置 env 时惰性返回 None，不改变非 ops profile 判定），
+    fail-closed 取向不变（DENY 硬拒绝不可绕过）。
+  - ops-init 职责降级为"铺样例数据 + 写配置"（帮助文案/README/OPS-VERIFY 同步）。
 
 ### 2. ops 样例数据含真实环境，发布前必须脱敏（2026-08-10 已实施）
 

@@ -144,3 +144,26 @@ def test_unified_banner_non_ops_shares_console_header():
     # Capability summary + onboarding hint replace the tool/skill inventory
     assert "1 tools · 1 skills" in out
     assert "vigil ops-init" in out
+
+
+def test_load_banner_state_matrix_default_on_without_enabled_key(tmp_path, monkeypatch):
+    """OPS-DELTA #1：矩阵默认启用——config 无 enabled 键也显示 matrix ON。"""
+    _fresh_state()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(yaml.safe_dump({
+        "ops": {
+            "permissions": {"env": "prod", "role": "prod"},
+        },
+    }), encoding="utf-8")
+
+    state = banner._load_banner_state()
+
+    assert state["ops_enabled"] is False  # 无显式 ops 开关 → 非 ops banner 布局
+    assert state["matrix_enabled"] is True  # 但矩阵语义为默认启用
+
+
+def test_unified_banner_no_topology_guides_ops_init():
+    """数据缺失时 TOPOLOGY 段引导运行 vigil ops-init（不再要求先启用能力）。"""
+    out = _render(_ops_state(entity_count=0, runbook_count=0))
+
+    assert "no topology — run vigil ops-init" in out

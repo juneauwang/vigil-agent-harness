@@ -14,14 +14,20 @@ prod 档判定，不依赖名字是 test/uat/prod。未定义的环境不做矩�
 检查），避免对未知环境误判。config 的 ``ops.environments`` 是权威来源，拓扑
 topology.yaml 的 environments 段不一致时以 config 为准。
 
+矩阵默认启用（OPS-DELTA #1）：``ops.permissions.enabled`` 缺省视为 true（显式
+``false`` 仍可关闭，向后兼容），env 缺省读 config 的 ``ops.permissions.env``——
+未配置 env（非 ops profile）时矩阵惰性返回 None（交回原有检查），不改变既有
+判定；一旦 env 就位（ops-init 默认 test 或 /env 切换）即按矩阵判定。fail-closed
+取向不变：DENY 是硬拒绝，任何会话级 bypass 都不能绕过。
+
 配置（config.yaml，ops 块）:
     ops:
       environments:            # 可选：环境定义列表（不写则用内置 test/uat/prod）
         - {name: test, isolation: relaxed, role: test}
         - {name: bare_metal_prod, isolation: strict, role: prod}
       permissions:
-        enabled: true          # 关闭则本模块完全静默
-        env: test              # 当前操作环境（/env 切换，须在 environments 已定义列表）
+        enabled: true          # 缺省默认启用（OPS-DELTA #1）；显式 false 才关闭
+        env: test              # 当前操作环境（/env 切换，须在 environments 已定义列表；未配置则矩阵惰性）
         role: test             # 会话角色（默认同 env，审计展示用）
         grades:                # 可选：覆盖内置分级正则（不写则用内置表）
           L1: [...]
@@ -265,10 +271,14 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     if not isinstance(command, str) or not command.strip():
         return None
     config = _load_config()
-    if not config.get("enabled", False):
-        return None
+    if config.get("enabled", True) is False:
+        return None  # 显式关闭（向后兼容）；缺省默认启用
 
     env = (target_env or _active_env()).strip().lower()
+    if not env:
+        # 无会话 env 且无目标级 env → 矩阵无可判定环境（等价于 _matrix_row("")
+        # 返回 None），提前返回：非 ops profile 的热路径零额外开销。
+        return None
 
     grade = classify_command(command)
     if grade is None:

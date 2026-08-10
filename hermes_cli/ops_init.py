@@ -1,5 +1,10 @@
 """Ops profile initializer (Ops Agent Harness, ops-agent-harness.md).
 
+初始化 ops profile 的**数据层**（拓扑样例 + runbook 样例 + 配置文件）。运维能力
+（topo/runbook 工具、权限矩阵）默认加载（OPS-DELTA #1）：topo/runbook 按数据
+存在性自动可用，权限矩阵默认启用——ops-init 不再是"启用能力"的必经之路，只负责
+铺数据。
+
 Creates the ``ops`` profile, writes the ops config (topo toolset + TOPO
 memory provider + permission matrix), and seeds the sample topology table
 (``topology.yaml`` + ``entities/``) and sample runbooks (``runbooks/``)
@@ -40,8 +45,9 @@ from pathlib import Path
 _SAMPLE_DIR = Path(__file__).resolve().parent / "ops_samples"
 _PROFILE_NAME = "ops"
 
-# ops 配置 = 一期交付（拓扑注入 A + topo 工具 B + 权限矩阵 D）的全部激活开关。
-# 见 ops-agent-harness.md §3/§4 与 OPS-DELTA.md。
+# ops 配置 = 一期交付（拓扑注入 A + topo 工具 B + 权限矩阵 D）。
+# 能力默认加载（OPS-DELTA #1）：topo/runbook 按数据存在性、矩阵默认启用；
+# 下面的 enabled: true 是显式声明（向后兼容），显式 false 仍可关闭。
 _CONFIG_TPL = """\
 # ops profile —— 由 vigil ops-init 生成。
 # 行为配置一律走 config.yaml（upstream 约定：不加 HERMES_* env var）。
