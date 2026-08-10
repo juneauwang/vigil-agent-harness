@@ -65,13 +65,16 @@ def guard_env(tmp_path, monkeypatch):
                 % (e["name"], e["isolation"], e["role"])
                 for e in environments
             ) + "\n"
+        enabled_yaml = (
+            "" if enabled is None else f"    enabled: {str(enabled).lower()}\n"
+        )
         (tmp_path / "config.yaml").write_text(
             "ops:\n"
             + env_yaml
             + "  permissions:\n"
-            f"    enabled: {str(enabled).lower()}\n"
-            f"    env: {env}\n"
-            f"    role: {env}\n",
+            + enabled_yaml
+            + f"    env: {env}\n"
+            + f"    role: {env}\n",
             encoding="utf-8",
         )
         (tmp_path / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
@@ -261,3 +264,21 @@ def test_undeclared_env_leaves_existing_flow(guard_env):
     ])
     result = approval_module.check_all_command_guards("ls -la", "local")
     assert result["approved"] is True
+
+
+def test_matrix_default_enabled_without_enabled_key(guard_env):
+    """OPS-DELTA #1：矩阵默认启用——config 只写 env 不写 enabled 也按矩阵判定。"""
+    guard_env("prod", enabled=None)
+    result = approval_module.check_all_command_guards("rm -rf /var/log", "local")
+    assert result["approved"] is False
+    assert result["ops_matrix"]["action"] == "deny"
+    assert result["ops_matrix"]["grade"] == "L3"
+    assert result["ops_matrix"]["env"] == "prod"
+
+
+def test_matrix_inert_without_env(guard_env):
+    """矩阵默认启用但未配置 env（非 ops profile）→ 惰性，不改变既有判定。"""
+    guard_env("", enabled=None)
+    result = approval_module.check_all_command_guards("rm -rf /var/log", "local")
+    assert result["approved"] is True
+    assert "ops_matrix" not in result

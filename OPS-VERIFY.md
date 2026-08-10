@@ -129,8 +129,9 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
 - 没改过样例拓扑：`vigil ops-init --force`（重铺 config/拓扑/runbooks 样例）。
 - 改过拓扑/实体（保留你的修改）：手工在 `~/.hermes/profiles/ops/config.yaml` 加两处——
   `platform_toolsets.cli` 改为 `[hermes-cli, topo, runbook]`，并在 `ops:` 下加
-  `runbooks: {enabled: true}`；然后 `vigil ops-init`（不带 --force，
-  会自动铺缺失的 runbooks/）。
+  `runbooks: {enabled: true}`（OPS-DELTA #1 起可选：新版本 runbook 工具默认按
+  `runbooks/` 数据存在性启用，`enabled` 只是显式声明/关闭开关）；然后
+  `vigil ops-init`（不带 --force，会自动铺缺失的 runbooks/）。
 
 重新 `hermes -p ops chat`，依次验证：
 

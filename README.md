@@ -77,7 +77,7 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 
 - **先确认，再动手**：任何运维操作前先查拓扑确认目标；命令的目标是谁，就用谁的
   环境来裁决（test 会话操作 prod 节点？矩阵直接拦）
-- **默认 fail-closed**：不确定就拒绝。权限矩阵默认 `env: test`，核对通过后再切 prod
+- **默认 fail-closed**：不确定就拒绝。topo/runbook 工具按数据存在性自动可用，权限矩阵默认启用（显式 `enabled: false` 可关）；矩阵默认 `env: test`，核对通过后再切 prod
 
 ## 快速开始
 
@@ -87,7 +87,8 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 # 1. 安装（生成 vigil 命令入口）
 pip install vigil-agent-harness
 
-# 2. 初始化 ops profile（拓扑表 + 样例 runbook）
+# 2.（可选）铺样例数据——运维能力（topo/runbook/权限矩阵）默认加载，
+#    ops-init 只负责生成配置 + 样例拓扑 + 样例 runbook，不是启用能力的前置门槛
 vigil ops-init         # 生成 ~/.vigil/profiles/ops 下的配置 + 样例拓扑 + 样例 runbook
 
 # 3. 配置模型（如 DeepSeek）——在 ~/.vigil/profiles/ops/config.yaml

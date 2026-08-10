@@ -228,7 +228,8 @@ def topo_query(
     if topo is None:
         return tool_error(
             f"拓扑表不存在或无法解析: {_topology_path(home)}。"
-            "运维会话需要先创建 topology.yaml（schema v0.1，见 ops-agent-harness.md §2.2）。"
+            "运维会话需要先铺拓扑数据：运行 vigil ops-init 生成样例 topology.yaml"
+            "（schema v0.1，见 ops-agent-harness.md §2.2），或手动创建。"
         )
 
     if entity:
@@ -378,9 +379,31 @@ def _ops_config() -> Dict[str, Any]:
         return {}
 
 
+def _topology_data_exists(home: Optional[Path] = None) -> bool:
+    """topology.yaml 就位且含核心实体（存在且非空）。"""
+    path = _topology_path(home)
+    try:
+        if not path.is_file():
+            return False
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        return bool(data.get("core_entities"))
+    except Exception:
+        return False
+
+
 def check_topo_requirements() -> bool:
-    """Tools are gated on the ops topology being enabled in config.yaml."""
-    return bool(_ops_config().get("topology", {}).get("enabled", False))
+    """Topo tools are available by default when topology data exists.
+
+    OPS-DELTA #1：能力门控按数据存在性自动切换（装上即用，不再要求 ops-init
+    先行）。config 的 ``ops.topology.enabled`` 保留为覆盖开关：
+      - 缺省（无该键）→ 按数据存在性（topology.yaml 就位即可用）；
+      - 显式 ``enabled: true`` → 仍要求数据就位（无数据工具只会报错）；
+      - 显式 ``enabled: false`` → 始终关闭（向后兼容既有关闭配置）。
+    """
+    ops = _ops_config()
+    if ops.get("topology", {}).get("enabled") is False:
+        return False
+    return _topology_data_exists()
 
 
 def _query_handler(args: Dict[str, Any], **kwargs) -> str:

@@ -17,7 +17,11 @@ import pytest
 import yaml
 
 import hermes_cli.config as hc
-from tools.runbook_tools import runbook_checkpoint, runbook_load
+from tools.runbook_tools import (
+    check_runbook_requirements,
+    runbook_checkpoint,
+    runbook_load,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAMPLE_RUNBOOKS = PROJECT_ROOT / "hermes_cli" / "ops_samples" / "runbooks"
@@ -179,3 +183,47 @@ def test_env_mismatch_warning(rb_home):
     assert result["session_env"] == "test"
     assert result["env_mismatch"] is True
     assert "跨环境操作默认拒绝" in result["env_warning"]
+
+
+def test_check_runbook_requirements_data_existence_gating(rb_home):
+    """OPS-DELTA #1：runbook 工具默认按数据存在性可用，enabled 降级为显式覆盖。"""
+    import hermes_cli.config as hc
+
+    # 数据就位 + 无 config（默认加载）→ 可用
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        assert check_runbook_requirements() is True
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+    # 显式 enabled: false + 数据在 → 仍关闭（向后兼容）
+    _write_config(rb_home, {"ops": {"runbooks": {"enabled": False}}})
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        assert check_runbook_requirements() is False
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+    # 显式 enabled: true 但数据缺失 → 不可用（工具无数据只会报错）
+    _write_config(rb_home, {"ops": {"runbooks": {"enabled": True}}})
+    for p in rb_home.glob("runbooks/*.yaml"):
+        p.unlink()
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        assert check_runbook_requirements() is False
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+
+def test_check_runbook_requirements_no_data(tmp_path, monkeypatch):
+    """无 runbooks/ 目录且无 config → 不可用（数据缺失，工具隐藏 + banner 引导）。"""
+    import hermes_cli.config as hc
+
+    home = tmp_path / "empty_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        assert check_runbook_requirements() is False
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()

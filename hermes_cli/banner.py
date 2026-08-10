@@ -573,9 +573,11 @@ def _load_banner_state() -> Dict[str, Any]:
             state["ops_enabled"] = bool(
                 topology.get("enabled") or permissions.get("enabled")
             )
-            state["matrix_enabled"] = bool(permissions.get("enabled"))
-            state["topology_enabled"] = bool(topology.get("enabled"))
-            state["runbook_enabled"] = bool(runbooks.get("enabled"))
+            # OPS-DELTA #1：capability 缺省启用（显式 false 才关闭），与
+            # check_fn 数据存在性门控 / 权限矩阵默认启用保持一致。
+            state["matrix_enabled"] = permissions.get("enabled", True) is not False
+            state["topology_enabled"] = topology.get("enabled", True) is not False
+            state["runbook_enabled"] = runbooks.get("enabled", True) is not False
             env = str(permissions.get("env") or "").strip()
             if env:
                 state["env"] = env
@@ -709,7 +711,7 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
         if state.get("entity_count"):
             topo_val = f"[{text}]{state.get('entity_count', 0)} entities[/]"
         else:
-            topo_val = f"[{warn}]no topology loaded[/]"
+            topo_val = f"[{warn}]no topology — run vigil ops-init[/]"
         right_lines.append(f"[dim {dim}]TOPOLOGY[/]    {topo_val}")
     else:
         right_lines.append(f"[dim {dim}]TOPOLOGY[/]    [dim {dim}]—[/]")
@@ -743,7 +745,7 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
             f"[dim {dim}]◈ {len(tools)} tools · {total_skills} skills · /help for commands[/]"
         )
         right_lines.append(
-            f"[dim {dim}]  提示：运行 vigil ops-init 启用运维能力（拓扑表 + runbook + 权限矩阵）[/]"
+            f"[dim {dim}]  提示：运行 vigil ops-init 铺拓扑样例数据（topology.yaml + runbooks/）[/]"
         )
     # Update check — use prefetched result if available
     try:

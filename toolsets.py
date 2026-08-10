@@ -288,8 +288,9 @@ TOOLSETS = {
         "description": (
             "Ops Agent Harness 拓扑表（CMDB 事实层）：topo_query 查平台拓扑，"
             "topo_update 更新实体档案（自动带 source=agent + last_verified，"
-            "PROD 实体变更需审批）。工具仅当 config.yaml 的 ops.topology.enabled "
-            "为 true 时可用（check_fn 门控）。"
+            "PROD 实体变更需审批）。工具默认按数据存在性可用（topology.yaml "
+            "就位即可用，无需 ops-init 先行）；ops.topology.enabled: false "
+            "可显式关闭。"
         ),
         "tools": ["topo_query", "topo_update"],
         "includes": [],
@@ -300,8 +301,8 @@ TOOLSETS = {
             "Ops Agent Harness 程序层 runbook（结构化 YAML：触发条件 + 步骤 + 命令 + 回滚）："
             "runbook_load 按需加载事故/部署 runbook（支持触发关键字模糊匹配与列表），"
             "runbook_checkpoint 维护 L4 部署 checklist 的阶段门（前置核对 → 滚动发布 → "
-            "真实验证 → 回滚预案）。工具仅当 config.yaml 的 ops.runbooks.enabled 为 true "
-            "时可用（check_fn 门控）。"
+            "真实验证 → 回滚预案）。工具默认按数据存在性可用（runbooks/ 有 yaml "
+            "即可用，无需 ops-init 先行）；ops.runbooks.enabled: false 可显式关闭。"
         ),
         "tools": ["runbook_load", "runbook_checkpoint"],
         "includes": [],
