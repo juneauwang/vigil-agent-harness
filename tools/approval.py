@@ -348,7 +348,14 @@ _SSH_PRIVATE_KEYS = (
     r'[^/\s"\'`]*\.(?:pem|key)\b)'
 )
 # kubeconfig holds cluster credentials (client certs, tokens, contexts).
-_KUBE_CONFIG_PATH = r'(?:~|\$home|\$\{home\})/\.kube/config\b'
+# Match both ~/.kube/config and absolute forms (/root/.kube/config,
+# /home/<user>/.kube/config, /var/lib/kubelet/config.yaml etc.) — agents
+# frequently read it via absolute path in sudo scenarios. Only the exact
+# config file name matches, not sibling files (.kube/cache etc.).
+_KUBE_CONFIG_PATH = (
+    r'(?:(?:~|\$home|\$\{home\})/|/home/[^/\s"\'`]+/|/root/|/var/lib/kubelet/)'
+    r'\.kube/config\b'
+)
 # Project-relative credential dotfiles (.npmrc/.pypirc/.netrc/.pgpass live in
 # the repo or the user home and hold registry/auth credentials).
 _PROJECT_CREDENTIAL_DOTFILES = (

@@ -1599,6 +1599,9 @@ class TestCredentialFileReads:
         "head ~/.ssh/id_ecdsa",
         # kubeconfig / credential dotfiles
         "cat ~/.kube/config",
+        "cat /root/.kube/config",
+        "cat /home/user/.kube/config",
+        "head /root/.kube/config",
         "cat ~/.npmrc",
         "tail -n 3 ~/.pypirc",
         "cat .pgpass",
