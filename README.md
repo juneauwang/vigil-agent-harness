@@ -102,11 +102,23 @@ vigil -p ops
 
 ### 从源码安装（开发者 / 自托管）
 
-想改代码、跑测试、自定义 fork 时用这条路（一键脚本 `setup-vigil.sh` 规划中）：
+想改代码、跑测试、自定义 fork 时用这条路。一键脚本 `setup-vigil.sh`
+（clone → 装依赖 → 初始化）：
 
 ```bash
+# 方式 A：已 clone 仓库，在仓库根目录直接跑
 git clone https://github.com/juneauwang/vigil-agent-harness.git
 cd vigil-agent-harness
+./setup-vigil.sh
+
+# 方式 B：未 clone，远程一键（自动 clone 到 ~/.vigil/vigil-agent-harness）
+bash <(curl -fsSL https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/main/setup-vigil.sh)
+```
+
+脚本会创建 `.venv`、安装依赖、把 `vigil` 软链到 `~/.local/bin`，并询问是否
+执行 `vigil ops-init`。也可以手动装：
+
+```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/vigil ops-init          # 或 .venv/bin/python scripts/ops_init.py（同入口）
 .venv/bin/vigil -p ops
@@ -181,7 +193,7 @@ Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
 - [x] 目标级权限矩阵（跨环境硬约束）
 - [x] 品牌化（Vigil 入口 / banner / 皮肤）
 - [x] PyPI 分发（pip install vigil-agent-harness）
-- [ ] 一键安装脚本 `setup-vigil.sh`（源码安装/自托管路径：clone → 装依赖 → 初始化）
+- [x] 一键安装脚本 `setup-vigil.sh`（源码安装/自托管路径：clone → 装依赖 → 初始化）
 - [ ] 同步 adapter（terraform.tfstate / k8s API）
 - [ ] 拓扑体检 cron（自动检查实体 freshness）
 - [ ] 数据目录独立（脱离 hermes profile 体系）
