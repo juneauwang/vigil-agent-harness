@@ -2,12 +2,12 @@
 name: k3s-prod
 type: k8s
 env: prod
-endpoint: "https://39.106.217.32:6443"
+endpoint: "https://203.0.113.10:6443"
 attrs:
   distro: k3s
   version: v1.28.15
-  nodes: ["node1 (control-plane, 10.0.1.29, 8G)", "node2 (worker, 10.0.1.30)"]
-  network: "10.0.1.0/24"
+  nodes: ["node1 (control-plane, 203.0.113.13, 8G)", "node2 (worker, 203.0.113.14)"]
+  network: "203.0.113.0/24"
   ingress: traefik
   workloads: [argo, argocd, gitea, harbor, dwarf-village-dev, dwarf-village-prod, istio-bookinfo, its-mytabs]
 depends_on: [harbor]

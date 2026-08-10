@@ -2,11 +2,11 @@
 name: harbor
 type: registry
 env: prod
-endpoint: "39.106.217.32:30443"
+endpoint: "203.0.113.10:30443"
 attrs:
   version: v2.11
   storage: /data/harbor
-  admin: wpwang
+  admin: your-name
 depends_on: [postgres]
 depended_by: [k3s-prod]                   # 镜像被 k3s-prod 拉取
 ops:

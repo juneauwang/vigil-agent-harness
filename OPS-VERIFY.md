@@ -7,7 +7,7 @@
 ## 0. 前置：初始化 ops profile
 
 ```bash
-cd /home/wpwang/projects/vigil-agent
+cd /home/your-name/projects/vigil-agent
 source .venv/bin/activate
 vigil ops-init                        # 默认写到 ~/.hermes/profiles/ops（旧入口：python3 scripts/ops_init.py 同效）
 ```

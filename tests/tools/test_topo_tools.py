@@ -16,7 +16,7 @@ updated_at: 2026-08-06
 sources: [netbox, snipeit, agent]
 environments:
   - name: prod
-    entry: "ssh jump@39.106.217.32"
+    entry: "ssh user@203.0.113.10"
     isolation: strict
     role: prod
     core_entities: [harbor, k3s-prod]
@@ -28,15 +28,15 @@ core_entities:
   - name: harbor
     type: registry
     env: prod
-    endpoint: 39.106.217.32:30443
-    owner: wpwang
+    endpoint: 203.0.113.10:30443
+    owner: your-name
     source: manual
     last_verified: 2026-08-01
     detail: entities/harbor.yaml
   - name: order-db
     type: db
     env: prod
-    owner: wpwang
+    owner: your-name
     source: manual
 key_paths:
   - [ingress, gateway-svc, order-db]
@@ -49,7 +49,7 @@ env: prod
 attrs:
   version: v2.11
   storage: /data/harbor
-  admin: wpwang
+  admin: your-name
 depends_on: [postgres]
 depended_by: [gnomeria-dev, gnomeria-prod]
 ops:
@@ -123,12 +123,12 @@ def test_topo_update_test_env_writes_source_and_verified(topo_home, monkeypatch)
         "  - name: order-db\n"
         "    type: db\n"
         "    env: prod\n"
-        "    owner: wpwang\n"
+        "    owner: your-name\n"
         "    source: manual\n"
     )
     topo_yaml = TOPO_YAML.replace(
         order_db_block,
-        "  - name: web-test\n    type: svc\n    env: test\n    owner: wpwang\n",
+        "  - name: web-test\n    type: svc\n    env: test\n    owner: your-name\n",
         1,
     )
     (topo_home / "topology.yaml").write_text(topo_yaml, encoding="utf-8")

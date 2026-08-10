@@ -2,7 +2,7 @@
 
 [project]
 name = "hermes-agent"  # Vigil 为产品名；发行包名沿用 hermes-agent（fork 兼容，见 OPS-DELTA.md）
-version = "0.1.6"
+version = "0.1.7"
 description = "Vigil — 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）"
 readme = "README.md"
 # Upper bound is load-bearing, not cosmetic. uv resolves the project's
