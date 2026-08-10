@@ -329,3 +329,227 @@
 | `tests/tools/test_runbook_tools.py` | §6.3 | runbook 加载/匹配/校验/L4 阶段门测试 |
 | `tools/ops_target.py` | §3 二期 | 命令目标解析：ssh/scp/sftp user@host、kubectl → k3s-prod，目标主机映射拓扑实体 → 目标级 env（只读零副作用） |
 | `tests/tools/test_ops_target.py` 等 | §3 二期 | 目标解析单测 + guard 目标级判定测试（test 会话对 prod 实体 L3/L4 硬拒绝） |
+
+## 待改项（2026-08-10 记录，未实施）
+
+### 1. ops 工具默认加载，去除 ops-init 前置门槛
+
+- **为什么**：目前使用 Vigil 必须 `vigil ops-init` 后才有运维工具（topo/runbook/
+  权限矩阵），与产品定位相悖——Vigil 是运维 agent harness，"装上即用"应是默认
+  行为，初始化不该是必经之路。
+- **待改方向**：默认加载运维工具（topo/runbook/权限矩阵），ops-init 降级为
+  "初始化拓扑数据/样例"而非"启用能力"；能力门控改为按数据存在性（topology.yaml
+  是否就位）自动切换，而非手动 init。
+- **未实施**：待排期。
+
+### 2. ops 样例数据含真实环境，发布前必须脱敏（2026-08-10 已实施）
+
+- **为什么**：`vigil ops-init` 铺出的样例拓扑（`hermes_cli/ops_samples/`）目前
+  直接用了真实环境数据（第一层 topology.yaml 含真实集群实体 IP），
+  随 wheel 发布到 PyPI 等于把真实基础设施暴露给所有人。作为产品样例必须匿名化。
+- **已实施（2026-08-10 v0.1.7）**：样例拓扑全部脱敏——真实 IP → RFC5737 保留段
+  （真实 IP → 203.0.113.10 / 203.0.113.11、内网 10.0.1.x →
+  203.0.113.13/14/15）、wpwang → your-name、SSH 入口 jump@ → user@；端口与实体名
+  保留（结构示例价值）；OPS-VERIFY.md / 测试断言同步占位实体；wheel + sdist 全量
+  扫描 0 命中。
+
+### 3. setup 引导仍是 Hermes 形态，需品牌化并裁剪工具
+
+- **为什么**：安装后的引导流程（setup 向导）依然是 Hermes 形态——欢迎文案、
+  工具推荐、示例命令都是 Hermes 的，与 Vigil 的运维定位不符；且引导中推荐了
+  大量运维用不到的工具（非运维工具集），与"Vigil 是运维 harness"的定位冲突。
+- **待改方向**：setup 引导品牌化为 Vigil 形态（文案/logo/命令名）；默认推荐
+  工具集裁剪为运维相关（terminal/file/ssh 等），非运维工具从引导推荐中移除
+  （不作为默认启用项）；至少删除运维不需要的工具。
+- **未实施**：待排期。
+
+### 4. 行为倾向：运维流程沉淀应走 runbook，而非默认创建 skill
+
+- **为什么**：Vigil 继承了 Hermes 的"遇到可复用流程就创建 skill"的核心倾向
+  （skill 是 Hermes 的默认能力沉淀机制）。但 Vigil 的产品定位是运维 harness，
+  运维流程（事故处理、部署 checklist）应沉淀为 **runbook**（topo/runbook/权限
+  矩阵体系的一部分），而不是 skill。当前 agent 在用户描述运维流程时仍倾向
+  创建 skill，与产品设计相悖。
+- **待改方向**：改核心逻辑——引导 agent 在识别到运维流程类内容（事故处理、
+  部署步骤、巡检清单）时优先创建/更新 runbook（runbook_load 体系），而非
+  skill；skill 保留用于通用编码/工具类知识，运维流程类明确路由到 runbook。
+  具体改点待定位（prompt 引导层 vs 工具选择层），需改核心而非加段。
+- **未实施**：待排期，且属于"碰核心逻辑"级改动，按 §7.3 需在本账本登记。
+
+### 5. 凭据文件内容回显防护（agent 读密码文件必须被硬 gate 住）
+
+- **为什么**：2026-08-10 实测失误——agent 排查 sudo 密码问题时用 `od` 检查密码文件，
+  把 24 字符密码内容回显进了对话。现有 `security.redact_secrets` 只匹配
+  API key/token 形态字符串，短密码 + 换行的文件内容形态上不像 key，redact
+  认不出 → 直接进上下文。这是机制盲区：**agent 主动读取凭据类文件并把内容
+  回显**没有硬限制，一旦会话日志泄露就是安全事故。
+- **待改方向**（三层组合，1+2 必做，3 为提示词辅助）：
+  1. 规则阻断层（最硬）：`approval.py` DANGEROUS_PATTERNS 增加"凭据文件读取"
+     模式——`cat|od|xxd|head|tail|less` × `sudoers|/etc/shadow|*.pwd|password|secret`
+     路径组合，命中触发审批/阻断。
+  2. 输出打码层（兜底）：redact 增强——工具输出中 `password|secret|passwd`
+     上下文行附近的敏感串打码，防"命令合法、输出泄露"（如 cat config.yaml
+     含凭据）。
+  3. 行为约束层（辅助）：ops profile SOP 明确"凭据类文件只回显校验结果
+     （wc -c / file / grep -c 计数），不回显内容"。
+  - **治本方向**：识别"agent 主动读取凭据文件"这个行为模式本身，而非逐条加
+    路径——正确路径是引导用户自行验证（sudo -S 提示输入），不是 agent 读文件
+    猜密码。
+- **未实施**：待排期。
+
+### 6. 拓扑分层重构：三层模型（host/跨 host 总览 → 服务索引 → 服务详情）
+
+- **为什么**：第一层 topology.yaml 有 <50 行限制（session 启动注入 system prompt，
+  token 成本约束，方向正确不该取消）。但当前第一层同时承担两个打架的职责——
+  **总览**（system prompt 速览）和**实体权威索引**（topo_query/权限矩阵/runbook
+  绑定的完整实体集）。平台小（样例 10 实体）时能合一；prod 6 host + 30+ 服务时
+  无法兼顾，LLM 靠合并实体凑行数 = 牺牲索引粒度（milvus/pgsql/rabbitmq 并进
+  attrs 就丢了独立实体级安全管控），是 workaround 不是解法。
+- **待改方向**（三层模型，2026-08-10 设计定稿）：
+  1. **第一层 = 总览**（保持 <50 行）：host × N + **跨 host 实体**（k3s 集群、
+     gpustack、istio/higress 这类不服从"服务挂单机"树形模型的实体）。样例预算
+     ~15 行，可撑 20 台机器不破。
+  2. **第二层 = 服务索引**：每个 host（或跨 host 实体）下的 compose 项目/逻辑
+     服务一行，挂在所属 host 下；实体仍有独立 name + env（层级是组织方式不是
+     命名空间——权限矩阵/runbook 照常按服务名绑定，不因分层失效）。
+  3. **第三层 = 服务详情**：现有 entities/<name>.yaml 机制，容器/依赖/端口/镜像
+     tag 明细。
+  - **关键决策**：docker runtime **不单独占层**——退化为 host attrs 属性
+    （`runtime: docker`），避免 6 台机器多 6 个第一层实体。
+  - **查询路径**：system prompt 只注入第一层；topo_query 展开第二层，detail=True
+    进第三层。总览开销恒定，平台增大不爆 token。
+  - **待落地**：schema 版本升级 + topo_query 支持按 host/env/type 过滤 + 样例
+    topology.yaml 重构（含 prod 真实拓扑迁移）。
+- **未实施**：待排期。
+
+### 7. 会话结束自动汇总 token 用量（可发现性增强）
+
+- **为什么**：`/usage` 已内置 session 级 token 汇总（`agent.session_total_tokens`，
+  input/output/reasoning 分类 + context 占用 + 压缩次数），但**用户不知道这个
+  命令存在**——用了很久 Vigil 从未发现，直到被提示。用户视角：每轮都有 token
+  输出显示，自然想知道"这一个 session 总共烧了多少"，但没有入口自动呈现。
+  这是典型可发现性问题：功能存在 ≠ 功能可用。
+- **待改方向**：session 结束（退出 / 新会话 / /new）时自动打印一行 token 汇总
+  （复用 `_show_usage` 的 Session Token Usage 块，精简为单行：
+  `📊 本次会话: 输入 X · 输出 Y · 总计 Z tokens`）；或启动新会话时显示上一会话
+  汇总。零新数据逻辑，纯 UI 呈现增强。
+- **附带发现**：审视整个 CLI 是否存在同类"功能存在但不可发现"项（如 /context
+  的 breakdown、/insights 的历史用量），可一并做帮助入口优化。
+- **未实施**：待排期。
+
+### 12. 拓扑自动发现（中间市场开箱即用的地基）
+
+- **为什么**：产品方向锚定"中间市场"（懂业务不懂 AI 配置的人：小企业主/一人
+  IT 部/设备工程师）。这类用户**不会手写 topology.yaml**——必须让 Vigil 自己
+  摸清平台：SSH 进主机 → 扫 docker/k8s → 自动生成实体。自动发现 + 三层模型
+  （第 6 条）= 开箱即用的地基。
+- **待改方向**：
+  1. 新增发现引擎：SSH 到 host，枚举 docker compose 项目 / k8s 资源 / 端口 /
+     GPU，自动生成第一层 + 第二层实体（映射到三层模型 schema）。
+  2. 首次运行"引导式发现"：用户只填 IP + 凭据，其余自动；发现结果人工确认后
+     落盘 topology.yaml。
+  3. 凭据走现有 OpenBao 体系，不落明文。
+  4. 与第 6 条（三层模型 schema）同源实现，自动发现输出即 schema 输入。
+- **未实施**：待排期（与第 6 条耦合，建议同批实施）。
+
+### 13. 开箱即用 UI 壳（中间市场的产品形态）
+
+- **为什么**：CLI 是运维工程师友好形态，但中间市场（秘书/机械背景用户）看到
+  `vigil ops-init --env prod` 就放弃。中间市场需要 Web 界面或桌面应用：
+  填服务器 IP → 自动发现 → 点按钮说话。CLI 是内核，UI 是壳。
+- **待改方向**：
+  1. Web 控制台（复用/扩展现有 dashboard）：服务器接入向导（IP + 凭据 →
+     自动发现 → 拓扑展示）、对话界面（同 CLI 内核，不同前端）。
+  2. 面向"非技术"的引导：无命令操作，全部点选。
+  3. 远期，与 token 差价模式（用户订阅不配模型 key）配套。
+- **未实施**：待排期（远期，依赖第 12 条自动发现先行）。
+
+### 11. 交互层应以 environment 为核心概念，而非 profile（`/env prod` 切换）
+
+- **为什么**：用户实测 `/env prod` 报 Unknown command——Vigil 的 CLI 命令体系
+  （commands.py）继承 Hermes 的 profile 概念，没有环境切换命令。但 Vigil 的
+  数据层已是 environment 语义：权限矩阵 `_active_env()` 按 env 判定（config
+  `role`）、banner 显示 ENV badge（test/uat/prod）、ops-init `--env` 参数。
+  **数据层认 env、交互层认 profile，两层割裂**。用户判断：profile（谁在用，
+  Hermes 个人场景隔离）不适合 Vigil，Vigil 核心应是 environment（操作哪里，
+  运维环境隔离）——"我在 prod 还是 test，决定了能干什么"。
+- **待改方向**：
+  1. 新增 `/env <test|uat|prod>` 命令：切换会话环境，同步更新 banner ENV
+     badge + 权限矩阵 `_active_env()`。
+  2. 明确 profile 与 env 的关系：profile 保留（个人配置隔离），但会话的
+     **操作环境**由 env 决定，profile 不再承载环境语义（或 env 作为 profile
+     的属性）。
+  3. 权限矩阵/runbook/拓扑查询均按会话 env 过滤，跨 env 操作走审批
+     （isolated/strict 语义已有，需接到 /env 切换）。
+  4. 检查 banner/提示符（`[test] ◉ Vigil >`）是否已正确反映切换后的 env。
+- **env 必须可自定义，不能硬编码 test/uat/prod（2026-08-10 补充）**：现状
+  `ops_init.py:191 --env choices=("test","uat","prod")` argparse 枚举锁死 +
+  权限矩阵注释固定三档 + 样例拓扑固定两个环境。但真实运维环境是二维组合：
+  **物理环境（local/cloud/bare_metal）× 等级（uat/prod）**——如
+  bare_metal_uat / bare_metal_prod / local / cloud。硬编码三档表达不了。
+  待改方向：
+  - env 改为 config.yaml 可定义列表（`ops.environments: [{name, isolation, role}]`），
+    ops-init `--env` 不再用 choices 锁死，改为校验"是否在已定义列表"。
+  - 权限矩阵按 env 名查表（名称任意，矩阵行为由 isolation/role 决定，不依赖
+    名字是 test/uat/prod）。
+  - 拓扑 environments 段与 config 的 env 定义同源。
+  - `/env <任意已定义名>` 切换。
+- **未实施**：待排期。
+
+### 8. 缺少主流 IM 平台 adapter——已确认是同步上游，非开发（2026-08-10 更新）
+
+- **为什么**：用户希望能在飞书/slack/teams/微信里跟 Vigil 对话，并以为现状是
+  "公网暴露 + 远端 APP pull"需要改 push。实际核查（2026-08-10）发现**关键事实**：
+  Hermes 0.15.1（本机）gateway/platforms 里有 20+ adapter（telegram/slack/
+  feishu/wecom/dingtalk/matrix/whatsapp/email/sms…），而 Vigil 0.1.6 打包
+  **裁掉了 10+ 个**（只剩 weixin/webhook/api_server/signal/whatsapp_cloud/
+  bluebubbles/yuanbao）。**不是要开发 adapter，是把上游文件同步回来 + 补依赖
+  和测试**，成本差一个数量级。
+- **上游连接模式（全部无需公网入站端口，符合"不暴露端口"诉求）**：
+  - feishu：`FEISHU_CONNECTION_MODE` 默认 `websocket`（飞书 2.0 长连接，
+    事件 WebSocket 出站推送，零回调 URL；附 encrypt_key/verification_token、
+    dedup、群白名单）——用户曾指正回调模式需公网，上游默认已用长连接绕开。
+  - slack：Socket Mode（slack_bolt AsyncSocketModeHandler，WebSocket 出站）。
+  - telegram：默认 getUpdates 轮询（出站），可选 webhook_mode。
+  - wecom：`wss://openws.work.weixin.qq.com` WebSocket 出站。
+  - whatsapp：云 API。matrix：原生协议。dingtalk：dingtalk_stream。
+- **同步依赖清单**（上游为可选依赖，try/except 包裹，装则启用）：
+  python-telegram-bot（telegram）、slack-bolt+slack-sdk（slack）、
+  lark-oapi（feishu）、wechatpy/wecom 相关（wecom）、dingtalk-stream
+  （dingtalk）、matrix 相关、whatsapp 相关、aiohttp-socks（matrix 代理）。
+- **待改方向**：
+  1. 从 Hermes 0.15.1 同步缺失 adapter 文件到 Vigil（telegram.py/slack.py/
+     feishu.py/wecom.py/dingtalk.py/matrix.py/email.py/sms.py 等）。
+  2. 检查 pyproject.toml 依赖分组（可选 extras），与上游对齐。
+  3. 补测试；确认平台配置文档（env var 名）不因 fork 漂移。
+  4. 一期优先国外市场（slack/telegram/whatsapp/teams），国内 feishu/wecom
+     上游也有现成实现，按需启用。
+- **未实施**：待排期。
+
+### 9. 自动化运维触发源：cron 已有，缺事件驱动入口（告警 → runbook）
+
+- **为什么**：Vigil 已有完整 cron 系统（cron/jobs.py + scheduler.py，
+  gateway 本身是常驻 daemon）——定时触发已解决。但运维自动化的触发源不该
+  只有定时，还应有**事件驱动**：Prometheus 告警、服务状态变化、webhook 打到
+  Vigil → 自动拉起对应 runbook。cron 是"到点就查"，事件是"出事才动"——
+  后者才是运维 agent 的核心价值，当前缺失。
+- **待改方向**：
+  1. 告警入口：Prometheus Alertmanager webhook → Vigil 接收 → 匹配 runbook →
+     自动执行（或审批后执行）。
+  2. 复用现有 webhook 机制（gateway/platforms/webhook.py）做接收端。
+  3. 事件 → runbook 映射放 config.yaml（事件源/告警名 → runbook 名），
+     不硬编码。
+- **未实施**：待排期。
+
+### 10. Prometheus 探查应为内置工具，而非 LLM 自写 curl/PromQL
+
+- **为什么**：Vigil 定位是运维 harness，但 tools/ 目录**没有任何 prometheus/
+  metrics 内置工具**——探查 Prometheus 数据靠 LLM 自己拼 curl + PromQL。
+  这不符合定位：就像不该让 LLM 自己封装 kubectl 一样，PromQL 查询、指标
+  解释、告警关联应是基础内置能力，LLM 只做语义层。
+- **待改方向**：
+  1. 内置 prom_query 工具（PromQL 查询 + 指标解释，读 config.yaml 的
+     prometheus endpoint/凭据，不硬编码）。
+  2. 内置告警关联能力（查 Alertmanager，把活跃告警映射到实体/runbook）。
+  3. 复用现有凭据体系（OpenBao/监控凭据），不新增明文。
+- **未实施**：待排期。
