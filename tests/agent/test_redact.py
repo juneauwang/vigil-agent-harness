@@ -708,6 +708,91 @@ class TestTerminalOutputRedaction:
         assert "zzzopaque1234567890abcdef" in red
 
 
+class TestCredentialValuesStrictPass:
+    """OPS-DELTA #5 — tool-output / file-content surfaces must mask
+    credential values even when the command itself is legal (``cat
+    config.yaml``) and the value has no recognizable API-key shape (short
+    password, no vendor prefix). The strict pass runs on top of code_file;
+    source constants (MAX_TOKENS=4096) and already-masked values survive."""
+
+    def test_terminal_cat_config_yaml_masks_short_passwords(self):
+        from agent.redact import redact_terminal_output
+
+        out = redact_terminal_output(
+            "password: hunter2\napi_key: abc12345\n", "cat config.yaml"
+        )
+        assert "hunter2" not in out
+        assert "abc12345" not in out
+        assert "password: ***" in out
+
+    def test_terminal_cat_config_masks_env_and_json_shapes(self):
+        from agent.redact import redact_terminal_output
+
+        env = redact_terminal_output("API_TOKEN=abc12345\nDB_PASSWORD=hunter2\n", "cat .env")
+        assert "abc12345" not in env and "hunter2" not in env
+
+        js = redact_terminal_output(
+            '{"password": "hunter2", "apiKey": "abc12345"}', "cat config.json"
+        )
+        assert "hunter2" not in js and "abc12345" not in js
+
+    def test_terminal_masks_spaced_equals_forms(self):
+        from agent.redact import redact_terminal_output
+
+        out = redact_terminal_output(
+            "passwd = hunter2\nspring.datasource.password = Sup3rS3cret!\n",
+            "cat application.properties",
+        )
+        assert "hunter2" not in out and "Sup3rS3cret" not in out
+
+    def test_file_read_masks_credential_values(self):
+        from agent.redact import redact_sensitive_text
+
+        out = redact_sensitive_text(
+            "password: hunter2\nsecret: s3cr3t\n", file_read=True
+        )
+        assert "hunter2" not in out and "s3cr3t" not in out
+
+    def test_strict_pass_preserves_source_constants(self):
+        from agent.redact import redact_terminal_output
+
+        out = redact_terminal_output("MAX_TOKENS=4096\nmax_tokens: 4096\n", "cat main.py")
+        assert out == "MAX_TOKENS=4096\nmax_tokens: 4096\n"
+
+        usage = redact_terminal_output(
+            '{"prompt_tokens": 123, "total_tokens": 456}', "cat usage.json"
+        )
+        assert '"prompt_tokens": 123' in usage and '"total_tokens": 456' in usage
+
+    def test_strict_pass_does_not_mangle_prose_or_plain_keys(self):
+        from agent.redact import redact_terminal_output
+
+        out = redact_terminal_output(
+            "Secretary: J.Smith\nauthor=Smith\nserver.port=8080\n", "cat notes.txt"
+        )
+        assert "J.Smith" in out and "author=Smith" in out and "server.port=8080" in out
+
+    def test_code_file_without_credential_values_stays_legacy(self):
+        """Surfaces that opt out (MoA advisory text, execute_code) keep the
+        #43025 contract: source constants and fixtures survive byte-identical."""
+        from agent.redact import redact_sensitive_text
+
+        text = 'MAX_TOKENS=4096\n"apiKey": "test-fixture"\n'
+        assert redact_sensitive_text(text, force=True, code_file=True) == text
+
+    def test_already_masked_values_not_remasked(self):
+        from agent.redact import redact_terminal_output
+
+        # Prefix pass masks sk- first; the strict ENV pass must keep the
+        # head/tail marker instead of collapsing it to "***" (#33801).
+        out = redact_terminal_output(
+            "OPENAI_API_KEY=sk-proj-abc123def456ghi789jkl012mno345", "cat config.yaml"
+        )
+        assert "sk-pro" in out
+        assert "abc123def456" not in out
+        assert "***" not in out.replace("sk-pro...o345", "")
+
+
 class TestFileReadNonReusableRedaction:
     """#35519: prefix-matched credentials in FILE CONTENT (read_file /
     search_files / cat) must be redacted to a NON-REUSABLE sentinel — not a

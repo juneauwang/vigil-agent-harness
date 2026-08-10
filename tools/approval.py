@@ -324,6 +324,59 @@ _USER_SENSITIVE_WRITE_TARGET = (
     rf'{_CREDENTIAL_FILES})'
 )
 _PROJECT_SENSITIVE_WRITE_TARGET = rf'(?:{_PROJECT_ENV_PATH}|{_PROJECT_CONFIG_PATH})'
+
+# ---------------------------------------------------------------------------
+# Credential-file READ fragments (OPS-DELTA #5). Reads that ECHO file content
+# (cat/od/xxd/head/tail/less/more/strings/tac) are gated only when the target
+# matches a credential path — the ops SOP allows validating credentials by
+# wc -c / file / grep -c (counts & metadata, no content echo), and those
+# commands are deliberately NOT in the read-command list below.
+# ---------------------------------------------------------------------------
+_CREDENTIAL_READ_COMMANDS = r'(?:cat|od|xxd|head|tail|less|more|strings|tac)'
+# System credential files: sudoers/shadow/passwd and the /etc/security/
+# subtree, including their macOS /private/etc mirror (same rationale as
+# _MACOS_PRIVATE_SYSTEM_PATH above).
+_CREDENTIAL_SYSTEM_FILES = (
+    r'(?:/etc/|/private/etc/)(?:sudoers|sudoers\.d/|shadow|passwd|security/)'
+)
+# ~/.ssh private keys (id_rsa / id_ed25519 / *.pem / *.key). Public keys
+# (id_rsa.pub, authorized_keys) and ~/.ssh/config are NOT secrets and stay
+# readable without approval.
+_SSH_PRIVATE_KEYS = (
+    r'(?:~|\$home|\$\{home\})/\.ssh/(?:'
+    r'id_(?:rsa|ed25519|ecdsa|dsa|ecdsa_sk|ed25519_sk)(?!\.pub)\b|'
+    r'[^/\s"\'`]*\.(?:pem|key)\b)'
+)
+# kubeconfig holds cluster credentials (client certs, tokens, contexts).
+# Match both ~/.kube/config and absolute forms (/root/.kube/config,
+# /home/<user>/.kube/config, /var/lib/kubelet/config.yaml etc.) — agents
+# frequently read it via absolute path in sudo scenarios. Only the exact
+# config file name matches, not sibling files (.kube/cache etc.).
+_KUBE_CONFIG_PATH = (
+    r'(?:(?:~|\$home|\$\{home\})/|/home/[^/\s"\'`]+/|/root/|/var/lib/kubelet/)'
+    r'\.kube/config\b'
+)
+# Project-relative credential dotfiles (.npmrc/.pypirc/.netrc/.pgpass live in
+# the repo or the user home and hold registry/auth credentials).
+_PROJECT_CREDENTIAL_DOTFILES = (
+    r'(?:(?:/|\.{1,2}/)?(?:[^\s/"\'`]+/)*\.(?:netrc|pgpass|npmrc|pypirc)\b)'
+)
+# Any path segment whose name IS a credential word (password/passwd/secret/
+# credential, optional plural) or the classic .pwd dotfile — password.txt,
+# db-secrets.yaml, credentials.json, secrets/, /run/secrets/<name>…
+_CREDENTIAL_NAMED_SEGMENT = (
+    r'(?:(?<![A-Za-z0-9])(?:password|passwd|secret|credential)s?(?![A-Za-z0-9])'
+    r'|\.pwd(?:\.[A-Za-z0-9]+)?)'
+)
+_CREDENTIAL_NAMED_PATH = rf'(?:^|/)[^\s/"\'`]*{_CREDENTIAL_NAMED_SEGMENT}[^\s/"\'`]*'
+# Project-relative .env reads, minus the documented non-secret substitutes
+# (.env.example / .env.sample / .env.template / .env.dist) that file_safety
+# explicitly leaves readable — see get_read_block_error().
+_PROJECT_ENV_READ_PATH = (
+    r'(?:(?:/|\.{1,2}/)?(?:[^\s/"\'`]+/)*'
+    r'\.env(?!\.(?:example|sample|template|dist)\b)(?:\.[^/\s"\'`]+)*)'
+)
+
 # Anchor for the cp/mv/install rule, where the sensitive path is only a write
 # target when it is the LAST argument (the destination). Requiring end-of-line
 # (or a command separator) keeps `cp config.yaml backup.yaml` — config.yaml as
@@ -888,6 +941,19 @@ DANGEROUS_PATTERNS = [
     # anywhere in the args, not just the first token — `perl -e '...'` (code
     # eval, no -i) does not trip because it has no `-...i` flag token.
     (rf'\b(?:perl|ruby)\b.*(?:^|\s)-[^\s]*i\b.*(?:{_HERMES_CONFIG_PATH}|{_HERMES_ENV_PATH})', "in-place edit of Hermes config/env (perl/ruby)"),
+    # Credential-file READS (OPS-DELTA #5): a content-echoing read of a
+    # credential file risks dumping secrets into the conversation (the
+    # 2026-08-10 incident: `od` on a password file echoed the password). The
+    # read command AND the credential path must both match — `tail -f
+    # app.log`, `cat /etc/hosts`, `wc -c /etc/shadow`, `file ~/.ssh/id_rsa`
+    # and `grep -c root /etc/shadow` (counts/metadata, no content echo) stay
+    # outside the gate. Layer 2 (agent.redact) and the ops SOP are the
+    # fallbacks when the command shape is opaque.
+    (rf'\b(?:{_CREDENTIAL_READ_COMMANDS})\b.*'
+     rf'(?:{_CREDENTIAL_SYSTEM_FILES}|{_SSH_PRIVATE_KEYS}|{_KUBE_CONFIG_PATH}|'
+     rf'{_CREDENTIAL_FILES}|{_PROJECT_CREDENTIAL_DOTFILES}|'
+     rf'{_PROJECT_ENV_READ_PATH}|{_CREDENTIAL_NAMED_PATH})',
+     "read credential file (may echo secrets)"),
     # Interpreter heredocs are handled by _execution_flag_findings() alongside
     # inline-exec flags; keep only shell heredocs regex-based here.
     # Shell execution via heredoc — `bash <<'EOF' ... EOF` runs arbitrary

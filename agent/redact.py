@@ -181,9 +181,27 @@ _CFG_DOTTED_RE = re.compile(
     rf"={_CFG_VALUE}",
     re.IGNORECASE,
 )
+# Strict-mode (code_file) variant tolerating spaces around ``=``, same
+# rationale as _CFG_ANCHORED_SPACED_RE below.
+_CFG_DOTTED_SPACED_RE = re.compile(
+    rf"([A-Za-z0-9_\-]++\.[A-Za-z0-9_.\-]*{_SECRET_CFG_NAMES}[A-Za-z0-9_.\-]*+"
+    rf"|[A-Za-z0-9_.\-]*{_SECRET_CFG_NAMES}[A-Za-z0-9_.\-]*\.[A-Za-z0-9_.\-]++)"
+    rf"\s*=\s*{_CFG_VALUE}",
+    re.IGNORECASE,
+)
 # Line-anchored bare key: ``password=…`` / ``export api_key=…`` at start of line.
 _CFG_ANCHORED_RE = re.compile(
     rf"(^[ \t]*(?:export[ \t]+)?[A-Za-z0-9_\-]*{_SECRET_CFG_NAMES}[A-Za-z0-9_\-]*)={_CFG_VALUE}",
+    re.IGNORECASE | re.MULTILINE,
+)
+# Strict-mode (code_file) variant of _CFG_ANCHORED_RE that tolerates spaces
+# around ``=`` (``passwd = hunter2``) — config dumps often pad the separator
+# (OPS-DELTA #5). Line-anchored and strict-only (never the log/prose passes)
+# keeps the prose-false-positive risk ~zero; the ENV closure rebuilds the
+# line, so spacing is normalized only on a hit.
+_CFG_ANCHORED_SPACED_RE = re.compile(
+    rf"(^[ \t]*(?:export[ \t]+)?[A-Za-z0-9_\-]*{_SECRET_CFG_NAMES}[A-Za-z0-9_\-]*)"
+    rf"\s*=\s*{_CFG_VALUE}",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -281,6 +299,53 @@ def _key_has_secret_keyword(key: str) -> bool:
         if _is_word_start(key, m.start()) and _is_word_end(key, m.end()):
             return True
     return False
+
+
+# Keys that LOOK secret (pass the keyword gate) but are well-known
+# non-secret programming/LLM constants — ``MAX_TOKENS=4096``,
+# ``prompt_tokens: 123``, ``max_tokens_for_response``. Only consulted on the
+# strict code_file surfaces (OPS-DELTA #5) so terminal/file output keeps the
+# #43025 carve-out (source constants survive byte-identical); the loose
+# legacy passes on log/prose surfaces keep masking them exactly as before.
+# Prefix matching (after stripping separators) covers the affixed variants
+# that real usage stats emit: ``prompt_tokens_details``,
+# ``max_completion_tokens``, ``total_tokens`` …
+_NON_SECRET_TOKEN_KEY_PREFIXES = (
+    "maxtokens", "mintokens", "numtokens", "tokencount", "tokenlimit",
+    "tokenbudget", "tokenwindow", "inputtokens", "outputtokens",
+    "prompttokens", "completiontokens", "totaltokens", "tokensper",
+)
+
+
+def _is_non_secret_constant_key(key: str) -> bool:
+    """True if ``key`` is a known non-secret constant despite containing a
+    secret keyword (``MAX_TOKENS``, ``max_tokens_for_response``). Suffix
+    match so dotted/namespaced keys keep the carve-out
+    (``spring.datasource.max_tokens``); prefix match covers affixed bare
+    forms (``max_tokens_123``)."""
+    normalized = re.sub(r"[^A-Za-z0-9]", "", key).lower()
+    return normalized.endswith(_NON_SECRET_TOKEN_KEY_PREFIXES) or normalized.startswith(
+        _NON_SECRET_TOKEN_KEY_PREFIXES
+    )
+
+
+# Head/tail mask shape produced by _mask_token (6 preserved chars + "..." +
+# 4 preserved chars). Used to detect values the prefix pass already masked
+# so the config passes don't re-mask them into a bare "***" (which destroys
+# the non-reusable sentinel / debuggability marker).
+_MASKED_TOKEN_RE = re.compile(r"^.{6}\.\.\..{4}$")
+
+
+def _already_masked_value(value: str) -> bool:
+    """True when ``value`` was already redacted by an earlier pass — the
+    non-reusable file-read sentinel (``«redacted:ghp_…»``), a head/tail mask
+    (``ghp_S1...Pn2T``), or a full placeholder. The config passes preserve
+    these instead of masking them again."""
+    return (
+        value.startswith("«")
+        or value == "***"
+        or bool(_MASKED_TOKEN_RE.match(value))
+    )
 
 # JSON field patterns: "apiKey": "value", "token": "value", etc.
 _JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material)"
@@ -662,6 +727,7 @@ def redact_sensitive_text(
     force: bool = False,
     code_file: bool = False,
     file_read: bool = False,
+    credential_values: bool = False,
     redact_url_credentials: bool = False,
 ) -> str:
     """Apply all redaction patterns to a block of text.
@@ -692,6 +758,16 @@ def redact_sensitive_text(
     usable key or written back as one. Implies code_file=True (config/data
     files shouldn't trigger the source-code ENV/JSON false-positive paths).
 
+    Set credential_values=True on tool-output / file-content surfaces
+    (redact_terminal_output; implied by file_read=True) so the STRICT
+    credential-key pass runs even under code_file=True — ``password:
+    hunter2`` / ``api_key=…`` from a legal ``cat config.yaml`` are masked
+    before they reach context (OPS-DELTA #5). The strict pass reuses the
+    ENV/JSON/YAML matchers but rejects known non-secret constants
+    (MAX_TOKENS=4096, prompt_tokens: 123 — issue #43025). Other code_file
+    surfaces (MoA advisory text, execute_code stdout, …) keep the legacy
+    behavior byte-identical.
+
     Performance: each regex pattern is gated behind a cheap substring
     pre-check (e.g. ``"=" in text`` for ENV assignments, ``"://" in text``
     for URLs, ``"eyJ" in text`` for JWTs). On a typical hermes log line
@@ -711,80 +787,107 @@ def redact_sensitive_text(
         return text
 
     # file_read content shouldn't hit the source-code ENV/JSON false-positive
-    # paths either (it's config/data, not log lines).
+    # paths either (it's config/data, not log lines), but it IS a
+    # tool-output surface: the strict credential-key pass below runs on it.
     if file_read:
         code_file = True
+        credential_values = True
 
     # Known prefixes (sk-, ghp_, etc.) — gate on substring presence
-    if _has_known_prefix_substring(text):
+    _prefix_present = _has_known_prefix_substring(text)
+    if _prefix_present:
         _prefix_sub = _mask_token_nonreusable if file_read else _mask_token
         text = _PREFIX_RE.sub(lambda m: _prefix_sub(m.group(1)), text)
 
     # ENV assignments: OPENAI_API_KEY=***  (skip for code files — false positives)
-    if not code_file:
-        if "=" in text:
-            def _redact_env(m):
-                name, quote, value = m.group(1), m.group(2), m.group(3)
-                # Programmatic env lookups reference variable *names*, not
-                # secret values — masking them corrupts code snippets in
-                # prose/log contexts (issue #2852): ``KEY=os.getenv('X')``.
-                if _ENV_LOOKUP_VALUE_RE.match(value):
-                    return m.group(0)
-                # Keyword must sit at a word boundary within the key —
-                # ``author=Smith`` / ``press.secretary=…`` are prose, not
-                # credentials (ported from nearai/ironclaw#6129). All-caps
-                # keys (the _ENV_ASSIGN_RE shape) short-circuit to legacy
-                # embedded matching inside the helper.
-                if not _key_has_secret_keyword(name):
-                    return m.group(0)
-                return f"{name}={quote}{_mask_token(value)}{quote}"
-            text = _ENV_ASSIGN_RE.sub(_redact_env, text)
-            # Lowercase/dotted config keys (issue #16413). Skip URLs entirely —
-            # web-URL query params are intentionally passed through (see note
-            # near the bottom of this function); _DB_CONNSTR_RE still guards
-            # connection-string passwords.
-            #
-            # Extra gate: every _CFG_*_RE match requires a secret keyword in
-            # the key, so a text without any secret keyword cannot match —
-            # skipping is exact. This matters because _CFG_DOTTED_RE
-            # backtracks quadratically on long unbroken [A-Za-z0-9_.\-] runs
-            # (e.g. base64/hex blobs in compaction payloads); the linear
-            # keyword scan prevents that pathological path on secret-free
-            # text.
-            if "://" not in text and _CFG_SECRET_WORD_RE.search(text):
-                text = _CFG_DOTTED_RE.sub(_redact_env, text)
-                text = _CFG_ANCHORED_RE.sub(_redact_env, text)
+    #
+    # OPS-DELTA #5: tool-output surfaces (terminal stdout via
+    # redact_terminal_output, read_file content via file_read) run a STRICT
+    # credential-key pass even under code_file=True — short passwords and
+    # non-prefix config values (``password: hunter2``, ``api_key=…``) must be
+    # masked when the command itself is legal (``cat config.yaml``). The
+    # strict pass reuses the ENV/JSON/YAML matchers but rejects the known
+    # non-secret constants (MAX_TOKENS=4096, prompt_tokens: 123 — issue
+    # #43025) and preserves values the prefix pass already masked.
+    _strict = code_file and credential_values
+    if "=" in text and (not code_file or (_strict and _CFG_SECRET_WORD_RE.search(text))):
+        def _redact_env(m):
+            name, quote, value = m.group(1), m.group(2), m.group(3)
+            # Programmatic env lookups reference variable *names*, not
+            # secret values — masking them corrupts code snippets in
+            # prose/log contexts (issue #2852): ``KEY=os.getenv('X')``.
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            # Keyword must sit at a word boundary within the key —
+            # ``author=Smith`` / ``press.secretary=…`` are prose, not
+            # credentials (ported from nearai/ironclaw#6129). All-caps
+            # keys (the _ENV_ASSIGN_RE shape) short-circuit to legacy
+            # embedded matching inside the helper.
+            if not _key_has_secret_keyword(name):
+                return m.group(0)
+            if _strict and _is_non_secret_constant_key(name):
+                return m.group(0)
+            if _strict and _prefix_present and _already_masked_value(value):
+                return m.group(0)
+            return f"{name}={quote}{_mask_token(value)}{quote}"
+        text = _ENV_ASSIGN_RE.sub(_redact_env, text)
+        # Lowercase/dotted config keys (issue #16413). Skip URLs entirely —
+        # web-URL query params are intentionally passed through (see note
+        # near the bottom of this function); _DB_CONNSTR_RE still guards
+        # connection-string passwords.
+        #
+        # Extra gate: every _CFG_*_RE match requires a secret keyword in
+        # the key, so a text without any secret keyword cannot match —
+        # skipping is exact. This matters because _CFG_DOTTED_RE
+        # backtracks quadratically on long unbroken [A-Za-z0-9_.\-] runs
+        # (e.g. base64/hex blobs in compaction payloads); the linear
+        # keyword scan prevents that pathological path on secret-free
+        # text.
+        if "://" not in text and _CFG_SECRET_WORD_RE.search(text):
+            text = _CFG_DOTTED_RE.sub(_redact_env, text)
+            text = _CFG_ANCHORED_RE.sub(_redact_env, text)
+            if _strict:
+                text = _CFG_DOTTED_SPACED_RE.sub(_redact_env, text)
+                text = _CFG_ANCHORED_SPACED_RE.sub(_redact_env, text)
 
-        # JSON fields: "apiKey": "***"  (skip for code files — false positives)
-        if ":" in text and '"' in text:
-            def _redact_json(m):
-                key, value = m.group(1), m.group(2)
-                # Same programmatic-env-lookup exception as _redact_env above
-                # (issue #2852): "apiKey": "os.getenv('X')" is a code snippet,
-                # not a leaked secret value.
-                if _ENV_LOOKUP_VALUE_RE.match(value):
-                    return m.group(0)
-                return f'{key}: "{_mask_token(value)}"'
-            text = _JSON_FIELD_RE.sub(_redact_json, text)
+    # JSON fields: "apiKey": "***"  (skip for code files — false positives)
+    if ":" in text and '"' in text and (not code_file or (_strict and _CFG_SECRET_WORD_RE.search(text))):
+        def _redact_json(m):
+            key, value = m.group(1), m.group(2)
+            # Same programmatic-env-lookup exception as _redact_env above
+            # (issue #2852): "apiKey": "os.getenv('X')" is a code snippet,
+            # not a leaked secret value.
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            if _strict and _is_non_secret_constant_key(key.strip('"')):
+                return m.group(0)
+            if _strict and _prefix_present and _already_masked_value(value):
+                return m.group(0)
+            return f'{key}: "{_mask_token(value)}"'
+        text = _JSON_FIELD_RE.sub(_redact_json, text)
 
-        # Unquoted YAML / colon config: password: ***  (after JSON so quoted
-        # values are handled there; the lookahead in _YAML_ASSIGN_RE skips
-        # quotes). Skip URLs — web-URL query params pass through by design.
-        if ":" in text and "://" not in text:
-            def _redact_yaml(m):
-                key, sep, value = m.group(1), m.group(2), m.group(3)
-                # Same programmatic-env-lookup exception as _redact_env above
-                # (issue #2852): api_key: os.getenv('X') is a code snippet,
-                # not a leaked secret value.
-                if _ENV_LOOKUP_VALUE_RE.match(value):
-                    return m.group(0)
-                # Keyword must sit at a word boundary within the key —
-                # ``Secretary: J.Smith`` / ``tokenizer: cl100k_base`` are
-                # document text, not credentials (nearai/ironclaw#6129).
-                if not _key_has_secret_keyword(key):
-                    return m.group(0)
-                return f"{key}{sep}{_mask_token(value)}"
-            text = _YAML_ASSIGN_RE.sub(_redact_yaml, text)
+    # Unquoted YAML / colon config: password: ***  (after JSON so quoted
+    # values are handled there; the lookahead in _YAML_ASSIGN_RE skips
+    # quotes). Skip URLs — web-URL query params pass through by design.
+    if ":" in text and "://" not in text and (not code_file or (_strict and _CFG_SECRET_WORD_RE.search(text))):
+        def _redact_yaml(m):
+            key, sep, value = m.group(1), m.group(2), m.group(3)
+            # Same programmatic-env-lookup exception as _redact_env above
+            # (issue #2852): api_key: os.getenv('X') is a code snippet,
+            # not a leaked secret value.
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            # Keyword must sit at a word boundary within the key —
+            # ``Secretary: J.Smith`` / ``tokenizer: cl100k_base`` are
+            # document text, not credentials (nearai/ironclaw#6129).
+            if not _key_has_secret_keyword(key):
+                return m.group(0)
+            if _strict and _is_non_secret_constant_key(key):
+                return m.group(0)
+            if _strict and _prefix_present and _already_masked_value(value):
+                return m.group(0)
+            return f"{key}{sep}{_mask_token(value)}"
+        text = _YAML_ASSIGN_RE.sub(_redact_yaml, text)
 
     # Authorization headers — _AUTH_HEADER_RE matches any scheme after
     # "[Proxy-]Authorization:" case-insensitively, so "uthorization" is the
@@ -930,13 +1033,20 @@ def redact_terminal_output(
     - anything else (or unknown command) → ``code_file=True`` to avoid
       false positives on source/config dumps.
 
+    Always runs the STRICT credential-key pass (``credential_values=True``):
+    a legal ``cat config.yaml`` may still echo ``password: hunter2`` /
+    ``api_key=…``, which must be masked before the output reaches context
+    (OPS-DELTA #5). Source constants (MAX_TOKENS=4096) stay intact.
+
     ``force=True`` bypasses the global ``security.redact_secrets`` preference
     for safety boundaries that must never emit raw credentials.
     """
     if not output:
         return output
     code_file = not is_env_dump_command(command or "")
-    return redact_sensitive_text(output, force=force, code_file=code_file)
+    return redact_sensitive_text(
+        output, force=force, code_file=code_file, credential_values=True
+    )
 
 
 # Substrings used to gate ``_PREFIX_RE`` execution. If none of these appear in
