@@ -403,9 +403,14 @@ class TestSensitiveRedirectPattern:
             assert "project env/config" in desc.lower(), command
 
     def test_adjacent_filenames_stay_safe(self):
+        # `cat .env` is now gated by the credential-READ rule (OPS-DELTA #5)
+        # — reading a sensitive file is not a WRITE, but content-echoing reads
+        # of credential files are independently approval-worthy.
+        dangerous, key, desc = detect_dangerous_command("cat .env > backup.txt")
+        assert dangerous is True
+        assert key == "read credential file (may echo secrets)"
+        assert desc == key
         for command in (
-            # Reading a sensitive file is not a write.
-            "cat .env > backup.txt",
             # `config.yaml.bak` is a different file; the boundary must end the
             # path token at a word boundary so backup writes stay out of the deny.
             "echo x > config.yaml.bak",
@@ -1568,3 +1573,81 @@ class TestCliApprovalTimeoutClassifiedSeparately:
         assert result.get("user_consent") is False
         assert "timed out without user response" in result["message"]
         assert "Silence is not consent" in result["message"]
+
+
+class TestCredentialFileReads:
+    """OPS-DELTA #5 — content-echoing reads of credential files trigger
+    approval; counting/metadata commands and ordinary log reads do not."""
+
+    CREDENTIAL_READS = [
+        # system files (+ macOS /private mirror)
+        "cat /etc/shadow",
+        "cat /etc/sudoers",
+        "od /etc/passwd",
+        "xxd /etc/security/pwquality.conf",
+        "head -n 5 /etc/shadow",
+        "tail -f /etc/sudoers",
+        "strings /etc/shadow",
+        "less /etc/passwd",
+        "cat /private/etc/shadow",
+        "sudo cat /etc/sudoers",
+        # ~/.ssh private keys (public keys / config stay safe)
+        "cat ~/.ssh/id_rsa",
+        "cat ~/.ssh/id_ed25519",
+        "cat ~/.ssh/aliyun_nopass.pem",
+        "cat ~/.ssh/deploy.key",
+        "head ~/.ssh/id_ecdsa",
+        # kubeconfig / credential dotfiles
+        "cat ~/.kube/config",
+        "cat ~/.npmrc",
+        "tail -n 3 ~/.pypirc",
+        "cat .pgpass",
+        # project .env (minus documented non-secret substitutes)
+        "cat .env",
+        "cat .env.production",
+        "cat /srv/app/.env",
+        # credential-named paths
+        "cat secrets/db-password.txt",
+        "cat ./credentials.json",
+        "cat /run/secrets/db_pass",
+        "cat /var/lib/foo/.pwd",
+        "od ~/.pwd",
+    ]
+
+    def test_credential_reads_trigger_approval(self):
+        for command in self.CREDENTIAL_READS:
+            dangerous, key, desc = detect_dangerous_command(command)
+            assert dangerous is True, command
+            assert key == "read credential file (may echo secrets)", command
+            assert "credential" in desc.lower(), command
+
+    BENIGN_READS = [
+        # ordinary logs / hosts / configs are NOT credential paths
+        "tail -f /var/log/nginx/access.log",
+        "head -n 20 /var/log/app.log",
+        "cat /etc/hosts",
+        "cat ~/.bashrc",
+        "cat /etc/nginx/nginx.conf",
+        "cat src/main.py",
+        # counting / metadata commands never echo content
+        "wc -c /etc/shadow",
+        "file /etc/shadow",
+        "grep -c root /etc/shadow",
+        "ls -la /etc/shadow",
+        "stat /etc/shadow",
+        # documented non-secret env substitutes
+        "cat .env.example",
+        "cat .env.sample",
+        "cat .env.template",
+        # SSH public keys / config are not secrets
+        "cat ~/.ssh/config",
+        "cat ~/.ssh/id_rsa.pub",
+        "cat ~/.ssh/authorized_keys",
+    ]
+
+    def test_benign_reads_do_not_trigger(self):
+        for command in self.BENIGN_READS:
+            dangerous, key, desc = detect_dangerous_command(command)
+            assert dangerous is False, command
+            assert key is None, command
+            assert desc is None, command
