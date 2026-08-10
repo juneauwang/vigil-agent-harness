@@ -59,9 +59,15 @@ def _resolve_hermes_home() -> Path:
     return get_hermes_home()
 
 
+def _default_container_base() -> str:
+    """容器内默认数据根：跟随宿主当前布局（新 ~/.vigil 或旧 ~/.hermes）。"""
+    from hermes_constants import default_data_root_for
+    return f"/root/{default_data_root_for(Path.home()).name}"
+
+
 def register_credential_file(
     relative_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> bool:
     """Register a credential file for mounting into remote sandboxes.
 
@@ -82,6 +88,7 @@ def register_credential_file(
     — the same guard that stops the agent reading them with ``read_file``, so
     the mount surface cannot hand a skill what the read surface denies it.
     """
+    container_base = _default_container_base() if container_base is None else container_base
     hermes_home = _resolve_hermes_home()
 
     # Reject absolute paths — they bypass the HERMES_HOME sandbox entirely.
@@ -150,7 +157,7 @@ def register_credential_file(
 
 def register_credential_files(
     entries: list,
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> List[str]:
     """Register multiple credential files from skill frontmatter entries.
 
@@ -158,6 +165,7 @@ def register_credential_files(
     key.  Returns the list of relative paths that were NOT found on the host
     (i.e. missing files).
     """
+    container_base = _default_container_base() if container_base is None else container_base
     missing = []
     for entry in entries:
         if isinstance(entry, str):
@@ -245,7 +253,7 @@ def get_credential_file_mounts() -> List[Dict[str, str]]:
 
 
 def get_skills_directory_mount(
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> list[Dict[str, str]]:
     """Return mount info for all skill directories (local + external).
 
@@ -263,6 +271,7 @@ def get_skills_directory_mount(
     The local skills dir mounts at ``<container_base>/skills``, external dirs
     at ``<container_base>/external_skills/<index>``.
     """
+    container_base = _default_container_base() if container_base is None else container_base
     mounts = []
     hermes_home = _resolve_hermes_home()
     skills_dir = hermes_home / "skills"
@@ -336,7 +345,7 @@ def _safe_skills_path(skills_dir: Path) -> str:
 
 
 def iter_skills_files(
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> List[Dict[str, str]]:
     """Yield individual (host_path, container_path) entries for skills files.
 
@@ -345,6 +354,7 @@ def iter_skills_files(
     that upload files individually (Daytona, Modal) rather than mounting a
     directory.
     """
+    container_base = _default_container_base() if container_base is None else container_base
     result: List[Dict[str, str]] = []
 
     hermes_home = _resolve_hermes_home()
@@ -404,7 +414,7 @@ _CACHE_DIRS: list[tuple[str, str]] = [
 
 
 def get_cache_directory_mounts(
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> List[Dict[str, str]]:
     """Return mount entries for each cache directory that exists on disk.
 
@@ -412,6 +422,7 @@ def get_cache_directory_mounts(
     ``container_path`` keys.  The host path is resolved via
     ``get_hermes_dir()`` for backward compatibility with old directory layouts.
     """
+    container_base = _default_container_base() if container_base is None else container_base
     from hermes_constants import get_hermes_dir
 
     mounts: List[Dict[str, str]] = []
@@ -429,7 +440,7 @@ def get_cache_directory_mounts(
 
 def map_cache_path_to_container(
     host_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> Optional[str]:
     """Map a host cache path to its mounted path under *container_base*.
 
@@ -440,6 +451,7 @@ def map_cache_path_to_container(
     Always joins with ``posixpath`` because container/remote paths are POSIX
     regardless of the host OS.
     """
+    container_base = _default_container_base() if container_base is None else container_base
     path = Path(host_path)
     for mount in get_cache_directory_mounts(container_base=container_base):
         host_dir = Path(mount["host_path"])
@@ -453,7 +465,7 @@ def map_cache_path_to_container(
 
 def from_agent_visible_cache_path(
     container_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> str:
     """Translate a sandbox/container cache path back to its host path.
 
@@ -462,6 +474,7 @@ def from_agent_visible_cache_path(
     auto-mounted cache directory — the caller then treats a still-container
     path as "no host file" and falls back to an in-container read.
     """
+    container_base = _default_container_base() if container_base is None else container_base
     if os.environ.get("TERMINAL_ENV", "local") != "docker":
         return container_path
 
@@ -477,7 +490,7 @@ def from_agent_visible_cache_path(
 
 def to_agent_visible_cache_path(
     host_path: str,
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> str:
     """Translate a host cache path to its mounted path inside the sandbox.
 
@@ -489,6 +502,7 @@ def to_agent_visible_cache_path(
     # (Modal, Daytona, Vercel) use different mount semantics and will be
     # addressed separately if needed.  Backend is identified by TERMINAL_ENV
     # (same env var tools/terminal_tool.py reads in _get_environment_config).
+    container_base = _default_container_base() if container_base is None else container_base
     if os.environ.get("TERMINAL_ENV", "local") != "docker":
         return host_path
 
@@ -497,13 +511,14 @@ def to_agent_visible_cache_path(
 
 
 def iter_cache_files(
-    container_base: str = "/root/.hermes",
+    container_base: str | None = None,
 ) -> List[Dict[str, str]]:
     """Return individual (host_path, container_path) entries for cache files.
 
     Used by Modal to upload files individually and resync before each command.
     Skips symlinks.  The container paths use the new ``cache/<subdir>`` layout.
     """
+    container_base = _default_container_base() if container_base is None else container_base
     from hermes_constants import get_hermes_dir
 
     result: List[Dict[str, str]] = []
@@ -526,5 +541,4 @@ def iter_cache_files(
 def clear_credential_files() -> None:
     """Reset the skill-scoped registry (e.g. on session reset)."""
     _get_registered().clear()
-
 

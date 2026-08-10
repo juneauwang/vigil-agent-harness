@@ -12,7 +12,8 @@ initialize the ops profile without a repo checkout. The legacy
 Usage:
     vigil ops-init [--root PATH] [--env test|uat|prod] [--force] [--no-alias]
 
-Files written (inside the Vigil root, default ``~/.hermes`` or $HERMES_HOME):
+Files written (inside the Vigil root, default ``~/.vigil``; override with
+``VIGIL_HOME`` / ``HERMES_HOME`` env or ``--root``):
     <root>/profiles/ops/config.yaml
     <root>/profiles/ops/topology.yaml
     <root>/profiles/ops/entities/*.yaml
@@ -184,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--root",
-        help="Vigil 根目录（默认 ~/.hermes 或 $HERMES_HOME）；ops profile 建在 <root>/profiles/ops",
+        help="Vigil 根目录（默认 ~/.vigil，或 $VIGIL_HOME/$HERMES_HOME）；ops profile 建在 <root>/profiles/ops",
     )
     parser.add_argument(
         "--env", choices=("test", "uat", "prod"), default="test",

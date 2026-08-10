@@ -39,6 +39,7 @@ PYTHON_VERSION="3.11"
 BRANCH="main"
 RUN_INIT=true
 UV_CMD=""
+VIGIL_ROOT=""
 
 # Prevent uv from discovering config files (uv.toml, pyproject.toml) from the
 # wrong user's home directory when running under sudo -u <user>.
@@ -93,6 +94,22 @@ prompt_yes() {
 is_checkout() {
     local dir="$1"
     [ -f "$dir/pyproject.toml" ] && grep -q '^name = "vigil-agent-harness"' "$dir/pyproject.toml"
+}
+
+resolve_data_root() {
+    # 与 hermes_constants.get_hermes_home() 的默认链保持一致：
+    # VIGIL_HOME → HERMES_HOME → ~/.vigil（旧 ~/.hermes 布局兜底）
+    if [ -n "${VIGIL_HOME:-}" ]; then
+        VIGIL_ROOT="$VIGIL_HOME"
+    elif [ -n "${HERMES_HOME:-}" ]; then
+        VIGIL_ROOT="$HERMES_HOME"
+    elif [ -d "$HOME/.vigil" ]; then
+        VIGIL_ROOT="$HOME/.vigil"
+    elif [ -d "$HOME/.hermes" ]; then
+        VIGIL_ROOT="$HOME/.hermes"
+    else
+        VIGIL_ROOT="$HOME/.vigil"
+    fi
 }
 
 # --- 源码定位 / 克隆 ---------------------------------------------------------
@@ -317,7 +334,7 @@ ensure_path() {
 
 # --- skills 同步 --------------------------------------------------------------
 sync_skills() {
-    local skills_dir="${HERMES_HOME:-$HOME/.hermes}/skills"
+    local skills_dir="$VIGIL_ROOT/skills"
     mkdir -p "$skills_dir"
     log_info "同步内置 skills 到 $skills_dir ..."
     if "$VENV_DIR/bin/python" "$SOURCE_DIR/tools/skills_sync.py" 2>/dev/null; then
@@ -334,7 +351,7 @@ run_ops_init() {
         log_info "已跳过 vigil ops-init（--no-init）"
         return
     fi
-    local ops_root="${HERMES_HOME:-$HOME/.hermes}/profiles/ops"
+    local ops_root="$VIGIL_ROOT/profiles/ops"
     if [ -f "$ops_root/config.yaml" ]; then
         log_info "ops profile 已存在（$ops_root），跳过初始化；如需重建请手动运行 vigil ops-init --force"
         return
@@ -357,8 +374,8 @@ print_next_steps() {
     else
         echo "  1. 确保 ~/.local/bin 在 PATH 中"
     fi
-    echo "  2. 配置模型：编辑 ${HERMES_HOME:-$HOME/.hermes}/profiles/ops/config.yaml 的 model 段"
-    echo "  3. 写入 API key：${HERMES_HOME:-$HOME/.hermes}/profiles/ops/.env（如 OPENROUTER_API_KEY=...）"
+    echo "  2. 配置模型：编辑 $VIGIL_ROOT/profiles/ops/config.yaml 的 model 段"
+    echo "  3. 写入 API key：$VIGIL_ROOT/profiles/ops/.env（如 OPENROUTER_API_KEY=...）"
     echo "  4. 启动：vigil -p ops"
     echo ""
     echo "其他命令："
@@ -387,6 +404,7 @@ main() {
     local script_dir
     script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     resolve_source "$script_dir" "$install_dir_arg"
+    resolve_data_root
 
     echo -e "${CYAN}⚕ Vigil v${VIGIL_VERSION}${NC}"
     echo ""

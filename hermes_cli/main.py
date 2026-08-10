@@ -271,11 +271,8 @@ def _config_default_interface_early() -> str:
         return _EARLY_INTERFACE_CACHE[0]
     value = "cli"
     try:
-        home = os.environ.get("HERMES_HOME")
-        if home:
-            cfg_path = os.path.join(home, "config.yaml")
-        else:
-            cfg_path = os.path.join(os.path.expanduser("~"), ".hermes", "config.yaml")
+        from hermes_constants import get_process_hermes_home
+        cfg_path = str(get_process_hermes_home() / "config.yaml")
         if os.path.exists(cfg_path):
             import yaml as _yaml_iface
 
@@ -545,7 +542,8 @@ def _apply_profile_override() -> None:
         except Exception:
             return None
 
-        candidate = home / ".hermes" / "profiles" / name
+        from hermes_constants import default_data_root_for
+        candidate = default_data_root_for(home) / "profiles" / name
         try:
             if candidate.is_dir():
                 return str(candidate)

@@ -24,7 +24,7 @@ def build_ops_init_parser(subparsers, *, cmd_ops_init: Callable) -> None:
     )
     ops_init_parser.add_argument(
         "--root",
-        help="Vigil root (default ~/.hermes or $HERMES_HOME); the ops profile "
+        help="Vigil root (default ~/.vigil or $VIGIL_HOME/$HERMES_HOME); the ops profile "
              "is created at <root>/profiles/ops",
     )
     ops_init_parser.add_argument(

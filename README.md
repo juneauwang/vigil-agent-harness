@@ -88,9 +88,9 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 pip install vigil-agent-harness
 
 # 2. 初始化 ops profile（拓扑表 + 样例 runbook）
-vigil ops-init         # 生成 ~/.hermes/profiles/ops 下的配置 + 样例拓扑 + 样例 runbook
+vigil ops-init         # 生成 ~/.vigil/profiles/ops 下的配置 + 样例拓扑 + 样例 runbook
 
-# 3. 配置模型（如 DeepSeek）——在 ~/.hermes/profiles/ops/config.yaml
+# 3. 配置模型（如 DeepSeek）——在 ~/.vigil/profiles/ops/config.yaml
 #    添加 model 段，并在同目录 .env 放 API key
 
 # 4. 进入 Vigil
@@ -149,6 +149,11 @@ uv venv --python 3.12 .venv && source .venv/bin/activate
 pip install vigil-agent-harness -i https://pypi.org/simple/
 ```
 
+**旧数据还在 ~/.hermes？**
+Vigil 的数据目录已独立为 `~/.vigil`（可用 `VIGIL_HOME` 覆盖）。`~/.vigil`
+不存在时自动沿用旧 `~/.hermes` 布局，无需手动迁移；想搬过去：
+`mv ~/.hermes ~/.vigil`（或 `export VIGIL_HOME=~/.vigil`）。
+
 ## 一次会话长什么样
 
 启动 `vigil -p ops` 后,控制台头部长这样(真实输出):
@@ -161,7 +166,7 @@ pip install vigil-agent-harness -i https://pypi.org/simple/
 │       > ^ <                → execute / approve / deny            │
 │                TOPOLOGY    20 entities                           │
 │                RUNBOOKS    6 loaded                              │
-│ deepseek-v4-flash          HOME  ~/.hermes/profiles/ops          │
+│ deepseek-v4-flash          HOME  ~/.vigil/profiles/ops           │
 │ /home/wpwang                                                     │
 │ Session: 20260809_171603   ◈ topo_query · runbook_load           │
 │                                · permission matrix · /help       │
@@ -196,7 +201,7 @@ Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
 - [x] 一键安装脚本 `setup-vigil.sh`（源码安装/自托管路径：clone → 装依赖 → 初始化）
 - [ ] 同步 adapter（terraform.tfstate / k8s API）
 - [ ] 拓扑体检 cron（自动检查实体 freshness）
-- [ ] 数据目录独立（脱离 hermes profile 体系）
+- [x] 数据目录独立（默认 `~/.vigil`，`VIGIL_HOME` 可覆盖；旧 `~/.hermes` 自动回退）
 
 ## License
 

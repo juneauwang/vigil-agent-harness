@@ -33,12 +33,13 @@ from hermes_constants import (
 class TestGetDefaultHermesRoot:
     """Tests for get_default_hermes_root() — Docker/custom deployment awareness."""
 
-    def test_no_hermes_home_returns_native(self, tmp_path, monkeypatch):
-        """When HERMES_HOME is not set, returns ~/.hermes."""
+    def test_no_hermes_home_returns_vigil_native(self, tmp_path, monkeypatch):
+        """When HERMES_HOME is not set, returns ~/.vigil (Vigil native root)."""
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        assert get_default_hermes_root() == tmp_path / ".hermes"
+        assert get_default_hermes_root() == tmp_path / ".vigil"
 
 
 
@@ -55,14 +56,15 @@ class TestGetDefaultHermesRoot:
         assert get_default_hermes_root() == docker_root
 
     def test_no_hermes_home_returns_localappdata_root_on_windows(self, tmp_path, monkeypatch):
-        """Native Windows falls back to %LOCALAPPDATA%\\hermes, not ~/.hermes."""
+        """Native Windows falls back to %LOCALAPPDATA%\\vigil."""
         local_appdata = tmp_path / "LocalAppData"
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "Home")
         monkeypatch.setattr(hermes_constants.sys, "platform", "win32")
 
-        assert get_default_hermes_root() == local_appdata / "hermes"
+        assert get_default_hermes_root() == local_appdata / "vigil"
 
 
 
@@ -70,15 +72,79 @@ class TestGetHermesHome:
     """Tests for get_hermes_home() platform-aware fallback."""
 
     def test_windows_fallback_uses_localappdata(self, tmp_path, monkeypatch):
-        """When HERMES_HOME is unset on Windows, use %LOCALAPPDATA%\\hermes."""
+        """When HERMES_HOME is unset on Windows, use %LOCALAPPDATA%\\vigil."""
         local_appdata = tmp_path / "LocalAppData"
         monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "Home")
         monkeypatch.setattr(hermes_constants.sys, "platform", "win32")
         monkeypatch.setattr(hermes_constants, "_profile_fallback_warned", False)
 
-        assert get_hermes_home() == local_appdata / "hermes"
+        assert get_hermes_home() == local_appdata / "vigil"
+
+
+class TestVigilDataRoot:
+    """Vigil 数据根剥离：默认 ~/.vigil，旧 ~/.hermes 布局兜底，VIGIL_HOME 优先。"""
+
+    def test_fresh_install_defaults_to_vigil(self, tmp_path, monkeypatch):
+        """~/.vigil 与 ~/.hermes 都不存在 → 首次安装落 ~/.vigil。"""
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(hermes_constants, "_legacy_fallback_warned", False)
+
+        assert get_hermes_home() == tmp_path / ".vigil"
+
+    def test_legacy_hermes_layout_fallback(self, tmp_path, monkeypatch):
+        """~/.vigil 不存在但旧 ~/.hermes 存在 → 继续用旧布局（老安装无感）。"""
+        legacy = tmp_path / ".hermes"
+        legacy.mkdir()
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(hermes_constants, "_legacy_fallback_warned", False)
+
+        assert get_hermes_home() == legacy
+
+    def test_new_layout_wins_when_both_exist(self, tmp_path, monkeypatch):
+        """~/.vigil 与旧 ~/.hermes 同时存在 → 用 ~/.vigil（迁移后切走）。"""
+        (tmp_path / ".hermes").mkdir()
+        (tmp_path / ".vigil").mkdir()
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(hermes_constants, "_legacy_fallback_warned", False)
+
+        assert get_hermes_home() == tmp_path / ".vigil"
+
+    def test_vigil_home_env_beats_hermes_home(self, tmp_path, monkeypatch):
+        """VIGIL_HOME 显式设置时优先于 HERMES_HOME。"""
+        vigil_home = tmp_path / "vigil-data"
+        hermes_home = tmp_path / "hermes-data"
+        monkeypatch.setenv("VIGIL_HOME", str(vigil_home))
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        assert get_hermes_home() == vigil_home
+
+    def test_hermes_home_still_honored(self, tmp_path, monkeypatch):
+        """未设置 VIGIL_HOME 时，HERMES_HOME 继续生效（legacy 兼容）。"""
+        hermes_home = tmp_path / "hermes-data"
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
+        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+        assert get_hermes_home() == hermes_home
+
+    def test_candidates_include_both_layouts(self, tmp_path, monkeypatch):
+        """vigil_data_root_candidates 同时覆盖新布局与旧布局（守护/迁移用）。"""
+        monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+        candidates = hermes_constants.vigil_data_root_candidates(tmp_path)
+        assert tmp_path / ".vigil" in candidates
+        assert tmp_path / ".hermes" in candidates
 
 
 class TestGetProcessHermesHome:
