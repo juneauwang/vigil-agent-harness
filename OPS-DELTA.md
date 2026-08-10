@@ -494,7 +494,12 @@
     名字是 test/uat/prod）。
   - 拓扑 environments 段与 config 的 env 定义同源。
   - `/env <任意已定义名>` 切换。
-- **未实施**：待排期。
+- **已实施（2026-08-10）**：`/env` 命令（commands.py 注册 + cli.py handler，无参显示
+  当前/可用列表、带参校验切换）+ `ops.environments` 可自定义列表（ops-init 生成默认
+  三档，`--env` 去 choices 支持自定义名如 bare_metal_prod，自动追加定义并告警拓扑
+  不同源）+ 权限矩阵按 env 名查表（行为由 role 决定，`_matrix_row`）+ banner ENV
+  badge 随切换更新（写 config `ops.permissions.env`，profile 保留职责分离）。
+  切换持久化写 config（`_active_env()`/banner 都从 config 读），跨会话保留。
 
 ### 8. 缺少主流 IM 平台 adapter——已确认是同步上游，非开发（2026-08-10 更新）
 

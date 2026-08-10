@@ -5189,6 +5189,112 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         else:
             self._console_print("  Battery indicator off")
 
+    def _handle_env_command(self, cmd_original: str) -> None:
+        """/env [name] — 查看或切换会话操作环境（ops.environments 已定义列表）。
+
+        无参显示当前环境 + 可用列表；带参切换会话操作环境。切换即持久化写 config
+        的 ``ops.permissions.env``（role 同步为所选环境定义的 role）：权限矩阵
+        ``_active_env()`` 与 banner ENV badge 都从 config 读，写 config 让切换
+        立即对后续命令生效且跨会话保留——"我在 prod 还是 test，决定了能干什么"
+        是持久陈述，不是一次性会话状态。会话级覆盖需要把 contextvar 穿进
+        ``_load_config()`` 和 approval 调用链，侵入数据层，故不采用（OPS-DELTA #11）。
+        """
+        from hermes_cli import config as _hc_config
+        from hermes_cli.config import load_config_readonly
+        from tools.ops_permissions import defined_environments
+
+        cfg = load_config_readonly() or {}
+        ops = cfg.get("ops") or {}
+        if isinstance(ops, dict):
+            permissions = ops.get("permissions") or {}
+            current = str(permissions.get("env") or "").strip() if isinstance(permissions, dict) else ""
+        else:
+            current = ""
+        env_defs = defined_environments()
+
+        parts = (cmd_original or "").split()
+        name = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if not name:
+            lines = [f"  当前操作环境: [bold]{current or '(未设置)'}[/]"]
+            if env_defs:
+                lines.append("  可用环境:")
+                for d in env_defs:
+                    n = str(d.get("name") or "?").strip()
+                    mark = "  ← 当前" if n.lower() == current.lower() else ""
+                    lines.append(
+                        f"    - {n} (isolation={d.get('isolation', '?')}, "
+                        f"role={d.get('role', '?')}){mark}"
+                    )
+            else:
+                lines.append("  （config 未定义 ops.environments —— 内置 test/uat/prod）")
+            lines.append("  用法: /env <name> 切换操作环境（如 /env prod）")
+            self._console_print("\n".join(lines))
+            return
+
+        env_def = next(
+            (d for d in env_defs if str(d.get("name") or "").strip().lower() == name),
+            None,
+        )
+        if env_def is None:
+            available = ", ".join(str(d.get("name")) for d in env_defs) or "test/uat/prod"
+            self._console_print(
+                f"  ✗ 未定义环境 '{name}'。可用环境: {available}"
+                "（如需新增，在 config.yaml ops.environments 中定义）"
+            )
+            return
+
+        role = str(env_def.get("role") or name).strip()
+        if not save_config_value("ops.permissions.env", name) or not save_config_value(
+            "ops.permissions.role", role
+        ):
+            self._console_print(f"  ✗ 写入 config.yaml 失败（ops.permissions.env={name}）")
+            return
+        # 权限矩阵 _active_env() 与 banner _load_banner_state() 都读 config 缓存；
+        # 清缓存让新 env 立即生效，重绘即显示新 ENV badge。
+        _hc_config._LOAD_CONFIG_CACHE.clear()
+        try:
+            import hermes_cli.banner as _banner_mod
+            _banner_mod._banner_state_cache = None
+        except Exception:
+            pass
+        self._console_print(
+            f"  ✓ 操作环境已切换: {current or '(未设置)'} → [bold]{name}[/]"
+            f"（role={role}；权限矩阵与 ENV badge 已生效，跨会话保留）"
+        )
+        # 立即重绘 banner，让 ENV badge 当场更新（TUI/经典交互走 ChatConsole，
+        # 与 /clear 的 banner 刷新同一模式；非交互兜底 show_banner）。
+        try:
+            if getattr(self, "_app", None) is not None:
+                cc = ChatConsole()
+                term_w = shutil.get_terminal_size().columns
+                if self.compact or term_w < 80:
+                    cc.print(_build_compact_banner())
+                else:
+                    tools = get_tool_definitions(
+                        enabled_toolsets=self.enabled_toolsets, quiet_mode=True
+                    )
+                    cwd = os.getenv("TERMINAL_CWD", os.getcwd())
+                    ctx_len = None
+                    if hasattr(self, 'agent') and self.agent and hasattr(
+                        self.agent, 'context_compressor'
+                    ):
+                        ctx_len = self.agent.context_compressor.context_length
+                    build_welcome_banner(
+                        console=cc,
+                        model=self.model,
+                        cwd=cwd,
+                        tools=tools,
+                        enabled_toolsets=self.enabled_toolsets,
+                        session_id=self.session_id,
+                        context_length=ctx_len,
+                        provider=self.provider,
+                    )
+            else:
+                self.show_banner()
+        except Exception:
+            pass
+
     @staticmethod
     def _compression_count_style(count: int) -> str:
         """Return a style class reflecting context compression pressure."""
@@ -10060,6 +10166,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             else:
                 from hermes_state import format_session_db_unavailable
                 _cprint(f"  {format_session_db_unavailable()}")
+        elif canonical == "env":
+            self._handle_env_command(cmd_original)
         elif canonical == "handoff":
             if not self._handle_handoff_command(cmd_original):
                 return False

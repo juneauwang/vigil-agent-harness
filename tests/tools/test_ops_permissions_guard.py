@@ -57,10 +57,18 @@ attrs:
 def guard_env(tmp_path, monkeypatch):
     approval_module.set_current_session_key(SESSION)
 
-    def _activate(env="prod", *, enabled=True):
+    def _activate(env="prod", *, enabled=True, environments=None):
+        env_yaml = ""
+        if environments:
+            env_yaml = "  environments:\n" + "\n".join(
+                "    - {name: %s, isolation: %s, role: %s}"
+                % (e["name"], e["isolation"], e["role"])
+                for e in environments
+            ) + "\n"
         (tmp_path / "config.yaml").write_text(
             "ops:\n"
-            "  permissions:\n"
+            + env_yaml
+            + "  permissions:\n"
             f"    enabled: {str(enabled).lower()}\n"
             f"    env: {env}\n"
             f"    role: {env}\n",
@@ -208,3 +216,48 @@ def test_target_prod_approve_notes_entity(guard_env, monkeypatch):
         assert "ops_matrix:L2:prod" in notified[0]["pattern_keys"]
     finally:
         approval_module.unregister_gateway_notify(SESSION)
+
+def test_custom_env_role_prod_denies_l3(guard_env):
+    """自定义 env bare_metal_prod（role=prod）→ L3 硬拒绝，矩阵按 role 判定不依赖名字。"""
+    guard_env("bare_metal_prod", environments=[
+        {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
+        {"name": "local", "isolation": "relaxed", "role": "test"},
+    ])
+    result = approval_module.check_all_command_guards("rm -rf /var/log", "local")
+    assert result["approved"] is False
+    assert result["ops_matrix"]["action"] == "deny"
+    assert result["ops_matrix"]["grade"] == "L3"
+    assert result["ops_matrix"]["env"] == "bare_metal_prod"
+
+
+def test_custom_env_role_prod_approves_l2(guard_env, monkeypatch):
+    """自定义 env bare_metal_prod → L2 需要审批（同 prod 档）。"""
+    guard_env("bare_metal_prod", environments=[
+        {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
+    ])
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
+    monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
+
+    result = approval_module.check_all_command_guards("systemctl restart myapp", "local")
+    assert result["approved"] is True
+    assert result["smart_approved"] is True
+
+
+def test_custom_env_role_test_executes_l3(guard_env):
+    """自定义 env local（role=test）→ L3 直接执行（同 test 档）。"""
+    guard_env("local", environments=[
+        {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
+        {"name": "local", "isolation": "relaxed", "role": "test"},
+    ])
+    result = approval_module.check_all_command_guards("rm -rf /var/log", "local")
+    assert result["approved"] is True
+
+
+def test_undeclared_env_leaves_existing_flow(guard_env):
+    """ops.environments 已定义列表之外的 env → 不做矩阵判定，交回原有检查。"""
+    guard_env("staging", environments=[
+        {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
+    ])
+    result = approval_module.check_all_command_guards("ls -la", "local")
+    assert result["approved"] is True

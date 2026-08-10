@@ -123,6 +123,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="[N]"),
     CommandDef("title", "Set a title for the current session", "Session",
                args_hint="[name]"),
+    CommandDef("env", "查看/切换会话操作环境（ops.environments 已定义列表；/env 无参显示当前环境与可用列表）", "Session",
+               cli_only=True, args_hint="[name]"),
     CommandDef("handoff", "Hand off this session to a messaging platform (Telegram, Discord, etc.)", "Session",
                args_hint="<platform>", cli_only=True),
     CommandDef("branch", "Branch the current session (explore a different path)", "Session",

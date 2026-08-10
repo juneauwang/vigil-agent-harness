@@ -1,25 +1,34 @@
 """Ops Agent Harness — 命令分级权限矩阵（L2/L3 层）。
 
 执行层分级 gate（ops-agent-harness.md §3）：把终端命令分级为 L1-L4，
-再按当前环境（test/uat/prod）查矩阵 → 执行 / 审批 / 拒绝。
+再按当前环境（ops.environments 已定义列表）查矩阵 → 执行 / 审批 / 拒绝。
 
 - ``deny`` 是硬拒绝：不依赖 agent 自觉，任何会话级 bypass（yolo / mode=off /
   永久 allowlist）都不能绕过（由 tools/approval.py 放在 yolo 检查之前调用）。
 - ``approve`` 表示需要审批：复用现有 dangerous-command 审批流程。
 - 命令不在任何等级 → 返回 None，交回原有检查（等效执行）。
 
+环境是可自定义列表（OPS-DELTA #11）：名称任意（test/uat/prod 只是内置默认），
+矩阵行为由定义里的 ``role`` 决定——``bare_metal_prod`` 定义 ``role: prod`` 就按
+prod 档判定，不依赖名字是 test/uat/prod。未定义的环境不做矩阵判定（交回原有
+检查），避免对未知环境误判。config 的 ``ops.environments`` 是权威来源，拓扑
+topology.yaml 的 environments 段不一致时以 config 为准。
+
 配置（config.yaml，ops 块）:
     ops:
+      environments:            # 可选：环境定义列表（不写则用内置 test/uat/prod）
+        - {name: test, isolation: relaxed, role: test}
+        - {name: bare_metal_prod, isolation: strict, role: prod}
       permissions:
         enabled: true          # 关闭则本模块完全静默
-        env: test              # 当前操作环境: test | uat | prod
+        env: test              # 当前操作环境（/env 切换，须在 environments 已定义列表）
         role: test             # 会话角色（默认同 env，审计展示用）
         grades:                # 可选：覆盖内置分级正则（不写则用内置表）
           L1: [...]
           L2: [...]
           L3: [...]
           L4: [...]
-        matrix:                # 可选：覆盖内置矩阵（不写则用内置矩阵）
+        matrix:                # 可选：按 env 名覆盖内置矩阵（不写则用内置矩阵）
           test: {L1: execute, L2: execute, L3: execute, L4: execute}
           uat:  {L1: execute, L2: execute, L3: approve, L4: deny}
           prod: {L1: execute, L2: approve, L3: deny, L4: deny}
@@ -90,12 +99,22 @@ _DEFAULT_GRADES: Dict[str, List[str]] = {
     ],
 }
 
-# 内置矩阵：等级 × 环境 → execute / approve / deny（ops-agent-harness.md §3）。
+# 内置矩阵：等级 × 角色档 → execute / approve / deny（ops-agent-harness.md §3）。
+# env 名任意；矩阵行按环境的 role 落点（bare_metal_prod → role prod → prod 行）。
 _DEFAULT_MATRIX: Dict[str, Dict[str, str]] = {
     "test": {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
     "uat":  {"L1": "execute", "L2": "execute", "L3": "approve", "L4": "deny"},
     "prod": {"L1": "execute", "L2": "approve", "L3": "deny", "L4": "deny"},
 }
+
+# 内置环境定义（config 未写 ops.environments 时的兜底，与 _CONFIG_TPL 生成一致）。
+# isolation 语义沿用 topology/ops-agent-harness.md：strict = 跨环境操作需审批，
+# relaxed = 自用放行；矩阵行为由 role 决定，isolation 为声明性展示字段。
+_DEFAULT_ENVIRONMENTS: List[Dict[str, str]] = [
+    {"name": "test", "isolation": "relaxed", "role": "test"},
+    {"name": "uat", "isolation": "strict", "role": "uat"},
+    {"name": "prod", "isolation": "strict", "role": "prod"},
+]
 
 # L1 例外：出现这些片段就不能算纯查询。
 _L1_EXCLUSIONS = [
@@ -116,6 +135,70 @@ def _load_config() -> Dict[str, Any]:
         return cfg.get("ops", {}).get("permissions", {}) or {}
     except Exception:
         return {}
+
+
+def _load_ops_config() -> Dict[str, Any]:
+    """ops 块整体（permissions 是子块；environments 与 permissions 平级）。"""
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        return cfg.get("ops", {}) or {}
+    except Exception:
+        return {}
+
+
+def defined_environments(ops_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """已定义环境列表（ops.environments）；config 未定义时回退内置 test/uat/prod。
+
+    这是 /env 命令与权限矩阵共用的权威名单：config 为准（拓扑 topology.yaml 的
+    environments 段不一致时以 config 为准），未定义环境不做矩阵判定。
+    """
+    ops = ops_config if ops_config is not None else _load_ops_config()
+    envs = ops.get("environments") or []
+    if not isinstance(envs, list) or not envs:
+        return [dict(e) for e in _DEFAULT_ENVIRONMENTS]
+    return [
+        e for e in envs
+        if isinstance(e, dict) and str(e.get("name") or "").strip()
+    ]
+
+
+def _env_definition(env: str, ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """按名（大小写不敏感）查已定义环境；未定义返回 None。"""
+    for env_def in defined_environments(ops_config):
+        if str(env_def.get("name") or "").strip().lower() == env:
+            return env_def
+    return None
+
+
+def _env_role(env: str, ops_config: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    """环境定义的 role（决定矩阵行为落点）；未定义或无 role 返回 None。"""
+    env_def = _env_definition(env, ops_config)
+    if env_def is None:
+        return None
+    return str(env_def.get("role") or "").strip().lower() or None
+
+
+def _matrix_row(config: Dict[str, Any], env: str,
+                ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, str]]:
+    """env 名 → 有效矩阵行（深拷贝，返回 None 表示未声明 → 交回原有检查）。
+
+    查表顺序（名称任意，矩阵行为由 isolation/role 决定）：
+      1. 用户 ``matrix`` 按 env 名覆盖（在默认行基础上合并，行为同旧版 setdefault+update）；
+      2. 已定义环境：按定义的 role 落点（bare_metal_prod → prod 行）；
+      3. 未定义环境（legacy 名）：按内置 test/uat/prod 名兜底。
+    """
+    user_matrix = config.get("matrix") or {}
+    if isinstance(user_matrix.get(env), dict):
+        row = dict(_DEFAULT_MATRIX.get(env, {}))
+        row.update(user_matrix[env])
+        return row or None
+    role = _env_role(env, ops_config)
+    if role:
+        row = dict(_DEFAULT_MATRIX.get(role, {}))
+        if row:
+            return row
+    return dict(_DEFAULT_MATRIX.get(env, {})) or None
 
 
 def _compile_grades(grade_patterns: Dict[str, List[str]]) -> Dict[str, List[re.Pattern]]:
@@ -186,23 +269,18 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         return None
 
     env = (target_env or _active_env()).strip().lower()
-    if env not in _DEFAULT_MATRIX and env not in (config.get("matrix") or {}):
-        return None  # 未声明环境 → 不做矩阵判定（交回原有检查）
 
     grade = classify_command(command)
     if grade is None:
         return None
 
-    # Deep-copy: a shallow copy would alias _DEFAULT_MATRIX rows, and the
-    # user-matrix merge below would mutate the module default for every later
-    # call (first config with a matrix override poisons the built-in table).
-    matrix = {env_name: dict(row) for env_name, row in _DEFAULT_MATRIX.items()}
-    user_matrix = config.get("matrix") or {}
-    for env_name, row in user_matrix.items():
-        if isinstance(row, dict):
-            matrix.setdefault(env_name, {}).update(row)
+    # env 名查表（名称任意，矩阵行为由 isolation/role 决定）；未声明环境返回
+    # None，交回原有检查，避免对未知环境误判。
+    row = _matrix_row(config, env, _load_ops_config())
+    if row is None:
+        return None
 
-    action = matrix.get(env, {}).get(grade, "execute")
+    action = row.get(grade, "execute")
     if action == "execute":
         return None
 
