@@ -630,8 +630,8 @@ class TestSystemUnitHermesHome:
 
         unit = gateway_cli.generate_systemd_unit(system=True, run_as_user="alice")
 
-        assert 'HERMES_HOME=/home/alice/.hermes' in unit
-        assert '/root/.hermes' not in unit
+        assert 'HERMES_HOME=/home/alice/.vigil' in unit
+        assert '/root/.vigil' not in unit
 
 
     def test_user_unit_unaffected_by_change(self):
@@ -781,7 +781,7 @@ class TestHermesHomeForTargetUser:
         monkeypatch.delenv("HERMES_HOME", raising=False)
 
         result = gateway_cli._hermes_home_for_target_user("/home/alice")
-        assert result == "/home/alice/.hermes"
+        assert result == "/home/alice/.vigil"
 
 
 
@@ -991,7 +991,7 @@ class TestProfileArg:
 
         assert "ExecStart=" in unit
         assert "--profile mybot gateway run" in unit
-        assert f'HERMES_HOME={target_home / ".hermes" / "profiles" / "mybot"}' in unit
+        assert f'HERMES_HOME={target_home / ".vigil" / "profiles" / "mybot"}' in unit
 
 
 
@@ -1061,7 +1061,7 @@ class TestSystemUnitPathRemapping:
         # always exists) — NOT the source checkout under it. Pinning cwd to the
         # checkout is the rot bug fixed alongside this: a relocated/removed
         # checkout would crash-loop the unit on CHDIR (status=200).
-        assert "WorkingDirectory=/home/alice/.hermes" in unit
+        assert "WorkingDirectory=/home/alice/.vigil" in unit
         assert "WorkingDirectory=/home/alice/.hermes/hermes-agent" not in unit
 
 

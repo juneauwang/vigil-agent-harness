@@ -270,8 +270,8 @@ def _is_gateway_approval_context() -> bool:
 # hermetic test conftest or any deferred-profile-resolution path).
 _SSH_SENSITIVE_PATH = r'(?:~|\$home|\$\{home\})/\.ssh(?:/|$)'
 _HERMES_ENV_PATH = (
-    r'(?:~\/\.hermes/|'
-    r'(?:\$home|\$\{home\})/\.hermes/|'
+    r'(?:~\/\.(?:hermes|vigil)/|'
+    r'(?:\$home|\$\{home\})/\.(?:hermes|vigil)/|'
     r'(?:\$hermes_home|\$\{hermes_home\})/)'
     r'\.env\b'
 )
@@ -284,8 +284,8 @@ _HERMES_ENV_PATH = (
 # theater. Mirrors _HERMES_ENV_PATH; matches the HERMES_HOME override form as
 # well as ~/.hermes/.
 _HERMES_CONFIG_PATH = (
-    r'(?:~\/\.hermes/|'
-    r'(?:\$home|\$\{home\})/\.hermes/|'
+    r'(?:~\/\.(?:hermes|vigil)/|'
+    r'(?:\$home|\$\{home\})/\.(?:hermes|vigil)/|'
     r'(?:\$hermes_home|\$\{hermes_home\})/)'
     r'config\.yaml\b'
 )

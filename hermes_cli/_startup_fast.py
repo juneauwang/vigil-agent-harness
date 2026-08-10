@@ -106,10 +106,8 @@ def active_profile_may_override_home(hermes_root: str) -> bool:
 
 
 def _resolved_home() -> str:
-    hermes_home = os.environ.get("HERMES_HOME", "").strip()
-    if hermes_home:
-        return hermes_home
-    return os.path.join(os.path.expanduser("~"), ".hermes")
+    from hermes_constants import get_process_hermes_home
+    return str(get_process_hermes_home())
 
 
 def container_mode_may_be_active() -> bool:
@@ -136,7 +134,7 @@ def container_mode_may_be_active() -> bool:
             and active_profile_may_override_home(hermes_home)
         )
 
-    default_home = os.path.join(os.path.expanduser("~"), ".hermes")
+    default_home = _resolved_home()
     if active_profile_may_override_home(default_home):
         return True
     return os.path.exists(os.path.join(default_home, ".container-mode"))

@@ -32,11 +32,13 @@ from hermes_cli.config import (
 
 
 class TestGetHermesHome:
-    def test_default_path(self):
+    def test_default_path(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("HERMES_HOME", None)
+            os.environ.pop("VIGIL_HOME", None)
             home = get_hermes_home()
-            assert home == Path.home() / ".hermes"
+            assert home == tmp_path / ".vigil"
 
 
 class TestEnsureHermesHome:

@@ -26,6 +26,7 @@ import os
 import datetime
 import threading
 import uuid
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 # fal_client is imported lazily — see _load_fal_client(). Pulling it
@@ -742,6 +743,9 @@ def _active_terminal_env(task_id: str | None):
 
 
 def _agent_cache_base_for_env(env: Any) -> str | None:
+    from hermes_constants import default_data_root_for
+    root_name = default_data_root_for(Path.home()).name  # ".vigil" 或旧布局 ".hermes"
+
     if env is not None:
         # Forward-looking optional override: an environment may expose its own
         # agent-visible cache root via this callable. No backend defines it yet
@@ -758,11 +762,11 @@ def _agent_cache_base_for_env(env: Any) -> str | None:
 
         remote_home = getattr(env, "_remote_home", None)
         if remote_home:
-            return f"{str(remote_home).rstrip('/')}/.hermes"
+            return f"{str(remote_home).rstrip('/')}/{root_name}"
 
         env_name = env.__class__.__name__
         if env_name in {"DockerEnvironment", "SingularityEnvironment", "ModalEnvironment"}:
-            return "/root/.hermes"
+            return f"/root/{root_name}"
 
     # If no environment has been created yet, only backends with deterministic
     # Hermes cache roots can be translated without side effects. SSH can still
@@ -770,9 +774,9 @@ def _agent_cache_base_for_env(env: Any) -> str | None:
     # the cache file before the first command runs.
     backend = (os.getenv("TERMINAL_ENV") or "local").strip().lower()
     if backend in {"docker", "singularity", "modal"}:
-        return "/root/.hermes"
+        return f"/root/{root_name}"
     if backend == "ssh":
-        return "~/.hermes"
+        return f"~/{root_name}"
     return None
 
 

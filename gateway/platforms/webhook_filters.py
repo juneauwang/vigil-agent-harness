@@ -40,6 +40,10 @@ def _resolve_profile_path(path_value: Any) -> Optional[Path]:
         return hermes_home
     if raw.startswith("~/.hermes/"):
         return hermes_home / raw.removeprefix("~/.hermes/")
+    if raw == "~/.vigil":
+        return hermes_home
+    if raw.startswith("~/.vigil/"):
+        return hermes_home / raw.removeprefix("~/.vigil/")
     path = Path(raw).expanduser()
     if path.is_absolute():
         return path
