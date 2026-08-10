@@ -2,7 +2,7 @@
 
 [project]
 name = "vigil-agent-harness"  # Vigil 为产品名；发行包名 vigil-agent-harness（2026-08-09 发布决策，见 OPS-DELTA.md）
-version = "0.1.4"
+version = "0.1.5"
 description = "Vigil — 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）"
 readme = "README.md"
 # Upper bound is load-bearing, not cosmetic. uv resolves the project's
@@ -17,19 +17,16 @@ authors = [{ name = "markjuneau" }]
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-  # Core — every direct dep is exact-pinned to ==X.Y.Z (no ranges).
-  # Rationale: ranges allow PyPI to ship a fresh version of a transitive
-  # at any time without a code review on our side. Exact pins mean the
-  # only way a new package version reaches a user is via an intentional
-  # update on our end (bump the pin in this file, regenerate uv.lock).
-  # This was tightened on 2026-05-12 in response to the Mini Shai-Hulud
-  # worm hitting mistralai 2.4.6 on PyPI; if that release had been
-  # captured by `mistralai>=2.3.0,<3` rather than an exact pin, every
-  # install in the hours before the quarantine would have pulled it.
+  # Core deps use >= lower bounds (ranges) since v0.1.4 — exact pins made
+  # installs fail on mirror nodes that hadn't synced the newest version yet
+  # (国内镜像 CDN 节点同步不同步, 2026-08-09 实测: 阿里云某节点缺 pillow-12.3.0
+  # 导致 "from versions: none"; 放宽到 >= 后镜像只有旧版也能装).
+  # Trade-off: ranges mean a fresh transitive can reach users without a code
+  # review. Acceptable for Vigil's user base; keep the upper bounds that are
+  # load-bearing (see requires-python note above).
   #
-  # When updating: bump the version below AND regenerate uv.lock with
-  # `uv lock` so the transitive resolution stays consistent. Don't
-  # introduce ranges back without a written justification.
+  # When updating: bump the lower bound below AND regenerate uv.lock with
+  # `uv lock` so the transitive resolution stays consistent.
   #
   # Scope rule: only packages used by EVERY hermes session belong here.
   # Anything that's provider-specific (`anthropic`, `firecrawl-py`,
