@@ -1,4 +1,4 @@
-1. 只允许在 /home/wpwang/projects/vigil-agent 内工作；
+1. 只允许在 /home/your-name/projects/vigil-agent 内工作；
 禁止读取/修改 ~/.hermes、~/.ssh、~/.kube、任何 .env 文件
 2. 开工前先 git commit 一个 baseline（回滚锚点），
 之后随便改，随时能 reset
@@ -10,7 +10,7 @@
 
 > 给 IT 运维用的 Agent Harness。Fork 自 Vigil Agent（MIT License）。
 > 代码交付给 Codex 实现，本文档是唯一交接材料（数据契约 + 改动地图）。
-> 源码位置: /home/wpwang/projects/hermes-source_1（upstream: NousResearch/hermes-agent）
+> 源码位置: /home/your-name/projects/hermes-source_1（upstream: NousResearch/hermes-agent）
 
 ## 0. 决策记录
 
@@ -63,7 +63,7 @@ updated_at: 2026-08-06
 sources: [netbox, snipeit, agent]        # 实际启用的同步源
 environments:
   - name: prod
-    entry: "ssh jump@39.106.217.32"
+    entry: "ssh user@203.0.113.10"
     isolation: strict                    # strict = 跨环境操作需审批
     role: prod                           # 见 §3 权限模型
     core_entities: [harbor, k3s-prod, argocd]
@@ -75,8 +75,8 @@ core_entities:
   - name: harbor
     type: registry
     env: prod
-    endpoint: 39.106.217.32:30443
-    owner: wpwang
+    endpoint: 203.0.113.10:30443
+    owner: your-name
     source: manual
     last_verified: 2026-08-01
     detail: entities/harbor.yaml         # 指向第二层
@@ -92,7 +92,7 @@ env: prod
 attrs:                                   # 完整属性
   version: v2.11
   storage: /data/harbor
-  admin: wpwang
+  admin: your-name
 depends_on: [postgres]                   # 它依赖谁（雪花展开）
 depended_by: [gnomeria-dev, gnomeria-prod]  # 谁依赖它
 ops:

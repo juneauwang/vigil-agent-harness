@@ -167,7 +167,7 @@ Vigil 的数据目录已独立为 `~/.vigil`（可用 `VIGIL_HOME` 覆盖）。`
 │                TOPOLOGY    20 entities                           │
 │                RUNBOOKS    6 loaded                              │
 │ deepseek-v4-flash          HOME  ~/.vigil/profiles/ops           │
-│ /home/wpwang                                                     │
+│ /home/your-name                                                  │
 │ Session: 20260809_171603   ◈ topo_query · runbook_load           │
 │                                · permission matrix · /help       │
 ╰──────────────────────────────────────────────────────────────────╯

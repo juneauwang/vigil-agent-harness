@@ -218,7 +218,7 @@
   4. 入口：`pyproject.toml [project.scripts]` 增加 `vigil`（主入口），保留
      `argus`/`hermes` 别名（行为不变）；`hermes_cli/profiles.py` wrapper 生成
      `vigil -p`，反向识别兼容 `vigil/argus/hermes -p`。
-  5. 仓库目录 `/home/wpwang/projects/argus_agent` → `/home/wpwang/projects/vigil-agent`；
+  5. 仓库目录 `/home/your-name/projects/argus_agent` → `/home/your-name/projects/vigil-agent`；
      `.venv` shebang 与 pyvenv.cfg 路径同步；用户级 `~/.local/bin/argus` →
      `~/.local/bin/vigil`（exec .venv/bin/vigil -p ops）；ops profile
      config.yaml `display.skin: argus`→`vigil`；SOUL.md 措辞核对。
@@ -322,7 +322,7 @@
 | `tools/ops_permissions.py` | §3 / §4 D | 命令分级矩阵（L1-L4 × env → execute/approve/deny） |
 | `tests/tools/test_topo_tools.py` 等 | §6.3 | 数据契约 + 矩阵验证 |
 | `hermes_cli/ops_init.py` | §6.3 | ops profile 初始化（包内模块 + `vigil ops-init` 入口）：建 profile + 写 ops config + 铺样例拓扑（幂等，--force 重铺）；`scripts/ops_init.py` 为同入口薄 shim |
-| `hermes_cli/ops_samples/` | §2.2 | 样例拓扑（原 `ops-profile/`，随 wheel package-data 分发）：第一层 topology.yaml（39.106.217.32 集群实体）+ 第二层 entities/ |
+| `hermes_cli/ops_samples/` | §2.2 | 样例拓扑（原 `ops-profile/`，随 wheel package-data 分发）：第一层 topology.yaml（203.0.113.10 集群实体）+ 第二层 entities/ |
 | `OPS-VERIFY.md` | §6.3 | 用户亲自验证步骤（TOPO 段 / topo_query / topo_update / 权限矩阵） |
 | `tools/runbook_tools.py` | §1 / §3 L4 | runbook_load（按名/触发关键字/列表）+ runbook_checkpoint（L4 checklist 阶段门），registry toolset=runbook |
 | `hermes_cli/ops_samples/runbooks/` | §1 / §3 L4 | 样例 runbook：harbor-restart / gateway-svc-restart（事故）+ deploy-gateway-svc（L4 部署 checklist 模板） |

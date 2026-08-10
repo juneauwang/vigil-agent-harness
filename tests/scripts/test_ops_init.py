@@ -173,7 +173,7 @@ def test_seeded_profile_renders_topo_and_queries(ops_home):
 
     harbor = json.loads(topo_query(entity="harbor", detail=True))
     assert harbor["name"] == "harbor"
-    assert harbor["endpoint"] == "39.106.217.32:30443"
+    assert harbor["endpoint"] == "203.0.113.10:30443"
     assert harbor["stale"] is False
     assert harbor["detail"]["depends_on"] == ["postgres"]
     assert harbor["detail"]["ops"]["healthcheck"].startswith("curl")
