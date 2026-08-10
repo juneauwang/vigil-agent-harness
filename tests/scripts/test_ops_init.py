@@ -102,6 +102,11 @@ def test_init_creates_profile_config_and_topology(ops_home):
     perms = cfg["ops"]["permissions"]
     assert perms["enabled"] is True
     assert perms["env"] == "test" and perms["role"] == "test"  # 安全默认
+    # ops.environments 默认三档（OPS-DELTA #11：env 可自定义的向后兼容基线）
+    env_defs = cfg["ops"]["environments"]
+    assert [d["name"] for d in env_defs] == ["test", "uat", "prod"]
+    assert env_defs[0]["role"] == "test" and env_defs[2]["role"] == "prod"
+    assert env_defs[1]["isolation"] == "strict" and env_defs[2]["isolation"] == "strict"
     # load_config_readonly 会把 "off" 规范化为 False；行为级校验看 ts_load()。
     assert cfg["tools"]["tool_search"]["enabled"] in ("off", False)
 
@@ -162,6 +167,48 @@ def test_env_flag_sets_permissions(tmp_path, monkeypatch, entry):
     monkeypatch.setenv("HERMES_HOME", str(home))
     perms = _load_permissions(home)
     assert perms["env"] == "prod" and perms["role"] == "prod"
+
+
+def test_env_flag_custom_env_defines_environments(tmp_path, monkeypatch):
+    """--env bare_metal_prod：自定义环境名生成配置成功，且矩阵按 role=prod 判定。
+
+    自定义名不再被 argparse choices 锁死（OPS-DELTA #11）；自动追加定义到
+    ops.environments（isolation/role 推导，可在 config.yaml 调整）。
+    """
+    root = tmp_path / "hermes-root"
+    proc = _run_init(root, "--no-alias", "--env", "bare_metal_prod", entry="module")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    home = root / "profiles" / "ops"
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    perms = _load_permissions(home)
+    assert perms["env"] == "bare_metal_prod"
+    # 生成配置里 role 跟随环境定义（prod），不是环境名本身
+    assert perms["role"] == "prod"
+
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        cfg = hc.load_config_readonly()
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+    env_defs = cfg["ops"]["environments"]
+    names = [d["name"] for d in env_defs]
+    assert names == ["test", "uat", "prod", "bare_metal_prod"]
+    bmp = next(d for d in env_defs if d["name"] == "bare_metal_prod")
+    assert bmp["role"] == "prod" and bmp["isolation"] == "strict"
+
+    # 权限矩阵按自定义 env 名判定：bare_metal_prod → prod 档（L3 拒绝 / L2 审批）
+    assert check_ops_command_permission("rm -rf /var/log")["action"] == "deny"
+    assert check_ops_command_permission("rm -rf /var/log")["env"] == "bare_metal_prod"
+    assert check_ops_command_permission("systemctl restart myapp")["action"] == "approve"
+
+
+def test_env_flag_invalid_name_errors_listing_available(tmp_path):
+    root = tmp_path / "hermes-root"
+    proc = _run_init(root, "--no-alias", "--env", "Bad Env!", entry="module")
+    assert proc.returncode == 2
+    combined = proc.stdout + proc.stderr
+    assert "无效环境名" in combined
+    assert "test" in combined and "prod" in combined
 
 
 def test_seeded_profile_renders_topo_and_queries(ops_home):

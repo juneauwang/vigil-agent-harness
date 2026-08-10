@@ -82,8 +82,15 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
 
 ## 4. 权限矩阵：切到 prod 验证（L2 审批 / L3-L4 拒绝）
 
-编辑 `~/.hermes/profiles/ops/config.yaml`，把
-`ops.permissions.env` 与 `ops.permissions.role` 改为 `prod`，重新 `hermes -p ops chat`。
+会话内切换操作环境（OPS-DELTA #11）：
+
+> /env prod
+
+**预期**：返回切换确认 + banner ENV badge 变为 `[prod]`，权限矩阵随之按 prod 判定
+（后续命令的 `ops_matrix.env` 为 `prod`）。`/env` 无参可查看当前环境与可用列表
+（`ops.environments` 已定义；可用 `vigil ops-init --env <自定义名>` 初始化自定义环境，
+如 `bare_metal_prod`）。老方式（手动编辑 `config.yaml` 的 `ops.permissions.env` /
+`ops.permissions.role` 后重开 session）仍兼容。
 
 然后依次让 agent 执行：
 
@@ -104,8 +111,7 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
 
    **预期**：`df -h` 直接执行，无审批。
 
-验证完把环境切回 `test`（或按真实目标环境保留）：
-`ops.permissions.env: test`。
+验证完把环境切回 `test`（或按真实目标环境保留）：`/env test`。
 
 ## 5. 通过标准与下一步
 

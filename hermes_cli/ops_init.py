@@ -10,7 +10,11 @@ initialize the ops profile without a repo checkout. The legacy
 ``scripts/ops_init.py`` entry point is a thin shim over this module.
 
 Usage:
-    vigil ops-init [--root PATH] [--env test|uat|prod] [--force] [--no-alias]
+    vigil ops-init [--root PATH] [--env NAME] [--force] [--no-alias]
+
+    --env 接受任意环境名：test/uat/prod 走内置三档；自定义名（物理环境×等级，
+    如 bare_metal_prod / local）自动追加到 ops.environments 定义（role 取
+    ``_test|_uat|_prod`` 尾缀，isolation 按角色推导，可随后在 config.yaml 调整）。
 
 Files written (inside the Vigil root, default ``~/.vigil``; override with
 ``VIGIL_HOME`` / ``HERMES_HOME`` env or ``--root``):
@@ -28,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -58,6 +63,12 @@ tools:
 memory:
   provider: topo
 ops:
+  # 环境定义列表（OPS-DELTA #11）：名称任意，权限矩阵按 env 名查表，
+  # 行为由 isolation/role 决定（bare_metal_prod → role prod → prod 档）。
+  # 这是 /env 命令的可用名单；topology.yaml 的 environments 段须与这里同源，
+  # 不一致以 config 为准。
+  environments:
+{environments}
   topology:
     enabled: true
   runbooks:
@@ -65,7 +76,7 @@ ops:
   permissions:
     enabled: true
     env: {env}
-    role: {env}
+    role: {role}
 """
 
 
@@ -84,13 +95,56 @@ def _latest_config_version() -> int:
     return int(DEFAULT_CONFIG.get("_config_version") or 1)
 
 
+_DEFAULT_ENV_DEFS = [
+    {"name": "test", "isolation": "relaxed", "role": "test"},
+    {"name": "uat", "isolation": "strict", "role": "uat"},
+    {"name": "prod", "isolation": "strict", "role": "prod"},
+]
+_ENV_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+
+def _resolve_env_defs(env: str) -> list[dict]:
+    """Built-in three tiers + (when requested) the custom env, derived.
+
+    真实运维环境是「物理环境 × 等级」组合（bare_metal_uat/prod、local、cloud），
+    名字锁死 test/uat/prod 表达不了。自定义名推导规则：
+      - role：``_<tier>`` 尾缀在 test/uat/prod 里则取尾缀（bare_metal_prod → prod），
+        否则以 env 名本身为 role（local → role local）；
+      - isolation：role 为 uat/prod → strict（跨环境操作需审批），否则 relaxed。
+    推导只是初始值，可随后在 config.yaml ops.environments 里调整。
+    """
+    defs = [dict(d) for d in _DEFAULT_ENV_DEFS]
+    if env not in {d["name"] for d in defs}:
+        tier = env.rsplit("_", 1)[-1]
+        role = tier if tier in ("test", "uat", "prod") else env
+        isolation = "strict" if role in ("uat", "prod") else "relaxed"
+        defs.append({"name": env, "isolation": isolation, "role": role})
+        print(f"· 自定义环境 {env} 已自动定义（isolation={isolation}, role={role}）；"
+              f"如需调整请在 config.yaml ops.environments 修改")
+    return defs
+
+
+def _environments_yaml(env_defs: list[dict]) -> str:
+    return "\n".join(
+        f"    - name: {d['name']}\n      isolation: {d['isolation']}\n      role: {d['role']}"
+        for d in env_defs
+    )
+
+
 def _write_config(profile_dir: Path, env: str, force: bool) -> bool:
     """Write config.yaml into the profile. Returns True when written."""
     path = profile_dir / "config.yaml"
     if path.exists() and not force:
         print(f"· config.yaml 已存在，跳过（--force 覆盖）：{path}")
         return False
-    text = _CONFIG_TPL.format(version=_latest_config_version(), env=env)
+    env_defs = _resolve_env_defs(env)
+    role = next(
+        (d["role"] for d in env_defs if d["name"] == env), env
+    )
+    text = _CONFIG_TPL.format(
+        version=_latest_config_version(), env=env, role=role,
+        environments=_environments_yaml(env_defs),
+    )
     path.write_text(text, encoding="utf-8")
     print(f"· 写入 config.yaml：{path}")
     return True
@@ -140,6 +194,31 @@ def _seed_samples(profile_dir: Path, force: bool) -> bool:
     return True
 
 
+def _warn_topology_env_sync(profile_dir: Path, env: str) -> None:
+    """拓扑 environments 段与 config 的 env 定义同源（不一致以 config 为准）。
+
+    ops.environments 是权限矩阵与 /env 的权威名单；topology.yaml 的 environments
+    段是注入 system prompt 的展示层。两者不一致时告警（config 为准），提醒补拓扑，
+    不阻断初始化。
+    """
+    topo_path = profile_dir / "topology.yaml"
+    if not topo_path.is_file():
+        return
+    try:
+        import yaml
+        data = yaml.safe_load(topo_path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return
+    topo_envs = {
+        str(e.get("name") or "").strip().lower()
+        for e in (data.get("environments") or []) if isinstance(e, dict)
+    }
+    if env.lower() not in topo_envs:
+        print(f"· 提示：当前环境 {env} 不在 {topo_path.name} 的 environments 段"
+              f"（{', '.join(sorted(topo_envs)) or '无'}）。权限矩阵按 config "
+              f"ops.environments 生效（以 config 为准）；如需拓扑展示该环境，请补定义")
+
+
 def run(root: Path, env: str = "test", force: bool = False, no_alias: bool = False) -> int:
     """Initialize the ops profile under ``root``. Returns process exit code."""
     os.environ["HERMES_HOME"] = str(root)  # 让 profile 解析锚定在 <root>/profiles
@@ -164,6 +243,7 @@ def run(root: Path, env: str = "test", force: bool = False, no_alias: bool = Fal
 
     _write_config(profile_dir, env, force)
     _seed_samples(profile_dir, force)
+    _warn_topology_env_sync(profile_dir, env)
 
     if not no_alias:
         alias = create_wrapper_script(_PROFILE_NAME)
@@ -188,8 +268,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Vigil 根目录（默认 ~/.vigil，或 $VIGIL_HOME/$HERMES_HOME）；ops profile 建在 <root>/profiles/ops",
     )
     parser.add_argument(
-        "--env", choices=("test", "uat", "prod"), default="test",
-        help="ops.permissions.env 初始环境（默认 test，安全默认；验证通过后切 prod）",
+        "--env", default="test",
+        help="ops.permissions.env 初始环境（默认 test，安全默认；可为自定义名如 "
+             "bare_metal_prod，自动追加定义到 ops.environments）",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -200,7 +281,12 @@ def main(argv: list[str] | None = None) -> int:
         help="不创建 ops 包装命令（仅 vigil -p ops 可用）",
     )
     args = parser.parse_args(argv)
-    return run(_resolve_root(args.root), env=args.env, force=args.force, no_alias=args.no_alias)
+    env = args.env.strip().lower() if args.env else ""
+    if not env or not _ENV_NAME_RE.fullmatch(env):
+        available = ", ".join(d["name"] for d in _DEFAULT_ENV_DEFS)
+        print(f"✗ 无效环境名 {args.env!r}：仅支持小写字母/数字/下划线/连字符（如 {available} 或自定义 bare_metal_prod）")
+        return 2
+    return run(_resolve_root(args.root), env=env, force=args.force, no_alias=args.no_alias)
 
 
 if __name__ == "__main__":

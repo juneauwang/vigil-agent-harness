@@ -116,6 +116,15 @@ def test_unified_banner_renders_console_header_for_ops_profile():
     assert "Available Skills" not in out
 
 
+def test_unified_banner_renders_custom_env_badge():
+    """自定义环境名（bare_metal_prod）渲染进 ENV badge，不锁死 test/uat/prod。"""
+    out = _render(_ops_state(env="bare_metal_prod"))
+
+    assert "ENV" in out
+    assert "[bare_metal_prod]" in out
+    assert "matrix ON" in out
+
+
 def test_unified_banner_matrix_off_warns():
     out = _render(_ops_state(matrix_enabled=False))
 

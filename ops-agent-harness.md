@@ -135,6 +135,12 @@ ops:
 
 - 审批 gate 钉在执行工具层（terminal/ssh 工具内），不依赖 agent 自觉。
 - 环境字段（env）是每命令的强制参数：跨环境操作默认拒绝，strict 环境需审批。
+- **env 可自定义（OPS-DELTA #11）**：上表 test/UAT/PROD 是内置默认档；真实环境是
+  「物理环境 × 等级」组合（bare_metal_uat / bare_metal_prod / local / cloud），在
+  config.yaml `ops.environments: [{name, isolation, role}]` 定义，名称任意，矩阵
+  行为由 `role` 决定（`bare_metal_prod` → `role: prod` → 按 PROD 档判定）。会话内
+  用 `/env <name>` 切换（无参显示当前 + 可用列表），权限矩阵与 banner ENV badge
+  随之更新；`vigil ops-init --env <自定义名>` 可初始化自定义环境。
 
 ## 4. 源码改动地图（fork 初期全部改动）
 
