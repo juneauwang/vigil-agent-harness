@@ -542,6 +542,44 @@ class TestProjectSensitiveTeePattern:
         assert "project env/config" in desc.lower()
 
 
+class TestInstallTreeWritePatterns:
+    """OPS-DELTA #15: the agent must not modify its own installed code.
+    Terminal-side pairing for the file_tools write_file/patch deny — every
+    write idiom targeting a site-packages / dist-packages path requires
+    approval, while reads and ordinary writes stay clear."""
+
+    def test_write_idioms_into_install_tree_require_approval(self):
+        for command in (
+            "echo 'x = 1' > /venv/lib/python3.11/site-packages/vigil/x.py",
+            "echo 'x = 1' >> /usr/local/lib/python3.11/dist-packages/hermes_cli/main.py",
+            "cat hotfix.py | tee /venv/site-packages/tools/file_operations.py",
+            "cp /tmp/hotfix.py /venv/site-packages/vigil/agent/redact.py",
+            "mv /tmp/hotfix.py /venv/lib/python3.11/site-packages/hermes_cli/x.py",
+            "sed -i 's/old/new/' /venv/site-packages/vigil/tools/x.py",
+            "perl -pi -e 's/old/new/' /venv/site-packages/vigil/tools/x.py",
+            "patch /venv/site-packages/vigil/tools/file_operations.py < /tmp/fix.diff",
+            "pip install --force-reinstall vigil-agent-harness",
+            "pip install -e /home/wpwang/projects/vigil-agent-release",
+            "python3 -m pip install vigil-agent-harness==0.1.7",
+        ):
+            dangerous, key, desc = detect_dangerous_command(command)
+            assert dangerous is True, command
+            assert key is not None, command
+
+    def test_reads_and_unrelated_writes_are_safe(self):
+        for cmd in (
+            "cat /venv/site-packages/vigil/x.py",                 # read only
+            "cp /venv/site-packages/vigil/x.py /tmp/backup.py",   # reading OUT
+            "echo hello > /tmp/notes.txt",
+            "sed -i 's/a/b/' /tmp/app.log",
+            "pip install requests",                               # new package, not self
+            "git -C /home/wpwang/projects/vigil-agent-release status",
+        ):
+            dangerous, key, desc = detect_dangerous_command(cmd)
+            assert dangerous is False, cmd
+            assert key is None, cmd
+
+
 class TestPatternKeyUniqueness:
     """Bug: pattern_key is derived by splitting on \\b and taking [1], so
     patterns starting with the same word (e.g. find -exec rm and find -delete)

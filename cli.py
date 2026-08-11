@@ -56,6 +56,7 @@ from hermes_cli.cli_agent_setup_mixin import CLIAgentSetupMixin
 from hermes_cli.cli_commands_mixin import CLICommandsMixin
 from hermes_cli.cli_billing_mixin import CLIBillingMixin
 from agent.interrupt_compat import request_hard_interrupt
+from agent.redact import redact_sensitive_text
 
 # prompt_toolkit for fixed input area TUI
 from prompt_toolkit.history import FileHistory
@@ -6551,7 +6552,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _emit_reasoning_preview(self, reasoning_text: str) -> None:
         """Render a buffered reasoning preview as a single [thinking] block."""
-        preview_text = reasoning_text.strip()
+        # Same redaction standard as the streamed reasoning box — a thinking
+        # block may repeat a credential value the model saw in tool output
+        # (OPS-DELTA #5).
+        preview_text = redact_sensitive_text(reasoning_text or "").strip()
         if not preview_text:
             return
 
@@ -6724,13 +6728,20 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         self._reasoning_buf = getattr(self, "_reasoning_buf", "") + text
 
+        # Redact on the reassembled line/chunk just before print, NOT on each
+        # delta: a credential split across two stream deltas (``SSHPASS='xx``
+        # + ``yy'``) only matches the redactor once the buffer has the full
+        # line. Same redact_sensitive_text standard as the main response
+        # stream; synchronous and applied per-line, so streaming cadence is
+        # unchanged (OPS-DELTA #5).
+        #
         # Emit complete lines, and force-flush long partial lines so
         # reasoning is visible in real-time even without newlines.
         while "\n" in self._reasoning_buf:
             line, self._reasoning_buf = self._reasoning_buf.split("\n", 1)
-            _cprint(f"{_DIM}{line}{_RST}")
+            _cprint(f"{_DIM}{redact_sensitive_text(line)}{_RST}")
         if len(self._reasoning_buf) > 80:
-            _cprint(f"{_DIM}{self._reasoning_buf}{_RST}")
+            _cprint(f"{_DIM}{redact_sensitive_text(self._reasoning_buf)}{_RST}")
             self._reasoning_buf = ""
 
     def _close_reasoning_box(self) -> None:
@@ -6739,7 +6750,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # Flush remaining reasoning buffer
             buf = getattr(self, "_reasoning_buf", "")
             if buf:
-                _cprint(f"{_DIM}{buf}{_RST}")
+                _cprint(f"{_DIM}{redact_sensitive_text(buf)}{_RST}")
                 self._reasoning_buf = ""
             w = self._scrollback_box_width()
             _cprint(f"{_DIM}└{'─' * (w - 2)}┘{_RST}")
@@ -14529,6 +14540,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             if self.show_reasoning and result and not _reasoning_already_shown:
                 reasoning = result.get("last_reasoning")
                 if reasoning:
+                    # Non-streaming fallback reasoning box — redact before
+                    # rendering, same standard as _stream_reasoning_delta
+                    # (OPS-DELTA #5).
+                    reasoning = redact_sensitive_text(reasoning)
                     w = self._scrollback_box_width()
                     r_label = " Reasoning "
                     r_fill = w - 2 - len(r_label)

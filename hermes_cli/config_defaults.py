@@ -2132,6 +2132,12 @@ DEFAULT_CONFIG = {
     "security": {
         "allow_private_urls": False,  # Allow requests to private/internal IPs (for OpenWrt, proxies, VPNs)
         "redact_secrets": True,
+        # Agent self-modification guard (OPS-DELTA #15): refuse file-tool
+        # writes into the running install's site-packages / source tree
+        # unless explicitly disabled. Set to false ONLY in a development
+        # profile — that is the documented escape hatch for working on Vigil
+        # itself.
+        "protect_install_code": True,
         "tirith_enabled": True,
         "tirith_path": "tirith",
         "tirith_timeout": 5,

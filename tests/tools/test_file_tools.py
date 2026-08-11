@@ -348,7 +348,11 @@ class TestPatchHints:
     """Patch tool should hint when old_string is not found."""
 
     @patch("tools.file_tools._get_file_ops")
-    def test_no_match_includes_hint(self, mock_get):
+    def test_no_match_includes_hint(self, mock_get, monkeypatch):
+        # Isolate the OPS-DELTA #15 install-code gate: this test exercises the
+        # no-match hint, not the source-tree write protection (the relative
+        # path would otherwise resolve under the repo root in the test env).
+        monkeypatch.setattr("tools.file_tools._get_install_code_roots", lambda: ())
         mock_ops = MagicMock()
         result_obj = MagicMock()
         result_obj.to_dict.return_value = {
@@ -486,6 +490,69 @@ class TestSensitivePathCheck:
         from tools.file_tools import write_file_tool
         result = json.loads(write_file_tool("/tmp/other.txt", "hello"))
         assert result["status"] == "ok"
+
+
+class TestInstallCodeWriteGate:
+    """OPS-DELTA #15: the agent must not write into its own installation or
+    source tree (site-packages / project repo) unless dev mode is explicit.
+    The 2026-08-11 hotpatch was an agent editing site-packages with no review;
+    this gate makes write_file/patch refuse those targets by default."""
+
+    @staticmethod
+    def _site_packages(tmp_path):
+        site = tmp_path / "site-packages"
+        site.mkdir()
+        return site
+
+    def test_write_into_site_packages_refused(self, tmp_path, monkeypatch):
+        site = self._site_packages(tmp_path)
+        monkeypatch.setattr("tools.file_tools._get_install_code_roots", lambda: (str(site),))
+        from tools.file_tools import write_file_tool
+        result = json.loads(write_file_tool(str(site / "vigil" / "x.py"), "x = 1\n"))
+        assert "error" in result
+        assert "installed/source code" in result["error"]
+
+    def test_write_into_package_source_root_refused(self, tmp_path, monkeypatch):
+        repo = tmp_path / "vigil-agent-release"
+        repo.mkdir()
+        monkeypatch.setattr("tools.file_tools._get_install_code_roots", lambda: (str(repo),))
+        from tools.file_tools import write_file_tool
+        result = json.loads(write_file_tool(str(repo / "tools" / "x.py"), "x = 1\n"))
+        assert "error" in result
+        assert "installed/source code" in result["error"]
+
+    def test_check_sensitive_path_covers_patch_embedded_paths(self, tmp_path, monkeypatch):
+        """The V4A patch path routes every touched file through
+        _check_sensitive_path, so the install-code gate applies there too."""
+        site = self._site_packages(tmp_path)
+        monkeypatch.setattr("tools.file_tools._get_install_code_roots", lambda: (str(site),))
+        from tools.file_tools import _check_sensitive_path
+        err = _check_sensitive_path(str(site / "hermes_cli" / "main.py"))
+        assert err is not None
+        assert "installed/source code" in err
+
+    def test_dev_mode_flag_allows_install_code_write(self, tmp_path, monkeypatch):
+        site = self._site_packages(tmp_path)
+        monkeypatch.setattr("tools.file_tools._get_install_code_roots", lambda: (str(site),))
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config_readonly",
+            lambda: {"security": {"protect_install_code": False}},
+        )
+        from tools.file_tools import write_file_tool
+        with patch("tools.file_tools._get_file_ops") as mock_get:
+            mock_ops = MagicMock()
+            mock_ops.write_file.return_value = MagicMock(
+                to_dict=lambda: {"content": "x = 1\n"}, error=None
+            )
+            mock_get.return_value = mock_ops
+            result = json.loads(write_file_tool(str(site / "vigil" / "x.py"), "x = 1\n"))
+        assert not result.get("error")
+
+    def test_unrelated_path_not_gated(self, tmp_path, monkeypatch):
+        site = self._site_packages(tmp_path)
+        monkeypatch.setattr("tools.file_tools._get_install_code_roots", lambda: (str(site),))
+        from tools.file_tools import _check_sensitive_path
+        assert _check_sensitive_path(str(tmp_path / "scratch" / "notes.txt")) is None
 
 
 class TestPatchSchemaShape:

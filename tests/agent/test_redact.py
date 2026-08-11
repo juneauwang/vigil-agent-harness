@@ -158,6 +158,25 @@ class TestJsonFields:
         result = redact_sensitive_text(text)
         assert result == text
 
+    def test_json_custom_credential_fields_masked(self):
+        """Custom credential field names (ssh_key / private_key / passphrase /
+        client_secret / id_rsa / credential / auth …) must mask like the
+        built-in password/token fields (OPS-DELTA #5)."""
+        for key in (
+            "ssh_key",
+            "private_key",
+            "passphrase",
+            "client_secret",
+            "id_rsa",
+            "credential",
+            "credentials",
+            "authorization",
+            "auth",
+        ):
+            result = redact_sensitive_text(f'{{"{key}": "fake-secret-value"}}')
+            assert "fake-secret-value" not in result, f"{key} survived: {result!r}"
+            assert f'"{key}": "***"' in result, f"{key} not fully masked: {result!r}"
+
 
 class TestAuthHeaders:
 
@@ -735,6 +754,43 @@ class TestCredentialValuesStrictPass:
             '{"password": "hunter2", "apiKey": "abc12345"}', "cat config.json"
         )
         assert "hunter2" not in js and "abc12345" not in js
+
+    def test_json_ssh_key_masked_on_tool_output(self):
+        """OpenBao-style ``{"ssh_key": …}`` must be masked on the strict
+        tool-output surface — the strict pre-gate has to recognize the key
+        name or the JSON pass is skipped entirely (OPS-DELTA #5)."""
+        from agent.redact import redact_terminal_output
+
+        for key in ("ssh_key", "private_key", "passphrase", "id_rsa"):
+            out = redact_terminal_output(
+                f'{{"{key}": "fake-secret-value"}}', "cat bao.json"
+            )
+            assert "fake-secret-value" not in out, f"{key} survived: {out!r}"
+            assert f'"{key}": "***"' in out, f"{key} not masked: {out!r}"
+
+    def test_sshpass_env_assignment_masked(self):
+        """``SSHPASS='…' sshpass -e ssh …`` must mask the assignment — the
+        PASS-class key is absent from the old env-name list, and the strict
+        pre-gate needs ``pass`` or the ENV pass never runs (OPS-DELTA #5)."""
+        from agent.redact import redact_sensitive_text, redact_terminal_output
+
+        plain = redact_sensitive_text(
+            "SSHPASS='fake-pass-123' sshpass -e ssh user@203.0.113.10"
+        )
+        assert "fake-pass-123" not in plain
+        assert "SSHPASS='***'" in plain
+
+        strict = redact_terminal_output(
+            "SSHPASS='fake-pass-123' sshpass -e ssh user@203.0.113.10",
+            "sshpass -e ssh user@203.0.113.10",
+        )
+        assert "fake-pass-123" not in strict
+        assert "SSHPASS='***'" in strict
+
+        for key in ("SUDO_PASS", "DB_PASS", "LOGIN_PASS"):
+            out = redact_terminal_output(f"{key}='fake-pass-123'", "cat .env")
+            assert "fake-pass-123" not in out, f"{key} survived: {out!r}"
+            assert f"{key}='***'" in out, f"{key} not masked: {out!r}"
 
     def test_terminal_masks_spaced_equals_forms(self):
         from agent.redact import redact_terminal_output

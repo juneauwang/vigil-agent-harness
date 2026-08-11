@@ -399,6 +399,16 @@ _COMMAND_TAIL = r'(?:\s*(?:&&|\|\||;).*)?$'
 # the same reasoning that keeps `config.yaml.bak` safe.
 _WRITE_TARGET_BOUNDARY = r'(?=[\s;&|<>"\']|$)'
 
+# Python install trees (pip site-packages / Debian dist-packages): writes
+# landing here are the agent modifying its OWN installed code (OPS-DELTA #15 —
+# the 2026-08-11 hotpatch was a Vigil session writing into site-packages with
+# no review/audit). The directory component is unambiguous regardless of the
+# venv prefix, so a static fragment covers any environment.
+_INSTALL_TREE_PATH = (
+    r'(?:[^\s/"\'`]*/)*'
+    r'(?:site-packages|dist-packages)/'
+)
+
 # =========================================================================
 # Hardline (unconditional) blocklist
 # =========================================================================
@@ -828,6 +838,22 @@ DANGEROUS_PATTERNS = [
     (rf'>>?\s*["\']?{_SENSITIVE_WRITE_TARGET}', "overwrite system file via redirection"),
     (rf'\btee\b.*["\']?{_PROJECT_SENSITIVE_WRITE_TARGET}["\']?{_WRITE_TARGET_BOUNDARY}', "overwrite project env/config via tee"),
     (rf'>>?\s*["\']?{_PROJECT_SENSITIVE_WRITE_TARGET}["\']?{_WRITE_TARGET_BOUNDARY}', "overwrite project env/config via redirection"),
+    # Install-tree writes (OPS-DELTA #15): the agent must not modify its own
+    # installed code. Pairs the file_tools write_file/patch deny so the
+    # terminal side (sed -i / patch / tee / > / cp / mv) is not an open door
+    # for the same self-modification. A target path carrying a
+    # site-packages/dist-packages component is unambiguous.
+    (rf'>>?\s*["\']?{_INSTALL_TREE_PATH}[^\s"\']*', "overwrite installed package code (site-packages)"),
+    (rf'\btee\b.*["\']?{_INSTALL_TREE_PATH}[^\s"\']*', "overwrite installed package code via tee"),
+    (rf'\b(cp|mv|install)\b.*\s["\']?{_INSTALL_TREE_PATH}[^\s"\']*["\']?{_COMMAND_TAIL}', "copy/move file into installed package code"),
+    (rf'\bsed\s+(?:-[^\s]*i\b|--in-place\b).*{_INSTALL_TREE_PATH}[^\s"\']*', "in-place edit of installed package code"),
+    (rf'\b(?:perl|ruby)\b.*(?:^|\s)-[^\s]*i\b.*{_INSTALL_TREE_PATH}[^\s"\']*', "in-place edit of installed package code (perl/ruby)"),
+    (rf'\bpatch\b.*{_INSTALL_TREE_PATH}[^\s"\']*', "patch installed package code (site-packages)"),
+    # pip reinstall/editable install of the agent package itself, or a
+    # force-reinstall/editable install that rewrites existing install-tree
+    # code — the pip-shaped equivalent of editing site-packages.
+    (r'\b(?:pip|pip3|python3?\s+-m\s+pip)\s+install\b.*\b(?:vigil[-_]agent[-_]harness|vigil[-_]harness)\b', "pip install of the agent package (self-modification)"),
+    (r'\b(?:pip|pip3|python3?\s+-m\s+pip)\s+install\b.*(?:--force-reinstall|-e\b|--editable\b)', "pip force/editable install (rewrites installed package code)"),
     (r'\bxargs\s+.*\brm\b', "xargs with rm"),
     # find -exec rm / -execdir rm — the -execdir variant (same semantics,
     # runs in the directory of each match) was previously missed. Claude
