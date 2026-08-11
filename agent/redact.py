@@ -132,8 +132,11 @@ _PREFIX_PATTERNS = [
 
 # ENV assignment patterns: KEY=value where KEY contains a secret-like name.
 # Uppercase keys tolerate spaces around "=" (e.g. ``FOO_SECRET = bar``) because
-# an all-caps key is almost never prose/code.
-_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)"
+# an all-caps key is almost never prose/code. ``PASS`` covers the sshpass /
+# sudo family (SSHPASS, SUDO_PASS, *_PASS) that the longer PASSWD/PASSWORD
+# alternatives miss — an all-caps KEY ending in PASS is a password, not prose
+# (OPS-DELTA #5).
+_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|CREDENTIAL|AUTH)"
 _ENV_ASSIGN_RE = re.compile(
     rf"([A-Z0-9_]{{0,50}}{_SECRET_ENV_NAMES}[A-Z0-9_]{{0,50}})\s*=\s*(['\"]?)(\S+)\2",
 )
@@ -155,7 +158,16 @@ _ENV_ASSIGN_RE = re.compile(
 #      (optionally after ``export``), so conversational ``I have password=foo``
 #      mid-sentence is left alone.
 # The colon-form URL guard (skip when ``://`` present) lives at the call site.
-_SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|credential|auth)"
+# ``pass`` and the SSH/credential key names are here for the STRICT pre-gate
+# (``_CFG_SECRET_WORD_RE``): tool-output surfaces must run the ENV/JSON passes
+# when the text carries only these keys — ``SSHPASS='…'``, ``{"ssh_key": …}``
+# (OpenBao returns) have no other secret keyword, so without them the gate
+# would skip the passes and let the values through verbatim. The dotted/
+# anchored/YAML matchers still run their own ``_key_has_secret_keyword``
+# validation, so bare-``pass``/``ssh_key`` config forms stay unchanged; only
+# the JSON/ENV passes (which do not keyword-validate) gain coverage
+# (OPS-DELTA #5).
+_SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|pass|ssh_key|private_key|passphrase|id_rsa|credential|auth)"
 _CFG_VALUE = r"(['\"]?)([^\s&]+?)\2(?=[\s&]|$)"
 # Linear pre-gate for the _CFG_*_RE subs below: a text with no secret keyword
 # can never match either pattern, so the (potentially backtrack-heavy) subs
@@ -348,7 +360,11 @@ def _already_masked_value(value: str) -> bool:
     )
 
 # JSON field patterns: "apiKey": "value", "token": "value", etc.
-_JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material)"
+# Custom credential field names (ssh_key / private_key / passphrase /
+# client_secret / id_rsa / credential / auth …) were missing — OpenBao returns
+# ``{"ssh_key": "…"}`` and it passed through verbatim while ``{"password":
+# "…"}`` was masked (OPS-DELTA #5).
+_JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material|ssh_key|private_key|passphrase|client_secret|id_rsa|credential|credentials|authorization|auth)"
 _JSON_FIELD_RE = re.compile(
     rf'("{_JSON_KEY_NAMES}")\s*:\s*"([^"]+)"',
     re.IGNORECASE,
