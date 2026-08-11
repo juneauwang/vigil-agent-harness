@@ -894,22 +894,55 @@ class ShellFileOperations(FileOperations):
         
         # Content analysis: >30% non-printable chars = binary
         if content_sample:
+            sample = content_sample[:1000]
             # Undecodable bytes: the terminal env decodes stdout with
             # errors="replace", so any non-UTF-8 byte arrives here already
             # turned into U+FFFD. That char is "printable" (ord 65533), so the
             # non-printable ratio below never catches it — and returning the
             # lossy text would let a read→edit→write round-trip silently
-            # overwrite the original bytes with mojibake. Treat a file whose
-            # sample carries the replacement char as binary (read-only) so the
-            # agent can't corrupt it. Legitimate UTF-8 text effectively never
-            # contains U+FFFD.
-            if "\ufffd" in content_sample[:1000]:
+            # overwrite the original bytes with mojibake. But U+FFFD is also
+            # produced by the `head -c 1000` SAMPLE cutting a multibyte UTF-8
+            # char mid-sequence (e.g. a Chinese runbook whose 3-byte char spans
+            # bytes 998-1000) — the FILE is valid; only the sample is
+            # truncated. Distinguish the two with a strict re-decode of the
+            # raw bytes: a truncation artifact decodes cleanly (keep the
+            # text), genuine invalid UTF-8 raises UnicodeDecodeError (binary).
+            # Fail-closed: if the re-read itself fails, keep the binary
+            # verdict. OPS-DELTA #15.
+            if "\ufffd" in sample and not self._raw_sample_decodes_utf8(path):
                 return True
-            non_printable = sum(1 for c in content_sample[:1000]
+            non_printable = sum(1 for c in sample
                                if ord(c) < 32 and c not in '\n\r\t')
             return non_printable / min(len(content_sample), 1000) > 0.30
         
         return False
+
+    def _raw_sample_decodes_utf8(self, path: str) -> bool:
+        """Strict-decode the raw first bytes of ``path`` via Python.
+
+        Re-reads the file in the terminal env (``rb``) and strict-decodes a
+        1003-byte window (1000 sample bytes + up to 3 completion bytes so a
+        multibyte char cut at the sample boundary is completed). A trailing
+        partial UTF-8 sequence is trimmed before decoding — a cut tail is a
+        sampling artifact, not corruption. Returns True when the window is
+        valid UTF-8, False on UnicodeDecodeError or when the re-read fails
+        (caller keeps the binary verdict — fail-closed).
+
+        The exit code (not stdout) carries the verdict, so the terminal env's
+        lossy stdout decoding cannot mask the result.
+        """
+        try:
+            result = self._exec(
+                "python3 -c \"import sys;"
+                "d=open(sys.argv[1],'rb').read(1003);"
+                "d=d.rstrip(b'\\x80\\xbf');"
+                "d=d[:-1] if d and d[-1]>=128 else d;"
+                "d.decode('utf-8')\" "
+                f"{self._escape_shell_arg(path)} 2>/dev/null"
+            )
+            return result.exit_code == 0
+        except Exception:
+            return False
     
     def _is_image(self, path: str) -> bool:
         """Check if file is an image we can return as base64."""

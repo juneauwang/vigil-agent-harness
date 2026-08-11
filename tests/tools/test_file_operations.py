@@ -673,3 +673,61 @@ class TestReadNonUtf8IsBinary:
         ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))
         # Proper UTF-8 (including non-ASCII) must still read as text.
         assert ops._is_likely_binary("notes.txt", "café résumé\nsecond\n") is False
+
+
+class TestIsLikelyBinaryUtf8Boundary:
+    """OPS-DELTA #15: `head -c 1000` sampling must not misclassify a valid
+    UTF-8 file as binary when the cut lands mid-multibyte-char.
+
+    The terminal env decodes the 1000-byte sample with errors="replace", so a
+    Chinese runbook whose 3-byte char spans bytes 998-1000 leaves a trailing
+    U+FFFD. Before the fix that U+FFFD was treated as genuine non-UTF-8 and
+    the file was flagged binary ("runbook 编码损坏" false alarm). The fix
+    re-reads the raw bytes with strict decoding: a truncation artifact
+    decodes cleanly, genuine corruption still raises UnicodeDecodeError.
+    """
+
+    @staticmethod
+    def _lossy_head(path: Path, n: int = 1000) -> str:
+        return path.read_bytes()[:n].decode("utf-8", errors="replace")
+
+    @staticmethod
+    def _write_utf8(path: Path, prefix_len: int) -> None:
+        # "程" is a 3-byte UTF-8 char (e7 a8 8b); place it at byte
+        # ``prefix_len`` so it spans [prefix_len, prefix_len+2].
+        path.write_text("a" * prefix_len + "程" + "b" * 50, encoding="utf-8")
+
+    def test_three_byte_char_cut_at_byte_1000_starting_998(self, tmp_path):
+        p = tmp_path / "runbook_998.yaml"
+        self._write_utf8(p, 998)  # spans bytes 998-1000, cut at 1000 → e7 a8
+        sample = self._lossy_head(p)
+        assert "\ufffd" in sample, "sample must carry the truncation artifact"
+        ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))
+        assert ops._is_likely_binary(str(p), sample) is False
+
+    def test_three_byte_char_cut_at_byte_1000_starting_999(self, tmp_path):
+        p = tmp_path / "runbook_999.yaml"
+        self._write_utf8(p, 999)  # spans bytes 999-1001, cut at 1000 → e7
+        sample = self._lossy_head(p)
+        assert "\ufffd" in sample, "sample must carry the truncation artifact"
+        ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))
+        assert ops._is_likely_binary(str(p), sample) is False
+
+    def test_genuine_corruption_still_binary(self, tmp_path):
+        p = tmp_path / "corrupt.yaml"
+        raw = bytes("runbook content " + "x" * 300, "utf-8") + b"\xff\xfe" + \
+            bytes("中文" * 100, "utf-8")
+        p.write_bytes(raw)
+        sample = self._lossy_head(p)
+        ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))
+        assert ops._is_likely_binary(str(p), sample) is True
+
+    def test_normal_chinese_file_not_binary(self, tmp_path):
+        p = tmp_path / "normal.yaml"
+        p.write_text("部署手册：第一页 第二页 第三页\n" * 100, encoding="utf-8")
+        sample = self._lossy_head(p)
+        # The 1000-byte sample cut can land mid-char here too — that is the
+        # whole point of the fix: the file is valid UTF-8 and must NOT be
+        # flagged binary even when the sample carries the truncation artifact.
+        ops = ShellFileOperations(make_real_subprocess_env(str(tmp_path)))
+        assert ops._is_likely_binary(str(p), sample) is False

@@ -654,6 +654,9 @@ _SENSITIVE_EXACT_PATHS = {"/var/run/docker.sock", "/run/docker.sock"}
 _hermes_config_resolved: str | None = None
 _hermes_config_resolved_loaded = False
 
+_install_code_roots: tuple[str, ...] | None = None
+_install_code_roots_loaded = False
+
 
 def _get_hermes_config_resolved() -> str | None:
     """Return the resolved absolute path of the Hermes config file (cached)."""
@@ -672,6 +675,60 @@ def _get_hermes_config_resolved() -> str | None:
     return _hermes_config_resolved
 
 
+def _protect_install_code_enabled() -> bool:
+    """Return True when agent writes into install/source code are gated.
+
+    Reads ``security.protect_install_code`` from config (default True —
+    fail-closed). Set it to ``false`` ONLY in an explicit development profile:
+    that is the documented escape hatch for working on Vigil itself. OPS-DELTA
+    #15: the 2026-08-11 site-packages hotpatch was an agent editing its own
+    installed code with no review/audit.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        sec = cfg.get("security")
+        if isinstance(sec, dict) and sec.get("protect_install_code") is False:
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _get_install_code_roots() -> tuple[str, ...]:
+    """Resolved roots of the running install's code (cached): the interpreter's
+    site-packages (purelib/platlib) and the source tree the Vigil package is
+    imported from (covers editable installs / repo checkouts). Writes landing
+    under any of these are agent self-modification unless dev mode is explicit.
+    """
+    global _install_code_roots, _install_code_roots_loaded
+    if _install_code_roots_loaded:
+        return _install_code_roots
+    _install_code_roots_loaded = True
+    roots: set[str] = set()
+    try:
+        import sysconfig
+        for key in ("purelib", "platlib"):
+            p = sysconfig.get_paths().get(key)
+            if p:
+                roots.add(str(Path(p).resolve()))
+    except Exception:
+        pass
+    try:
+        import site
+        for p in site.getsitepackages():
+            roots.add(str(Path(p).resolve()))
+    except Exception:
+        pass
+    try:
+        import hermes_cli
+        roots.add(str(Path(hermes_cli.__file__).resolve().parent.parent))
+    except Exception:
+        pass
+    _install_code_roots = tuple(sorted(roots))
+    return _install_code_roots
+
+
 def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None:
     """Return an error message if the path targets a sensitive system location."""
     try:
@@ -688,6 +745,19 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
             return _err
     if resolved in _SENSITIVE_EXACT_PATHS or normalized in _SENSITIVE_EXACT_PATHS:
         return _err
+    # Agent self-modification guard (OPS-DELTA #15): never let the agent write
+    # into its own installation / source tree unless dev mode is explicit.
+    if _protect_install_code_enabled():
+        for root in _get_install_code_roots():
+            if resolved == root or resolved.startswith(root + os.sep):
+                return (
+                    f"Refusing to write into installed/source code: {filepath}\n"
+                    "The agent must not modify its own installation or source "
+                    "tree (site-packages / project repo). Set "
+                    "security.protect_install_code: false in config.yaml only "
+                    "in an explicit development profile to allow install-code "
+                    "writes."
+                )
     # Prevent agents from modifying the Hermes config file directly.
     # approvals.mode and other security settings live here; a malicious or
     # prompt-injected agent could silently disable exec approval by writing to
