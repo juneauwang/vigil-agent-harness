@@ -370,6 +370,14 @@ _JSON_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# OPS-DELTA #35：值形态检测兜底——任意键名的 JSON 值兜底 pass。键名无法穷举
+# （组合字段名 ssh_key_0811/sudo_0811 形态），只要值本身像凭据就打码。值组
+# 要求 ≥16 字符（与 _looks_like_inline_secret 的长度门槛一致，短值不匹配，
+# 也避免在普通 JSON 上无谓扫描）。
+_JSON_VALUE_SHAPE_RE = re.compile(
+    r'("(?:\\.|[^"\\])*")\s*:\s*"((?:\\.|[^"\\]){16,})"'
+)
+
 # Authorization headers — any scheme (Bearer, Basic, Token, Digest, …) plus the
 # bare-credential form, and Proxy-Authorization. The credential token is masked
 # while the header name and scheme word are preserved for debuggability. The
@@ -565,6 +573,11 @@ def _looks_like_inline_secret(token: str) -> bool:
     no mixed case) are excluded so git shas and pod ids survive.
     """
     if not token or len(token) < 16:
+        return False
+    # 含空格 = 句子/短语形态，不是凭据（API key/password/token 无空格）。
+    # 首字母大写的英文句子（lower+upper 混合）会被下面字符类判定误伤，
+    # 这里先排除（OPS-DELTA #35 验收发现）。
+    if " " in token:
         return False
     # shell flag（--from-literal=… / -p …）不是凭据本身——flag 通道已覆盖其值。
     if token.startswith("-"):
@@ -993,6 +1006,24 @@ def redact_sensitive_text(
                 return m.group(0)
             return f'{key}: "{_mask_token(value)}"'
         text = _JSON_FIELD_RE.sub(_redact_json, text)
+
+        # OPS-DELTA #35：值形态检测兜底（精确键名 pass 之后，只处理它漏掉的）。
+        # 严格模式（工具输出等）不要求键名含秘密词——这正是值形态检测存在的
+        # 意义（任意键名无法穷举）。防误伤：URL/路径/base64（含 / \ : .）
+        # 与纯小写长文本（字符类单一）被 _looks_like_inline_secret 天然排除；
+        # 已打码值（含 "."）不会二次匹配。
+        def _redact_json_value_shape(m):
+            key, value = m.group(1), m.group(2)
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            if _strict and _is_non_secret_constant_key(key.strip('"')):
+                return m.group(0)
+            if _strict and _prefix_present and _already_masked_value(value):
+                return m.group(0)
+            if _looks_like_inline_secret(value):
+                return f'{key}: "{_mask_token(value)}"'
+            return m.group(0)
+        text = _JSON_VALUE_SHAPE_RE.sub(_redact_json_value_shape, text)
 
     # Unquoted YAML / colon config: password: ***  (after JSON so quoted
     # values are handled there; the lookahead in _YAML_ASSIGN_RE skips

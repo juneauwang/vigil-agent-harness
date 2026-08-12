@@ -1324,7 +1324,7 @@
   （45 例）+ test_ops_permissions_guard.py 新增 4 例 + test_runbook_tools.py
   新增 2 例，相关套件全过。
 
-### 33. topo_update 参数契约未校验——错误结构静默写入嵌套层 — ⬜ 未实施（代码层待排期；数据已修复）
+### 33. topo_update 参数契约未校验——错误结构静默写入嵌套层 — ✅ 已实施（2026-08-12，批次五：attrs 键展开合并 + 复杂值拒绝 + 契约正反例）
 
 - **现象**：工具文档契约是"env/type/endpoint/owner/status/healthcheck/depends_on/depended_by 为顶层字段，其余键写入 attrs"，即调用方应直接传字段键。但调用方传了 `{"attrs": {...}}`（把 attrs 当普通键再包一层），工具静默接受，把内容写进 attrs.attrs 嵌套层，返回 status=updated 无任何警告。一次批量登记导致 20 个实体档案变成两层嵌套，topo_query detail 结构异常，且第一层概览看不出问题——靠用户追问"记录为什么不对"才发现。
 - **根因**：
@@ -1337,8 +1337,14 @@
   3. 可选防御：topo_query detail 检测 attrs 异常嵌套并提示。
 - **本次已做（数据修复）**：20 个受影响档案已用保注释脚本把嵌套内容提升回顶层 attrs（冲突键保留旧值），复核无残留；后续更新已按正确参数格式验证。
 - **2026-08-12 复核**：批次二（schema v0.2）后 topo_update 的 attrs 处理仍在（tools/topo_tools.py:613-617 直接 `attrs[key] = value`），"attrs 键自动展开/拒绝"未实施。**并入批次二任务 1 的 B 项一并排期**（与 v0.2 参数契约修订同批）。
+- **已实施（批次五，2026-08-12）**：
+  1. `tools/topo_tools.py` `topo_update` 的 updates 循环新增 `"attrs"` 键显式分支：值为 dict → 展开合并进顶层 attrs（`existing.setdefault("attrs", {})`），**不再写入 attrs.attrs 嵌套层**；值非 dict → 明确报错。audit 追加 note："updates 含 attrs 键：字段键直接传，不需要包 attrs 层；已自动展开合并。"
+  2. 非白名单键的 dict/list 复杂值 → 明确报错（防 LLM 传嵌套结构继续污染档案；depends_on/depended_by 是已定义顶层列表字段，走原分支不受影响）。
+  3. `_DEFAULT_TOPO_UPDATE_SCHEMA` description 补正例 `{"endpoint": "1.2.3.4", "owner": "x"}` / 反例 `{"attrs": {...}}`（应直接传字段键，attrs 键会被自动展开）+ 标量限制说明。
+  单测：tests/tools/test_topo_update_contract.py（8 例：attrs 展开合并不产生 attrs.attrs / 合并既有 attrs / non-dict 拒绝 / 顶层字段 / 普通标量 / dict 和 list 拒绝 / depends_on 列表仍允许）+ 既有 test_topo_tools.py / test_topo_v2.py 全过。
+- **核销方式**：`ops.topo.enabled=false` 时工具不注册零影响；合法调用（顶层字段 + 标量 attrs）行为不变，仅新增结构防御与提示；季度体检抽查新档案不再出现 attrs.attrs 两层嵌套。
 
-### 34. 上游推理服务 500 崩溃：无降级 + 崩溃会话不入库 — ⬜ 未实施（待排期）
+### 34. 上游推理服务 500 崩溃：无降级 + 崩溃会话不入库 — 🟡 缺陷 2 已核实“边执行边写”已存在（批次五，登记结论未加代码）；缺陷 1 保持未实施（原因见下）
 
 - **背景**：切换模型后实测新模型能力。新模型（经自建推理服务接入）在完成 4 个复杂任务（拓扑总览、监控服务全检、多轮 ssh/vssh 排查）后，于一次 pty 重试调用时上游返回 500。两个独立缺陷同时暴露：
 - **缺陷 1：上游 500 无降级**。RemoteProtocolError → 重试耗尽 → InternalServerError，重试全失败后会话直接断连，无降级/兜底路径（当前未配置 fallback 模型；若后续配置，需验证 5xx 时是否真正生效）。
@@ -1347,8 +1353,19 @@
   1. 重试耗尽后触发 fallback 模型降级并显式告知"已降级"，不静默断连；
   2. 会话持久化边执行边写（或崩溃时 flush 已执行轨迹），保证排障复盘不因崩溃丢失证据。
 - **未实施**：待排期。
+- **批次五核实（2026-08-12，读代码验证，不实测远端）**：
+  - **缺陷 2（崩溃轨迹 flush）——核实结论：边执行边写已存在，flush 是多余的，不强行加代码**。会话持久化是"边执行边写"：
+    1. `agent/turn_context.py:1241` 在首次 LLM 调用前即持久化入站 user 消息（Crash-resilience）；`agent/conversation_loop.py` 工具循环每步 flush（assistant(tool_calls) 块在工具执行前落库、每个工具结果立即落库，`tests/run_agent/test_tool_call_incremental_persistence.py` 契约钉住），且每条终止路径——重试耗尽（含 500）、invalid response、中断、截断、拒绝、外层 catch-all——都调用 `agent._persist_session()`；`agent/turn_finalizer.py:410` 每 turn 出口（成功 + 异常）统一持久化；`cli.py:12072/14837` CLI 关闭/退出兜底。
+    2. 落库走 `hermes_state.SessionDB.append_messages_batch`（单事务 + FTS5 可检索），`_flush_messages_to_session_db` 用 `_DB_PERSISTED_MARKER` 去重（#860 契约，`tests/run_agent/test_860_dedup.py` 钉住），重复 flush 幂等不产生重复行；崩溃（含 SIGKILL）最多丢失当前 in-flight 半截 turn，已完成轨迹"哪怕缺最后一段"也已在库，session_search 可检索到。
+    3. **登记核实结论，未加代码**（批次五明确：不适用场景登记即可，不强行加代码）。
+  - **缺陷 1（500 降级探测）——登记"探测提示保持未实施，原因"**：
+    1. **fallback 配置已存在**：config.yaml 顶层 `fallback_providers`（list，legacy `fallback_model` 自动迁移，`hermes_cli/config.py:1967-2020` 规范化），`agent/agent_init.py:1404-1411` 构建 `_fallback_chain`，`agent/chat_completion_helpers.py:1730 try_activate_fallback` 逐级切换。
+    2. **5xx 时确实生效（读代码验证）**：`agent/error_classifier.py` 将 500/502 分类为 `server_error, retryable=True`（请求校验/上下文溢出形态除外）、503/529 为 overloaded；`agent/conversation_loop.py:5328-5347` 重试耗尽后先 `_try_recover_primary_transport` 再 `_try_activate_fallback()`，fallback 可用则自动降级继续。断连并非静默：每次 attempt 缓冲行含 `[HTTP 500]` 状态码，终端 `❌ API failed after N retries — <摘要>`。
+    3. **保持未实施原因**：提示文本要求"已重试 N 次失败"的 N（retry_count/max_retries）是 `agent/conversation_loop.py` 重试循环的局部变量，断连出口也在该文件（SDK `max_retries=0` 已禁用，重试归外层循环所有）——硬约束 1 禁止触碰 conversation_loop，从 `agent/chat_completion_helpers.py` 或持久化入口拿不到 N，硬加需跨层传递计数（侵入）。按批次五完成标准第 3 条登记"缺陷 1 保持未实施，原因"，不硬改。
+    4. "已执行轨迹已保存"语义由架构保证（缺陷 2 核实结论）：断连前所有终止路径均已调用 `_persist_session`，用户不会"以为全丢"。
+- **核销方式**：季度体检复核 conversation_loop 重试耗尽路径是否仍先落库再返回（当前 5482 行附近先 `_persist_session` 再 return）；fallback 配置存在性随时可从 config.yaml 检查；若后续允许触碰 conversation_loop，在终端断连出口补一行"上游推理服务 500，已重试 N 次失败；已执行轨迹已保存"即可关闭缺陷 1 的提示部分。
 
-### 35. 换模型即失守：行为约束层 vs 代码层 gate 的实证 — 🟡 部分覆盖（批次一代码层已拦 sudo/命令文本；输出层自定义字段名回显缺口仍在，待排期）
+### 35. 换模型即失守：行为约束层 vs 代码层 gate 的实证 — ✅ 已实施（2026-08-12，批次五：JSON 值形态检测兜底，组合字段名回显打码）
 
 - **现象**：探查 prod k3s 节点状态（需加载带 passphrase 的 ssh key）时，切换后的模型（397B）单任务内三次凭据违规：
   1. **输出层无脱敏**：vault API 返回 JSON 全量回显到工具输出，含组合字段名（ssh_key_0811/sudo_0811 形态）的凭据字段——redact 名单只认 api_key/token/secret 等固定键名，自定义字段名原样过（第 5 条 2026-08-11 实证同源，**再次复现**）；
@@ -1366,6 +1383,13 @@
   2. 命令构造层凭据检测（第 21 条，批次一已做主体，短值补漏）；
   3. sudo 被拦后的系统化 fallback：被拦即停 + 引导用户手动执行（本次反复尝试多轮才停下，行为约束换模型后不可靠）；
   4. 产品设计原则固化：行为约束层降级为辅助，安全 gate 以代码层为准。
+- **已实施（批次五，2026-08-12）——JSON 值形态检测兜底**：
+  1. `agent/redact.py` 新增 `_JSON_VALUE_SHAPE_RE`（任意键名 + 值 ≥16 字符形态）作为精确键名 `_JSON_FIELD_RE` pass **之后**的兜底层：值满足 `_looks_like_inline_secret`（≥16 字符、≥2 字符类混合、非纯 hex/UUID/路径/URL、香农熵 ≥3.2）→ `_mask_token` 打码，与键名无关。`{"ssh_key_0811": "<高熵>"}` / `{"sudo_0811": "<高熵>"}` → 值打码（#35 核心用例）。
+  2. 防误伤复用主链现有守卫：env 引用形态（`_ENV_LOOKUP_VALUE_RE`）、非秘密常量键（`_is_non_secret_constant_key`，严格模式）、已打码值（`_already_masked_value`，`_prefix_present`）直接放行；URL/路径/base64（含 `/ \ : .`）与长纯文本（字符类单一）被 `_looks_like_inline_secret` 天然排除——`{"description": "<50 字符普通文本>"}`、`{"url": "https://..."}`、`{"path": "/var/lib/..."}` 不打码；精确键名 `{"password": "short"}` 原逻辑不回归。
+  3. 新逻辑挂在 `redact_sensitive_text` 主链内，工具输出 / reasoning / 命令文本三个渲染出口自动覆盖（批次一 #5 已接线，无需重复接线，测试各验证一例）。
+  单测：tests/agent/test_redact_value_shape.py（12 例：值打码 4 + 防误伤 4 + 精确键名回归 1 + 三渲染出口 3）+ 既有 test_redact.py / test_redact_command_text.py 全过。
+- **2026-08-12 验收修复**：独立验收发现首字母大写的正常英文句子（lower+upper 天然混合字符类，如 `{"description": "This is a perfectly normal..."}`）被 `_looks_like_inline_secret` 误判打码。修复：该函数开头排除**含空格 token**（真凭据从不含空格；`_CMD_HIGH_ENTROPY_TOKEN_RE` 匹配的单 token 本就不含空格，命令文本路径零影响）——仅改 1 行。补首字母大写回归用例 `test_caps_sentence_not_masked`（value_shape 12→13 例），实测 `ssh_key_0811`/`sudo_0811` 高熵值仍打码、句子不再误伤、三渲染出口抽查通过。
+- **核销方式**：redact 是输出层常驻，与 `ops` 开关无关；组合字段名无法穷举，值形态检测是兜底，精确键名 pass 仍先行。风险点：恰好"≥16 字符 + 混合字符类"的普通长字符串有被误判面，已用空格排除 + 字符类/路径/URL/纯 hex 排除 + 防误伤测试用例钉住。
 
 ## 附：合并时的代码实测记录（2026-08-12）
 
