@@ -369,7 +369,7 @@
   wpwang → your-name、SSH 入口 jump@ → user@；端口与实体名保留（结构示例价值）；
   OPS-VERIFY.md / 测试断言同步占位实体；wheel + sdist 全量扫描 0 命中。
 
-### 3. setup 引导仍是 Hermes 形态，需品牌化并裁剪工具 — ⬜ 未实施（待排期）
+### 3. setup 引导仍是 Hermes 形态，需品牌化并裁剪工具 — ✅ 已实施（2026-08-12，批次六：向导欢迎框 Vigil 运维定位 + 非运维工具默认关闭）
 
 - **为什么**：安装后的引导流程（setup 向导）依然是 Hermes 形态——欢迎文案、
   工具推荐、示例命令都是 Hermes 的，与 Vigil 的运维定位不符；且引导中推荐了
@@ -377,8 +377,36 @@
 - **待改方向**：setup 引导品牌化为 Vigil 形态（文案/logo/命令名）；默认推荐
   工具集裁剪为运维相关（terminal/file/ssh 等），非运维工具从引导推荐中移除
   （不作为默认启用项）；至少删除运维不需要的工具。
+- **已实施（批次六，2026-08-12）**：
+  1. **向导欢迎框品牌化**（`hermes_cli/setup.py`）：欢迎框抽出为
+     `_wizard_welcome_box_lines()`（纯展示数据，便于断言），文案改为
+     "Welcome to Vigil — topology loaded, runbooks ready, permission gates
+     armed. Configure your agent below."，与 banner/skin 欢迎语一致；其余
+     向导流程未重构（批次一已品牌化主体，复核无 `hermes <子命令>` 用户可见
+     残留）。
+  2. **工具默认预选裁剪**（`hermes_cli/tools_config.py`）：`_DEFAULT_OFF_TOOLSETS`
+     新增 `browser`/`image_gen`/`computer_use`（浏览器自动化/图像生成/桌面
+     自动化——非运维定位），默认关闭仅作用于"未显式保存工具集列表"的预选
+     判定（`_get_platform_tools` 隐式分支 + 首次安装 checklist
+     `checklist_preselected`）；**不删工具本身**，显式保存列表或 `vigil tools`
+     手动启用路径不受影响。运维核心（terminal/file/code_execution/skills/
+     memory/todo/web + 批次二已默认启用的 topo/runbook）保持默认；`bfl`
+     按 recently-shipped 契约保留（首版发布回填机制，测试钉住，不并入本轮）。
+  3. 用户可见文案：`⚕ Hermes Tool Configuration` → `⚕ Vigil Tool
+     Configuration`；x_search 描述/终端权限提示/重启 tracing 提示的 Hermes →
+     Vigil；模块 docstring 同步。
+  单测：tests/hermes_cli/test_setup_branding.py（9 例：欢迎框 Vigil 定位 +
+  无 hermes 残留 + 默认预选含运维工具/不含非运维工具 + 显式配置手动启用不受
+  影响）。既有 setup/tools_config 套件全过（test_setup.py 中 modal 用例
+  为基线既有挂起，与本次无关，见下）。
+- **核销方式**：`ops` 开关无关（引导/预选是安装层行为）；`_DEFAULT_OFF_TOOLSETS`
+  只影响"未显式配置"的默认预选，显式列表权威不受影响；季度体检抽查新安装
+  默认工具集不再含 browser/image_gen/computer_use，`vigil tools` 手动启用
+  仍可用。风险点：存量用户若从未保存过工具集列表，升级后 browser/image_gen/
+  computer_use 会从默认启用变为默认关闭——需在 `vigil tools` 重新启用（这是
+  本批"非运维工具不作为默认"的预期行为）。
 
-### 4. 行为倾向：运维流程沉淀应走 runbook，而非默认创建 skill — ⬜ 未实施（待排期）
+### 4. 行为倾向：运维流程沉淀应走 runbook，而非默认创建 skill — ✅ 已实施（2026-08-12，批次六：SKILLS_GUIDANCE 运维分流段；SOUL 已有 runbook 倾向核实）
 
 - **为什么**：Vigil 继承了 Hermes 的"遇到可复用流程就创建 skill"的核心倾向
   （skill 是 Hermes 的默认能力沉淀机制）。但 Vigil 的产品定位是运维 harness，
@@ -390,6 +418,25 @@
   skill；skill 保留用于通用编码/工具类知识，运维流程类明确路由到 runbook。
   具体改点待定位（prompt 引导层 vs 工具选择层），需改核心而非加段。
 - 属于"碰核心逻辑"级改动，按 §7.3 需在本账本登记。
+- **已实施（批次六，2026-08-12，提示词内容层，硬约束 1 允许例外）**：
+  1. `agent/prompt_builder.py` `SKILLS_GUIDANCE` 常量尾部追加 OPS ROUTING
+     分流段（**不删除**原 skill 引导——通用编码/工具类知识仍走 skill）："运维
+     流程类内容（事故处理、部署步骤、巡检清单、凭据轮换等）不存 skill——用
+     runbook_load 体系沉淀为 runbook（拓扑/runbook/权限矩阵的一部分）。识别到
+     运维流程时优先创建/更新 runbook，skill 保留用于通用编码/工具类知识。"
+  2. 只动常量文本，未动 prompt 组装/缓存逻辑（system_prompt.py 的注入点在
+     `skill_manage` 工具加载时才拼入，属稳定前缀；新文本只影响**新建会话**的
+     system prompt，会话内缓存前缀不受影响）。
+  3. `hermes_cli/default_soul.py` `DEFAULT_SOUL_MD` **核实已含 runbook 优先
+     倾向**（"follow runbooks for how to act"）——不再补；用户级 SOUL.md
+     无需建议文本（内置模板已覆盖，未改用户级文件）。
+  单测：tests/agent/test_prompt_builder.py 新增
+  `test_skills_guidance_routes_ops_workflows_to_runbook`（OPS ROUTING 段存在 +
+  原 skill 引导/Skill Safety Rule 不回归；既有断言均为"包含"型，非快照相等）。
+  test_prompt_builder.py + test_ghost_skill_pruning.py 全过。
+- **核销方式**：`ops` 开关无关（提示词内容层）；季度体检复核 SKILLS_GUIDANCE
+  仍含 OPS ROUTING 段、`skill_manage` 未加载时该段不进入 system prompt（注入
+  条件未变）；新建会话可看到分流行为，会话内缓存前缀字节稳定。
 
 ### 5. 凭据文件内容回显防护 — ✅ 代码已实施（2026-08-10/11，5de609a + 8f43841 + 7b875c3），治本方向待排期
 

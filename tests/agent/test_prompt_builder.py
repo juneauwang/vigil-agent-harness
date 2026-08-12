@@ -28,6 +28,7 @@ from agent.prompt_builder import (
     TOOL_USE_ENFORCEMENT_MODELS,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
+    SKILLS_GUIDANCE,
     GOOGLE_MODEL_OPERATIONAL_GUIDANCE,
     MEMORY_GUIDANCE,
     SESSION_SEARCH_GUIDANCE,
@@ -53,6 +54,15 @@ class TestGuidanceConstants:
     def test_session_search_guidance_is_simple_cross_session_recall(self):
         assert "relevant cross-session context exists" in SESSION_SEARCH_GUIDANCE
         assert "recent turns of the current session" not in SESSION_SEARCH_GUIDANCE
+
+    def test_skills_guidance_routes_ops_workflows_to_runbook(self):
+        # OPS-DELTA #4：运维流程走 runbook 分流段存在
+        assert "OPS ROUTING" in SKILLS_GUIDANCE
+        assert "runbook_load" in SKILLS_GUIDANCE
+        assert "运维流程" in SKILLS_GUIDANCE
+        # 原 skill 引导不回归
+        assert "After completing a complex task (5+ tool calls)" in SKILLS_GUIDANCE
+        assert "## Skill Safety Rule" in SKILLS_GUIDANCE
 
 
 # =========================================================================

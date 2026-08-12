@@ -203,7 +203,12 @@ SKILLS_GUIDANCE = (
     "1. **UNAVAILABLE** — If a skill placeholder contains `[SKILL_PRUNED]`, the skill content was lost in compression and is inaccessible.\n"
     "2. **RELOAD** — Before performing any action that depends on a skill, re-check its content with `skill_view(name='...')` if it shows `[SKILL_PRUNED]`.\n"
     "3. **WAIT** — If a skill is loading or was just pruned, wait for the reload confirmation before proceeding.\n"
-    "4. **DEDUP** — After reloading a pruned skill, **ignore any remaining `[SKILL_PRUNED]` markers for that same skill** — they are historical artifacts from previous compactions and do not need further action."
+    "4. **DEDUP** — After reloading a pruned skill, **ignore any remaining `[SKILL_PRUNED]` markers for that same skill** — they are historical artifacts from previous compactions and do not need further action.\n"
+    "\n"
+    "OPS ROUTING: 运维流程类内容（事故处理、部署步骤、巡检清单、凭据轮换等）"
+    "不存 skill——用 runbook_load 体系沉淀为 runbook（拓扑/runbook/权限矩阵"
+    "的一部分）。识别到运维流程时优先创建/更新 runbook，skill 保留用于通用"
+    "编码/工具类知识。\n"
 )
 
 KANBAN_GUIDANCE = (

@@ -2934,6 +2934,23 @@ def _run_portal_one_shot(config: dict) -> None:
     print_info("  Run `vigil` to start chatting.")
 
 
+def _wizard_welcome_box_lines() -> list[str]:
+    """Welcome box for the interactive setup wizard (Vigil branding + ops positioning).
+
+    Pure display data, no I/O — extracted so tests can assert the branding
+    (OPS-DELTA #3) without driving the interactive prompt flow.
+    """
+    return [
+        "┌─────────────────────────────────────────────────────────┐",
+        "│             ◉ Vigil Agent Setup Wizard                │",
+        "├─────────────────────────────────────────────────────────┤",
+        "│  Welcome to Vigil — topology loaded, runbooks ready,  │",
+        "│  permission gates armed. Configure your agent below.  │",
+        "│  Press Ctrl+C at any time to exit.                     │",
+        "└─────────────────────────────────────────────────────────┘",
+    ]
+
+
 def run_setup_wizard(args):
     """Run the interactive setup wizard.
 
@@ -3034,40 +3051,8 @@ def run_setup_wizard(args):
         or active_provider is not None
     )
 
-    print()
-    print(
-        color(
-            "┌─────────────────────────────────────────────────────────┐",
-            Colors.MAGENTA,
-        )
-    )
-    print(
-        color(
-            "│             ◉ Vigil Agent Setup Wizard                │", Colors.MAGENTA
-        )
-    )
-    print(
-        color(
-            "├─────────────────────────────────────────────────────────┤",
-            Colors.MAGENTA,
-        )
-    )
-    print(
-        color(
-            "│  Let's configure your Vigil Agent installation.       │", Colors.MAGENTA
-        )
-    )
-    print(
-        color(
-            "│  Press Ctrl+C at any time to exit.                     │", Colors.MAGENTA
-        )
-    )
-    print(
-        color(
-            "└─────────────────────────────────────────────────────────┘",
-            Colors.MAGENTA,
-        )
-    )
+    for _box_line in _wizard_welcome_box_lines():
+        print(color(_box_line, Colors.MAGENTA))
 
     migration_ran = False
 

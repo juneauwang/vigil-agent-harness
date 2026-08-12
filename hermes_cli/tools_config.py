@@ -1,7 +1,7 @@
 """
-Unified tool configuration for Hermes Agent.
+Unified tool configuration for Vigil Agent.
 
-`hermes tools` and `hermes setup tools` both enter this module.
+`vigil tools` and `vigil setup tools` both enter this module.
 Select a platform → toggle toolsets on/off → for newly enabled tools
 that need API keys, run through provider-aware configuration.
 
@@ -144,17 +144,24 @@ def gui_toolset_label(label: str) -> str:
 # They're still in _HERMES_CORE_TOOLS (available at runtime if enabled),
 # but the setup checklist won't pre-select them for first-time users.
 #
+# OPS-DELTA #3 (Vigil ops positioning): browser/image_gen/computer_use are
+# non-ops capabilities (网页/图像/桌面自动化), not default-recommended for a
+# 运维 agent — users opt in via `vigil tools` → the matching category, which
+# walks them through provider + model selection. Removal is from the default
+# pre-selection only; the tools themselves stay registered and manually
+# enableable (explicit saved lists keep working).
+#
 # Video gen is off by default — it's a niche, paid, slow feature. Users
-# who want it opt in via `hermes tools` → Video Generation, which walks
+# who want it opt in via `vigil tools` → Video Generation, which walks
 # them through provider + model selection.
 #
 # X search is off by default for users without xAI credentials, but
 # auto-enables when SuperGrok OAuth tokens are stored OR XAI_API_KEY is
 # set — mirroring the HASS_TOKEN → homeassistant auto-enable below. The
-# `hermes tools` → X (Twitter) Search setup walks users through credential
+# `vigil tools` → X (Twitter) Search setup walks users through credential
 # setup. The tool's check_fn means the schema still won't appear to the
 # model if the credential later goes missing or expires.
-_DEFAULT_OFF_TOOLSETS = {"homeassistant", "spotify", "discord", "discord_admin", "video", "video_gen", "x_search", "a2a"}
+_DEFAULT_OFF_TOOLSETS = {"browser", "image_gen", "computer_use", "homeassistant", "spotify", "discord", "discord_admin", "video", "video_gen", "x_search", "a2a"}
 
 
 # Config-only capabilities: they appear in `hermes tools` for provider/API-key
@@ -572,7 +579,7 @@ TOOL_CATEGORIES = {
         "name": "X (Twitter) Search",
         "setup_title": "Select xAI Credential Source",
         "setup_note": (
-            "Hermes routes X searches through xAI's built-in x_search "
+            "Vigil routes X searches through xAI's built-in x_search "
             "Responses tool for read-only public X discovery. Use the xurl "
             "skill for authenticated X API reads and account actions. Both "
             "credential sources hit the same "
@@ -1601,7 +1608,7 @@ def _run_cua_driver_installer(
                     _print_info("    IMPORTANT — grant macOS permissions now:")
                     _print_info("      System Settings > Privacy & Security > Accessibility")
                     _print_info("      System Settings > Privacy & Security > Screen Recording")
-                    _print_info("    Both must allow the terminal / Hermes process.")
+                    _print_info("    Both must allow the terminal / Vigil process.")
             return True
         _print_warning(f"    cua-driver {label.lower()} did not complete. Re-run manually:")
         _print_info(f"      {manual_hint}")
@@ -1937,7 +1944,7 @@ def _run_post_setup(post_setup_key: str):
         except Exception as exc:
             _print_warning(f"    Could not enable plugin automatically: {exc}")
             _print_info("    Run manually: vigil plugins enable observability/langfuse")
-        _print_info("    Restart Hermes for tracing to take effect.")
+        _print_info("    Restart Vigil for tracing to take effect.")
         _print_info("    Verify: vigil plugins list")
 
     elif post_setup_key == "xai_grok":
@@ -4861,7 +4868,7 @@ def _reconfigure_simple_requirements(ts_key: str):
 # ─── Main Entry Point ─────────────────────────────────────────────────────────
 
 def tools_command(args=None, first_install: bool = False, config: dict = None):
-    """Entry point for `hermes tools` and `hermes setup tools`.
+    """Entry point for `vigil tools` and `vigil setup tools`.
 
     Args:
         first_install: When True (set by the setup wizard on fresh installs),
@@ -4896,7 +4903,7 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
                 print(color("    (none enabled)", Colors.DIM))
         print()
         return
-    print(color("⚕ Hermes Tool Configuration", Colors.CYAN, Colors.BOLD))
+    print(color("⚕ Vigil Tool Configuration", Colors.CYAN, Colors.BOLD))
     print(color("  Enable or disable tools per platform.", Colors.DIM))
     print(color("  Tools that need API keys will be configured when enabled.", Colors.DIM))
     print(color("  Guide: https://hermes-agent.nousresearch.com/docs/user-guide/features/tools", Colors.DIM))
