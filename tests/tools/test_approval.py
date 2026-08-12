@@ -559,7 +559,7 @@ class TestInstallTreeWritePatterns:
             "perl -pi -e 's/old/new/' /venv/site-packages/vigil/tools/x.py",
             "patch /venv/site-packages/vigil/tools/file_operations.py < /tmp/fix.diff",
             "pip install --force-reinstall vigil-agent-harness",
-            "pip install -e /home/wpwang/projects/vigil-agent-release",
+            "pip install -e /opt/vigil-project",
             "python3 -m pip install vigil-agent-harness==0.1.7",
         ):
             dangerous, key, desc = detect_dangerous_command(command)
@@ -573,7 +573,7 @@ class TestInstallTreeWritePatterns:
             "echo hello > /tmp/notes.txt",
             "sed -i 's/a/b/' /tmp/app.log",
             "pip install requests",                               # new package, not self
-            "git -C /home/wpwang/projects/vigil-agent-release status",
+            "git -C /opt/vigil-project status",
         ):
             dangerous, key, desc = detect_dangerous_command(cmd)
             assert dangerous is False, cmd
