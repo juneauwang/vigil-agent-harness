@@ -19,3 +19,4 @@ test_durations.json
 
 # First-run bootstrap marker — `git stash -u` (hermes update autostash) must skip it
 .hermes-bootstrap-complete
+dist/

@@ -108,9 +108,48 @@ def test_matrix_approve_rides_smart_approval(guard_env, monkeypatch):
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
-    result = approval_module.check_all_command_guards("systemctl restart myapp", "local")
+    # pip install 是 L2 审批级但非变更类（不在 _CHANGE_COMMAND_RE）——
+    # smart-approval 仍可自动放行（prod 变更确认门只拦变更类命令）。
+    result = approval_module.check_all_command_guards("pip install requests", "local")
     assert result["approved"] is True
     assert result["smart_approved"] is True
+
+
+def test_prod_change_command_requires_human_confirmation_even_with_smart_approval(
+    guard_env, monkeypatch
+):
+    """OPS-DELTA #32：prod 变更类命令（systemctl restart / ansible-playbook /
+    docker compose up）即使 smart-approval 判 approve、yolo 开启，也必须人工
+    确认——不直接放行。"""
+    guard_env("prod")
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
+    monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
+
+    for cmd in ("systemctl restart myapp", "ansible-playbook site.yml",
+                "docker compose up -d", "kubectl rollout restart deploy/x"):
+        result = approval_module.check_all_command_guards(cmd, "local")
+        assert result["approved"] is False, cmd
+        assert "prod 变更确认门" in result.get("description", ""), cmd
+
+
+def test_prod_change_command_yolo_does_not_bypass_confirmation(guard_env, monkeypatch):
+    """OPS-DELTA #32：yolo 不能绕过 prod 变更确认门。"""
+    guard_env("prod")
+    approval_module._YOLO_MODE_FROZEN = True
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    result = approval_module.check_all_command_guards("systemctl restart myapp", "local")
+    assert result["approved"] is False
+    assert "prod 变更确认门" in result.get("description", "")
+
+
+def test_prod_change_command_deny_still_hard_blocks(guard_env):
+    """OPS-DELTA #32：L3/L4 deny 仍硬拒，优先级不变（deny > 确认门）。"""
+    guard_env("prod")
+    result = approval_module.check_all_command_guards("kubectl apply -f x.yaml", "local")
+    assert result["approved"] is False
+    assert result["ops_matrix"]["action"] == "deny"
+    assert result["ops_matrix"]["require_confirmation"] is True
 
 
 def test_matrix_approve_fails_closed_without_human(guard_env, monkeypatch):
@@ -242,7 +281,7 @@ def test_custom_env_role_prod_approves_l2(guard_env, monkeypatch):
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
-    result = approval_module.check_all_command_guards("systemctl restart myapp", "local")
+    result = approval_module.check_all_command_guards("pip install requests", "local")
     assert result["approved"] is True
     assert result["smart_approved"] is True
 

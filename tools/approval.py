@@ -568,11 +568,24 @@ def _check_sudo_stdin_guard(command: str) -> tuple:
     only fires when SUDO_PASSWORD is *not* set, meaning the LLM explicitly
     wrote ``sudo -S`` to pipe a guessed password.
 
+    OPS-DELTA #25（按密码来源分级）：
+      1. 密码来自 vault（会话内已从保险箱/vault 读过）→ 放行；
+      2. 密码来自用户本轮明确提供（approval 确认 / 保险箱 store）→ 放行；
+      3. 密码无来源（agent 猜测/试探）→ 拦截（保留现状防暴力能力）。
+    登记来源由 tools/credential_vault 维护（store/retrieve/审批确认时登记）。
+
     Returns:
         (is_blocked: bool, description: str | None)
     """
     if "SUDO_PASSWORD" in os.environ:
         return (False, None)
+    try:
+        from tools.credential_vault import has_credential_source
+        if has_credential_source(("user", "vault")):
+            # 会话内已登记用户/vault 来源凭据 → 密码有来源，视为授权放行。
+            return (False, None)
+    except Exception:
+        pass
     normalized = _normalize_command_for_detection(command).lower()
     if _SUDO_STDIN_RE.search(normalized):
         return (True, "sudo password guessing via stdin (sudo -S)")
@@ -740,10 +753,9 @@ def _sudo_stdin_block_result(description: str) -> dict:
         "approved": False,
         "message": (
             f"BLOCKED: {description}. "
-            "Do not pipe passwords to 'sudo -S' — this is a brute-force "
-            "attack vector. Set SUDO_PASSWORD in your .env file if the "
-            "agent needs passwordless sudo, or run the sudo command "
-            "manually in your own terminal."
+            "在对话中提供密码（仅本次使用，系统将安全存储、不回显），"
+            "或将 SUDO_PASSWORD 写入 .env；否则请自行在终端手动执行该 "
+            "sudo 命令。不要向 'sudo -S' 管道猜测的密码——这是暴力破解向量。"
         ),
     }
 
@@ -3760,13 +3772,24 @@ def check_all_command_guards(command: str, env_type: str,
                 ),
             }
 
+    # OPS-DELTA #32 prod 变更强制确认门：require_confirmation 的 approve 决策
+    # 不因 yolo / mode=off / 永久 allowlist / smart-approval 自动放行——强制
+    # 走人工确认门（与 L2 approve 同一条审批通道），用户确认后才执行。
+    _ops_confirmation_required = bool(
+        ops_decision is not None
+        and ops_decision.get("action") == "approve"
+        and ops_decision.get("require_confirmation")
+    )
+
     # --yolo or approvals.mode=off: bypass all approval prompts.
     # Gateway /yolo is session-scoped; CLI --yolo remains process-scoped.
     approval_mode = _get_approval_mode()
-    if _YOLO_MODE_FROZEN or is_current_session_yolo_enabled() or approval_mode == "off":
+    if not _ops_confirmation_required and (
+        _YOLO_MODE_FROZEN or is_current_session_yolo_enabled() or approval_mode == "off"
+    ):
         return {"approved": True, "message": None}
 
-    if _command_matches_permanent_allowlist(command):
+    if not _ops_confirmation_required and _command_matches_permanent_allowlist(command):
         return {"approved": True, "message": None}
 
     is_cli = _is_interactive_cli()
@@ -3919,7 +3942,10 @@ def check_all_command_guards(command: str, env_type: str,
         ops_desc = ops_decision["description"]
         if target:
             ops_desc = f"{ops_desc} 目标: {target['label']}"
-        if not is_approved(session_key, ops_key):
+        if _ops_confirmation_required:
+            # 强制确认门：每次都走人工确认，会话/永久 allowlist 不能跳过。
+            warnings.append((ops_key, ops_desc, False))
+        elif not is_approved(session_key, ops_key):
             warnings.append((ops_key, ops_desc, False))
 
     # Nothing to warn about
@@ -3942,10 +3968,12 @@ def check_all_command_guards(command: str, env_type: str,
         )
         verdict = _smart_approve(command, combined_desc_for_llm)
         _observe_smart_approval_verdict(observer_payload, verdict)
-        if verdict == "approve":
+        if verdict == "approve" and not _ops_confirmation_required:
             # Approve this command only. Pattern-level persistence would let one
             # benign command suppress review of later commands that happen to
             # match the same broad detector category.
+            # prod 变更确认门（require_confirmation）不在此列——smart 判定为
+            # approve 也降级为人工确认。
             _reset_denials(session_key)
             logger.debug("Smart approval: auto-approved '%s' (%s)",
                          command[:60], combined_desc_for_llm)
@@ -3986,6 +4014,10 @@ def check_all_command_guards(command: str, env_type: str,
     # correctly persist the pattern key and downgrade the tirith key to
     # session — the UI was stricter than the persistence layer.
     has_permanent_capable = any(not is_t for _, _, is_t in warnings)
+    # prod 变更确认门（require_confirmation）不提供永久 allowlist——每次都
+    # 必须人工确认，Always 只会诱导"一次性授权=永久放行"。
+    if _ops_confirmation_required:
+        has_permanent_capable = False
 
     # Gateway/async approval — block the agent thread until the user
     # responds with /approve or /deny, mirroring the CLI's synchronous
@@ -4083,7 +4115,7 @@ def check_all_command_guards(command: str, env_type: str,
             # A smart-DENY owner override is always one operation, even if an
             # older client returns "session" or "always". Manual and ESCALATE
             # choices retain their existing persistence semantics.
-            if not smart_denied_for_owner:
+            if not smart_denied_for_owner and not _ops_confirmation_required:
                 for key, _, is_tirith in warnings:
                     if choice == "session" or (choice == "always" and is_tirith):
                         approve_session(session_key, key)
@@ -4095,6 +4127,12 @@ def check_all_command_guards(command: str, env_type: str,
             # A human approval (including an ESCALATE-then-approve or a
             # smart-DENY owner override) resets the consecutive-denial tally.
             _reset_denials(session_key)
+            # OPS-DELTA #25：用户确认即授权登记（sudo -S 分级放行的 user 来源）。
+            try:
+                from tools.credential_vault import mark_user_authorized
+                mark_user_authorized()
+            except Exception:
+                pass
             return {"approved": True, "message": None,
                     "user_approved": True, "description": combined_desc}
 
@@ -4197,7 +4235,7 @@ def check_all_command_guards(command: str, env_type: str,
 
     # Smart-DENY owner overrides are one-operation scoped. Preserve existing
     # persistence for manual mode and smart ESCALATE.
-    if not smart_denied_for_owner:
+    if not smart_denied_for_owner and not _ops_confirmation_required:
         for key, _, is_tirith in warnings:
             if choice == "session" or (choice == "always" and is_tirith):
                 # tirith: session only (no permanent broad allowlisting)
@@ -4210,6 +4248,12 @@ def check_all_command_guards(command: str, env_type: str,
 
     # A human approval resets the consecutive-denial tally.
     _reset_denials(session_key)
+    # OPS-DELTA #25：用户确认即授权登记（sudo -S 分级放行的 user 来源）。
+    try:
+        from tools.credential_vault import mark_user_authorized
+        mark_user_authorized()
+    except Exception:
+        pass
     return {"approved": True, "message": None,
             "user_approved": True, "description": combined_desc}
 

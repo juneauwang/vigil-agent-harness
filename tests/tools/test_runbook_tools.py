@@ -123,6 +123,47 @@ def test_validation_checklist_requires_verify_and_rollback(rb_home):
     assert "verify" in result and "rollback" in result
 
 
+def test_deploy_runbook_defaults_to_checklist(rb_home):
+    """OPS-DELTA #32：kind=deploy 缺省 checklist=true（部署阶段门强制）。"""
+    _write_runbook(
+        rb_home, "deploy-implicit.yaml",
+        {
+            "name": "deploy-implicit", "title": "x", "env": "prod",
+            "kind": "deploy",  # 无 checklist 键 → 默认 checklist=true
+            "steps": [
+                {"id": "preflight", "commands": ["ls"]},
+                {"id": "verify", "commands": ["curl -sf http://x/healthz"],
+                 "verify": "curl -sf http://x/healthz", "expect": "HTTP 200"},
+            ],
+            "rollback": [{"title": "回滚", "commands": ["kubectl rollout undo deploy/x"]}],
+        },
+    )
+    loaded = _load(runbook_load(runbook="deploy-implicit", home=rb_home))
+    # kind=deploy + 无 checklist 键 → 按 checklist 处理（阶段门状态随 load 返回）
+    assert loaded["checklist_state"] is not None
+
+    # 未过前置直接推进 → 阶段门拒绝（部署路径强制过阶段门）
+    result = runbook_checkpoint(
+        runbook="deploy-implicit", step_id="verify", status="pass", home=rb_home
+    )
+    assert "前置步骤未全部通过" in result
+
+
+def test_deploy_runbook_explicit_checklist_false_stays_off(rb_home):
+    """显式 checklist: false 仍可关闭（默认不覆盖用户声明）。"""
+    _write_runbook(
+        rb_home, "deploy-explicit-off.yaml",
+        {
+            "name": "deploy-explicit-off", "title": "x", "env": "test",
+            "kind": "deploy", "checklist": False,
+            "steps": [{"id": "s1", "commands": ["ls"]}],
+        },
+    )
+    loaded = _load(runbook_load(runbook="deploy-explicit-off", home=rb_home))
+    assert loaded["checklist"] is False
+    assert loaded["checklist_state"] is None
+
+
 def test_checkpoint_enforces_phase_order(rb_home):
     # 未过前置直接推进 → 阶段门拒绝
     result = runbook_checkpoint(

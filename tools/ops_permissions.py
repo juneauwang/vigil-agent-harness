@@ -133,6 +133,20 @@ _L1_EXCLUSIONS = [
 ]
 _L1_EXCLUSIONS_COMPILED = [re.compile(p, re.IGNORECASE) for p in _L1_EXCLUSIONS]
 
+# 变更类命令清单（OPS-DELTA #32 prod 变更强制确认门）：服务重启 / 容器重建 /
+# 配置下发类。env=prod 时命中即 require_confirmation（approve 决策强制走人工
+# 确认门）；test/uat 不触发（现状不变）。宁可多列——漏列的代价是 prod 变更
+# 无确认执行，多列的代价只是 prod 变更命令多一次人工确认。
+_CHANGE_COMMAND_RE = re.compile(
+    r"\bansible-playbook\b"
+    r"|\bkubectl\s+(?:apply|delete|edit|scale|rollout|drain|cordon)\b"
+    r"|\bdocker\s+compose\s+(?:up|restart|rm|down)\b"
+    r"|\bdocker\s+(?:restart|rm|stop)\b"
+    r"|\bsystemctl\s+(?:restart|stop)\b"
+    r"|\bhelm\s+(?:upgrade|install|uninstall)\b",
+    re.IGNORECASE,
+)
+
 
 def _load_config() -> Dict[str, Any]:
     try:
@@ -251,6 +265,19 @@ def _active_role() -> str:
     return str(config.get("role") or _active_env() or "").strip().lower()
 
 
+def _is_prod_env(env: str, ops_config: Optional[Dict[str, Any]] = None) -> bool:
+    """env 是否按 prod 档处理（决定 require_confirmation 门）。
+
+    与环境定义里的 role 对齐（bare_metal_prod → role prod → prod 档）；
+    未定义环境按内置名兜底（与 ``_matrix_row`` 的 legacy 兜底一致）——
+    env 名就叫 ``prod`` 时按 prod 档。
+    """
+    role = _env_role(env, ops_config)
+    if role:
+        return role == "prod"
+    return env == "prod"
+
+
 def check_ops_command_permission(command: str, target_env: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Grade a terminal command and apply the environment matrix.
 
@@ -258,6 +285,14 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     先做命令目标解析（tools/ops_target.py），命中拓扑实体时传入该实体的 env；
     为 None 或未命中时用会话 env（现状不变）。目标 env 未在矩阵声明时同样返回
     None（交回原有检查），避免对未知环境误判。
+
+    OPS-DELTA #32：decision 增加 ``require_confirmation`` 字段——变更类命令
+    （服务重启/容器重建/配置下发，见 ``_CHANGE_COMMAND_RE``）在 env=prod 时
+    默认 true，approval.py 对 approve+require_confirmation 强制走人工确认门
+    （yolo / smart-approval / 永久 allowlist 都不能绕过）。L3/L4 的 deny 仍
+    硬拒，优先级不变（deny > require_confirmation）；未分级的变更类命令在
+    prod 合成审批级判定（否则 ansible-playbook 这类未列入分级的命令会漏网）。
+    test/uat 及非变更类命令行为与现状一致。
 
     Returns:
       None                         — gate disabled / env unknown / grade execute
@@ -281,28 +316,41 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         return None
 
     grade = classify_command(command)
-    if grade is None:
-        return None
+    ops_config = _load_ops_config()
+    row = _matrix_row(config, env, ops_config) if grade is not None else None
 
-    # env 名查表（名称任意，矩阵行为由 isolation/role 决定）；未声明环境返回
-    # None，交回原有检查，避免对未知环境误判。
-    row = _matrix_row(config, env, _load_ops_config())
-    if row is None:
-        return None
+    is_prod = _is_prod_env(env, ops_config)
+    is_change_cmd = bool(_CHANGE_COMMAND_RE.search(command))
+    require_confirmation = bool(is_prod and is_change_cmd)
 
-    action = row.get(grade, "execute")
-    if action == "execute":
-        return None
+    if grade is not None and row is not None:
+        action = row.get(grade, "execute")
+        if action == "execute":
+            # 未命中审批/拒绝档：除非是 prod 变更类（强制确认门），否则交回
+            # 原有检查（现状）。
+            if not require_confirmation:
+                return None
+            action = "approve"
+    else:
+        # 未分级（ansible-playbook 等未列入 _DEFAULT_GRADES）或未声明环境：
+        # 仅 prod 变更类命令合成审批级判定（确认门）；其余交回原有检查。
+        if not require_confirmation:
+            return None
+        action = "approve"
+        grade = grade or "L2"
 
     description = (
         f"命令分级 {grade}（{_grade_examples(grade)}）在 {env} 环境的权限矩阵"
         f"判定为 {'需要审批' if action == 'approve' else '拒绝'}"
     )
+    if require_confirmation:
+        description = f"⚠ prod 变更确认门：{description}"
     return {
         "action": action,
         "grade": grade,
         "env": env,
         "role": _active_role(),
+        "require_confirmation": require_confirmation,
         "description": description,
     }
 
