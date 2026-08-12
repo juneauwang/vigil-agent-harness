@@ -223,7 +223,7 @@ def test_env_mismatch_warning(rb_home):
     result = _load(runbook_load(runbook="harbor-restart", home=rb_home))
     assert result["session_env"] == "test"
     assert result["env_mismatch"] is True
-    assert "跨环境操作默认拒绝" in result["env_warning"]
+    assert "由命令级权限矩阵逐条判定" in result["env_warning"]
 
 
 def test_check_runbook_requirements_data_existence_gating(rb_home):

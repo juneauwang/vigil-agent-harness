@@ -308,6 +308,17 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "prom": {
+        "description": (
+            "Prometheus 监控（只读，OPS-DELTA #10）：prom_query 做 PromQL 查询"
+            "（即时/range，紧凑结构化摘要），alert_query 查 Alertmanager 活跃告警。"
+            "工具按配置门控（ops.prometheus.endpoint 存在才可用，未配置零 footprint）；"
+            "不默认注册到核心工具集，ops profile 显式启用。"
+        ),
+        "tools": ["prom_query", "alert_query"],
+        "includes": [],
+    },
+
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "

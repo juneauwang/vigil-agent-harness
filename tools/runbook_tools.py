@@ -344,8 +344,8 @@ def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
     if rb.get("env") and payload["session_env"] and rb["env"] != payload["session_env"]:
         payload["env_mismatch"] = True
         payload["env_warning"] = (
-            f"runbook 适用环境 {rb['env']} 与当前会话环境 {payload['session_env']} 不一致——"
-            "跨环境操作默认拒绝，确认后再执行。"
+            f"runbook 适用环境 {rb['env']} 与当前会话环境 {payload['session_env']} 不一致；"
+            "跨环境操作由命令级权限矩阵逐条判定（L2 及以上走审批），不是整体拒绝。"
         )
     payload["checklist_state"] = _checklist_state_for(home, name) if _is_checklist_runbook(rb) else None
     payload["note"] = (
