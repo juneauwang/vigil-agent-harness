@@ -97,7 +97,21 @@ class TestVigilDataRoot:
         assert get_hermes_home() == tmp_path / ".vigil"
 
     def test_legacy_hermes_layout_fallback(self, tmp_path, monkeypatch):
-        """~/.vigil 不存在但旧 ~/.hermes 存在 → 继续用旧布局（老安装无感）。"""
+        """~/.vigil 不存在、旧 ~/.hermes 含 Vigil 老数据特征（profiles/ops）→
+        继续用旧布局（老安装无感）。"""
+        legacy = tmp_path / ".hermes"
+        ops = legacy / "profiles" / "ops"
+        ops.mkdir(parents=True)
+        (ops / "SOUL.md").write_text("# ops profile")
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(hermes_constants, "_legacy_fallback_warned", False)
+
+        assert get_hermes_home() == legacy
+
+    def test_legacy_empty_hermes_no_fallback(self, tmp_path, monkeypatch):
+        """只有空 ~/.hermes（无 profiles/ops 特征）→ 不 fallback，落 ~/.vigil。"""
         legacy = tmp_path / ".hermes"
         legacy.mkdir()
         monkeypatch.delenv("HERMES_HOME", raising=False)
@@ -105,7 +119,19 @@ class TestVigilDataRoot:
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         monkeypatch.setattr(hermes_constants, "_legacy_fallback_warned", False)
 
-        assert get_hermes_home() == legacy
+        assert get_hermes_home() == tmp_path / ".vigil"
+
+    def test_legacy_hermes_has_other_profiles_no_fallback(self, tmp_path, monkeypatch):
+        """~/.hermes 只有 Hermes 本体形态 profile（personal/work）→ 不 fallback，
+        落 ~/.vigil（防把 Hermes 本体数据当 Vigil 数据根）。"""
+        legacy = tmp_path / ".hermes"
+        (legacy / "profiles" / "personal").mkdir(parents=True)
+        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
+        monkeypatch.setattr(hermes_constants, "_legacy_fallback_warned", False)
+
+        assert get_hermes_home() == tmp_path / ".vigil"
 
     def test_new_layout_wins_when_both_exist(self, tmp_path, monkeypatch):
         """~/.vigil 与旧 ~/.hermes 同时存在 → 用 ~/.vigil（迁移后切走）。"""
@@ -138,13 +164,35 @@ class TestVigilDataRoot:
         assert get_hermes_home() == hermes_home
 
     def test_candidates_include_both_layouts(self, tmp_path, monkeypatch):
-        """vigil_data_root_candidates 同时覆盖新布局与旧布局（守护/迁移用）。"""
+        """vigil_data_root_candidates 同时覆盖新布局与旧布局（守护/迁移用）。
+
+        旧布局必须含 Vigil 老数据特征（profiles/ops）才进入候选。
+        """
+        (tmp_path / ".hermes" / "profiles" / "ops").mkdir(parents=True)
         monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
         monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
         candidates = hermes_constants.vigil_data_root_candidates(tmp_path)
         assert tmp_path / ".vigil" in candidates
         assert tmp_path / ".hermes" in candidates
+
+    def test_candidates_empty_hermes_excluded(self, tmp_path, monkeypatch):
+        """空 ~/.hermes 不进候选（守护/迁移不得把 Hermes 残留当 Vigil 数据根扫）。"""
+        (tmp_path / ".hermes").mkdir()
+        monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+        candidates = hermes_constants.vigil_data_root_candidates(tmp_path)
+        assert candidates == (tmp_path / ".vigil",)
+
+    def test_candidates_ops_profile_included(self, tmp_path, monkeypatch):
+        """~/.hermes/profiles/ops 存在 → 候选含 (新布局, 旧布局)。"""
+        (tmp_path / ".hermes" / "profiles" / "ops").mkdir(parents=True)
+        monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
+        monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+        candidates = hermes_constants.vigil_data_root_candidates(tmp_path)
+        assert candidates == (tmp_path / ".vigil", tmp_path / ".hermes")
 
 
 class TestGetProcessHermesHome:

@@ -79,19 +79,28 @@ def vigil_data_root_candidates(home: Path) -> tuple[Path, ...]:
 
     返回 ``(新布局, 旧布局)`` 去重后的元组，供守护/迁移判断（auth 测试护栏、
     gateway 服务 remap 等）使用。环境变量不参与 —— 这是纯默认位置。
+
+    旧 hermes 布局仅在含 Vigil 老数据特征（``profiles/ops``）时进入候选，
+    防止把 Hermes 本体/无关残留（personal/work profile、空目录）当 Vigil
+    数据根扫描。
     """
     primary = _vigil_native_home_dir(home)
     legacy = _legacy_hermes_home_dir(home)
     if legacy == primary:
         return (primary,)
-    return (primary, legacy)
+    if _safe_exists(legacy) and _looks_like_vigil_legacy_data(legacy):
+        return (primary, legacy)
+    return (primary,)
 
 
 def default_data_root_for(home: Path) -> Path:
     """指定 home 下、无环境变量时的 Vigil 数据根（新布局优先，旧布局兜底）。
 
     - ``<home>/.vigil`` 存在 → 返回它（新布局，Vigil 独立数据目录）
-    - 否则 ``<home>/.hermes`` 存在 → 返回它（旧 hermes 布局，老安装无感兼容）
+    - 否则旧 ``<home>/.hermes`` 布局仅在含 Vigil 老数据特征（``profiles/ops``）
+      时兜底（老安装无感兼容）；空的或只有 Hermes 本体 profile 的
+      ``~/.hermes`` 不会被当作 Vigil 数据根——防止把 Hermes 本体/无关残留
+      当数据根读配置、写数据，或与正在运行的 Hermes 抢数据
     - 两者都不存在 → 返回 ``<home>/.vigil``（首次安装落新目录）
 
     不含环境变量读取和告警副作用，可供任意用户目录（sudo 用户、gateway 目标
@@ -101,7 +110,7 @@ def default_data_root_for(home: Path) -> Path:
     if _safe_exists(primary):
         return primary
     legacy = _legacy_hermes_home_dir(home)
-    if _safe_exists(legacy):
+    if _safe_exists(legacy) and _looks_like_vigil_legacy_data(legacy):
         return legacy
     return primary
 
@@ -118,6 +127,18 @@ def _safe_exists(path: Path) -> bool:
         return path.exists()
     except OSError:
         return False
+
+
+def _looks_like_vigil_legacy_data(hermes_dir: Path) -> bool:
+    """判断 ``~/.hermes`` 是否含 Vigil 老数据特征（``profiles/ops``）。
+
+    Vigil v0.1.5 及以前把数据放在 ``~/.hermes`` 且默认 profile 是 ``ops``
+    （``~/.hermes/profiles/ops``）；Hermes 本体/无关残留的 profile 是
+    personal/work（无 ``ops``）或根本没有 profiles。用 ``profiles/ops``
+    目录存在与否区分"Vigil 老数据"和"别人的数据根"，避免自动 fallback
+    串读/串写 Hermes 数据（OPS-DELTA #37）。
+    """
+    return _safe_exists(hermes_dir / "profiles" / "ops")
 
 
 def _warn_legacy_fallback_once(root: Path) -> None:
