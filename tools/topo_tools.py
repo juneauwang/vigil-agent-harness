@@ -110,6 +110,10 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
                 "description": (
                     "要写入的字段。env/type/endpoint/owner/status/healthcheck/depends_on/"
                     "depended_by 为顶层字段，其余键写入 attrs。"
+                    "正例：{\"endpoint\": \"1.2.3.4\", \"owner\": \"x\"}；"
+                    "反例：{\"attrs\": {\"endpoint\": \"...\"}}（应直接传 endpoint，"
+                    "attrs 键会被自动展开合并，不需要包这一层）。"
+                    "只接受标量属性值；dict/list 复杂结构会被拒绝（防嵌套污染）。"
                 ),
             },
             "reason": {
@@ -606,10 +610,34 @@ def topo_update(
         except Exception as exc:
             return tool_error(f"实体档案解析失败: {target_path} ({exc})")
 
+    attrs_expanded = False
     for key, value in updates.items():
-        if key in _TOPLEVEL_UPDATE_FIELDS:
+        if key == "attrs":
+            # OPS-DELTA #33：调用方多包一层 attrs → 显式展开合并进顶层 attrs，
+            # 不再静默写入 attrs.attrs 嵌套层（曾导致 20 个实体档案两层嵌套）。
+            if not isinstance(value, dict):
+                return tool_error(
+                    f"updates['attrs'] 必须是对象（收到 {type(value).__name__}）；"
+                    "字段键直接传，不需要包 attrs 层。"
+                )
+            attrs = existing.setdefault("attrs", {})
+            if not isinstance(attrs, dict):
+                attrs = {}
+                existing["attrs"] = attrs
+            attrs.update(value)
+            attrs_expanded = True
+        elif key in _TOPLEVEL_UPDATE_FIELDS:
             existing[key] = value
         else:
+            # 非标量值防御：dict/list 等复杂结构不再静默写入 attrs
+            # （depends_on/depended_by 是已定义的顶层列表字段，走上一分支）。
+            # 防 LLM 传嵌套结构继续污染档案。
+            if isinstance(value, (dict, list)):
+                return tool_error(
+                    f"updates['{key}'] 的值是 {type(value).__name__} 复杂结构，"
+                    "topo_update 只接受标量属性（防嵌套结构污染档案）；"
+                    "字段键直接传，不需要包 attrs 层。"
+                )
             attrs = existing.setdefault("attrs", {})
             if not isinstance(attrs, dict):
                 attrs = {}
@@ -638,6 +666,8 @@ def topo_update(
         "source": _SOURCE_AGENT,
         "last_verified": _today(),
     }
+    if attrs_expanded:
+        audit["note"] = "updates 含 attrs 键：字段键直接传，不需要包 attrs 层；已自动展开合并。"
     return json.dumps({"status": "updated", **audit}, ensure_ascii=False, indent=2)
 
 
