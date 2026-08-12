@@ -65,6 +65,15 @@ def test_is_available_gates_on_config(topo_home, monkeypatch):
     assert TopoMemoryProvider().is_available() is False
 
 
+def test_is_available_defaults_to_data_existence(topo_home, monkeypatch):
+    """缺省 ops.topology.enabled → 按数据存在性（OPS-DELTA #14：默认 topo）。"""
+    # 有 topology.yaml、无 config → available
+    assert TopoMemoryProvider().is_available() is True
+    # 数据不在 → 不可用（provider 静默，不注入 TOPO 段）
+    (topo_home / "topology.yaml").unlink()
+    assert TopoMemoryProvider().is_available() is False
+
+
 def test_system_prompt_block_renders_topo_section(topo_home, monkeypatch):
     _enable(monkeypatch, enabled=True)
     provider = TopoMemoryProvider()
@@ -109,3 +118,31 @@ def test_plugin_discoverable():
     provider = load_memory_provider("topo")
     assert provider is not None
     assert provider.name == "topo"
+
+
+def test_v2_render_injects_only_first_layer(tmp_path, monkeypatch):
+    """OPS-DELTA #6：v0.2 下 TOPO 段只注入第一层（hosts+cross_host），
+    服务在第二层、不进 system prompt（token 成本恒定）。"""
+    import shutil
+    from pathlib import Path as _P
+    sample = _P(__file__).resolve().parents[3] / "hermes_cli" / "ops_samples"
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    shutil.copy2(sample / "topology.yaml", home / "topology.yaml")
+    shutil.copytree(sample / "hosts", home / "hosts")
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    hc._LOAD_CONFIG_CACHE.clear()
+
+    provider = TopoMemoryProvider()
+    provider.initialize("sess-1", hermes_home=str(home), platform="cli")
+    block = provider.system_prompt_block()
+
+    # 第一层总览：主机 + 跨主机实体 + 关键链路。
+    assert "node1" in block and "test-host" in block
+    assert "k3s-prod" in block and "ingress" in block
+    assert "ingress → gateway-svc → order-db" in block
+    assert "runtime=k3s" in block and "runtime=docker" in block
+    # 第二层服务不进注入块。
+    assert "harbor" not in block
+    assert "postgres" not in block
+    hc._LOAD_CONFIG_CACHE.clear()

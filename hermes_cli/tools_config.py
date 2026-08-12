@@ -2344,6 +2344,19 @@ def _get_platform_tools(
         if x_search_auto_enabled:
             enabled_toolsets.add("x_search")
 
+        # Ops harness (OPS-DELTA #14): topo/runbook 工具集对 cli 平台默认启用，
+        # 让 default profile 的 ``vigil`` 会话开箱即用运维事实层（拓扑表 + 
+        # runbook），无需 ``-p ops``。只在用户**没有**保存显式工具集列表时
+        # 生效（显式列表权威，不覆盖用户选择）；平台仅限 cli，不污染
+        # telegram/discord 等消息平台。工具可用性仍由 check_fn 数据存在性
+        # 门控——无 topology.yaml/runbooks 时 schema 里不出现，零 footprint。
+        if platform == "cli" and not explicitly_configured:
+            for _ops_ts in ("topo", "runbook"):
+                if _ops_ts in enabled_toolsets:
+                    continue
+                if _toolset_allowed_for_platform(_ops_ts, platform):
+                    enabled_toolsets.add(_ops_ts)
+
         default_off = set(_DEFAULT_OFF_TOOLSETS)
         # Legacy safety: if the platform's own name matches a default-off
         # toolset (e.g. `homeassistant` platform + `homeassistant` toolset),

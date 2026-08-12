@@ -1659,7 +1659,12 @@ DEFAULT_CONFIG = {
         # Set to a provider name to activate: "openviking", "mem0",
         # "hindsight", "holographic", "retaindb", "byterover".
         # Only ONE external provider is allowed at a time.
-        "provider": "",
+        # Vigil (OPS-DELTA #14): 默认 topo——TOPO 段经 memory-provider 外部块
+        # 注入 system prompt（零侵入注入槽位）；provider 本身按 topology.yaml
+        # 数据存在性门控（is_available），无数据/显式关闭时零影响，非 ops
+        # profile 不产生任何 prompt 变化。显式 "" 仍是关闭外部 provider 的
+        # 语义（向后兼容）。
+        "provider": "topo",
     },
 
     # Subagent delegation — override the provider:model used by delegate_task
