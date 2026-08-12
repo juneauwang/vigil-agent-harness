@@ -1449,3 +1449,23 @@
   site-packages gate + 单测。
 - 5de609a/8f43841/7b875c3（#5）共三提交：DANGEROUS_PATTERNS 凭据读取阻断 +
   kubeconfig 绝对路径补漏 + redact 三路径（ssh_key/SSHPASS/reasoning）。
+
+### 37. 数据根 legacy fallback 无特征判断——空/他人 ~/.hermes 被当 Vigil 数据根 — ✅ 已实施（2026-08-12，b240ef0）
+- **发现**：2026-08-12 晚产品讨论时发现 `default_data_root_for` 的旧 hermes 布局兜底
+  只看 `~/.hermes` 目录存在，无法区分"Vigil 老数据"和"Hermes 本体/无关残留"——用户
+  机器上恰好有 ~/.hermes（装过 Hermes 本体 profile=personal/work，或别的工具残留）时，
+  Vigil 会把别人的数据根当自己的，读错配置、写错数据，甚至与正在运行的 Hermes 抢数据。
+  当晚实战触发：第一个试用用户（朋友二）机器上**确实装有 Hermes**，已让其暂缓安装等修复。
+- **修复（b240ef0）**：
+  1. 新增模块级 `_looks_like_vigil_legacy_data(hermes_dir)`：`_safe_exists(hermes_dir / "profiles" / "ops")`
+     ——Vigil v0.1.5 及以前数据在 ~/.hermes 且默认 profile 是 ops；Hermes 本体是 personal/work，
+     无 ops，这是可靠区分特征。
+  2. `default_data_root_for` legacy 分支：`if _safe_exists(legacy) and _looks_like_vigil_legacy_data(legacy)`
+  3. `vigil_data_root_candidates` 同步（auth 测试护栏/gateway remap 3+2 处消费）：无特征只返回 (primary,)
+  4. 环境变量路径（VIGIL_HOME/HERMES_HOME）未动，显式指定仍优先；未新增 env var。
+- **验收**：tests/test_hermes_constants.py 60 passed（改 2 用例 + 新增 3 用例：
+  empty_hermes_no_fallback / has_other_profiles_no_fallback / candidates_empty_hermes_excluded
+  / candidates_ops_profile_included）；行为探针五场景符合预期（空 .hermes→.vigil、
+  ops→.hermes、personal→.vigil、都不存在→.vigil、.vigil+ops→.vigil 且 candidates 含 legacy）。
+- **核销方式**：fallback 语义从"目录存在即兜底"改为"含 Vigil 老数据特征才兜底"；
+  老安装（profiles/ops 在）仍无感兼容，新用户/Hermes 本体用户不再被串。
