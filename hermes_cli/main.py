@@ -424,6 +424,7 @@ from hermes_cli.subcommands._shared import add_accept_hooks_flag as _add_accept_
 from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
+from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
 from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
@@ -4572,6 +4573,21 @@ def cmd_ops_init(args):
         "--env", args.env,
         *(["--force"] if args.force else []),
         *(["--no-alias"] if args.no_alias else []),
+    ])
+
+
+def cmd_topo_discover(args):
+    """Guided topology discovery (SSH → docker/k8s/ports/GPU → v0.2 fragment)."""
+    from hermes_cli.topo_discover import main as topo_discover_main
+
+    return topo_discover_main([
+        "--host", args.host,
+        "--env", args.env,
+        *(("--user", args.user) if args.user else ()),
+        *(("--key", args.key) if args.key else ()),
+        *(["--dry-run"] if args.dry_run else []),
+        *(["--force"] if args.force else []),
+        *(["--yes"] if args.yes else []),
     ])
 
 
@@ -12410,6 +12426,11 @@ def main():
     # ops-init command  (parser built in hermes_cli/subcommands/ops_init.py)
     # =========================================================================
     build_ops_init_parser(subparsers, cmd_ops_init=cmd_ops_init)
+
+    # =========================================================================
+    # topo-discover command  (parser built in hermes_cli/subcommands/topo_discover.py)
+    # =========================================================================
+    build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
 
     # =========================================================================
     # completion command

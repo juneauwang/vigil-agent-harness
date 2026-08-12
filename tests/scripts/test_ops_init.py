@@ -40,6 +40,10 @@ def _run_init(root: Path, *extra: str, entry: str = "script") -> subprocess.Comp
     - module:  packaged ``hermes_cli.ops_init`` module
     - cli:     ``vigil ops-init`` subcommand (hermes_cli.main dispatch)
     """
+    env = dict(os.environ)
+    # 钉住本仓库：script 入口的 sys.path[0] 是 scripts/，editable 安装可能把
+    # hermes_cli 解析到别处——本测试断言的是 PROJECT_ROOT 的样例与代码。
+    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     if entry == "script":
         argv = [sys.executable, str(INIT_SCRIPT)]
     elif entry == "module":
@@ -49,7 +53,7 @@ def _run_init(root: Path, *extra: str, entry: str = "script") -> subprocess.Comp
     return subprocess.run(
         [*argv, "--root", str(root), *extra],
         cwd=str(PROJECT_ROOT),
-        env=dict(os.environ),
+        env=env,
         capture_output=True,
         text=True,
         timeout=120,
@@ -83,6 +87,9 @@ def _load_permissions(ops_home: Path) -> dict:
 def test_init_creates_profile_config_and_topology(ops_home):
     assert (ops_home / "config.yaml").is_file()
     assert (ops_home / "topology.yaml").is_file()
+    # v0.2 三层样例：第一层 topology.yaml + 第二层 hosts/ 服务索引 + 第三层 entities/。
+    seeded_hosts = sorted(p.stem for p in (ops_home / "hosts").glob("*.yaml"))
+    assert seeded_hosts == sorted(p.stem for p in (SAMPLE_DIR / "hosts").glob("*.yaml"))
     seeded = sorted(p.stem for p in (ops_home / "entities").glob("*.yaml"))
     assert seeded == SAMPLE_ENTITY_NAMES
     seeded_rb = sorted(p.stem for p in (ops_home / "runbooks").glob("*.yaml"))
@@ -137,7 +144,8 @@ def test_init_idempotent_and_force(tmp_path, entry):
     proc = _run_init(root, "--no-alias", "--force", entry=entry)
     assert proc.returncode == 0
     assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
-    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 1
+    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 2
+    assert (home / "hosts" / "node1.yaml").is_file()
     # --force 重铺样例但不删除用户自建文件（mine.yaml 保留）。
     assert set(p.stem for p in runbooks_dir.glob("*.yaml")) >= set(SAMPLE_RUNBOOK_NAMES)
     assert (runbooks_dir / "mine.yaml").is_file()
@@ -214,7 +222,8 @@ def test_env_flag_invalid_name_errors_listing_available(tmp_path):
 def test_seeded_profile_renders_topo_and_queries(ops_home):
     block = render_topo_block(ops_home)
     assert block.startswith("## TOPO — 平台拓扑总览")
-    assert "harbor" in block
+    # v0.2：第一层只注入 hosts + cross_host（服务在第二层，不进 system prompt）。
+    assert "node1" in block and "k3s-prod" in block and "test-host" in block
     assert "ingress → gateway-svc → order-db" in block
     assert "执行任何运维操作前" in block
 
@@ -227,6 +236,10 @@ def test_seeded_profile_renders_topo_and_queries(ops_home):
 
     dbs = json.loads(topo_query(entity_type="db", env="prod"))
     assert {e["name"] for e in dbs["entities"]} == {"order-db", "postgres"}
+
+    node1 = json.loads(topo_query(host="node1"))
+    assert node1["name"] == "node1"
+    assert {s["name"] for s in node1["services"]} == {"harbor", "argocd", "order-db", "postgres"}
 
 
 def test_topo_update_test_entity_writes_source_agent(ops_home):
@@ -252,8 +265,31 @@ def test_sample_topology_stays_valid_and_under_50_lines():
     lines = (SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8").splitlines()
     assert len(lines) < 50, "第一层注入 system prompt，必须保持 <50 行"
     data = yaml.safe_load("\n".join(lines))
-    assert data["version"] == 1
-    assert {e["name"] for e in data["core_entities"]} == set(SAMPLE_ENTITY_NAMES)
-    for ent in data["core_entities"]:
+    # v0.2 三层：hosts + cross_host（第一层）+ hosts/ 服务索引（第二层）
+    # → 扁平实体集 == entities/ 第三层档案集（样例完整性契约）。
+    assert data["version"] == 2
+    hosts = data["hosts"]
+    cross_host = data["cross_host"]
+    assert {h["name"] for h in hosts} == {"node1", "node2", "test-host"}
+    assert {c["name"] for c in cross_host} == {"k3s-prod", "ingress"}
+    for host in hosts:
+        assert (SAMPLE_DIR / host["services_index"]).is_file(), \
+            f"services_index 指向缺失: {host['services_index']}"
+    flat = {h["name"] for h in hosts} | {c["name"] for c in cross_host}
+    detail_entities = {c["name"] for c in cross_host}
+    for host in hosts:
+        index = yaml.safe_load(
+            (SAMPLE_DIR / host["services_index"]).read_text(encoding="utf-8")
+        )
+        flat |= {s["name"] for s in index["services"]}
+        detail_entities |= {s["name"] for s in index["services"]}
+        if (SAMPLE_DIR / "entities" / f"{host['name']}.yaml").is_file():
+            detail_entities.add(host["name"])
+        for svc in index["services"]:
+            assert (SAMPLE_DIR / svc["detail"]).is_file(), f"detail 指向缺失: {svc['detail']}"
+    assert flat >= set(SAMPLE_ENTITY_NAMES)
+    # 第三层档案集 = 有 detail 的实体（服务 + cross_host + 有档案的 host）。
+    assert detail_entities == set(SAMPLE_ENTITY_NAMES)
+    for ent in cross_host:
         assert (SAMPLE_DIR / ent["detail"]).is_file(), f"detail 指向缺失: {ent['detail']}"
     assert data["key_paths"] == [["ingress", "gateway-svc", "order-db"]]

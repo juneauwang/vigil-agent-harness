@@ -1,0 +1,9 @@
+# node1 —— 第二层服务索引（第一层 hosts 段通过 services_index 指向本文件）。
+# 服务行 = 权限矩阵/runbook 绑定的实体：name+env 独立，不因分层失效。
+host: node1
+env: prod
+services:
+  - {name: harbor, type: registry, env: prod, endpoint: "203.0.113.10:30443", owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/harbor.yaml}
+  - {name: argocd, type: service, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/argocd.yaml}
+  - {name: order-db, type: db, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/order-db.yaml}
+  - {name: postgres, type: db, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/postgres.yaml}

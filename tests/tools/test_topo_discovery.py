@@ -1,0 +1,272 @@
+"""OPS-DELTA #12 — 拓扑自动发现引擎 + topo-discover CLI 验收测试。
+
+覆盖：mock ssh 输出（docker ps / compose ls / ss / nvidia-smi / kubectl）→
+正确映射服务/端口/镜像、输出 v0.2 结构、source=discovered + needs_review=true；
+凭据不落明文；dry-run 不写文件；确认落盘后 hosts/<hostname>.yaml 结构可被
+topo_tools 校验；ssh 失败 → 明确错误无半截数据；v0.1 topology 拒绝覆盖；
+--help 正常。
+"""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+import yaml
+
+import hermes_cli.config as hc
+from tools.topo_discovery import (
+    DiscoveryError,
+    ProbeResult,
+    discover_host,
+    write_discovery,
+)
+
+DOCKER_PS = """\
+{"Command":"/entrypoint.sh","ID":"abc123","Image":"harbor:v2.11.0","Labels":"com.docker.compose.project=harbor,com.docker.compose.service=harbor","Names":"harbor","Ports":"0.0.0.0:30443->5000/tcp, :::30443->5000/tcp","State":"running"}
+{"Command":"docker-entrypoint.sh","ID":"def456","Image":"postgres:16-alpine","Labels":"com.docker.compose.project=db,com.docker.compose.service=postgres","Names":"db-postgres-1","Ports":"0.0.0.0:5432->5432/tcp","State":"running"}
+"""
+COMPOSE_LS = (
+    '[{"Name":"harbor","Status":"running(1)","ConfigFiles":"/opt/harbor/compose.yaml"},'
+    '{"Name":"db","Status":"running(1)","ConfigFiles":"/opt/db/compose.yaml"}]'
+)
+SS_TLNP = """\
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      128    0.0.0.0:22      0.0.0.0:*    users:(("sshd",pid=1,fd=3))
+LISTEN 0      128    127.0.0.1:5432  0.0.0.0:*    users:(("postgres",pid=2,fd=4))
+LISTEN 0      128    0.0.0.0:9090    0.0.0.0:*    users:(("prom",pid=3,fd=5))
+"""
+NVIDIA = "NVIDIA A100-SXM4-40GB, 40960 MiB"
+KUBE = (
+    '{"items":['
+    '{"kind":"Service","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"ports":[{"port":3000,"nodePort":30030}]}},'
+    '{"kind":"Deployment","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"template":{"spec":{"containers":[{"image":"grafana/grafana:10"}]}}}}'
+    ']}'
+)
+
+
+class FakeRunner:
+    """可编程 mock runner：按命令前缀返回输出；记录调用（供明文断言）。"""
+
+    def __init__(self, **probes):
+        self.probes = probes
+        self.calls: list = []
+
+    def __call__(self, cmd: str) -> ProbeResult:
+        self.calls.append(cmd)
+        for key, value in self.probes.items():
+            if key in cmd:
+                if isinstance(value, Exception):
+                    raise value
+                if isinstance(value, tuple):
+                    return ProbeResult(value[0], value[1])
+                return ProbeResult(value)
+        return ProbeResult("", 127)
+
+
+def _default_runner(**overrides):
+    probes = {
+        "docker ps": DOCKER_PS,
+        "compose ls": COMPOSE_LS,
+        "kubectl": KUBE,
+        "ss -tlnp": SS_TLNP,
+        "nvidia-smi": NVIDIA,
+    }
+    probes.update(overrides)
+    return FakeRunner(**probes)
+
+
+# ---------------------------------------------------------------------------
+# 发现引擎
+# ---------------------------------------------------------------------------
+
+def test_discover_maps_services_ports_images():
+    runner = _default_runner()
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+
+    assert d["version"] == 2
+    assert d["source"] == "discovered"
+    assert d["needs_review"] is True
+    assert d["last_verified"]
+
+    host = d["host"]
+    assert host["name"] == "203.0.113.20"
+    assert host["env"] == "prod"
+    assert host["endpoint"] == "203.0.113.20"
+    assert host["runtime"] == "docker"
+    assert host["source"] == "discovered"
+    assert host["needs_review"] is True
+    assert host["attrs"]["gpu"] == ["NVIDIA A100-SXM4-40GB, 40960 MiB"]
+    assert host["attrs"]["compose_projects"] == ["harbor", "db"]
+
+    names = {s["name"]: s for s in d["services"]}
+    assert "harbor" in names
+    assert names["harbor"]["endpoint"] == "203.0.113.20:30443"
+    assert names["harbor"]["attrs"]["image"] == "harbor:v2.11.0"
+    assert names["harbor"]["attrs"]["ports"] == [30443]
+    assert names["postgres"]["attrs"]["ports"] == [5432]
+    # k8s 枚举：grafana svc（nodePort 30030）+ deploy（镜像）。
+    assert names["grafana"]["type"] == "k8s-service"
+    assert names["grafana"]["endpoint"] == "203.0.113.20:30030"
+    # 端口扫描补条目：9090 未识别；22（sshd）与已映射端口不补。
+    assert "unidentified-9090" in names
+    assert "unidentified-22" not in names
+    assert "unidentified-5432" not in names
+
+    # 第三层详情草案（detail 指向 entities/<name>.yaml）。
+    assert d["details"]["harbor"]["name"] == "harbor"
+    assert d["details"]["harbor"]["needs_review"] is True
+    assert names["harbor"]["detail"] == "entities/harbor.yaml"
+
+
+def test_discover_credentials_never_in_output_or_command_strings():
+    runner = _default_runner()
+    secret = "Sup3r-Secret!Password"
+    d = discover_host("203.0.113.20", "prod", {"user": "root", "password": secret},
+                      runner=runner)
+    # 命令串（runner 记录）与输出/日志里不得出现密码明文。
+    blob = json.dumps(d) + "\n" + "\n".join(runner.calls)
+    assert secret not in blob
+    # 服务/详情数据也不含凭据字段。
+    assert "password" not in json.dumps(d).lower()
+
+
+def test_discover_ssh_failure_raises_no_partial_data():
+    runner = _default_runner(**{"docker ps": DiscoveryError("SSH 连接 203.0.113.20 失败")})
+    with pytest.raises(DiscoveryError) as exc:
+        discover_host("203.0.113.20", "prod", runner=runner)
+    assert "203.0.113.20" in str(exc.value)
+
+
+def test_discover_docker_unavailable_falls_through_to_other_probes():
+    """docker 未安装（exit 127）→ 记录 skipped，其余探针照常。"""
+    runner = _default_runner(**{"docker ps": ("", 127), "compose ls": ("", 127)})
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert d["probes"]["docker"] != "ok"
+    assert d["probes"]["kubectl"] == "ok"
+    assert d["probes"]["ss"] == "ok"
+    assert {s["name"] for s in d["services"]} == {"grafana", "unidentified-9090"}
+    # 无 docker 容器 → runtime 跟随 k8s。
+    assert d["host"]["runtime"] == "k3s"
+
+
+def test_discover_parses_compose_ls_plain_fallback():
+    runner = _default_runner(
+        **{"compose ls": "NAME    STATUS         CONFIG FILES\nharbor  running(1)    /opt/harbor/x.yaml\n"}
+    )
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert d["host"]["attrs"]["compose_projects"] == ["harbor"]
+
+
+# ---------------------------------------------------------------------------
+# 落盘
+# ---------------------------------------------------------------------------
+
+def _discovery():
+    return discover_host("203.0.113.20", "prod", runner=_default_runner())
+
+
+def test_write_discovery_writes_v2_structure(tmp_path):
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    d = _discovery()
+    result = write_discovery(home, d)
+    assert result["written"]
+
+    index = home / "hosts" / "203.0.113.20.yaml"
+    assert index.is_file()
+    data = yaml.safe_load(index.read_text(encoding="utf-8"))
+    assert data["host"] == "203.0.113.20"
+    assert data["env"] == "prod"
+    assert {s["name"] for s in data["services"]} == {
+        "harbor", "postgres", "grafana", "unidentified-9090"}
+
+    topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
+    assert topo["version"] == 2
+    assert topo["hosts"][0]["name"] == "203.0.113.20"
+    assert topo["hosts"][0]["services_index"] == "hosts/203.0.113.20.yaml"
+
+    # 落盘结果能被 topo_tools 正常读取（第二层服务索引进扁平视图）。
+    os.environ["HERMES_HOME"] = str(home)
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        from tools.topo_tools import topo_query
+        node = json.loads(topo_query(host="203.0.113.20"))
+        assert {s["name"] for s in node["services"]} >= {"harbor", "postgres"}
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+
+def test_write_discovery_refuses_v1_topology(tmp_path):
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    (home / "topology.yaml").write_text(
+        "version: 1\ncore_entities:\n  - {name: old, type: svc, env: prod}\n",
+        encoding="utf-8",
+    )
+    d = _discovery()
+    with pytest.raises(DiscoveryError) as exc:
+        write_discovery(home, d)
+    assert "v0.1" in str(exc.value)
+    # v0.1 数据未被改写。
+    assert "version: 1" in (home / "topology.yaml").read_text(encoding="utf-8")
+
+
+def test_write_discovery_refuses_existing_host_unless_force(tmp_path):
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    d = _discovery()
+    write_discovery(home, d)
+    with pytest.raises(DiscoveryError) as exc:
+        write_discovery(home, d)  # 已存在 → 拒绝
+    assert "--force" in str(exc.value)
+
+    result = write_discovery(home, d, force=True)  # --force → 覆盖
+    assert result["written"]
+
+
+def test_write_discovery_dry_run_not_applied_by_cli(tmp_path, monkeypatch):
+    """CLI --dry-run 只展示不落盘（main 走 dry-run 分支不调 write_discovery）。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    calls = {"discover": 0, "write": 0}
+
+    def fake_discover(*a, **kw):
+        calls["discover"] += 1
+        return _discovery()
+
+    def fake_write(*a, **kw):
+        calls["write"] += 1
+        return {"written": []}
+
+    monkeypatch.setattr(td, "discover_host", fake_discover)
+    monkeypatch.setattr(td, "write_discovery", fake_write)
+    monkeypatch.setattr(td, "_prompt_credentials", lambda host, user, key: {"user": "root"})
+
+    rc = td.main(["--host", "203.0.113.20", "--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert calls["discover"] == 1
+    assert calls["write"] == 0
+    assert not (home / "topology.yaml").exists()
+    assert not (home / "hosts").exists()
+
+
+def test_topo_discover_cli_help_and_missing_args(tmp_path):
+    import subprocess
+    import sys
+    proc = subprocess.run(
+        [sys.executable, "-m", "hermes_cli.main", "topo-discover", "--help"],
+        cwd=Path(__file__).resolve().parents[2],
+        env=dict(os.environ),
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0
+    assert "--host" in proc.stdout and "--env" in proc.stdout
+    assert "--dry-run" in proc.stdout and "--force" in proc.stdout

@@ -1,0 +1,569 @@
+"""拓扑自动发现引擎（OPS-DELTA #12，中间市场开箱即用地基）。
+
+零侵入独立模块：SSH 进主机 → 扫 docker / k8s / 监听端口 / GPU → 自动生成
+schema v0.2 片段（第一层 host 行 + 第二层 services 索引 + 第三层详情草案），
+供 ``vigil topo-discover`` 展示、人工确认后落盘。
+
+设计要点（与 ops-agent-harness.md / OPS-DELTA #12 对齐）：
+- **只读**：本模块只采集，不写 topology.yaml——落盘由用户确认后显式调用
+  ``write_discovery()``。
+- **凭据不落明文**：SSH 由调用方注入 runner（默认 runner 只走 ssh-agent / key，
+  密码经 SSH_ASKPASS 从保险箱文件读取，命令串/环境/日志里不出现密码）。
+- **无半截数据**：SSH 级失败抛 ``DiscoveryError`` 直接中止；单个探针失败
+  （docker/kubectl 未安装等）记为 skipped，不影响其余探针。
+- **输出标记**：``source: discovered`` + ``last_verified: 今天`` +
+  ``needs_review: true``——人工确认前不落盘为权威。
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import json
+import logging
+import os
+import re
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+import yaml
+
+logger = logging.getLogger(__name__)
+
+_SSH_TIMEOUT_S = 60
+# 容器名/服务名白名单（防路径穿越 + 防把不可打印字符写进文件名）。
+_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+class DiscoveryError(Exception):
+    """发现级失败：SSH 不通 / 数据冲突 / 落盘被拒。消息对用户可操作。"""
+
+
+class ProbeResult:
+    """一次远端命令探测的结果（stdout + exit_code）。"""
+
+    __slots__ = ("stdout", "exit_code")
+
+    def __init__(self, stdout: str, exit_code: int = 0):
+        self.stdout = stdout or ""
+        self.exit_code = exit_code
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# Runner（SSH 执行）
+# ---------------------------------------------------------------------------
+
+def _sanitize_name(value: str) -> str:
+    """名称净化：只保留白名单字符，防止路径穿越/脏名写入。"""
+    value = str(value or "").strip().lower()
+    value = re.sub(r"[^A-Za-z0-9_.-]", "-", value)
+    return value or "unknown"
+
+
+def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = None,
+                      askpass_file: Optional[Path] = None) -> Callable[[str], ProbeResult]:
+    """默认 SSH runner：key/agent 认证（BatchMode）或 SSH_ASKPASS 密码文件。
+
+    密码走 SSH_ASKPASS（``askpass_file`` 为 0600 脚本，从保险箱文件读取），
+    任何密码明文都不进 argv / 环境变量。
+    """
+    if not host or not user:
+        raise DiscoveryError("SSH 需要 host 与 user（--host / --user）")
+
+    def run(cmd: str) -> ProbeResult:
+        env = dict(os.environ)
+        use_askpass = askpass_file is not None and askpass_file.is_file()
+        argv = ["ssh", "-o", "ConnectTimeout=10"]
+        if not use_askpass:
+            # key/agent 认证：BatchMode 确保不交互弹密码（密码路径走 askpass）。
+            argv += ["-o", "BatchMode=yes"]
+        if key_path:
+            argv += ["-i", str(key_path)]
+        argv += [f"{user}@{host}", cmd]
+        if use_askpass:
+            # 密码经 SSH_ASKPASS（0600 脚本读保险箱文件）注入，命令串/env 无明文。
+            env["SSH_ASKPASS"] = str(askpass_file)
+            env["SSH_ASKPASS_REQUIRE"] = "force"
+            env.setdefault("DISPLAY", ":0")
+        try:
+            proc = subprocess.run(argv, capture_output=True, text=True,
+                                  timeout=_SSH_TIMEOUT_S, env=env)
+        except subprocess.TimeoutExpired as exc:
+            raise DiscoveryError(f"SSH 连接 {user}@{host} 超时（{_SSH_TIMEOUT_S}s）") from exc
+        except OSError as exc:
+            raise DiscoveryError(f"无法执行 ssh：{exc}") from exc
+        if proc.returncode == 255:
+            # ssh 自身失败（连接拒绝/认证失败）→ 中止发现，无半截数据。
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            raise DiscoveryError(
+                f"SSH 连接 {user}@{host} 失败（exit 255）："
+                f"{detail[-1] if detail else '认证失败或主机不可达'}"
+            )
+        return ProbeResult(proc.stdout, proc.returncode)
+
+    return run
+
+
+def _make_askpass_script(vault_file: Path) -> Path:
+    """写 0600 askpass 脚本：输出保险箱文件内容（密码），不进 argv/env。"""
+    script = Path(tempfile.mkstemp(prefix="vigil-askpass-", suffix=".sh")[1])
+    script.write_text(f"#!/bin/sh\ncat {vault_file}\n", encoding="utf-8")
+    os.chmod(script, 0o600)
+    return script
+
+
+# ---------------------------------------------------------------------------
+# 探针解析
+# ---------------------------------------------------------------------------
+
+def _parse_docker_ps(output: str) -> List[Dict[str, Any]]:
+    """docker ps --format '{{json .}}' → 容器列表（Name/Image/Ports/Labels）。"""
+    containers: List[Dict[str, Any]] = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(row, dict):
+            continue
+        labels = row.get("Labels") or ""
+        labels_map: Dict[str, str] = {}
+        for part in str(labels).split(","):
+            if "=" in part:
+                k, _, v = part.partition("=")
+                labels_map[k.strip()] = v.strip()
+        containers.append({
+            "name": str(row.get("Names") or "").strip(),
+            "image": str(row.get("Image") or "").strip(),
+            "ports": str(row.get("Ports") or "").strip(),
+            "state": str(row.get("State") or "").strip(),
+            "compose_project": labels_map.get("com.docker.compose.project", ""),
+            "compose_service": labels_map.get("com.docker.compose.service", ""),
+        })
+    return [c for c in containers if c["name"]]
+
+
+def _parse_published_ports(ports_str: str) -> List[int]:
+    """'0.0.0.0:30443->5000/tcp, :::30443->5000/tcp' → [30443]（去重）。"""
+    ports: List[int] = []
+    for part in str(ports_str).split(","):
+        part = part.strip()
+        m = re.match(r".*?(\d+)->", part)
+        if m:
+            port = int(m.group(1))
+        else:
+            m = re.match(r".*?(\d+)/", part)
+            if not m:
+                continue
+            port = int(m.group(1))
+        if port not in ports:
+            ports.append(port)
+    return ports
+
+
+def _parse_compose_ls(output: str) -> List[str]:
+    """docker compose ls --format json → compose 项目名列表。"""
+    out = output.strip()
+    if not out:
+        return []
+    projects: List[str] = []
+    if out.startswith("["):
+        try:
+            rows = json.loads(out)
+        except json.JSONDecodeError:
+            rows = []
+        for row in rows or []:
+            if isinstance(row, dict) and row.get("Name"):
+                projects.append(str(row["Name"]))
+        return projects
+    # 非 json 兜底：第一列是项目名。
+    for line in out.splitlines():
+        line = line.strip()
+        if line and not line.startswith("NAME"):
+            projects.append(line.split()[0])
+    return projects
+
+
+def _parse_ss_tlnp(output: str) -> List[Dict[str, Any]]:
+    """ss -tlnp → 非 loopback 监听端口（Local Address:Port）。"""
+    listeners: List[Dict[str, Any]] = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith("State"):
+            continue
+        parts = line.split()
+        if len(parts) < 5 or parts[0] != "LISTEN":
+            continue
+        addr_port = parts[3]
+        host_part, _, port_part = addr_port.rpartition(":")
+        host = host_part.strip("[]")
+        if not port_part.isdigit():
+            continue
+        if host in ("127.0.0.1", "::1", "localhost", ""):
+            continue
+        listeners.append({"host": host, "port": int(port_part)})
+    return listeners
+
+
+def _parse_nvidia_smi(output: str) -> List[str]:
+    """nvidia-smi csv → ['NVIDIA A100-SXM4-40GB, 40960 MiB', ...]。"""
+    gpus = [l.strip() for l in output.splitlines() if l.strip()]
+    return [g for g in gpus if not g.lower().startswith("name")]
+
+
+def _parse_kubectl(output: str) -> List[Dict[str, Any]]:
+    """kubectl get deploy,svc -A -o json → 服务/端口/镜像映射。"""
+    try:
+        data = json.loads(output or "{}")
+    except json.JSONDecodeError:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for item in data.get("items") or []:
+        kind = str(item.get("kind") or "").lower()
+        meta = item.get("metadata") or {}
+        name = str(meta.get("name") or "")
+        namespace = str(meta.get("namespace") or "")
+        if not name:
+            continue
+        if kind == "service":
+            ports = []
+            for p in (item.get("spec") or {}).get("ports") or []:
+                if isinstance(p, dict):
+                    port = p.get("nodePort") or p.get("port")
+                    if port:
+                        ports.append(int(port))
+            rows.append({"kind": "k8s-service", "name": name, "namespace": namespace,
+                         "ports": sorted(set(ports))})
+        elif kind == "deployment":
+            containers = (((item.get("spec") or {}).get("template") or {})
+                          .get("spec") or {}).get("containers") or []
+            image = containers[0].get("image", "") if containers else ""
+            rows.append({"kind": "k8s-deploy", "name": name, "namespace": namespace,
+                         "image": image})
+    return rows
+
+
+# ---------------------------------------------------------------------------
+# 发现编排
+# ---------------------------------------------------------------------------
+
+def _probe(runner: Callable[[str], ProbeResult], cmd: str) -> ProbeResult:
+    return runner(cmd)
+
+
+def _service_from_container(c: Dict[str, Any], host: str, env: str,
+                            details: Dict[str, Any]) -> Dict[str, Any]:
+    """docker 容器 → v0.2 服务行（第二层）+ 第三层详情草案。"""
+    ports = _parse_published_ports(c.get("ports") or "")
+    service_name = c.get("compose_service") or c.get("name")
+    project = c.get("compose_project") or ""
+    name = _sanitize_name(service_name)
+    if project and project != name and name in (details or {}):
+        # 同名跨项目：前缀项目名保持唯一。
+        name = _sanitize_name(f"{project}-{name}")
+    endpoint = f"{host}:{ports[0]}" if ports else None
+    svc = {
+        "name": name,
+        "type": "service",
+        "env": env,
+        "endpoint": endpoint,
+        "source": "discovered",
+        "last_verified": _dt.date.today().isoformat(),
+        "needs_review": True,
+        "detail": f"entities/{name}.yaml",
+        "attrs": {
+            "image": c.get("image") or "",
+            "ports": ports,
+            "container": c.get("name") or "",
+            "state": c.get("state") or "",
+        },
+    }
+    if project:
+        svc["attrs"]["compose_project"] = project
+        svc["attrs"]["compose_service"] = c.get("compose_service") or ""
+    details[name] = {
+        "name": name,
+        "type": "service",
+        "env": env,
+        "attrs": {k: v for k, v in svc["attrs"].items() if k not in ("ports",)},
+        "source": "discovered",
+        "last_verified": svc["last_verified"],
+        "needs_review": True,
+    }
+    return svc
+
+
+def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
+                  *, runner: Optional[Callable[[str], ProbeResult]] = None) -> Dict[str, Any]:
+    """发现一台主机的 v0.2 schema 片段。
+
+    Args:
+      host: 目标 IP/主机名（endpoint）。
+      env: 目标环境（test/uat/prod/自定义）。
+      creds: ``{"user", "key_path", "askpass_file"}`` 等认证信息（不含密码明文）。
+      runner: 可注入的 SSH 执行器（测试用）；默认 ``_build_ssh_runner``。
+
+    Returns:
+      v0.2 片段 dict：``{version, source, last_verified, needs_review, host,
+      services, details, probes}``。
+    """
+    host = str(host or "").strip()
+    if not host:
+        raise DiscoveryError("discover_host 需要 host（--host <ip>）")
+    if not env:
+        raise DiscoveryError("discover_host 需要 env（--env <env>）")
+    creds = creds or {}
+    user = str(creds.get("user") or "root")
+    if runner is None:
+        runner = _build_ssh_runner(
+            host, user=user,
+            key_path=creds.get("key_path"),
+            askpass_file=Path(creds["askpass_file"]) if creds.get("askpass_file") else None,
+        )
+
+    probes: Dict[str, str] = {}
+    services: List[Dict[str, Any]] = []
+    details: Dict[str, Any] = {}
+    seen_ports: set = set()
+    runtime = "unknown"
+    gpus: List[str] = []
+    compose_projects: List[str] = []
+
+    # 1) docker 枚举（docker ps + compose ls）。
+    docker_res = _probe(runner, "docker ps --format '{{json .}}'")
+    if docker_res.ok:
+        runtime = "docker"
+        probes["docker"] = "ok"
+        for c in _parse_docker_ps(docker_res.stdout):
+            svc = _service_from_container(c, host, env, details)
+            if svc["name"] not in [s["name"] for s in services]:
+                services.append(svc)
+            for p in svc["attrs"].get("ports") or []:
+                seen_ports.add(p)
+        compose_res = _probe(runner, "docker compose ls --format json")
+        if compose_res.ok:
+            compose_projects = _parse_compose_ls(compose_res.stdout)
+            probes["compose"] = f"ok({len(compose_projects)} projects)"
+        else:
+            probes["compose"] = compose_res.stdout.strip()[:80] or "exit!=0"
+    else:
+        reason = (docker_res.stdout or "").strip().splitlines()
+        probes["docker"] = reason[-1][:120] if reason else "docker 不可用（exit!=0）"
+
+    # 2) k8s 枚举（可选：kubectl 可用才扫）。
+    k8s_res = _probe(runner, "kubectl get deploy,svc -A -o json 2>/dev/null")
+    if k8s_res.ok:
+        runtime = "k3s" if runtime == "unknown" else runtime
+        probes["kubectl"] = "ok"
+        for row in _parse_kubectl(k8s_res.stdout):
+            if row["kind"] == "k8s-service":
+                for p in row.get("ports") or []:
+                    seen_ports.add(p)
+            name = row["name"]
+            if name not in [s["name"] for s in services]:
+                node_port = row.get("ports")[0] if row.get("ports") else None
+                svc = {
+                    "name": name,
+                    "type": row["kind"],
+                    "env": env,
+                    "endpoint": f"{host}:{node_port}" if node_port else None,
+                    "source": "discovered",
+                    "last_verified": _dt.date.today().isoformat(),
+                    "needs_review": True,
+                    "detail": f"entities/{name}.yaml",
+                    "attrs": {"namespace": row.get("namespace", ""),
+                              "image": row.get("image", ""),
+                              "ports": row.get("ports") or []},
+                }
+                services.append(svc)
+                details[name] = {
+                    "name": name, "type": row["kind"], "env": env,
+                    "attrs": {"namespace": row.get("namespace", ""),
+                              "image": row.get("image", "")},
+                    "source": "discovered",
+                    "last_verified": svc["last_verified"],
+                    "needs_review": True,
+                }
+    else:
+        probes["kubectl"] = "skipped（kubectl 不可用）"
+
+    # 3) 端口扫描补条目（非 loopback 监听端口，未映射到已知服务）。
+    ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
+    if ss_res.ok:
+        probes["ss"] = "ok"
+        for listener in _parse_ss_tlnp(ss_res.stdout):
+            port = listener["port"]
+            if port in seen_ports or port == 22:
+                # 22 = sshd 管理通道（主机自身，不是服务）；其余已映射端口跳过。
+                continue
+            name = f"unidentified-{port}"
+            services.append({
+                "name": name,
+                "type": "service",
+                "env": env,
+                "endpoint": f"{host}:{port}",
+                "source": "discovered",
+                "last_verified": _dt.date.today().isoformat(),
+                "needs_review": True,
+                "detail": f"entities/{name}.yaml",
+                "attrs": {"listener": listener["host"], "ports": [port]},
+            })
+            details[name] = {
+                "name": name, "type": "service", "env": env,
+                "attrs": {"listener": listener["host"]},
+                "source": "discovered",
+                "last_verified": _dt.date.today().isoformat(),
+                "needs_review": True,
+            }
+            seen_ports.add(port)
+    else:
+        probes["ss"] = "skipped（ss 不可用）"
+
+    # 4) GPU（可选）。
+    gpu_res = _probe(runner, "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null")
+    if gpu_res.ok:
+        probes["gpu"] = "ok"
+        gpus = _parse_nvidia_smi(gpu_res.stdout)
+    else:
+        probes["gpu"] = "skipped（nvidia-smi 不可用）"
+
+    host_row = {
+        "name": _sanitize_name(host),
+        "env": env,
+        "endpoint": host,
+        "runtime": runtime,
+        "source": "discovered",
+        "last_verified": _dt.date.today().isoformat(),
+        "needs_review": True,
+        "services_index": f"hosts/{_sanitize_name(host)}.yaml",
+    }
+    if gpus:
+        host_row["attrs"] = {"gpu": gpus}
+    elif compose_projects:
+        host_row["attrs"] = {}
+    if compose_projects:
+        host_row["attrs"].setdefault("compose_projects", compose_projects)
+    return {
+        "version": 2,
+        "source": "discovered",
+        "last_verified": _dt.date.today().isoformat(),
+        "needs_review": True,
+        "host": host_row,
+        "services": services,
+        "details": details,
+        "probes": probes,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 落盘（用户确认后调用）
+# ---------------------------------------------------------------------------
+
+def _topo_v2(topo: Dict[str, Any]) -> bool:
+    if topo.get("version") == 2:
+        return True
+    if "version" in topo:
+        return False
+    return bool(topo.get("hosts") or topo.get("cross_host"))
+
+
+def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+    """把发现结果落盘为 v0.2 结构（hosts/<host>.yaml + topology.yaml + entities/）。
+
+    - 现有 topology.yaml 为 v0.1 时拒绝写入（迁移不靠自动重写用户数据）；
+    - host 已存在且未 ``force`` → 拒绝覆盖；
+    - 写路径：hosts/<hostname>.yaml（第二层服务索引）、
+      entities/<name>.yaml（第三层详情草案）、topology.yaml 的 hosts 段追加。
+    """
+    home = Path(home)
+    host_row = dict(discovery.get("host") or {})
+    hostname = _sanitize_name(host_row.get("name") or "")
+    if not hostname:
+        raise DiscoveryError("发现结果缺少 host.name，无法落盘。")
+    host_row["name"] = hostname
+    host_row["services_index"] = f"hosts/{hostname}.yaml"
+    env = str(host_row.get("env") or "")
+
+    topo_path = home / "topology.yaml"
+    topo: Dict[str, Any] = {}
+    if topo_path.is_file():
+        try:
+            topo = yaml.safe_load(topo_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            raise DiscoveryError(f"topology.yaml 解析失败：{exc}") from exc
+        if not isinstance(topo, dict) or not _topo_v2(topo):
+            raise DiscoveryError(
+                "现有 topology.yaml 是 schema v0.1（扁平 core_entities）。"
+                "topo-discover 只写 v0.2；请先迁移到 v0.2（可运行 vigil ops-init --force "
+                "重铺样例，或手动添加 version: 2 + hosts: 段）后再发现。"
+            )
+        hosts = [h for h in topo.get("hosts") or [] if isinstance(h, dict)]
+        if any(h.get("name") == hostname for h in hosts) and not force:
+            raise DiscoveryError(
+                f"host {hostname} 已存在于 topology.yaml（--force 覆盖）。"
+            )
+        topo["hosts"] = [h for h in hosts if h.get("name") != hostname] + [host_row]
+        envs = [e.get("name") for e in (topo.get("environments") or []) if isinstance(e, dict)]
+        if env and env not in envs:
+            topo.setdefault("environments", []).append(
+                {"name": env, "isolation": "relaxed", "role": env}
+            )
+        topo["version"] = 2
+        topo["updated_at"] = _dt.date.today().isoformat()
+    else:
+        topo = {
+            "version": 2,
+            "updated_at": _dt.date.today().isoformat(),
+            "sources": ["discovered"],
+            "environments": [{"name": env, "isolation": "relaxed", "role": env}] if env else [],
+            "hosts": [host_row],
+            "cross_host": [],
+            "key_paths": [],
+        }
+
+    # 第二层：hosts/<hostname>.yaml 服务索引。
+    index_rows = []
+    for svc in discovery.get("services") or []:
+        if not isinstance(svc, dict):
+            continue
+        row = dict(svc)
+        row.pop("_host", None)
+        index_rows.append(row)
+    index_data = {"host": hostname, "env": env, "services": index_rows}
+
+    # 第三层：entities/<name>.yaml 详情草案。
+    entities_dir = home / "entities"
+    entity_paths = []
+    for name, detail in (discovery.get("details") or {}).items():
+        if not isinstance(detail, dict) or not _NAME_RE.fullmatch(str(name)):
+            continue
+        entities_dir.mkdir(parents=True, exist_ok=True)
+        path = entities_dir / f"{name}.yaml"
+        if path.exists() and not force:
+            continue
+        path.write_text(
+            yaml.safe_dump(detail, allow_unicode=True, sort_keys=False), encoding="utf-8"
+        )
+        entity_paths.append(str(path.relative_to(home)))
+
+    hosts_dir = home / "hosts"
+    hosts_dir.mkdir(parents=True, exist_ok=True)
+    index_path = hosts_dir / f"{hostname}.yaml"
+    index_path.write_text(
+        yaml.safe_dump(index_data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    topo_path.parent.mkdir(parents=True, exist_ok=True)
+    topo_path.write_text(
+        yaml.safe_dump(topo, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+    written = [str(index_path.relative_to(home)), str(topo_path.relative_to(home))]
+    written.extend(entity_paths)
+    return {"written": written, "topology": topo_path, "index": index_path}

@@ -7,8 +7,9 @@
 
 Creates the ``ops`` profile, writes the ops config (topo toolset + TOPO
 memory provider + permission matrix), and seeds the sample topology table
-(``topology.yaml`` + ``entities/``) and sample runbooks (``runbooks/``)
-into the profile's HERMES_HOME.
+(``topology.yaml`` + ``hosts/`` + ``entities/``, schema v0.2 三层模型：
+第一层总览 + 第二层服务索引 + 第三层详情档案) and sample runbooks
+(``runbooks/``) into the profile's HERMES_HOME.
 
 Shipped inside the wheel as ``vigil ops-init`` so pip-installed users can
 initialize the ops profile without a repo checkout. The legacy
@@ -25,6 +26,7 @@ Files written (inside the Vigil root, default ``~/.vigil``; override with
 ``VIGIL_HOME`` / ``HERMES_HOME`` env or ``--root``):
     <root>/profiles/ops/config.yaml
     <root>/profiles/ops/topology.yaml
+    <root>/profiles/ops/hosts/*.yaml
     <root>/profiles/ops/entities/*.yaml
     <root>/profiles/ops/runbooks/*.yaml
 
@@ -175,14 +177,26 @@ def _seed_samples(profile_dir: Path, force: bool) -> bool:
 
     if not force and entities_dst.exists() and any(entities_dst.iterdir()):
         print(f"· entities/ 已存在且非空，跳过（--force 覆盖）：{entities_dst}")
-        return True
+    else:
+        entities_dst.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for src_file in sorted(entities_src.glob("*.yaml")):
+            shutil.copy2(src_file, entities_dst / src_file.name)
+            copied += 1
+        print(f"· 写入 entities/：{copied} 个实体档案 → {entities_dst}")
 
-    entities_dst.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for src_file in sorted(entities_src.glob("*.yaml")):
-        shutil.copy2(src_file, entities_dst / src_file.name)
-        copied += 1
-    print(f"· 写入 entities/：{copied} 个实体档案 → {entities_dst}")
+    hosts_src = _SAMPLE_DIR / "hosts"
+    hosts_dst = profile_dir / "hosts"
+    if hosts_src.is_dir():
+        if not force and hosts_dst.exists() and any(hosts_dst.iterdir()):
+            print(f"· hosts/ 已存在且非空，跳过（--force 覆盖）：{hosts_dst}")
+        else:
+            hosts_dst.mkdir(parents=True, exist_ok=True)
+            copied_hosts = 0
+            for src_file in sorted(hosts_src.glob("*.yaml")):
+                shutil.copy2(src_file, hosts_dst / src_file.name)
+                copied_hosts += 1
+            print(f"· 写入 hosts/：{copied_hosts} 个服务索引 → {hosts_dst}")
 
     runbooks_src = _SAMPLE_DIR / "runbooks"
     runbooks_dst = profile_dir / "runbooks"
@@ -190,13 +204,13 @@ def _seed_samples(profile_dir: Path, force: bool) -> bool:
         raise SystemExit(f"缺少样例 runbooks 目录 {runbooks_src} —— 初始化中止。")
     if not force and runbooks_dst.exists() and any(runbooks_dst.iterdir()):
         print(f"· runbooks/ 已存在且非空，跳过（--force 覆盖）：{runbooks_dst}")
-        return True
-    runbooks_dst.mkdir(parents=True, exist_ok=True)
-    copied = 0
-    for src_file in sorted(runbooks_src.glob("*.yaml")):
-        shutil.copy2(src_file, runbooks_dst / src_file.name)
-        copied += 1
-    print(f"· 写入 runbooks/：{copied} 个 runbook → {runbooks_dst}")
+    else:
+        runbooks_dst.mkdir(parents=True, exist_ok=True)
+        copied = 0
+        for src_file in sorted(runbooks_src.glob("*.yaml")):
+            shutil.copy2(src_file, runbooks_dst / src_file.name)
+            copied += 1
+        print(f"· 写入 runbooks/：{copied} 个 runbook → {runbooks_dst}")
     return True
 
 
@@ -257,7 +271,8 @@ def run(root: Path, env: str = "test", force: bool = False, no_alias: bool = Fal
             print("· 未创建 ops 包装命令（vigil 不在 PATH？）；可用 vigil -p ops 代替")
 
     print("\n下一步（详见 OPS-VERIFY.md）：")
-    print(f"  1. 核对拓扑：{profile_dir / 'topology.yaml'} 与 {profile_dir / 'entities'}")
+    print(f"  1. 核对拓扑：{profile_dir / 'topology.yaml'}（第一层）+ "
+          f"{profile_dir / 'hosts'}（第二层服务索引）+ {profile_dir / 'entities'}（第三层详情）")
     print(f"  2. 核对 runbook：{profile_dir / 'runbooks'}（事故处理 + L4 部署 checklist）")
     print("  3. 起 session：vigil -p ops chat")
     print("  4. 验证 TOPO 段 / topo_query / topo_update / 权限矩阵 / runbook_load")

@@ -586,13 +586,11 @@ def _load_banner_state() -> Dict[str, Any]:
 
     if state["ops_enabled"] and home is not None:
         try:
-            topo_file = home / "topology.yaml"
-            if topo_file.is_file():
-                import yaml
-                data = yaml.safe_load(topo_file.read_text(encoding="utf-8")) or {}
-                entities = data.get("core_entities") or []
-                if isinstance(entities, list):
-                    state["entity_count"] = len(entities)
+            # OPS-DELTA #6：实体计数按 schema 版本（v0.1 core_entities /
+            # v0.2 hosts+cross_host+services）——走 topo_tools 单一来源，
+            # banner 只做展示、不重复实现解析。
+            from tools.topo_tools import topology_entity_count
+            state["entity_count"] = topology_entity_count(home)
             runbooks_dir = home / "runbooks"
             if runbooks_dir.is_dir():
                 state["runbook_count"] = len(list(runbooks_dir.glob("*.yaml")))

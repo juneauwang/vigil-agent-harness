@@ -1,0 +1,5 @@
+# node2 —— 第二层服务索引（worker 节点）。
+host: node2
+env: prod
+services:
+  - {name: gateway-svc, type: gateway, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/gateway-svc.yaml}

@@ -1,30 +1,26 @@
 # topology.yaml —— 第一层：平台拓扑总览（session 启动注入 system prompt，保持 <50 行）
-# 203.0.113.10 集群样例（schema v0.1，见 ops-agent-harness.md §2.2）；投入前请逐项核对。
-# 第二层完整档案在 entities/<name>.yaml，按需加载（topo_query detail=True）。
-version: 1
-updated_at: 2026-08-08
-sources: [terraform.tfstate, agent, manual]  # 实际同步源：tfstate（存在性/规格）+ agent（语义）+ 人工
+# 203.0.113.10 集群样例（schema v0.2，见 ops-agent-harness.md §2.2）；投入前请逐项核对。
+# 第一层 = 总览：hosts（每行一台机器，runtime 是 host 属性）+ cross_host（跨 host
+# 实体：k3s 集群 / ingress 等不服从"服务挂单机"树形模型的实体）。
+# 第二层服务索引在 hosts/<hostname>.yaml；第三层完整档案在 entities/<name>.yaml。
+version: 2
+updated_at: 2026-08-12
+sources: [terraform.tfstate, agent, manual, discovered]
 environments:
   - name: prod
     entry: "ssh user@203.0.113.10"
-    isolation: strict                       # strict = 跨环境操作需审批
+    isolation: strict
     role: prod
-    core_entities: [harbor, k3s-prod, argocd, node1, node2]
   - name: test
     entry: "ssh test-jump"
     isolation: relaxed
     role: test
-    core_entities: [test-web]
-core_entities:
-  - {name: harbor, type: registry, env: prod, endpoint: "203.0.113.10:30443", owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/harbor.yaml}
+hosts:
+  - {name: node1, env: prod, endpoint: "203.0.113.10", role: control-plane, runtime: k3s, owner: your-name, source: agent, last_verified: 2026-08-08, services_index: hosts/node1.yaml}
+  - {name: node2, env: prod, role: worker, runtime: k3s, owner: your-name, source: agent, last_verified: 2026-08-08, services_index: hosts/node2.yaml}
+  - {name: test-host, env: test, runtime: docker, owner: your-name, source: manual, last_verified: 2026-08-06, services_index: hosts/test-host.yaml}
+cross_host:
   - {name: k3s-prod, type: k8s, env: prod, endpoint: "https://203.0.113.10:6443", owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/k3s-prod.yaml}
-  - {name: argocd, type: service, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/argocd.yaml}
-  - {name: gateway-svc, type: gateway, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/gateway-svc.yaml}
-  - {name: order-db, type: db, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/order-db.yaml}
-  - {name: postgres, type: db, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/postgres.yaml}
   - {name: ingress, type: ingress, env: prod, owner: your-name, source: manual, last_verified: 2026-08-08, detail: entities/ingress.yaml}
-  - {name: node1, type: k8s-node, env: prod, role: control-plane, endpoint: "203.0.113.10", owner: your-name, source: agent, last_verified: 2026-08-08, detail: entities/node1.yaml}
-  - {name: node2, type: k8s-node, env: prod, role: worker, owner: your-name, source: agent, last_verified: 2026-08-08, detail: entities/node2.yaml}
-  - {name: test-web, type: service, env: test, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/test-web.yaml}
 key_paths:
   - [ingress, gateway-svc, order-db]
