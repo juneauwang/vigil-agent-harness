@@ -319,6 +319,18 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "watch": {
+        "description": (
+            "值守层第二层（OPS-DELTA #9）：watch_digest 读 vigil-watch 常驻采集"
+            "服务写入的 inbox（~/.vigil/watch/inbox/），返回未处理告警摘要 + 拓扑"
+            "关联（instance → 实体/env），agent 据此分级/播报/匹配 runbook。"
+            "纯数据只读；ops.watch.enabled: false 时工具不出现；不默认注册，"
+            "与 prom 同策略（用户显式启用 toolset）。"
+        ),
+        "tools": ["watch_digest"],
+        "includes": [],
+    },
+
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "

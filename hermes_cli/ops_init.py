@@ -85,6 +85,8 @@ ops:
     endpoint: ""        # 如 http://127.0.0.1:9090；空 = prom_query 不可用
     alertmanager: ""    # 如 http://127.0.0.1:9093；空 = alert_query 不可用
     vault_path: ""      # 可选：本机保险箱 JSON 凭据条目 {{"user": ..., "pass": ...}}
+  watch:
+    enabled: false      # 值守采集（vigil watch install 常驻服务）：显式 true + alertmanager 配置后才采集
   permissions:
     enabled: true
     env: {env}

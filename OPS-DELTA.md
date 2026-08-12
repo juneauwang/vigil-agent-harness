@@ -465,19 +465,26 @@
     ops_target 相关套件全过；`vigil ops-init` 铺 v0.2 样例后
     topo_query 总览 / host=node1 / entity=harbor detail=True 均正确。
 
-### 7. 会话结束自动汇总 token 用量（可发现性增强）— ⬜ 未实施（待排期）
+### 7. 会话结束自动汇总 token 用量（可发现性增强）— ✅ 已实施（2026-08-12，批次三）
 
 - **为什么**：`/usage` 已内置 session 级 token 汇总（`agent.session_total_tokens`，
   input/output/reasoning 分类 + context 占用 + 压缩次数），但**用户不知道这个
   命令存在**——用了很久 Vigil 从未发现，直到被提示。用户视角：每轮都有 token
   输出显示，自然想知道"这一个 session 总共烧了多少"，但没有入口自动呈现。
   这是典型可发现性问题：功能存在 ≠ 功能可用。
-- **待改方向**：session 结束（退出 / 新会话 / /new）时自动打印一行 token 汇总
-  （复用 `_show_usage` 的 Session Token Usage 块，精简为单行：
-  `📊 本次会话: 输入 X · 输出 Y · 总计 Z tokens`）；或启动新会话时显示上一会话
-  汇总。零新数据逻辑，纯 UI 呈现增强。
-- **附带发现**：审视整个 CLI 是否存在同类"功能存在但不可发现"项（如 /context
-  的 breakdown、/insights 的历史用量），可一并做帮助入口优化。
+- **改了什么**：`cli.py` `_print_exit_summary()` 在现有退出摘要（Duration /
+  Messages 之后）追加一行 token 汇总：`Tokens: 📊 本次会话: 输入 X · 输出 Y ·
+  总计 Z tokens`。纯 UI 呈现，零新数据逻辑——字段读取与 `_show_usage` 同一来源
+  （`agent.session_input_tokens / session_output_tokens / session_total_tokens`）。
+- **为什么这么改**：有 live agent 且 `session_api_calls > 0` 才打印（无 agent /
+  0 调用跳过，避免 0-token 噪音行）；字段用 `getattr(..., 0) or 0` 防属性缺失
+  （-q 模式 / 早期退出路径无这些属性时不炸）。
+- **核销方式**：`tests/cli/test_exit_summary_tokens.py`（5 例，覆盖有 agent 有
+  调用 / 无 agent / 0 调用 / `clear_screen=False` 路径）+ 既有
+  `test_exit_summary_resume_hint.py`（5 例，退出提示文案不回归）全过。
+- **未做**：`/new` 或新会话启动显示上一会话汇总——需要碰会话生命周期核心
+  （prompt 缓存 / conversation_loop 边界），按硬约束 1 登记跳过，只做第 1 点
+  （退出汇总）。
 
 ### 12. 拓扑自动发现（中间市场开箱即用的地基）— ✅ 已实施（2026-08-12，批次二，与 #6 同批）
 
@@ -544,6 +551,25 @@
        （交互会话同 provider 2-6s），5 步分析要 5-10 分钟，曾挂死一次
        （进程死、execution 状态未回写成僵尸）。需排查 cron 会话的并发/
        超时配置（可能与交互会话共用 provider 池被限流或模型推理排队）。
+       **排查记录（批次四，2026-08-12；只记录不修复，需公司机器实测）**：
+       - **已知现象**：cron 会话每步 API latency 30-183s（交互同 provider
+         2-6s）；5 步分析 5-10 分钟；曾整进程挂死（execution 状态未回写，
+         僵尸记录）。本机无法复现（无生产负载与真实 provider）。
+       - **假设**：① cron 会话与交互会话共用同一 credential pool / API key，
+         provider 侧限流或推理排队；② cron 作业解析到与交互不同的模型/
+         provider（`cron.model` / `cron.model_provider` 未 pin 时走全局
+         model.default，可能落在慢队列）；③ 调度器并发（cron/scheduler.py
+         的 `_running_agents` 多 agent 并发）与交互会话争抢 provider 配额。
+       - **配置级待验证方向（已读代码确认存在这些键）**：`config.yaml` 的
+         `cron.model` / `cron.model_provider`（job 级 pin > cron.model >
+         model.default 的解析链）；`cron.provider`（builtin 时 ticker 在线程
+         里跑，agent 调用在主线程/线程池——`future.result(timeout=...)` 只在
+         执行/回写路径，无每次 LLM 调用的超时覆盖，观测到的 30-183s 更接近
+         provider 侧排队而非本地超时）；交互与 cron 会话是否共享 provider
+         连接池/限流桶。
+       - **待实测清单（公司机器）**：cron 作业真实 `cron.model` 解析值 vs
+         交互会话 `/model`；同一时刻交互+cron 并发的 provider 侧 latency
+         分布；单跑 cron 作业（无交互并发）时 latency 是否回落。
     2. **cron script 路径提示误导**：创建时报"script 须放 ~/.hermes/scripts/"
        但实际解析到 ~/.vigil/scripts/（Vigil profile 根），放错位置导致
        首轮"Script not found"但 agent 仍被调起（自带纠错能力反而掩盖了
@@ -572,6 +598,39 @@
          automatically"——只看 gateway PID 存活，不看 ticker 心跳
          （源码 #32612/#32895 已为此加心跳检测但 status 输出未用），
          假健康误导排障。
+       **2026-08-12 晚设计定稿（采集/分析分层，替代 gateway daemon 方案）**：
+       修复方向不是跑 gateway daemon，而是拆两层——**采集（确定性代码，
+       不需要 LLM）与分析播报（需要 LLM）分离**：
+       - 第一层：systemd --user service（**服务名 vigil-watch.service**，
+         避开被 upstream Hermes 占用的 hermes-gateway.service；开机自启、
+         journald 日志、失败自动重启，不依赖任何终端会话）→ 每 5 分钟拉
+         alertmanager `/api/v2/alerts` + prometheus `/api/v1/alerts`（vault
+         basic auth）→ 有告警写入本地队列 `~/.vigil/watch/inbox/`，无告警
+         静默退出（零成本）；
+       - 第二层：agent 会话启动/常驻时消费 inbox → 拓扑关联/分级/播报 →
+         处理完标记清空。session 关闭不影响采集（系统层永远在跑），session
+         只是"消费队列的分析工"；办公电脑关机也不丢告警——告警堆在
+         alertmanager/233 侧信箱，回来补拉（产品文档 0812 拉模式修正的
+         "回来补拉"形态，不是缺陷是设计）。
+       - 与"固化边界"原则一致（#12 AIOps 蓝图）：采集是确定性代码固化进
+         系统层，LLM 只留判断和编排。
+       - cron agent 会话 LLM 调用异常慢（缺陷 1）与本方案相关：若分析播报
+         走 cron agent 会话，需先解决 30-183s latency 问题（见 #12 缺陷 1）。
+       **已实施（批次四，2026-08-12）**：
+       - `tools/watch_collect.py` 采集层 + `vigil watch install|uninstall|status`
+         （systemd --user，服务名固定 vigil-watch.service，enable --now 开机自启、
+         Restart=on-failure，非 systemd 平台 install 明确报错不假装成功）+
+         `hermes_cli/watch_collect_loop.py` 常驻循环（300s 间隔，SIGTERM 优雅
+         退出）；`ops.watch.enabled: false` 或 alertmanager 未配置 → 零行为。
+       - `tools/watch_tools.py` `watch_digest()` 第二层消费（toolset=watch，
+         不注册 _HERMES_CORE_TOOLS，与 prom 同策略；mark_processed 显式消费）。
+       - `vigil cron status` 假健康修复：gateway PID 按 HERMES_HOME/--profile
+         归属过滤（upstream hermes-gateway 一律不算）+ ticker 心跳真实状态
+         分行显示（"Gateway: 真实状态 | Ticker: 真实状态"），采集常驻接管时
+         提示以 `vigil watch status` 为准。
+       - 核销：`test_watch_collect.py`（7）+ `test_watch_tools.py`（7）+
+         `test_watch_cmd.py`（8）+ `test_cron_status_health.py`（11）+ cron
+         既有套件全过。
     5. **双安装 profile 重叠（架构级，本案例所有混乱的总根源）**：
        本机同时存在**两套同源但独立安装**：
        - upstream Hermes 0.15.1：/usr/local/lib/hermes-agent/venv +
@@ -657,7 +716,23 @@
   查表（行为由 isolation/role 决定，不依赖名字是 test/uat/prod）；拓扑
   environments 段与 config 的 env 定义同源（实施时告警不同源，同源待做）。
 
-### 8. 缺少主流 IM 平台 adapter — ⬜ 未实施（待排期；已确认是同步上游，非开发）
+### 8. 缺少主流 IM 平台 adapter — ✅ 已核实（2026-08-12）：adapter 全部在位，无需同步开发
+
+- **核实结论（2026-08-12 修正本条记录）**：本条原记录"Vigil 0.1.6 打包裁掉了
+  10+ 个 adapter"**已被证伪**。`diff -rq` 上游 `hermes-source_1/plugins/platforms/`
+  ↔ Vigil `plugins/platforms/`：目录清单完全一致（22 个 adapter 目录 / 63 个
+  py 文件，与上游同数），0 个 "Only in"（无缺文件/多文件）；17 个文件有内容
+  diff，全部为品牌化文案（hermes→vigil 命令名，如 `hermes setup` → `vigil
+  setup`，抽查 telegram/slack/feishu 均为纯文案替换）。→ 从"要同步开发"变成
+  "已核实无需开发"。
+- **启用路径核实**：`hermes_cli/plugins.py` 扫描 bundled `plugins/platforms/`，
+  读 `plugin.yaml`（kind: platform），向 `gateway/platform_registry.py` 注册
+  **延迟加载器**（`_register_deferred_platform`，按需 import 避免每次 CLI 启动
+  加载 ~20 个平台 SDK）；`gateway/run.py` 启动时查 `platform_registry` 并
+  `create_adapter()` 实例化。telegram/slack/feishu 等 adapter 的
+  `__init__.py::register(ctx)` 自动完成注册，**无需额外注册步骤**——启用走
+  `vigil gateway` 配置（可选依赖 try/except 包裹，装则启用）。
+- **无代码改动**（未发现真缺文件，按任务要求不自行复制上游代码）。
 
 - **为什么**：用户希望能在飞书/slack/teams/微信里跟 Vigil 对话，并以为现状是
   "公网暴露 + 远端 APP pull"需要改 push。实际核查（2026-08-10）发现**关键事实**：
@@ -686,7 +761,7 @@
   4. 一期优先国外市场（slack/telegram/whatsapp/teams），国内 feishu/wecom
      上游也有现成实现，按需启用。
 
-### 9. 自动化运维触发源：cron 已有，缺事件驱动入口（告警 → runbook）— ⬜ 未实施（待排期，形态见 #12 拉模式修正）
+### 9. 自动化运维触发源：cron 已有，缺事件驱动入口（告警 → runbook）— ✅ 已实施（2026-08-12，批次四：值守层采集/分析分层落地）
 
 - **为什么**：Vigil 已有完整 cron 系统（cron/jobs.py + scheduler.py，
   gateway 本身是常驻 daemon）——定时触发已解决。但运维自动化的触发源不该
@@ -699,18 +774,74 @@
   2. 告警 → runbook 匹配（事件源/告警名 → runbook 名）映射放 config.yaml，
      不硬编码。
   3. 分级处置：test 可自动处置，prod 高危走审批。
-
-### 10. Prometheus 探查应为内置工具，而非 LLM 自写 curl/PromQL — ⬜ 未实施（待排期）
+- **已实施（批次四，2026-08-12）——值守层落地（采集/分析分层，替代 gateway
+  daemon 方案，见 #12 缺陷 4 设计定稿）**：
+  - **第一层采集（确定性代码，不需要 LLM）**：新文件 `tools/watch_collect.py`
+    `collect_once()`——拉 Alertmanager `/api/v2/alerts`（复用 prom_tools 的
+    endpoint/凭据/10s 硬超时/vault basic auth 注入），有活跃告警原子写
+    `~/.vigil/watch/inbox/<timestamp>.json`（`{collected_at, alerts, processed}`
+    契约），无告警不写；按 alertname+instance 对未处理 inbox 去重（恢复后再
+    复发允许新条目）；采集失败/配置缺失只写 `~/.vigil/watch/errors.log` 一行
+    不抛异常（systemd 重启循环不能炸）；`ops.watch.enabled: false` 或
+    alertmanager 未配置 → 零行为（硬约束 3）。
+  - **常驻服务**：`vigil watch install|uninstall|status` 子命令 +
+    `hermes_cli/watch_collect_loop.py` 常驻循环（每 300s 一次，SIGTERM 优雅
+    退出）→ systemd --user unit **服务名固定 vigil-watch.service**（硬约束 7：
+    与 upstream hermes-gateway 无任何关联），enable --now 开机自启、Restart=
+    on-failure；`watch status` 报真实状态（active/inactive + 上次采集 +
+    inbox 未处理数），不报假健康；非 systemd 平台 install 明确报错 +
+    "WSL 可改用 cron 或常驻终端"，不假装成功。
+  - **第二层分析（需要 LLM）**：新工具 `watch_digest()`（tools/watch_tools.py，
+    toolset=watch，不注册 _HERMES_CORE_TOOLS，与 prom 同策略）——读 inbox
+    未处理条目 → 紧凑摘要（alertname/severity/instance/采集时间 + 拓扑关联：
+    instance 命中拓扑实体给出实体名/env，未命中标注"不在拓扑"）→ agent 分级/
+    播报/runbook 匹配；`mark_processed=True` 显式消费（契约写进 docstring）；
+    session 关闭队列堆积，下次启动补处理（"回来补拉"形态）。
+  - **未做（登记跳过原因）**：任务 2B「会话启动自动调 watch_digest 在欢迎区
+    显示一行提示」——需要碰会话生命周期核心（欢迎区渲染 / 会话启动路径 /
+    prompt 缓存边界），按硬约束 1 跳过，只做 2A（手动工具）。消费入口 =
+    agent 主动调 watch_digest；后续若做自动提示，须在不碰 conversation_loop
+    的入口（如 CLI 欢迎横幅静态区）另排期。
+  - **告警 → runbook 映射/分级处置**（待改方向 2/3）：未实施——依赖 agent
+    语义层（watch_digest 输出已含实体/env，runbook 匹配由 agent 做），
+    后续如需固化可加 config 映射表。
+- **核销方式**：`tests/tools/test_watch_collect.py`（7 例：有告警写 inbox/
+  无告警不写/去重/processed 后允许复发/disabled 零行为/缺 alertmanager 只写
+  errors/失败不抛）+ `tests/tools/test_watch_tools.py`（7 例：摘要+拓扑关联/
+  无待处理/mark_processed 消费/命中未命中两态/check_fn 门控）+
+  `tests/hermes_cli/test_watch_cmd.py`（8 例：unit 内容/平台守卫/uninstall/
+  status 真实状态/服务活跃辅助函数）+ cron 相关回归全过。
+### 10. Prometheus 探查应为内置工具，而非 LLM 自写 curl/PromQL — ✅ 已实施（2026-08-12，批次三）
 
 - **为什么**：Vigil 定位是运维 harness，但 tools/ 目录**没有任何 prometheus/
   metrics 内置工具**——探查 Prometheus 数据靠 LLM 自己拼 curl + PromQL。
   这不符合定位：就像不该让 LLM 自己封装 kubectl 一样，PromQL 查询、指标
   解释、告警关联应是基础内置能力，LLM 只做语义层。
-- **待改方向**：
-  1. 内置 prom_query 工具（PromQL 查询 + 指标解释，读 config.yaml 的
-     prometheus endpoint/凭据，不硬编码；vault 注入 basic auth，LLM 不见明文）。
-  2. 内置告警关联能力（查 Alertmanager，把活跃告警映射到实体/runbook）。
-  3. 复用现有凭据体系（OpenBao/监控凭据），不新增明文。
+- **改了什么**：
+  1. **新文件 `tools/prom_tools.py`**：`prom_query(query, step, duration)`（PromQL
+     即时/range 查询，结果解析为紧凑结构化文本 series → 时间点摘要，截断上限
+     20 series / 30 点）+ `alert_query()`（Alertmanager `/api/v2/alerts`，活跃
+     告警摘要 alertname/severity/instance/labels；无告警明确返回"无活跃告警"）。
+  2. **配置**：`hermes_cli/ops_init.py` `_CONFIG_TPL` 的 `ops:` 块加
+     `prometheus: {endpoint, alertmanager, vault_path}` 模板段；`toolsets.py`
+     `TOOLSETS` 加 `"prom"` 条目（纯数据 toolset）；`hermes_cli/tools_config.py`
+     `CONFIGURABLE_TOOLSETS` 加 `("prom", "📊 Prometheus 监控", ...)`（`vigil
+     tools` 列表可见）。
+  3. **门控（零 footprint）**：check_fn = `ops.prometheus.endpoint` 非空才可用；
+     **不**加入 `_HERMES_CORE_TOOLS`、**不**默认注册（ops-init 模板
+     `platform_toolsets.cli` 不加 prom），用户启用走 `vigil tools` / 显式
+     `platform_toolsets`。endpoint 为空 → 工具不出现在 schema（硬约束 3）。
+  4. **防幻觉 + 防挂死**：PromQL 语法预校验（白名单字符集 + 拒 shell 元字符
+     `; | & \` $() ${}` + 拒 shell 命令前缀如 curl/kubectl/docker + 必含表达式
+     形态），非法输入明确报错且不发请求；HTTP 失败/超时返回**原始错误**不编造
+     值；网络硬超时 10s。
+  5. **凭据注入**：`vault_path` 指向本机保险箱（`tools/credential_vault`）JSON
+     凭据条目 `{"user": ..., "pass": ...}`，请求时解析为 Basic Auth header
+     注入（读取即登记 vault 来源），工具输出/日志无明文。
+- **核销方式**：`tests/tools/test_prom_tools.py`（18 例：结构化摘要 / 非法
+  PromQL 不发请求 / HTTP 500 / 超时 / 非 JSON / Prometheus error status /
+  alert 两态 / check_fn 门控 / vault header 注入 + 输出日志无明文）；ops-init
+  模板渲染 + tools_config/banner 套件（60 例）全过。
 
 ### 14. topo/runbook 工具集应默认启用——默认 profile 开箱即用 ops 能力 — ✅ 已实施（2026-08-12，批次一）
 
@@ -1018,7 +1149,7 @@
   3. 缓解（已落地）：包装脚本每次调用内完成 vault→fresh agent→ssh（本机
      /root/bin/vssh），不依赖跨会话 agent。
 
-### 27. runbook env_mismatch 警告与命令级权限矩阵判定不一致 — ⬜ 未实施（待排期）
+### 27. runbook env_mismatch 警告与命令级权限矩阵判定不一致 — ✅ 已实施（2026-08-12，批次三）
 
 - **现象**：每次 runbook_load 加载 prod runbook（test 会话）都返回
   `env_warning: 跨环境操作默认拒绝，确认后再执行`，但后续实际执行并未因此被拒
@@ -1026,11 +1157,17 @@
   与实际行为（放行）不一致。
 - **问题**：LLM 要么被"默认拒绝"误导以为有硬 gate 而松懈，要么对每条 runbook
   重复的警告麻木；真正的判定（命令级矩阵、L4 阶段门）与加载时警告不联动。
-- **待改方向**：
-  1. env_mismatch 仅作提示，措辞改为"跨环境操作由命令级权限矩阵逐条判定"，
-     消除语义冲突；
-  2. 或 runbook 加载时真正联动：env 不匹配则整体降级 read-only，直至用户确认；
-  3. 审批记录按 runbook 维度聚合展示，减少重复噪音。
+- **改了什么（方案 1：纯文案，零逻辑）**：`tools/runbook_tools.py` `_full_payload`
+  的 `payload["env_warning"]` 措辞改为——
+  "runbook 适用环境与当前会话环境不一致；跨环境操作由命令级权限矩阵逐条判定
+  （L2 及以上走审批），不是整体拒绝。"`env_mismatch: True` 布尔字段语义不变
+  （下游依赖不破坏）。
+- **为什么这么改**：env_mismatch 只是加载时提示，硬 gate 在命令级权限矩阵
+  （L2 走审批 / L3-L4 拒绝）——措辞与真实判定逻辑对齐，消除"默认拒绝"语义
+  冲突；不把 runbook 整体降级 read-only（会破坏跨环境 runbook 的合法用途，
+  且与矩阵逐条判定冲突）。
+- **核销方式**：`tests/tools/test_runbook_tools.py`（env_mismatch 断言同步新
+  措辞）+ `test_runbook_vault_refs.py` 全过（16 例）。
 
 ### 28. 凭据字段语义漂移第三次实证——组合字段 + 工具化校验定位 — ⬜ 未实施（并入 #19，待排期）
 
