@@ -514,6 +514,118 @@ _FORM_BODY_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_.-]*=[^&\s]*(?:&[A-Za-z_][A-Za-z0-9_.-]*=[^&\s]*)+$"
 )
 
+# ── Command-text inline credentials (OPS-DELTA #21) ────────────────────────
+# agent 把 vault/保险箱密码 f-string 内插进命令串（--from-literal=password=…、
+# -u user:pass、--password …）时，明文随命令文本显示/落盘（#21 两次实测：
+# PUT datasource JSON、patch ConfigMap）。这里做两层兜底：
+#   1. 已知凭据 flag 后的值一律打码（长 flag 无脑打码）；
+#   2. 命令上下文里的高熵裸 token（≥16 字符、混合字符类、香农熵高）兜底打码，
+#      覆盖未知 flag/内插位置——纯 hex/UUID/路径/URL 形态排除，避免误伤
+#      git sha、pod 名、长 URL。
+_CMD_CRED_FLAG_RE = re.compile(
+    r"(?i)"
+    r"(--from-literal[=:]\s*)([A-Za-z0-9_.-]+=)([^\s'\"&|;]+)"
+    r"|(--(?:password|passwd|token|secret|api[-_]?key|client[-_]?secret|"
+    r"access[-_]?token)(?:[=:]\s*|\s+))([^\s'\"&|;]+)"
+)
+_CMD_USERPASS_RE = re.compile(
+    r"(?i)"
+    r"((?:^|[\s&|;])(?:-u|--user)\s+[^\s:='\"&|;]+:)([^\s'\"&|;]+)"
+    r"|((?:^|[\s&|;])-p\s+)([^\s'\"&|;]+)"
+)
+_CMD_CONTEXT_RE = re.compile(
+    r"(?im)^[ \t]*(?:ansible-playbook|kubectl|docker|helm|systemctl|service|"
+    r"ssh|scp|curl|wget|git|pip3?|apt(?:-get)?|yum|dnf|npm|python3?|bash|sh|"
+    r"sudo|aws|gcloud|vault)\b",
+)
+_CMD_HIGH_ENTROPY_TOKEN_RE = re.compile(r"(?<![\w@#])([^\s'\"&|;<>()\[\]{}]{16,})(?![\w@#])")
+# 凭据特征符号集（- _ . = 是结构性字符，不参与"含符号"判定——pod 名、
+# kebab-case、k=v 形态不该因横线/下划线被当成高熵凭据）。
+_SECRET_SYMBOLS = set("!@#$%^*+=:,?~`")
+
+
+def _token_entropy(token: str) -> float:
+    """Shannon entropy (bits/char) of a token."""
+    from math import log2
+    if not token:
+        return 0.0
+    counts: dict = {}
+    for ch in token:
+        counts[ch] = counts.get(ch, 0) + 1
+    n = len(token)
+    return -sum((c / n) * log2(c / n) for c in counts.values())
+
+
+def _looks_like_inline_secret(token: str) -> bool:
+    """High-entropy inline credential heuristic (length ≥ 16, mixed classes).
+
+    Paths/URLs/hosts (contain ``/ \\ : .``) are excluded — the flag-based pass
+    covers credential positions; the bare-token pass is only a fallback for
+    standalone secrets. Pure-hex/UUID shapes (lowercase+digits, no symbols,
+    no mixed case) are excluded so git shas and pod ids survive.
+    """
+    if not token or len(token) < 16:
+        return False
+    # shell flag（--from-literal=… / -p …）不是凭据本身——flag 通道已覆盖其值。
+    if token.startswith("-"):
+        return False
+    if any(ch in token for ch in "/\\:."):
+        return False
+    lower = upper = digit = symbol = False
+    for ch in token:
+        if ch.islower():
+            lower = True
+        elif ch.isupper():
+            upper = True
+        elif ch.isdigit():
+            digit = True
+        elif ch in _SECRET_SYMBOLS:
+            symbol = True
+    classes = sum((lower, upper, digit, symbol))
+    if classes < 2:
+        return False
+    # 纯 hex / UUID（小写+数字）排除：要求有符号，或大小写混合。
+    if not (symbol or (lower and upper)):
+        return False
+    return _token_entropy(token) >= 3.2
+
+
+def _redact_command_inline_credentials(text: str) -> str:
+    """Mask inline credentials inside shell command text (#21)."""
+    if not text:
+        return text
+
+    # 1. 已知凭据 flag（--from-literal=KEY=VAL / --password …）
+    if ("from-literal" in text or "--pass" in text or "--token" in text
+            or "--secret" in text or "--api-" in text or "--client-" in text):
+        def _sub_flag(m):
+            if m.group(1):
+                return m.group(1) + m.group(2) + _mask_token(m.group(3))
+            return m.group(4) + _mask_token(m.group(5))
+        text = _CMD_CRED_FLAG_RE.sub(_sub_flag, text)
+
+    # 2. -u user:pass / -p pass（-p 仅打疑似凭据值，避免 -p 8080 端口误伤）
+    if " -u " in text or " -p " in text:
+        def _sub_userpass(m):
+            if m.group(1):
+                return m.group(1) + _mask_token(m.group(2))
+            value = m.group(4)
+            if len(value) >= 8 and not value.isdigit() and _looks_like_inline_secret(value):
+                return m.group(3) + _mask_token(value)
+            return m.group(0)
+        text = _CMD_USERPASS_RE.sub(_sub_userpass, text)
+
+    # 3. 高熵裸 token 兜底（仅命令上下文，防误伤普通文本）
+    if _CMD_CONTEXT_RE.search(text):
+        def _sub_entropy(m):
+            token = m.group(1)
+            if _looks_like_inline_secret(token):
+                return _mask_token(token)
+            return token
+        text = _CMD_HIGH_ENTROPY_TOKEN_RE.sub(_sub_entropy, text)
+
+    return text
+
 # Compile known prefix patterns into one alternation
 _PREFIX_RE = re.compile(
     r"(?<![A-Za-z0-9_-])(" + "|".join(_PREFIX_PATTERNS) + r")(?![A-Za-z0-9_-])"
@@ -994,6 +1106,9 @@ def redact_sensitive_text(
                 return phone[:2] + "****" + phone[-2:]
             return phone[:4] + "****" + phone[-4:]
         text = _SIGNAL_PHONE_RE.sub(_redact_phone, text)
+
+    # Command-text inline credentials (#21): agent 内插进命令串的凭据明文。
+    text = _redact_command_inline_credentials(text)
 
     return text
 
