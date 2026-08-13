@@ -87,16 +87,16 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 # 1. 安装（生成 vigil 命令入口）
 pip install vigil-agent-harness
 
-# 2.（可选）铺样例数据——运维能力（topo/runbook/权限矩阵）默认加载，
-#    ops-init 只负责生成配置 + 样例拓扑 + 样例 runbook，不是启用能力的前置门槛
-vigil ops-init         # 生成 ~/.vigil/profiles/ops 下的配置 + 样例拓扑 + 样例 runbook
+# 2. 直接进入 Vigil——ops 能力默认加载（topology / runbooks / 权限矩阵），
+#    全新安装的 default profile 自带 ops 配置与样例拓扑，无需任何初始化
+vigil
 
-# 3. 配置模型（如 DeepSeek）——在 ~/.vigil/profiles/ops/config.yaml
-#    添加 model 段，并在同目录 .env 放 API key
-
-# 4. 进入 Vigil
-vigil -p ops
+# 3. 配置模型（如 DeepSeek）——在 ~/.vigil/config.yaml 添加 model 段，
+#    并在同目录 .env 放 API key
 ```
+
+> 如需手动重建样例 profile，可用 `vigil ops-init`（可选——老用户/自托管
+> 显式重建或迁移仍可用，首装已不需要）。
 
 首次进入后，让 Vigil 摸清你的平台：**自动发现拓扑**——把每台机器的 IP 和
 SSH 凭据告诉它，它会 SSH 进去扫 docker / k8s / systemd 服务 / 端口，生成实体
