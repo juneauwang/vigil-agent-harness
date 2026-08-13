@@ -121,18 +121,17 @@ USAGE
     print(skin.colors["banner_title"])    # "#FFD700"
     print(skin.get_branding("agent_name"))  # "Vigil"
 
-    set_active_skin("ares")               # Switch to built-in ares skin
+    set_active_skin("vigil")              # Switch to built-in vigil skin
     set_active_skin("mytheme")            # Switch to user skin from ~/.vigil/skins/
 
 BUILT-IN SKINS
 ==============
 
-- ``default`` — Classic Vigil gold/kawaii (the current look)
-- ``ares``    — Crimson/bronze war-god theme with custom spinner wings
-- ``mono``    — Clean grayscale monochrome
-- ``slate``   — Cool blue developer-focused theme
-- ``daylight`` — Light background theme with dark text and blue accents
-- ``warm-lightmode`` — Warm brown/gold text for light terminal backgrounds
+- ``default`` — Vigil 蓝黑主题（与 vigil 同源，兼容旧 display.skin: default）
+- ``vigil``   — Vigil ops 蓝黑主题（唯一内置真实皮肤；其余内置皮肤已删除）
+
+未知皮肤名（含已删除的 ares/mono/slate/daylight/warm-lightmode/poseidon/
+sisyphus/charizard）解析时回退 vigil 色值，不抛异常。
 
 USER SKINS
 ==========
@@ -198,661 +197,107 @@ class SkinConfig:
 # Built-in skin definitions
 # =============================================================================
 
-_BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
-    "default": {
-        "name": "default",
-        "description": "Classic Vigil — gold and kawaii",
-        # Dark-authored. Values match the TUI's DARK_THEME so the classic CLI
-        # and the TUI render the same Vigil gold.
-        "colors": {
-            "banner_border": "#CD7F32",
-            "banner_title": "#FFD700",
-            "banner_accent": "#FFBF00",
-            "banner_dim": "#B8860B",
-            "banner_text": "#FFF8DC",
-            "ui_accent": "#FFBF00",
-            "ui_label": "#DAA520",
-            "ui_ok": "#4caf50",
-            "ui_error": "#ef5350",
-            "ui_warn": "#ffa726",
-            "prompt": "#FFF8DC",
-            "input_rule": "#CD7F32",
-            "response_border": "#FFD700",
-            "status_bar_bg": "#1a1a2e",
-            "status_bar_text": "#C0C0C0",
-            "status_bar_strong": "#FFD700",
-            "status_bar_dim": "#8A7A4A",
-            "status_bar_good": "#8FBC8F",
-            "status_bar_warn": "#FFD700",
-            "status_bar_bad": "#FF8C00",
-            "status_bar_critical": "#FF6B6B",
-            "session_label": "#DAA520",
-            "session_border": "#8B8682",
-            "completion_menu_bg": "#1a1a2e",
-            "completion_menu_current_bg": "#333355",
-            "selection_bg": "#3a3a55",
-            "shell_dollar": "#4dabf7",
-            "voice_status_bg": "#1a1a2e",
-        },
-        # Light overlay (merged onto `colors`; dark mode renders the vivid
-        # block above untouched). The goldenrod ladder: on white, the vivid
-        # #FFD700/#FFBF00 read as glare and WCAG-darkened mustard (#867000)
-        # reads as mud — the sweet spot is the statusbar's goldenrod family
-        # (#B8860B/#DAA520): hue kept, saturation tamed, mid luminance.
-        # Hierarchy on white: ink body 8.9:1 > fade 5.2 > label 3.7 >
-        # muted 3.3 > title 2.7 > headers 2.4 (accents recede last, like
-        # slate's pastels — the raw-canon look, just not neon).
-        "light_colors": {
-            "banner_title": "#C8961E",
-            "banner_accent": "#D89B04",
-            "banner_dim": "#B8860B",
-            "banner_text": "#5C4718",
-            "ui_accent": "#D89B04",
-            "ui_label": "#A97E10",
-            "ui_ok": "#2E7D32",
-            "ui_error": "#C62828",
-            "ui_warn": "#D97706",
-            "prompt": "#5C4718",
-            "response_border": "#C8961E",
-            "session_label": "#A97E10",
-            "status_bar_text": "#6F6F6F",
-            "status_bar_strong": "#C8961E",
-            "status_bar_dim": "#9A8A5A",
-            "status_bar_good": "#2E7D32",
-            "status_bar_warn": "#C8961E",
-            "status_bar_bad": "#C2410C",
-            "status_bar_critical": "#B91C1C",
-            "shell_dollar": "#1E6FC0",
-            # Fills: flip the dark navy surfaces to light polarity.
-            "completion_menu_bg": "#F5F5F5",
-            "completion_menu_current_bg": "#E0D1BF",
-            "selection_bg": "#D4E4F7",
-            "status_bar_bg": "#F5F5F5",
-            "voice_status_bg": "#F5F5F5",
-        },
-        "spinner": {
-            # Empty = use hardcoded defaults in display.py
-        },
-        "branding": {
-            "agent_name": "Vigil",
-            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Vigil ",
-            "prompt_symbol": "❯",
-            "help_header": "(^_^)? Available Commands",
-        },
-        "tool_prefix": "┊",
+_VIGIL_SKIN_DEFINITION: Dict[str, Any] = {
+    "name": "vigil",
+    "description": "Vigil ops theme — slate blue-gray on dark gray",
+    # 蓝灰系 ops 主题：主色 #4A90D9，深色暗灰底（非纯黑）。层次阶梯：
+    # 边框暗蓝灰 < 标题亮蓝灰 < accent 中蓝 < 正文浅灰白；工具指示亮蓝；
+    # 状态栏中性灰蓝。banner 标识（◉ VIGIL）与欢迎语继承 default（品牌一致）。
+    "colors": {
+        "banner_border": "#3E6B9B",
+        "banner_title": "#8FB8E8",
+        "banner_accent": "#5B9BD5",
+        "banner_dim": "#6B7F99",
+        "banner_text": "#E8EEF5",
+        "ui_accent": "#4A90D9",
+        "ui_label": "#8FB8E8",
+        "ui_ok": "#4CAF7D",
+        "ui_error": "#E06C6C",
+        "ui_warn": "#E0A060",
+        "ui_tool": "#6BA9E8",
+        "ui_thinking": "#7D93B8",
+        "prompt": "#E8EEF5",
+        "input_rule": "#3E6B9B",
+        "response_border": "#4A90D9",
+        "status_bar_bg": "#1A202A",
+        "status_bar_text": "#C7D2E0",
+        "status_bar_strong": "#8FB8E8",
+        "status_bar_dim": "#5E6F87",
+        "status_bar_good": "#5FB98A",
+        "status_bar_warn": "#E0A060",
+        "status_bar_bad": "#D9822B",
+        "status_bar_critical": "#E06C6C",
+        "session_label": "#8FB8E8",
+        "session_border": "#5E6F87",
+        "completion_menu_bg": "#1A202A",
+        "completion_menu_current_bg": "#2A3B52",
+        "completion_menu_meta_bg": "#1A202A",
+        "completion_menu_meta_current_bg": "#30445E",
+        "selection_bg": "#2A3B52",
+        "shell_dollar": "#4A90D9",
+        "voice_status_bg": "#1A202A",
+        "syntax_string": "#7FC98C",
+        "syntax_number": "#C7D2E0",
+        "syntax_keyword": "#6BA9E8",
+        "syntax_comment": "#5E6F87",
+        # Ops env badge colors (consumed by the ops-mode CLI prompt/banner;
+        # plain color keys, no schema change)
+        "ops_env_test": "#4A90D9",
+        "ops_env_uat": "#E0A060",
+        "ops_env_prod": "#E06C6C",
     },
-    "vigil": {
-        "name": "vigil",
-        "description": "Vigil ops theme — slate blue-gray on dark gray",
-        # 蓝灰系 ops 主题：主色 #4A90D9，深色暗灰底（非纯黑）。层次阶梯：
-        # 边框暗蓝灰 < 标题亮蓝灰 < accent 中蓝 < 正文浅灰白；工具指示亮蓝；
-        # 状态栏中性灰蓝。banner 标识（◉ VIGIL）与欢迎语继承 default（品牌一致）。
-        "colors": {
-            "banner_border": "#3E6B9B",
-            "banner_title": "#8FB8E8",
-            "banner_accent": "#5B9BD5",
-            "banner_dim": "#6B7F99",
-            "banner_text": "#E8EEF5",
-            "ui_accent": "#4A90D9",
-            "ui_label": "#8FB8E8",
-            "ui_ok": "#4CAF7D",
-            "ui_error": "#E06C6C",
-            "ui_warn": "#E0A060",
-            "ui_tool": "#6BA9E8",
-            "ui_thinking": "#7D93B8",
-            "prompt": "#E8EEF5",
-            "input_rule": "#3E6B9B",
-            "response_border": "#4A90D9",
-            "status_bar_bg": "#1A202A",
-            "status_bar_text": "#C7D2E0",
-            "status_bar_strong": "#8FB8E8",
-            "status_bar_dim": "#5E6F87",
-            "status_bar_good": "#5FB98A",
-            "status_bar_warn": "#E0A060",
-            "status_bar_bad": "#D9822B",
-            "status_bar_critical": "#E06C6C",
-            "session_label": "#8FB8E8",
-            "session_border": "#5E6F87",
-            "completion_menu_bg": "#1A202A",
-            "completion_menu_current_bg": "#2A3B52",
-            "completion_menu_meta_bg": "#1A202A",
-            "completion_menu_meta_current_bg": "#30445E",
-            "selection_bg": "#2A3B52",
-            "shell_dollar": "#4A90D9",
-            "voice_status_bg": "#1A202A",
-            "syntax_string": "#7FC98C",
-            "syntax_number": "#C7D2E0",
-            "syntax_keyword": "#6BA9E8",
-            "syntax_comment": "#5E6F87",
-            # Ops env badge colors (consumed by the ops-mode CLI prompt/banner;
-            # plain color keys, no schema change)
-            "ops_env_test": "#4A90D9",
-            "ops_env_uat": "#E0A060",
-            "ops_env_prod": "#E06C6C",
-        },
-                "banner_logo": """[bold #8FB8E8]VIGIL[/]
-[bold #5B9BD5]  /\\_/\\\\[/]
+    "banner_logo": """[bold #8FB8E8]VIGIL[/]
+[bold #5B9BD5]  /\_/\\[/]
 [bold #8FB8E8]  ( ◉.◉ )[/]
 [dim #6B7F99]  > ^ <[/]
 [dim #6B7F99]记住整个平台，安全地动生产[/]""",
-        "banner_hero": """[bold #8FB8E8]◉[/]
+    "banner_hero": """[bold #8FB8E8]◉[/]
 [bold #8FB8E8]VIGIL[/]
 [dim #6B7F99]记住整个平台[/]
 [dim #6B7F99]安全地动生产[/]""",
-        "branding": {
-            "prompt_symbol": "◉ Vigil >",
-        },
-        "spinner": {
-            "waiting_faces": ["(·)", "(·|)", "(·/)", "(·\\)"],
-            "thinking_faces": ["(·)", "(⌁)", "(∘)", "(○)"],
-            "thinking_verbs": [
-                "querying topology", "checking runbook", "verifying permissions",
-                "tracing entity", "confirming env", "watching gates",
-            ],
-        },
-        "tool_emojis": {
-            "topo_query": "🧭",
-            "topo_update": "🧭",
-            "runbook_load": "📋",
-            "runbook_checkpoint": "📋",
-        },
-        "tool_prefix": "┊",
+    "branding": {
+        "prompt_symbol": "◉ Vigil >",
     },
-    "ares": {
-        "name": "ares",
-        "description": "War-god theme — crimson and bronze",
-        "colors": {
-            "banner_border": "#A93333",
-            "banner_title": "#C7A96B",
-            "banner_accent": "#DD4A3A",
-            "banner_dim": "#905151",
-            "banner_text": "#F1E6CF",
-            "ui_accent": "#DD4A3A",
-            "ui_label": "#C7A96B",
-            "ui_ok": "#4caf50",
-            "ui_error": "#ef5350",
-            "ui_warn": "#ffa726",
-            "prompt": "#F1E6CF",
-            "input_rule": "#A93333",
-            "response_border": "#C7A96B",
-            "status_bar_bg": "#2A1212",
-            "status_bar_text": "#F1E6CF",
-            "status_bar_strong": "#C7A96B",
-            "status_bar_dim": "#756054",
-            "status_bar_good": "#7BC96F",
-            "status_bar_warn": "#C7A96B",
-            "status_bar_bad": "#DD4A3A",
-            "status_bar_critical": "#EF5350",
-            "session_label": "#C7A96B",
-            "session_border": "#6E584B",
-            "completion_menu_bg": "#2A1212",
-            "completion_menu_current_bg": "#5C221D",
-            "selection_bg": "#692620",
-            "shell_dollar": "#DD4A3A",
-            "voice_status_bg": "#2A1212",
-        },
-        "spinner": {
-            "waiting_faces": ["(⚔)", "(⛨)", "(▲)", "(<>)", "(/)"],
-            "thinking_faces": ["(⚔)", "(⛨)", "(▲)", "(⌁)", "(<>)"],
-            "thinking_verbs": [
-                "forging", "marching", "sizing the field", "holding the line",
-                "hammering plans", "tempering steel", "plotting impact", "raising the shield",
-            ],
-            "wings": [
-                ["⟪⚔", "⚔⟫"],
-                ["⟪▲", "▲⟫"],
-                ["⟪╸", "╺⟫"],
-                ["⟪⛨", "⛨⟫"],
-            ],
-        },
-        "branding": {
-            "agent_name": "Ares Agent",
-            "welcome": "Welcome to Ares Agent! Type your message or /help for commands.",
-            "goodbye": "Farewell, warrior! ⚔",
-            "response_label": " ⚔ Ares ",
-            "prompt_symbol": "⚔",
-            "help_header": "(⚔) Available Commands",
-        },
-        "tool_prefix": "╎",
-        "banner_logo": """[bold #A3261F] █████╗ ██████╗ ███████╗███████╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
-[bold #B73122]██╔══██╗██╔══██╗██╔════╝██╔════╝      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
-[#C93C24]███████║██████╔╝█████╗  ███████╗█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
-[#D84A28]██╔══██║██╔══██╗██╔══╝  ╚════██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
-[#E15A2D]██║  ██║██║  ██║███████╗███████║      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
-[#EB6C32]╚═╝  ╚═╝╚═╝  ╚═╝╚══════╝╚══════╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]""",
-        "banner_hero": """[#9F1C1C]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣤⣤⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#9F1C1C]⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⠟⠻⣿⣦⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#C7A96B]⠀⠀⠀⠀⠀⠀⠀⣠⣾⡿⠋⠀⠀⠀⠙⢿⣷⣄⠀⠀⠀⠀⠀⠀⠀[/]
-[#C7A96B]⠀⠀⠀⠀⠀⢀⣾⡿⠋⠀⠀⢠⡄⠀⠀⠙⢿⣷⡀⠀⠀⠀⠀⠀[/]
-[#DD4A3A]⠀⠀⠀⠀⣰⣿⠟⠀⠀⠀⣰⣿⣿⣆⠀⠀⠀⠻⣿⣆⠀⠀⠀⠀[/]
-[#DD4A3A]⠀⠀⠀⢰⣿⠏⠀⠀⢀⣾⡿⠉⢿⣷⡀⠀⠀⠹⣿⡆⠀⠀⠀[/]
-[#9F1C1C]⠀⠀⠀⣿⡟⠀⠀⣠⣿⠟⠀⠀⠀⠻⣿⣄⠀⠀⢻⣿⠀⠀⠀[/]
-[#9F1C1C]⠀⠀⠀⣿⡇⠀⠀⠙⠋⠀⠀⚔⠀⠀⠙⠋⠀⠀⢸⣿⠀⠀⠀[/]
-[#6B1717]⠀⠀⠀⢿⣧⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣼⡿⠀⠀⠀[/]
-[#6B1717]⠀⠀⠀⠘⢿⣷⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⡿⠃⠀⠀⠀[/]
-[#C7A96B]⠀⠀⠀⠀⠈⠻⣿⣷⣦⣤⣀⣀⣤⣤⣶⣿⠿⠋⠀⠀⠀⠀[/]
-[#C7A96B]⠀⠀⠀⠀⠀⠀⠀⠉⠛⠿⠿⠿⠿⠛⠉⠀⠀⠀⠀⠀⠀⠀[/]
-[#DD4A3A]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⚔⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[dim #6B1717]⠀⠀⠀⠀⠀⠀⠀⠀war god online⠀⠀⠀⠀⠀⠀⠀⠀[/]""",
+    "spinner": {
+        "waiting_faces": ["(·)", "(·|)", "(·/)", "(·\\)"],
+        "thinking_faces": ["(·)", "(⌁)", "(∘)", "(○)"],
+        "thinking_verbs": [
+            "querying topology", "checking runbook", "verifying permissions",
+            "tracing entity", "confirming env", "watching gates",
+        ],
     },
-    "mono": {
-        "name": "mono",
-        "description": "Monochrome — clean grayscale",
-        "colors": {
-            "banner_border": "#5E5E5E",
-            "banner_title": "#e6edf3",
-            "banner_accent": "#aaaaaa",
-            "banner_dim": "#606060",
-            "banner_text": "#c9d1d9",
-            "ui_accent": "#aaaaaa",
-            "ui_label": "#888888",
-            "ui_ok": "#888888",
-            "ui_error": "#cccccc",
-            "ui_warn": "#999999",
-            "prompt": "#c9d1d9",
-            "input_rule": "#606060",
-            "response_border": "#aaaaaa",
-            "status_bar_bg": "#1F1F1F",
-            "status_bar_text": "#C9D1D9",
-            "status_bar_strong": "#E6EDF3",
-            "status_bar_dim": "#777777",
-            "status_bar_good": "#B5B5B5",
-            "status_bar_warn": "#AAAAAA",
-            "status_bar_bad": "#D0D0D0",
-            "status_bar_critical": "#F0F0F0",
-            "session_label": "#888888",
-            "session_border": "#5E5E5E",
-            "completion_menu_bg": "#1F1F1F",
-            "completion_menu_current_bg": "#464646",
-            "selection_bg": "#505050",
-            "shell_dollar": "#aaaaaa",
-            "voice_status_bg": "#1F1F1F",
-        },
-        "spinner": {},
-        "branding": {
-            "agent_name": "Vigil",
-            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Vigil ",
-            "prompt_symbol": "❯",
-            "help_header": "[?] Available Commands",
-        },
-        "tool_prefix": "┊",
+    "tool_emojis": {
+        "topo_query": "🧭",
+        "topo_update": "🧭",
+        "runbook_load": "📋",
+        "runbook_checkpoint": "📋",
     },
-    "slate": {
-        "name": "slate",
-        "description": "Cool blue — developer-focused",
-        "colors": {
-            "banner_border": "#4169e1",
-            "banner_title": "#7eb8f6",
-            "banner_accent": "#8EA8FF",
-            "banner_dim": "#545E6B",
-            "banner_text": "#c9d1d9",
-            "ui_accent": "#7eb8f6",
-            "ui_label": "#8EA8FF",
-            "ui_ok": "#63D0A6",
-            "ui_error": "#F7A072",
-            "ui_warn": "#e6a855",
-            "prompt": "#c9d1d9",
-            "input_rule": "#4169e1",
-            "response_border": "#7eb8f6",
-            "status_bar_bg": "#151C2F",
-            "status_bar_text": "#C9D1D9",
-            "status_bar_strong": "#7EB8F6",
-            "status_bar_dim": "#5D6672",
-            "status_bar_good": "#63D0A6",
-            "status_bar_warn": "#E6A855",
-            "status_bar_bad": "#F7A072",
-            "status_bar_critical": "#FF7A7A",
-            "session_label": "#7eb8f6",
-            "session_border": "#545E6B",
-            "completion_menu_bg": "#151C2F",
-            "completion_menu_current_bg": "#324867",
-            "selection_bg": "#3A5375",
-            "shell_dollar": "#7eb8f6",
-            "voice_status_bg": "#151C2F",
-        },
-        "spinner": {},
-        "branding": {
-            "agent_name": "Vigil",
-            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Vigil ",
-            "prompt_symbol": "❯",
-            "help_header": "(^_^)? Available Commands",
-        },
-        "tool_prefix": "┊",
-    },
-    "daylight": {
-        "name": "daylight",
-        "description": "Light theme for bright terminals with dark text and cool blue accents",
-        "colors": {
-            "banner_border": "#2563EB",
-            "banner_title": "#0F172A",
-            "banner_accent": "#1D4ED8",
-            "banner_dim": "#475569",
-            "banner_text": "#111827",
-            "ui_accent": "#2563EB",
-            "ui_label": "#0F766E",
-            "ui_ok": "#15803D",
-            "ui_error": "#B91C1C",
-            "ui_warn": "#B45309",
-            "prompt": "#111827",
-            "input_rule": "#6E94BE",
-            "response_border": "#2563EB",
-            "status_bar_bg": "#E5EDF8",
-            "status_bar_text": "#111827",
-            "status_bar_strong": "#2563EB",
-            "status_bar_dim": "#838890",
-            "status_bar_good": "#15803D",
-            "status_bar_warn": "#B45309",
-            "status_bar_bad": "#B45309",
-            "status_bar_critical": "#B91C1C",
-            "session_label": "#1D4ED8",
-            "session_border": "#64748B",
-            "completion_menu_bg": "#F8FAFC",
-            "completion_menu_current_bg": "#DBEAFE",
-            "completion_menu_meta_bg": "#EEF2FF",
-            "completion_menu_meta_current_bg": "#BFDBFE",
-            "selection_bg": "#D3E0FB",
-            "shell_dollar": "#2563EB",
-            "voice_status_bg": "#E5EDF8",
-        },
-        "spinner": {},
-        "branding": {
-            "agent_name": "Vigil",
-            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
-            "goodbye": "Goodbye! ⚕",
-            "response_label": " ◉ Vigil ",
-            "prompt_symbol": "❯",
-            "help_header": "[?] Available Commands",
-        },
-        "tool_prefix": "│",
-    },
-    "warm-lightmode": {
-        "name": "warm-lightmode",
-        "description": "Warm light mode — dark brown/gold text for light terminal backgrounds",
-        "colors": {
-            "banner_border": "#8B6914",
-            "banner_title": "#5C3D11",
-            "banner_accent": "#8B4513",
-            "banner_dim": "#8B7355",
-            "banner_text": "#2C1810",
-            "ui_accent": "#8B4513",
-            "ui_label": "#5C3D11",
-            "ui_ok": "#2E7D32",
-            "ui_error": "#C62828",
-            "ui_warn": "#E65100",
-            "prompt": "#2C1810",
-            "input_rule": "#8B6914",
-            "response_border": "#8B6914",
-            "status_bar_bg": "#F5F0E8",
-            "status_bar_text": "#2C1810",
-            "status_bar_strong": "#8B4513",
-            "status_bar_dim": "#8A8F98",
-            "status_bar_good": "#2E7D32",
-            "status_bar_warn": "#E65100",
-            "status_bar_bad": "#DA4D00",
-            "status_bar_critical": "#C62828",
-            "session_label": "#5C3D11",
-            "session_border": "#A0845C",
-            "completion_menu_bg": "#F5EFE0",
-            "completion_menu_current_bg": "#E8DCC8",
-            "completion_menu_meta_bg": "#F0E8D8",
-            "completion_menu_meta_current_bg": "#DFCFB0",
-            "selection_bg": "#E8DAD0",
-            "shell_dollar": "#8B4513",
-            "voice_status_bg": "#F5F0E8",
-        },
-        "spinner": {},
-        "branding": {
-            "agent_name": "Vigil",
-            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, permission gates armed. Type a message or /help.",
-            "goodbye": "Goodbye! \u2695",
-            "response_label": " \u2695 Vigil ",
-            "prompt_symbol": "\u276f",
-            "help_header": "(^_^)? Available Commands",
-        },
-        "tool_prefix": "\u250a",
-    },
-    "poseidon": {
-        "name": "poseidon",
-        "description": "Ocean-god theme — deep blue and seafoam",
-        "colors": {
-            "banner_border": "#2A6FB9",
-            "banner_title": "#A9DFFF",
-            "banner_accent": "#5DB8F5",
-            "banner_dim": "#44638F",
-            "banner_text": "#EAF7FF",
-            "ui_accent": "#5DB8F5",
-            "ui_label": "#A9DFFF",
-            "ui_ok": "#4caf50",
-            "ui_error": "#ef5350",
-            "ui_warn": "#ffa726",
-            "prompt": "#EAF7FF",
-            "input_rule": "#2A6FB9",
-            "response_border": "#5DB8F5",
-            "status_bar_bg": "#0F2440",
-            "status_bar_text": "#EAF7FF",
-            "status_bar_strong": "#A9DFFF",
-            "status_bar_dim": "#52708A",
-            "status_bar_good": "#6ED7B0",
-            "status_bar_warn": "#5DB8F5",
-            "status_bar_bad": "#3576BC",
-            "status_bar_critical": "#D94F4F",
-            "session_label": "#A9DFFF",
-            "session_border": "#496884",
-            "completion_menu_bg": "#0F2440",
-            "completion_menu_current_bg": "#254D73",
-            "selection_bg": "#2A587F",
-            "shell_dollar": "#5DB8F5",
-            "voice_status_bg": "#0F2440",
-        },
-        "spinner": {
-            "waiting_faces": ["(≈)", "(Ψ)", "(∿)", "(◌)", "(◠)"],
-            "thinking_faces": ["(Ψ)", "(∿)", "(≈)", "(⌁)", "(◌)"],
-            "thinking_verbs": [
-                "charting currents", "sounding the depth", "reading foam lines",
-                "steering the trident", "tracking undertow", "plotting sea lanes",
-                "calling the swell", "measuring pressure",
-            ],
-            "wings": [
-                ["⟪≈", "≈⟫"],
-                ["⟪Ψ", "Ψ⟫"],
-                ["⟪∿", "∿⟫"],
-                ["⟪◌", "◌⟫"],
-            ],
-        },
-        "branding": {
-            "agent_name": "Poseidon Agent",
-            "welcome": "Welcome to Poseidon Agent! Type your message or /help for commands.",
-            "goodbye": "Fair winds! Ψ",
-            "response_label": " Ψ Poseidon ",
-            "prompt_symbol": "Ψ",
-            "help_header": "(Ψ) Available Commands",
-        },
-        "tool_prefix": "│",
-        "banner_logo": """[bold #B8E8FF]██████╗  ██████╗ ███████╗███████╗██╗██████╗  ██████╗ ███╗   ██╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
-[bold #97D6FF]██╔══██╗██╔═══██╗██╔════╝██╔════╝██║██╔══██╗██╔═══██╗████╗  ██║      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
-[#75C1F6]██████╔╝██║   ██║███████╗█████╗  ██║██║  ██║██║   ██║██╔██╗ ██║█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
-[#4FA2E0]██╔═══╝ ██║   ██║╚════██║██╔══╝  ██║██║  ██║██║   ██║██║╚██╗██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
-[#2E7CC7]██║     ╚██████╔╝███████║███████╗██║██████╔╝╚██████╔╝██║ ╚████║      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
-[#1B4F95]╚═╝      ╚═════╝ ╚══════╝╚══════╝╚═╝╚═════╝  ╚═════╝ ╚═╝  ╚═══╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]""",
-        "banner_hero": """[#2A6FB9]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#5DB8F5]⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#5DB8F5]⠀⠀⠀⠀⠀⠀⠀⢠⣿⠏⠀Ψ⠀⠹⣿⡄⠀⠀⠀⠀⠀⠀⠀[/]
-[#A9DFFF]⠀⠀⠀⠀⠀⠀⠀⣿⡟⠀⠀⠀⠀⠀⢻⣿⠀⠀⠀⠀⠀⠀⠀[/]
-[#A9DFFF]⠀⠀⠀≈≈≈≈≈⣿⡇⠀⠀⠀⠀⠀⢸⣿≈≈≈≈≈⠀⠀⠀[/]
-[#5DB8F5]⠀⠀⠀⠀⠀⠀⠀⣿⡇⠀⠀⠀⠀⠀⢸⣿⠀⠀⠀⠀⠀⠀⠀[/]
-[#2A6FB9]⠀⠀⠀⠀⠀⠀⠀⢿⣧⠀⠀⠀⠀⠀⣼⡿⠀⠀⠀⠀⠀⠀⠀[/]
-[#2A6FB9]⠀⠀⠀⠀⠀⠀⠀⠘⢿⣷⣄⣀⣠⣾⡿⠃⠀⠀⠀⠀⠀⠀⠀[/]
-[#153C73]⠀⠀⠀⠀⠀⠀⠀⠀⠈⠻⣿⣿⡿⠟⠁⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#153C73]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#5DB8F5]⠀⠀⠀⠀⠀≈≈≈≈≈≈≈≈≈≈≈≈≈≈≈⠀⠀⠀⠀⠀[/]
-[#A9DFFF]⠀⠀⠀⠀⠀⠀≈≈≈≈≈≈≈≈≈≈≈≈≈⠀⠀⠀⠀⠀⠀[/]
-[dim #153C73]⠀⠀⠀⠀⠀⠀⠀deep waters hold⠀⠀⠀⠀⠀⠀⠀[/]""",
-    },
-    "sisyphus": {
-        "name": "sisyphus",
-        "description": "Sisyphean theme — austere grayscale with persistence",
-        "colors": {
-            "banner_border": "#B7B7B7",
-            "banner_title": "#F5F5F5",
-            "banner_accent": "#E7E7E7",
-            "banner_dim": "#5C5C5C",
-            "banner_text": "#D3D3D3",
-            "ui_accent": "#E7E7E7",
-            "ui_label": "#D3D3D3",
-            "ui_ok": "#919191",
-            "ui_error": "#E7E7E7",
-            "ui_warn": "#B7B7B7",
-            "prompt": "#F5F5F5",
-            "input_rule": "#656565",
-            "response_border": "#B7B7B7",
-            "status_bar_bg": "#202020",
-            "status_bar_text": "#D3D3D3",
-            "status_bar_strong": "#F5F5F5",
-            "status_bar_dim": "#6D6D6D",
-            "status_bar_good": "#B7B7B7",
-            "status_bar_warn": "#D3D3D3",
-            "status_bar_bad": "#E7E7E7",
-            "status_bar_critical": "#F5F5F5",
-            "session_label": "#919191",
-            "session_border": "#656565",
-            "completion_menu_bg": "#202020",
-            "completion_menu_current_bg": "#585858",
-            "selection_bg": "#666666",
-            "shell_dollar": "#E7E7E7",
-            "voice_status_bg": "#202020",
-        },
-        "spinner": {
-            "waiting_faces": ["(◉)", "(◌)", "(◬)", "(⬤)", "(::)"],
-            "thinking_faces": ["(◉)", "(◬)", "(◌)", "(○)", "(●)"],
-            "thinking_verbs": [
-                "finding traction", "measuring the grade", "resetting the boulder",
-                "counting the ascent", "testing leverage", "setting the shoulder",
-                "pushing uphill", "enduring the loop",
-            ],
-            "wings": [
-                ["⟪◉", "◉⟫"],
-                ["⟪◬", "◬⟫"],
-                ["⟪◌", "◌⟫"],
-                ["⟪⬤", "⬤⟫"],
-            ],
-        },
-        "branding": {
-            "agent_name": "Sisyphus Agent",
-            "welcome": "Welcome to Sisyphus Agent! Type your message or /help for commands.",
-            "goodbye": "The boulder waits. ◉",
-            "response_label": " ◉ Sisyphus ",
-            "prompt_symbol": "◉",
-            "help_header": "(◉) Available Commands",
-        },
-        "tool_prefix": "│",
-        "banner_logo": """[bold #F5F5F5]███████╗██╗███████╗██╗   ██╗██████╗ ██╗  ██╗██╗   ██╗███████╗       █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
-[bold #E7E7E7]██╔════╝██║██╔════╝╚██╗ ██╔╝██╔══██╗██║  ██║██║   ██║██╔════╝      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
-[#D7D7D7]███████╗██║███████╗ ╚████╔╝ ██████╔╝███████║██║   ██║███████╗█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
-[#BFBFBF]╚════██║██║╚════██║  ╚██╔╝  ██╔═══╝ ██╔══██║██║   ██║╚════██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
-[#8F8F8F]███████║██║███████║   ██║   ██║     ██║  ██║╚██████╔╝███████║      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
-[#626262]╚══════╝╚═╝╚══════╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝ ╚═════╝ ╚══════╝      ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]""",
-        "banner_hero": """[#B7B7B7]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⣀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#D3D3D3]⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#E7E7E7]⠀⠀⠀⠀⠀⠀⣾⣿⣿⣿⣿⣿⣿⣿⣷⠀⠀⠀⠀⠀⠀⠀[/]
-[#F5F5F5]⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀⠀⠀⠀[/]
-[#E7E7E7]⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⠀⠀[/]
-[#D3D3D3]⠀⠀⠀⠀⠀⠀⠘⢿⣿⣿⣿⣿⣿⡿⠃⠀⠀⠀⠀⠀⠀⠀[/]
-[#B7B7B7]⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⣿⠿⠋⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#919191]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#656565]⠀⠀⠀⠀⠀⠀⠀⠀⠀⣰⡄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#656565]⠀⠀⠀⠀⠀⠀⠀⠀⣰⣿⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#4A4A4A]⠀⠀⠀⠀⠀⠀⠀⣰⣿⣿⣿⣿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#4A4A4A]⠀⠀⠀⠀⠀⣀⣴⣿⣿⣿⣿⣿⣿⣦⣀⠀⠀⠀⠀⠀⠀[/]
-[#656565]⠀⠀⠀━━━━━━━━━━━━━━━━━━━━━━━⠀⠀⠀[/]
-[dim #4A4A4A]⠀⠀⠀⠀⠀⠀⠀⠀⠀the boulder⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]""",
-    },
-    "charizard": {
-        "name": "charizard",
-        "description": "Volcanic theme — burnt orange and ember",
-        "colors": {
-            "banner_border": "#C75B1D",
-            "banner_title": "#FFD39A",
-            "banner_accent": "#F29C38",
-            "banner_dim": "#C58A45",
-            "banner_text": "#FFF0D4",
-            "ui_accent": "#F29C38",
-            "ui_label": "#FFD39A",
-            "ui_ok": "#4caf50",
-            "ui_error": "#ef5350",
-            "ui_warn": "#ffa726",
-            "prompt": "#FFF0D4",
-            "input_rule": "#C75B1D",
-            "response_border": "#F29C38",
-            "status_bar_bg": "#2B160E",
-            "status_bar_text": "#FFF0D4",
-            "status_bar_strong": "#FFD39A",
-            "status_bar_dim": "#826144",
-            "status_bar_good": "#6BCB77",
-            "status_bar_warn": "#F29C38",
-            "status_bar_bad": "#E2832B",
-            "status_bar_critical": "#EF5350",
-            "session_label": "#FFD39A",
-            "session_border": "#7B593A",
-            "completion_menu_bg": "#0B0503",
-            "completion_menu_current_bg": "#4A1B07",
-            "completion_menu_meta_bg": "#120806",
-            "completion_menu_meta_current_bg": "#5A260D",
-            "selection_bg": "#5A260D",
-            "shell_dollar": "#F29C38",
-            "voice_status_bg": "#2B160E",
-        },
-        "spinner": {
-            "waiting_faces": ["(✦)", "(▲)", "(◇)", "(<>)", "(🔥)"],
-            "thinking_faces": ["(✦)", "(▲)", "(◇)", "(⌁)", "(🔥)"],
-            "thinking_verbs": [
-                "banking into the draft", "measuring burn", "reading the updraft",
-                "tracking ember fall", "setting wing angle", "holding the flame core",
-                "plotting a hot landing", "coiling for lift",
-            ],
-            "wings": [
-                ["⟪✦", "✦⟫"],
-                ["⟪▲", "▲⟫"],
-                ["⟪◌", "◌⟫"],
-                ["⟪◇", "◇⟫"],
-            ],
-        },
-        "branding": {
-            "agent_name": "Charizard Agent",
-            "welcome": "Welcome to Charizard Agent! Type your message or /help for commands.",
-            "goodbye": "Flame out! ✦",
-            "response_label": " ✦ Charizard ",
-            "prompt_symbol": "✦",
-            "help_header": "(✦) Available Commands",
-        },
-        "tool_prefix": "│",
-        "banner_logo": """[bold #FFF0D4] ██████╗██╗  ██╗ █████╗ ██████╗ ██╗███████╗ █████╗ ██████╗ ██████╗        █████╗  ██████╗ ███████╗███╗   ██╗████████╗[/]
-[bold #FFD39A]██╔════╝██║  ██║██╔══██╗██╔══██╗██║╚══███╔╝██╔══██╗██╔══██╗██╔══██╗      ██╔══██╗██╔════╝ ██╔════╝████╗  ██║╚══██╔══╝[/]
-[#F29C38]██║     ███████║███████║██████╔╝██║  ███╔╝ ███████║██████╔╝██║  ██║█████╗███████║██║  ███╗█████╗  ██╔██╗ ██║   ██║[/]
-[#E2832B]██║     ██╔══██║██╔══██║██╔══██╗██║ ███╔╝  ██╔══██║██╔══██╗██║  ██║╚════╝██╔══██║██║   ██║██╔══╝  ██║╚██╗██║   ██║[/]
-[#C75B1D]╚██████╗██║  ██║██║  ██║██║  ██║██║███████╗██║  ██║██║  ██║██████╔╝      ██║  ██║╚██████╔╝███████╗██║ ╚████║   ██║[/]
-[#7A3511] ╚═════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝╚═╝╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝╚═════╝       ╚═╝  ╚═╝ ╚═════╝ ╚══════╝╚═╝  ╚═══╝   ╚═╝[/]""",
-        "banner_hero": """[#FFD39A]⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⠶⠶⠶⣤⣀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#F29C38]⠀⠀⠀⠀⠀⠀⣴⠟⠁⠀⠀⠀⠀⠈⠻⣦⠀⠀⠀⠀⠀⠀[/]
-[#F29C38]⠀⠀⠀⠀⠀⣼⠏⠀⠀⠀✦⠀⠀⠀⠀⠹⣧⠀⠀⠀⠀⠀[/]
-[#E2832B]⠀⠀⠀⠀⢰⡟⠀⠀⣀⣤⣤⣤⣀⠀⠀⠀⢻⡆⠀⠀⠀⠀[/]
-[#E2832B]⠀⠀⣠⡾⠛⠁⣠⣾⠟⠉⠀⠉⠻⣷⣄⠀⠈⠛⢷⣄⠀⠀[/]
-[#C75B1D]⠀⣼⠟⠀⢀⣾⠟⠁⠀⠀⠀⠀⠀⠈⠻⣷⡀⠀⠻⣧⠀[/]
-[#C75B1D]⢸⡟⠀⠀⣿⡟⠀⠀⠀🔥⠀⠀⠀⠀⢻⣿⠀⠀⢻⡇[/]
-[#7A3511]⠀⠻⣦⡀⠘⢿⣧⡀⠀⠀⠀⠀⠀⢀⣼⡿⠃⢀⣴⠟⠀[/]
-[#7A3511]⠀⠀⠈⠻⣦⣀⠙⢿⣷⣤⣤⣤⣾⡿⠋⣀⣴⠟⠁⠀⠀[/]
-[#C75B1D]⠀⠀⠀⠀⠈⠙⠛⠶⠤⠭⠭⠤⠶⠛⠋⠁⠀⠀⠀⠀[/]
-[#F29C38]⠀⠀⠀⠀⠀⠀⠀⠀⣰⡿⢿⣆⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[#F29C38]⠀⠀⠀⠀⠀⠀⠀⣼⡟⠀⠀⢻⣧⠀⠀⠀⠀⠀⠀⠀⠀[/]
-[dim #7A3511]⠀⠀⠀⠀⠀⠀⠀tail flame lit⠀⠀⠀⠀⠀⠀⠀⠀[/]""",
-    },
+    "tool_prefix": "┊",
 }
 
+# 内置皮肤只保留 Vigil 蓝黑一个真实主题（ares/mono/slate/daylight/
+# warm-lightmode/poseidon/sisyphus/charizard 未适配 Vigil 设计，已删除）。
+# ``default`` 键保留并与 vigil 同源，作为旧 ``display.skin: default`` 配置与
+# 未知皮肤名的兜底——任何名字解析失败都回退 vigil 色值，不抛异常。
+_BUILTIN_SKINS: Dict[str, Dict[str, Any]] = {
+    "default": {
+        **_VIGIL_SKIN_DEFINITION,
+        "name": "default",
+        "description": "Vigil 蓝黑主题（default 与 vigil 同源）",
+        # 保留旧 default 的品牌键（agent_name/welcome/goodbye/...），消费方
+        # 大多带 fallback，这里显式携带避免默认皮肤缺品牌文案。
+        "branding": {
+            **_VIGIL_SKIN_DEFINITION["branding"],
+            "agent_name": "Vigil",
+            "welcome": "Welcome to Vigil — topology loaded, runbooks ready, "
+            "permission gates armed. Type a message or /help.",
+            "goodbye": "Goodbye! ⚕",
+            "response_label": " ◉ Vigil ",
+            "help_header": "(^_^)? Available Commands",
+        },
+    },
+    "vigil": _VIGIL_SKIN_DEFINITION,
+}
 
 # =============================================================================
 # Skin loading and management
@@ -966,8 +411,24 @@ def list_skins() -> List[Dict[str, str]]:
     return result
 
 
+_UNKNOWN_SKIN_WARNED: set[str] = set()
+
+
+def _warn_unknown_skin_once(name: str) -> None:
+    """Warn once per unknown skin name (deleted built-ins included)."""
+    if name in _UNKNOWN_SKIN_WARNED:
+        return
+    _UNKNOWN_SKIN_WARNED.add(name)
+    logger.warning(
+        "Skin '%s' not found, falling back to Vigil blue-black (default)", name
+    )
+
+
 def load_skin(name: str) -> SkinConfig:
-    """Load a skin by name. Checks user skins first, then built-in."""
+    """Load a skin by name. Checks user skins first, then built-in.
+
+    未知名字（含已删除的内置皮肤，如 slate）→ 回退 vigil 色值，不抛异常。
+    """
     # Check user skins directory
     skins_path = _skins_dir()
     user_file = skins_path / f"{name}.yaml"
@@ -980,8 +441,8 @@ def load_skin(name: str) -> SkinConfig:
     if name in _BUILTIN_SKINS:
         return _build_skin_config(_BUILTIN_SKINS[name])
 
-    # Fallback to default
-    logger.warning("Skin '%s' not found, using default", name)
+    # Fallback: any unknown name resolves to the Vigil blue-black palette.
+    _warn_unknown_skin_once(name)
     return _build_skin_config(_BUILTIN_SKINS["default"])
 
 
