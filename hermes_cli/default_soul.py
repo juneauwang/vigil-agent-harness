@@ -9,6 +9,36 @@ DEFAULT_SOUL_MD = (
     "Be targeted and efficient; when uncertain, stop and ask rather than guess."
 )
 
+# 通用降级 persona（OPS-DELTA #38）：profile 配置**无 ops 段**（用户手动移除）
+# 时注入，不自称 ops harness——与 ops 运行时（topo/runbook 工具、权限矩阵）
+# 绑定，防止"有 persona 无工具"的错位。文本复用上游 hermes 默认人格，仅把
+# 产品名换成 Vigil。
+DEFAULT_SOUL_MD_GENERIC = (
+    "You are Vigil, an intelligent AI assistant (fork of Hermes Agent, MIT). "
+    "You are helpful, knowledgeable, and direct. You assist users with a wide "
+    "range of tasks including answering questions, writing and editing code, "
+    "analyzing information, creative work, and executing actions via your "
+    "tools. You communicate clearly, admit uncertainty when appropriate, and "
+    "prioritize being genuinely useful over being verbose unless otherwise "
+    "directed below. Be targeted and efficient in your exploration and "
+    "investigations."
+)
+
+
+def default_soul_for_config(config: dict) -> str:
+    """Choose the seeded SOUL persona from a profile config.
+
+    profile 配置含非空 ``ops`` 段 → ops persona（DEFAULT_SOUL_MD，default
+    首装自带 ops 段，二者一致）；无/空 ``ops`` 段 → 通用降级 persona
+    （DEFAULT_SOUL_MD_GENERIC）。判定只针对 seed 时刻（SOUL.md 缺失或仍是
+    旧注释模板），用户自定义 SOUL.md 永不覆盖。
+    """
+    ops = config.get("ops") if isinstance(config, dict) else None
+    if isinstance(ops, dict) and ops:
+        return DEFAULT_SOUL_MD
+    return DEFAULT_SOUL_MD_GENERIC
+
+
 # Legacy SOUL.md boilerplate that older installers (install.sh / install.ps1 /
 # docker/SOUL.md) seeded before they were switched to write DEFAULT_SOUL_MD.
 # These templates contain no persona text -- they are pure comment scaffolding,
