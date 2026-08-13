@@ -96,7 +96,7 @@ def test_discover_maps_services_ports_images():
     runner = _default_runner()
     d = discover_host("203.0.113.20", "prod", runner=runner)
 
-    assert d["version"] == 2
+    assert d["version"] == 3
     assert d["source"] == "discovered"
     assert d["needs_review"] is True
     assert d["last_verified"]
@@ -104,6 +104,7 @@ def test_discover_maps_services_ports_images():
     host = d["host"]
     assert host["name"] == "203.0.113.20"
     assert host["env"] == "prod"
+    assert host["cluster"] == "default"          # 未标 cluster → 显示 default
     assert host["endpoint"] == "203.0.113.20"
     assert host["runtime"] == "docker"
     assert host["source"] == "discovered"
@@ -125,10 +126,15 @@ def test_discover_maps_services_ports_images():
     assert "unidentified-22" not in names
     assert "unidentified-5432" not in names
 
-    # 第三层详情草案（detail 指向 entities/<name>.yaml）。
+    # 第三层详情草案：L3 命名 entities/{cluster}__{host}__{name}.yaml，
+    # cluster 空用 env 兜底（本用例无 cluster → prod__host__name）。
     assert d["details"]["harbor"]["name"] == "harbor"
     assert d["details"]["harbor"]["needs_review"] is True
-    assert names["harbor"]["detail"] == "entities/harbor.yaml"
+    assert d["details"]["harbor"]["cluster"] == "default"
+    assert names["harbor"]["detail"] == "entities/prod__203.0.113.20__harbor.yaml"
+    assert names["harbor"]["cluster"] == "default"
+    assert names["grafana"]["detail"] == "entities/prod__203.0.113.20__grafana.yaml"
+    assert names["unidentified-9090"]["detail"] == "entities/prod__203.0.113.20__unidentified-9090.yaml"
 
 
 def test_discover_credentials_never_in_output_or_command_strings():
@@ -141,6 +147,54 @@ def test_discover_credentials_never_in_output_or_command_strings():
     assert secret not in blob
     # 服务/详情数据也不含凭据字段。
     assert "password" not in json.dumps(d).lower()
+
+
+def test_entity_filename_no_collision_across_dimensions():
+    from tools.topo_discovery import _entity_filename
+
+    # 同 host 不同 app / 同 app 不同 host / 同 app 同 host 不同 cluster 全不冲突。
+    a = _entity_filename("k3s-prod", "node1", "postgres")
+    b = _entity_filename("k3s-prod", "node1", "harbor")
+    c = _entity_filename("k3s-prod", "node2", "postgres")
+    d = _entity_filename("k3s-a", "node1", "postgres")
+    assert len({a, b, c, d}) == 4
+    assert a == "entities/k3s-prod__node1__postgres.yaml"
+    # cluster 空 → env 兜底；都空 → default。
+    assert _entity_filename("", "node1", "postgres", "prod") == "entities/prod__node1__postgres.yaml"
+    assert _entity_filename("", "node1", "postgres", "") == "entities/default__node1__postgres.yaml"
+
+
+def test_entity_filename_sanitized_names_unambiguous():
+    from tools.topo_discovery import _entity_filename
+
+    # _sanitize_name 字符集（. _ -）保留；__ 分隔不歧义。
+    assert _entity_filename("prod", "node.a-1", "my_app-v2") == "entities/prod__node.a-1__my_app-v2.yaml"
+    assert _entity_filename("Prod Cluster", "Node.1", "PostgreSQL") == "entities/prod-cluster__node.1__postgresql.yaml"
+
+
+def test_discover_cluster_param_threads_into_host_row_and_details():
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod", runner=_default_runner())
+    assert d["host"]["cluster"] == "k3s-prod"
+    names = {s["name"]: s for s in d["services"]}
+    # 显式 cluster → L3 文件名用 cluster，不再用 env 兜底。
+    assert names["harbor"]["detail"] == "entities/k3s-prod__203.0.113.20__harbor.yaml"
+    assert names["harbor"]["cluster"] == "k3s-prod"
+    assert d["details"]["harbor"]["cluster"] == "k3s-prod"
+    assert d["details"]["harbor"]["detail"] == names["harbor"]["detail"]
+
+
+def test_discover_credential_derived_from_key_path_only():
+    runner = _default_runner()
+    d = discover_host("203.0.113.20", "prod",
+                      {"user": "ops", "key_path": "/keys/node1.pem"}, runner=runner)
+    assert d["host"]["credential"] == {
+        "type": "ssh_key", "ref": "/keys/node1.pem", "user": "ops", "port": 22,
+    }
+    # 密码走 askpass（无 key_path）→ 不写凭据引用，密码明文不进任何输出。
+    d2 = discover_host("203.0.113.20", "prod",
+                       {"user": "root", "password": "Sup3r-Secret!Password"}, runner=runner)
+    assert "credential" not in d2["host"]
+    assert "Sup3r-Secret!Password" not in json.dumps(d2)
 
 
 def test_discover_ssh_failure_raises_no_partial_data():
@@ -213,6 +267,7 @@ def test_discover_ss_entries_record_source_probe():
     svc = next(s for s in d["services"] if s["name"] == "unidentified-9090")
     assert svc["attrs"]["source_probe"] == "ss"
     assert d["details"]["unidentified-9090"]["attrs"]["source_probe"] == "ss"
+    assert d["details"]["unidentified-9090"]["detail"] == svc["detail"]
 
 
 def test_build_ssh_runner_encrypted_key_uses_askpass_without_plaintext(tmp_path, monkeypatch):
@@ -399,11 +454,11 @@ def test_cli_batch_confirm_once_and_writes_each_success(tmp_path, monkeypatch):
 # 落盘
 # ---------------------------------------------------------------------------
 
-def _discovery():
-    return discover_host("203.0.113.20", "prod", runner=_default_runner())
+def _discovery(host: str = "203.0.113.20", env: str = "prod"):
+    return discover_host(host, env, runner=_default_runner())
 
 
-def test_write_discovery_writes_v2_structure(tmp_path):
+def test_write_discovery_writes_v3_structure(tmp_path):
     home = tmp_path / "hermes_home"
     home.mkdir()
     d = _discovery()
@@ -415,13 +470,20 @@ def test_write_discovery_writes_v2_structure(tmp_path):
     data = yaml.safe_load(index.read_text(encoding="utf-8"))
     assert data["host"] == "203.0.113.20"
     assert data["env"] == "prod"
+    assert data["cluster"] == "default"
     assert {s["name"] for s in data["services"]} == {
         "harbor", "postgres", "grafana", "unidentified-9090"}
 
     topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
-    assert topo["version"] == 2
+    assert topo["version"] == 3
     assert topo["hosts"][0]["name"] == "203.0.113.20"
+    assert topo["hosts"][0]["cluster"] == "default"
     assert topo["hosts"][0]["services_index"] == "hosts/203.0.113.20.yaml"
+
+    # L3 命名：entities/{env}__{host}__{name}.yaml（cluster 空 → env 兜底）。
+    harbor = home / "entities" / "prod__203.0.113.20__harbor.yaml"
+    assert harbor.is_file()
+    assert yaml.safe_load(harbor.read_text(encoding="utf-8"))["name"] == "harbor"
 
     # 落盘结果能被 topo_tools 正常读取（第二层服务索引进扁平视图）。
     os.environ["VIGIL_HOME"] = str(home)
@@ -432,6 +494,32 @@ def test_write_discovery_writes_v2_structure(tmp_path):
         assert {s["name"] for s in node["services"]} >= {"harbor", "postgres"}
     finally:
         hc._LOAD_CONFIG_CACHE.clear()
+
+
+def test_write_discovery_same_app_two_hosts_no_entity_collision(tmp_path):
+    """L3 命名验收：同一应用跨两个 host 发现 → 两个实体文件不冲突。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    write_discovery(home, _discovery("node-a"))
+    write_discovery(home, _discovery("node-b"))
+    a = home / "entities" / "prod__node-a__harbor.yaml"
+    b = home / "entities" / "prod__node-b__harbor.yaml"
+    assert a.is_file() and b.is_file()
+    assert a != b
+    assert yaml.safe_load(a.read_text(encoding="utf-8"))["name"] == "harbor"
+    assert yaml.safe_load(b.read_text(encoding="utf-8"))["name"] == "harbor"
+
+
+def test_write_discovery_legacy_env_maps_to_tier_in_environments(tmp_path):
+    """写入端只产四值枚举：老自定义 env（uat）按档位映射为 prod，不追加 uat 定义。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    d = _discovery("node-a", env="uat")
+    write_discovery(home, d)
+    topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
+    envs = [e["name"] for e in topo["environments"]]
+    assert envs == ["prod"]
+    assert topo["environments"][0]["isolation"] == "strict"
 
 
 def test_write_discovery_refuses_v1_topology(tmp_path):
