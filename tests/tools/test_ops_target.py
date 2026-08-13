@@ -58,7 +58,7 @@ def topo_home(tmp_path, monkeypatch):
     (home / "entities").mkdir()
     (home / "entities" / "node2.yaml").write_text(NODE2_YAML, encoding="utf-8")
     (home / "entities" / "test-web.yaml").write_text(TESTWEB_YAML, encoding="utf-8")
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         yield home
@@ -192,7 +192,7 @@ def test_empty_or_non_string_returns_none(topo_home):
 def test_no_topology_returns_none(tmp_path, monkeypatch):
     home = tmp_path / "empty_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         assert resolve_command_target("ssh root@203.0.113.11 'rm -rf /var/log'") is None

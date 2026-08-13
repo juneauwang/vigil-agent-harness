@@ -1,0 +1,9 @@
+# test-web —— 验证用测试实体（可删除，见 OPS-VERIFY.md §3）。
+name: test-web
+type: service
+env: test
+cluster: default
+attrs:
+  purpose: "权限矩阵与 topo_update 验证用测试实体（可删除）"
+ops:
+  healthcheck: "curl -sf http://127.0.0.1:8080/healthz"   # 端口待核对

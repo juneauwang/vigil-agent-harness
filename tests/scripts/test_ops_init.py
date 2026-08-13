@@ -40,6 +40,10 @@ def _run_init(root: Path, *extra: str, entry: str = "script") -> subprocess.Comp
     - module:  packaged ``hermes_cli.ops_init`` module
     - cli:     ``vigil ops-init`` subcommand (hermes_cli.main dispatch)
     """
+    env = dict(os.environ)
+    # 钉住本仓库：script 入口的 sys.path[0] 是 scripts/，editable 安装可能把
+    # hermes_cli 解析到别处——本测试断言的是 PROJECT_ROOT 的样例与代码。
+    env["PYTHONPATH"] = str(PROJECT_ROOT) + os.pathsep + env.get("PYTHONPATH", "")
     if entry == "script":
         argv = [sys.executable, str(INIT_SCRIPT)]
     elif entry == "module":
@@ -49,7 +53,7 @@ def _run_init(root: Path, *extra: str, entry: str = "script") -> subprocess.Comp
     return subprocess.run(
         [*argv, "--root", str(root), *extra],
         cwd=str(PROJECT_ROOT),
-        env=dict(os.environ),
+        env=env,
         capture_output=True,
         text=True,
         timeout=120,
@@ -64,7 +68,7 @@ def ops_home(tmp_path, monkeypatch, request):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     home = root / "profiles" / "ops"
     assert home.is_dir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         yield home
@@ -83,6 +87,9 @@ def _load_permissions(ops_home: Path) -> dict:
 def test_init_creates_profile_config_and_topology(ops_home):
     assert (ops_home / "config.yaml").is_file()
     assert (ops_home / "topology.yaml").is_file()
+    # v0.2 三层样例：第一层 topology.yaml + 第二层 hosts/ 服务索引 + 第三层 entities/。
+    seeded_hosts = sorted(p.stem for p in (ops_home / "hosts").glob("*.yaml"))
+    assert seeded_hosts == sorted(p.stem for p in (SAMPLE_DIR / "hosts").glob("*.yaml"))
     seeded = sorted(p.stem for p in (ops_home / "entities").glob("*.yaml"))
     assert seeded == SAMPLE_ENTITY_NAMES
     seeded_rb = sorted(p.stem for p in (ops_home / "runbooks").glob("*.yaml"))
@@ -102,11 +109,12 @@ def test_init_creates_profile_config_and_topology(ops_home):
     perms = cfg["ops"]["permissions"]
     assert perms["enabled"] is True
     assert perms["env"] == "test" and perms["role"] == "test"  # 安全默认
-    # ops.environments 默认三档（OPS-DELTA #11：env 可自定义的向后兼容基线）
+    # ops.environments 四值枚举（OPS-DELTA #42：local/test/dev relaxed、prod strict）
     env_defs = cfg["ops"]["environments"]
-    assert [d["name"] for d in env_defs] == ["test", "uat", "prod"]
-    assert env_defs[0]["role"] == "test" and env_defs[2]["role"] == "prod"
-    assert env_defs[1]["isolation"] == "strict" and env_defs[2]["isolation"] == "strict"
+    assert [d["name"] for d in env_defs] == ["local", "test", "dev", "prod"]
+    assert env_defs[0]["role"] == "local" and env_defs[3]["role"] == "prod"
+    assert env_defs[0]["isolation"] == "relaxed" and env_defs[3]["isolation"] == "strict"
+    assert env_defs[2]["isolation"] == "relaxed"  # dev relaxed
     # load_config_readonly 会把 "off" 规范化为 False；行为级校验看 ts_load()。
     assert cfg["tools"]["tool_search"]["enabled"] in ("off", False)
 
@@ -137,7 +145,8 @@ def test_init_idempotent_and_force(tmp_path, entry):
     proc = _run_init(root, "--no-alias", "--force", entry=entry)
     assert proc.returncode == 0
     assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
-    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 1
+    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 3
+    assert (home / "hosts" / "node1.yaml").is_file()
     # --force 重铺样例但不删除用户自建文件（mine.yaml 保留）。
     assert set(p.stem for p in runbooks_dir.glob("*.yaml")) >= set(SAMPLE_RUNBOOK_NAMES)
     assert (runbooks_dir / "mine.yaml").is_file()
@@ -164,25 +173,25 @@ def test_env_flag_sets_permissions(tmp_path, monkeypatch, entry):
     proc = _run_init(root, "--no-alias", "--env", "prod", entry=entry)
     assert proc.returncode == 0
     home = root / "profiles" / "ops"
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     perms = _load_permissions(home)
     assert perms["env"] == "prod" and perms["role"] == "prod"
 
 
-def test_env_flag_custom_env_defines_environments(tmp_path, monkeypatch):
-    """--env bare_metal_prod：自定义环境名生成配置成功，且矩阵按 role=prod 判定。
+def test_env_flag_custom_env_maps_to_tier(tmp_path, monkeypatch):
+    """--env bare_metal_prod：老自定义名按档位映射到 prod（OPS-DELTA #42）。
 
-    自定义名不再被 argparse choices 锁死（OPS-DELTA #11）；自动追加定义到
-    ops.environments（isolation/role 推导，可在 config.yaml 调整）。
+    写入端只产四值枚举：不再追加自定义定义；ops.permissions.env 落映射后的
+    prod 档，role=prod，权限矩阵按 prod 档判定（L3 拒绝 / L2 审批）。
     """
     root = tmp_path / "hermes-root"
     proc = _run_init(root, "--no-alias", "--env", "bare_metal_prod", entry="module")
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "映射" in proc.stdout + proc.stderr           # 映射打一次警告（提示）
     home = root / "profiles" / "ops"
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     perms = _load_permissions(home)
-    assert perms["env"] == "bare_metal_prod"
-    # 生成配置里 role 跟随环境定义（prod），不是环境名本身
+    assert perms["env"] == "prod"                        # 映射后的档位，不是原名
     assert perms["role"] == "prod"
 
     hc._LOAD_CONFIG_CACHE.clear()
@@ -191,15 +200,30 @@ def test_env_flag_custom_env_defines_environments(tmp_path, monkeypatch):
     finally:
         hc._LOAD_CONFIG_CACHE.clear()
     env_defs = cfg["ops"]["environments"]
-    names = [d["name"] for d in env_defs]
-    assert names == ["test", "uat", "prod", "bare_metal_prod"]
-    bmp = next(d for d in env_defs if d["name"] == "bare_metal_prod")
-    assert bmp["role"] == "prod" and bmp["isolation"] == "strict"
+    assert [d["name"] for d in env_defs] == ["local", "test", "dev", "prod"]
+    prod = next(d for d in env_defs if d["name"] == "prod")
+    assert prod["role"] == "prod" and prod["isolation"] == "strict"
 
-    # 权限矩阵按自定义 env 名判定：bare_metal_prod → prod 档（L3 拒绝 / L2 审批）
+    # 权限矩阵按映射后的档位判定（bare_metal_prod → prod 档）。
     assert check_ops_command_permission("rm -rf /var/log")["action"] == "deny"
-    assert check_ops_command_permission("rm -rf /var/log")["env"] == "bare_metal_prod"
     assert check_ops_command_permission("systemctl restart myapp")["action"] == "approve"
+
+
+def test_env_flag_legacy_uat_maps_prod_tier(tmp_path, monkeypatch):
+    """--env uat：老自定义名 → prod 档（更严不更松），写入端只产四值。"""
+    root = tmp_path / "hermes-root"
+    proc = _run_init(root, "--no-alias", "--env", "uat", entry="module")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "映射" in proc.stdout + proc.stderr
+    home = root / "profiles" / "ops"
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    perms = _load_permissions(home)
+    assert perms["env"] == "prod" and perms["role"] == "prod"
+    # 权限判定 = prod 档语义（L3 deny / L2 approve / 变更确认门）。
+    deny = check_ops_command_permission("rm -rf /var/log")
+    assert deny["action"] == "deny" and deny["env_tier"] == "prod"
+    approve = check_ops_command_permission("systemctl restart myapp")
+    assert approve["action"] == "approve" and approve["env_tier"] == "prod"
 
 
 def test_env_flag_invalid_name_errors_listing_available(tmp_path):
@@ -214,7 +238,8 @@ def test_env_flag_invalid_name_errors_listing_available(tmp_path):
 def test_seeded_profile_renders_topo_and_queries(ops_home):
     block = render_topo_block(ops_home)
     assert block.startswith("## TOPO — 平台拓扑总览")
-    assert "harbor" in block
+    # v0.2：第一层只注入 hosts + cross_host（服务在第二层，不进 system prompt）。
+    assert "node1" in block and "k3s-prod" in block and "test-host" in block
     assert "ingress → gateway-svc → order-db" in block
     assert "执行任何运维操作前" in block
 
@@ -228,6 +253,10 @@ def test_seeded_profile_renders_topo_and_queries(ops_home):
     dbs = json.loads(topo_query(entity_type="db", env="prod"))
     assert {e["name"] for e in dbs["entities"]} == {"order-db", "postgres"}
 
+    node1 = json.loads(topo_query(host="node1"))
+    assert node1["name"] == "node1"
+    assert {s["name"] for s in node1["services"]} == {"harbor", "argocd", "order-db", "postgres"}
+
 
 def test_topo_update_test_entity_writes_source_agent(ops_home):
     result = json.loads(
@@ -237,7 +266,10 @@ def test_topo_update_test_entity_writes_source_agent(ops_home):
     assert result["env"] == "test"
     assert result["last_verified"] == _dt.date.today().isoformat()
 
-    data = yaml.safe_load((ops_home / "entities" / "test-web.yaml").read_text(encoding="utf-8"))
+    # L3 命名：entities/{cluster}__{host}__{name}.yaml（test-host cluster=default）。
+    data = yaml.safe_load(
+        (ops_home / "entities" / "default__test-host__test-web.yaml").read_text(encoding="utf-8")
+    )
     assert data["source"] == "agent"
     assert data["status"] == "degraded"
     assert data["last_verified"] == _dt.date.today().isoformat()
@@ -252,8 +284,45 @@ def test_sample_topology_stays_valid_and_under_50_lines():
     lines = (SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8").splitlines()
     assert len(lines) < 50, "第一层注入 system prompt，必须保持 <50 行"
     data = yaml.safe_load("\n".join(lines))
-    assert data["version"] == 1
-    assert {e["name"] for e in data["core_entities"]} == set(SAMPLE_ENTITY_NAMES)
-    for ent in data["core_entities"]:
+    # v0.3 三层：clusters + hosts + cross_host（第一层）+ hosts/ 服务索引（第二层）
+    # → 扁平实体集 == entities/ 第三层档案集（样例完整性契约）。
+    assert data["version"] == 3
+    hosts = data["hosts"]
+    cross_host = data["cross_host"]
+    assert {h["name"] for h in hosts} == {"node1", "node2", "test-host"}
+    assert {c["name"] for c in cross_host} == {"k3s-prod", "ingress"}
+    clusters = data.get("clusters") or []
+    assert {c["name"] for c in clusters} == {"k3s-prod"}
+    assert all(c["env"] in ("local", "test", "dev", "prod") for c in clusters)
+    assert {e["name"] for e in data["environments"]} == {"local", "test", "dev", "prod"}
+    for host in hosts:
+        assert (SAMPLE_DIR / host["services_index"]).is_file(), \
+            f"services_index 指向缺失: {host['services_index']}"
+    flat = {h["name"] for h in hosts} | {c["name"] for c in cross_host}
+    detail_entities = {c["name"] for c in cross_host}
+    for host in hosts:
+        index = yaml.safe_load(
+            (SAMPLE_DIR / host["services_index"]).read_text(encoding="utf-8")
+        )
+        flat |= {s["name"] for s in index["services"]}
+        detail_entities |= {s["name"] for s in index["services"]}
+        # cluster 三层贯通：hosts 行 cluster == 服务索引头 cluster。
+        host_cluster = host.get("cluster") or "default"
+        assert index.get("cluster") == host_cluster
+        # L3 命名：实体文件 = entities/{cluster}__{host}__{name}.yaml。
+        host_profile = SAMPLE_DIR / "entities" / f"{host_cluster}__{host['name']}__{host['name']}.yaml"
+        if host_profile.is_file():
+            detail_entities.add(host["name"])
+        for svc in index["services"]:
+            assert (SAMPLE_DIR / svc["detail"]).is_file(), f"detail 指向缺失: {svc['detail']}"
+            svc_cluster = svc.get("cluster") or host_cluster
+            assert svc["detail"] == f"entities/{svc_cluster}__{host['name']}__{svc['name']}.yaml", \
+                f"L3 命名不符合规则: {svc['detail']}"
+    # L3 文件名 = {cluster}__{host}__{name}.yaml：与扁平实体集按 name 部分比较。
+    sample_names = {stem.rsplit("__", 1)[-1] for stem in SAMPLE_ENTITY_NAMES}
+    assert flat >= sample_names
+    # 第三层档案集 = 有 detail 的实体（服务 + cross_host + 有档案的 host）。
+    assert detail_entities == sample_names
+    for ent in cross_host:
         assert (SAMPLE_DIR / ent["detail"]).is_file(), f"detail 指向缺失: {ent['detail']}"
     assert data["key_paths"] == [["ingress", "gateway-svc", "order-db"]]

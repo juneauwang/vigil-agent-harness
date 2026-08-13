@@ -7,7 +7,7 @@ default profile 数据根——ops-init 保留给老用户/自托管显式重建
 
 Creates the ``ops`` profile, writes the ops config (topo toolset + TOPO
 memory provider + permission matrix), and seeds the sample topology table
-(``topology.yaml`` + ``hosts/`` + ``entities/``, schema v0.2 三层模型：
+(``topology.yaml`` + ``hosts/`` + ``entities/``, schema v0.3 三层模型：
 第一层总览 + 第二层服务索引 + 第三层详情档案) and sample runbooks
 (``runbooks/``) into the profile's HERMES_HOME.
 
@@ -18,16 +18,16 @@ initialize the ops profile without a repo checkout. The legacy
 Usage:
     vigil ops-init [--root PATH] [--env NAME] [--force] [--no-alias]
 
-    --env 接受任意环境名：test/uat/prod 走内置三档；自定义名（物理环境×等级，
-    如 bare_metal_prod / local）自动追加到 ops.environments 定义（role 取
-    ``_test|_uat|_prod`` 尾缀，isolation 按角色推导，可随后在 config.yaml 调整）。
+    --env 接受四值 local/test/dev/prod；老自定义名（uat/staging/bare_metal_prod/...）
+    读取时按档位映射（uat→prod、staging→dev、其余按名字推导），映射打一次警告
+    不报错——权限语义不放松，uat→prod 只会更严。
 
 Files written (inside the Vigil root, default ``~/.vigil``; override with
 ``VIGIL_HOME`` / ``HERMES_HOME`` env or ``--root``):
     <root>/profiles/ops/config.yaml
     <root>/profiles/ops/topology.yaml
     <root>/profiles/ops/hosts/*.yaml
-    <root>/profiles/ops/entities/*.yaml
+    <root>/profiles/ops/entities/*.yaml      # L3 命名：entities/{cluster}__{host}__{name}.yaml
     <root>/profiles/ops/runbooks/*.yaml
 
 Idempotent: an existing profile / config.yaml / topology.yaml is left
@@ -71,8 +71,9 @@ tools:
 memory:
   provider: topo
 ops:
-  # 环境定义列表（OPS-DELTA #11）：名称任意，权限矩阵按 env 名查表，
-  # 行为由 isolation/role 决定（bare_metal_prod → role prod → prod 档）。
+  # 环境定义列表（OPS-DELTA #42）：四值枚举 local/test/dev/prod（local/test/dev
+  # relaxed、prod strict）。老自定义名（uat/staging/...）读取时按档位映射
+  # （uat→prod 档，权限只会更严不会更松），不追加自定义定义。
   # 这是 /env 命令的可用名单；topology.yaml 的 environments 段须与这里同源，
   # 不一致以 config 为准。
   environments:
@@ -110,32 +111,52 @@ def _latest_config_version() -> int:
 
 
 _DEFAULT_ENV_DEFS = [
+    {"name": "local", "isolation": "relaxed", "role": "local"},
     {"name": "test", "isolation": "relaxed", "role": "test"},
-    {"name": "uat", "isolation": "strict", "role": "uat"},
+    {"name": "dev", "isolation": "relaxed", "role": "dev"},
     {"name": "prod", "isolation": "strict", "role": "prod"},
 ]
 _ENV_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_ENV_TIERS = ("local", "test", "dev", "prod")
+_LEGACY_ENV_TIER_MAP = {"uat": "prod", "staging": "dev"}
+
+
+def _env_tier(env: str) -> str:
+    """环境名 → 四值档位（写入端映射，权限语义不放松）。
+
+    uat → prod 档、staging → dev 档；其余按名字推导（含 prod → prod、
+    尾缀 local/test/dev → 对应档、默认 dev）。读取端映射（带警告）在
+    tools/ops_permissions.py。
+    """
+    lower = str(env or "").strip().lower()
+    if lower in _ENV_TIERS:
+        return lower
+    if lower in _LEGACY_ENV_TIER_MAP:
+        return _LEGACY_ENV_TIER_MAP[lower]
+    if "prod" in lower:
+        return "prod"
+    if lower.endswith("local"):
+        return "local"
+    if lower.endswith("test"):
+        return "test"
+    if lower.endswith("dev"):
+        return "dev"
+    return "dev"
 
 
 def _resolve_env_defs(env: str) -> list[dict]:
-    """Built-in three tiers + (when requested) the custom env, derived.
+    """四值档位定义；老自定义名按档位映射（打一次警告，不报错——不打断老数据）。
 
-    真实运维环境是「物理环境 × 等级」组合（bare_metal_uat/prod、local、cloud），
-    名字锁死 test/uat/prod 表达不了。自定义名推导规则：
-      - role：``_<tier>`` 尾缀在 test/uat/prod 里则取尾缀（bare_metal_prod → prod），
-        否则以 env 名本身为 role（local → role local）；
-      - isolation：role 为 uat/prod → strict（跨环境操作需审批），否则 relaxed。
-    推导只是初始值，可随后在 config.yaml ops.environments 里调整。
+    环境枚举固定为 local/test/dev/prod（OPS-DELTA #42）：uat 移除、加 local/dev。
+    老自定义名（uat/staging/bare_metal_prod/...）读取时映射到最近档位——
+    uat → prod 档（权限只会更严不会更松）、staging → dev 档、其余按名字推导。
     """
-    defs = [dict(d) for d in _DEFAULT_ENV_DEFS]
-    if env not in {d["name"] for d in defs}:
-        tier = env.rsplit("_", 1)[-1]
-        role = tier if tier in ("test", "uat", "prod") else env
-        isolation = "strict" if role in ("uat", "prod") else "relaxed"
-        defs.append({"name": env, "isolation": isolation, "role": role})
-        print(f"· 自定义环境 {env} 已自动定义（isolation={isolation}, role={role}）；"
-              f"如需调整请在 config.yaml ops.environments 修改")
-    return defs
+    tier = _env_tier(env)
+    if tier != str(env or "").strip().lower():
+        print(f"· 提示：自定义环境 {env} 已映射到 {tier} 档"
+              f"（环境枚举现为 {'/'.join(_ENV_TIERS)}；权限语义不放松，"
+              f"uat→prod 只会更严）。如需调整请在 config.yaml ops.environments 修改")
+    return [dict(d) for d in _DEFAULT_ENV_DEFS]
 
 
 def _environments_yaml(env_defs: list[dict]) -> str:
@@ -152,11 +173,12 @@ def _write_config(profile_dir: Path, env: str, force: bool) -> bool:
         print(f"· config.yaml 已存在，跳过（--force 覆盖）：{path}")
         return False
     env_defs = _resolve_env_defs(env)
+    tier = _env_tier(env)
     role = next(
-        (d["role"] for d in env_defs if d["name"] == env), env
+        (d["role"] for d in env_defs if d["name"] == tier), tier
     )
     text = _CONFIG_TPL.format(
-        version=_latest_config_version(), env=env, role=role,
+        version=_latest_config_version(), env=tier, role=role,
         environments=_environments_yaml(env_defs),
     )
     path.write_text(text, encoding="utf-8")
@@ -252,10 +274,11 @@ def _warn_topology_env_sync(profile_dir: Path, env: str) -> None:
         str(e.get("name") or "").strip().lower()
         for e in (data.get("environments") or []) if isinstance(e, dict)
     }
-    if env.lower() not in topo_envs:
-        print(f"· 提示：当前环境 {env} 不在 {topo_path.name} 的 environments 段"
+    tier = _env_tier(env)
+    if tier not in topo_envs:
+        print(f"· 提示：当前环境档位 {tier} 不在 {topo_path.name} 的 environments 段"
               f"（{', '.join(sorted(topo_envs)) or '无'}）。权限矩阵按 config "
-              f"ops.environments 生效（以 config 为准）；如需拓扑展示该环境，请补定义")
+              f"ops.environments 生效（以 config 为准）；如需拓扑展示该档位，请补定义")
 
 
 def run(root: Path, env: str = "test", force: bool = False, no_alias: bool = False) -> int:
@@ -309,8 +332,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--env", default="test",
-        help="ops.permissions.env 初始环境（默认 test，安全默认；可为自定义名如 "
-             "bare_metal_prod，自动追加定义到 ops.environments）",
+        help="ops.permissions.env 初始环境（默认 test，安全默认；四值 "
+             "local/test/dev/prod；老自定义名如 uat/staging 按档位映射）",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -324,7 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     env = args.env.strip().lower() if args.env else ""
     if not env or not _ENV_NAME_RE.fullmatch(env):
         available = ", ".join(d["name"] for d in _DEFAULT_ENV_DEFS)
-        print(f"✗ 无效环境名 {args.env!r}：仅支持小写字母/数字/下划线/连字符（如 {available} 或自定义 bare_metal_prod）")
+        print(f"✗ 无效环境名 {args.env!r}：仅支持小写字母/数字/下划线/连字符"
+              f"（四值 {available}；老自定义名如 uat/staging 按档位映射，无需注册）")
         return 2
     return run(_resolve_root(args.root), env=env, force=args.force, no_alias=args.no_alias)
 

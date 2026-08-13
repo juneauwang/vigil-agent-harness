@@ -379,14 +379,10 @@ def _ddgs_package_importable() -> bool:
 def _web_requires_env() -> list[str]:
     """Return tool metadata env vars for the currently enabled web backends.
 
-    The gateway env vars are always reported — they're metadata strings
-    used by the tool registry to light up the tool when the variable is
-    set.  Gating them on ``managed_nous_tools_enabled()`` only saved
-    string noise in the metadata list, but cost a synchronous HTTP
-    refresh against the Nous portal on every CLI startup (invoked at
-    tool-registration time).  The behavioral contract is: if the env var
-    is set, the tool sees it; if not, it doesn't.  Not-logged-in users
-    simply don't have the vars set, so the extra entries are harmless.
+    Direct credentials only. The Nous tool-gateway env overrides
+    (FIRECRAWL_GATEWAY_URL / TOOL_GATEWAY_*) were dropped from the config
+    catalog (批次十三 D2) and are no longer advertised as tool requirements;
+    the gateway path still reads them internally when configured.
     """
     return [
         "EXA_API_KEY",
@@ -394,10 +390,6 @@ def _web_requires_env() -> list[str]:
         "TAVILY_API_KEY",
         "FIRECRAWL_API_KEY",
         "FIRECRAWL_API_URL",
-        "FIRECRAWL_GATEWAY_URL",
-        "TOOL_GATEWAY_DOMAIN",
-        "TOOL_GATEWAY_SCHEME",
-        "TOOL_GATEWAY_USER_TOKEN",
     ]
 
 

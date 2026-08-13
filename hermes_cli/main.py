@@ -424,6 +424,9 @@ from hermes_cli.subcommands._shared import add_accept_hooks_flag as _add_accept_
 from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
+from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
+from hermes_cli.subcommands.vssh import build_vssh_parser
+from hermes_cli.subcommands.watch import build_watch_parser
 from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.subcommands.profile import build_profile_parser
 from hermes_cli.subcommands.model import build_model_parser
@@ -1519,6 +1522,52 @@ def _read_tui_active_session_file(path: Optional[str]) -> Optional[str]:
         return None
 
 
+# E4: 已知模型的 $/Mtok 单价（input, cache_read, output）——只列已知单价，
+# 未知模型省略价格行。deepseek-v4 系列沿用 DeepSeek 公开定价结构，按需扩展。
+_MODEL_PRICE_PER_MTOK = {
+    "deepseek-v4-flash": (0.28, 0.028, 0.42),
+    "deepseek-v4-pro": (0.56, 0.056, 1.68),
+}
+
+
+def _match_model_price(model: Optional[str]) -> Optional[str]:
+    """模型名 → 价格表键（去 provider 前缀：deepseek/deepseek-v4-pro → deepseek-v4-pro）。"""
+    if not model:
+        return None
+    name = str(model).strip()
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    return name if name in _MODEL_PRICE_PER_MTOK else None
+
+
+def _estimate_session_cost_usd(model: Optional[str], input_tokens: int,
+                               output_tokens: int, cache_read_tokens: int) -> Optional[float]:
+    """会话 token 费用估算（$/Mtok）；模型未知 → None（省略价格行）。"""
+    key = _match_model_price(model)
+    if key is None:
+        return None
+    price_in, price_cache, price_out = _MODEL_PRICE_PER_MTOK[key]
+    return (input_tokens * price_in + cache_read_tokens * price_cache
+            + output_tokens * price_out) / 1_000_000
+
+
+def _format_session_token_line(total_tokens: int, input_tokens: int, output_tokens: int,
+                               cache_read_tokens: int, reasoning_tokens: int,
+                               *, model: Optional[str] = None,
+                               cost: Optional[float] = None) -> str:
+    """Token 行显示（E4）：``cache read A/B``（A=命中缓存数，B=总输入即命中率）+ 可选价格。"""
+    total_input = input_tokens + cache_read_tokens
+    line = (
+        f"Tokens:         {total_tokens} (in {input_tokens}, out {output_tokens}, "
+        f"cache read {cache_read_tokens}/{total_input}, reasoning {reasoning_tokens})"
+    )
+    if cost is None:
+        cost = _estimate_session_cost_usd(model, input_tokens, output_tokens, cache_read_tokens)
+    if cost is not None:
+        line += f"  (≈${cost:.2f})"
+    return line
+
+
 def _print_tui_exit_summary(
     session_id: Optional[str], active_session_file: Optional[str] = None
 ) -> None:
@@ -1572,11 +1621,10 @@ def _print_tui_exit_summary(
     if title:
         print(f"Title:          {title}")
     print(f"Messages:       {message_count}")
-    print(
-        "Tokens:         "
-        f"{total_tokens} (in {input_tokens}, out {output_tokens}, "
-        f"cache {cache_read_tokens + cache_write_tokens}, reasoning {reasoning_tokens})"
-    )
+    print(_format_session_token_line(
+        total_tokens, input_tokens, output_tokens, cache_read_tokens, reasoning_tokens,
+        model=session.get("model") or None,
+    ))
 
 
 _NPM_LOCK_RUNTIME_KEYS = frozenset({"ideallyInert", "peer"})
@@ -2690,8 +2738,10 @@ def cmd_chat(args):
             accept_hooks=getattr(args, "accept_hooks", False),
         )
 
-    # Import and run the CLI
+    # Import and run the CLI（import 即触发 CLI_CONFIG=load_cli_config() 等重加载）
+    _progress_hint("· 加载配置与模型…")
     from cli import main as cli_main
+    _progress_hint("· 启动就绪")
 
     # Build kwargs from args
     kwargs = {
@@ -4573,6 +4623,35 @@ def cmd_ops_init(args):
         *(["--force"] if args.force else []),
         *(["--no-alias"] if args.no_alias else []),
     ])
+
+
+def cmd_topo_discover(args):
+    """Guided topology discovery (SSH → docker/k8s/ports/GPU → v0.2 fragment)."""
+    from hermes_cli.topo_discover import main as topo_discover_main
+
+    return topo_discover_main([
+        "--host", args.host,
+        "--env", args.env,
+        *(("--user", args.user) if args.user else ()),
+        *(("--key", args.key) if args.key else ()),
+        *(["--dry-run"] if args.dry_run else []),
+        *(["--force"] if args.force else []),
+        *(["--yes"] if args.yes else []),
+    ])
+
+
+def cmd_watch(args):
+    """Vigil watch collector service management (systemd --user)."""
+    from hermes_cli.watch import watch_command
+
+    return watch_command(args)
+
+
+def cmd_vssh(args):
+    """常用运维命令：vault 安全凭据的交互 SSH（OPS-DELTA #26 产品化）。"""
+    from hermes_cli.subcommands.vssh import run as vssh_run
+
+    return vssh_run(args)
 
 
 def cmd_cron(args):
@@ -10735,6 +10814,27 @@ def _resolve_deferred_platform_cli_command(command_name: str | None) -> None:
         )
 
 
+# E2 启动进度提示：轻量 print（不额外 IO），仅交互 tty + 非 CI + 非 oneshot 打印。
+# oneshot 模式 stdout 只允许最终回复（_run_and_exit_oneshot），故 main 会关掉开关。
+_STARTUP_PROGRESS = True
+
+
+def _startup_progress_enabled() -> bool:
+    """进度提示开关：交互 tty + 非 CI + 非 oneshot（管道/CI/脚本不打印）。"""
+    if not _STARTUP_PROGRESS or os.environ.get("CI"):
+        return False
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, OSError):
+        return False
+
+
+def _progress_hint(message: str) -> None:
+    """轻量启动进度提示（E2）：纯 print + flush，不做额外 IO，不阻断失败。"""
+    if _startup_progress_enabled():
+        print(message, flush=True)
+
+
 _AGENT_COMMANDS = {None, "chat", "acp", "rl"}
 _AGENT_SUBCOMMANDS = {
     "cron": ("cron_command", {"run", "tick"}),
@@ -10784,6 +10884,7 @@ def _prepare_agent_startup(args) -> None:
         return
 
     _accept_hooks = bool(getattr(args, "accept_hooks", False))
+    _progress_hint("· 加载插件与工具…")
     try:
         from hermes_cli.plugins import discover_plugins
 
@@ -10793,6 +10894,7 @@ def _prepare_agent_startup(args) -> None:
             "plugin discovery failed at CLI startup",
             exc_info=True,
         )
+    _progress_hint("· 插件与工具加载完成")
     _run_inline_mcp_discovery = True
     if _is_tui_chat_launch(args):
         # The TUI launcher hands off to a dedicated startup path that already
@@ -12412,6 +12514,13 @@ def main():
     build_ops_init_parser(subparsers, cmd_ops_init=cmd_ops_init)
 
     # =========================================================================
+    # topo-discover command  (parser built in hermes_cli/subcommands/topo_discover.py)
+    # =========================================================================
+    build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
+    build_vssh_parser(subparsers, cmd_vssh=cmd_vssh)
+    build_watch_parser(subparsers, cmd_watch=cmd_watch)
+
+    # =========================================================================
     # completion command
     # =========================================================================
     completion_parser = subparsers.add_parser(
@@ -12522,6 +12631,17 @@ def main():
     else:
         subparsers.required = False
         args = parser.parse_args(_processed_argv)
+
+    # E1: --help-all → 未分组全量 help（继承命令也完整列出）。
+    if getattr(args, "help_all", False):
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        parser.print_help()
+        return
+
+    # E2: oneshot stdout 只允许最终回复 → 关闭启动进度提示。
+    if getattr(args, "oneshot", None):
+        global _STARTUP_PROGRESS
+        _STARTUP_PROGRESS = False
 
     # Handle --version flag
     if args.version:

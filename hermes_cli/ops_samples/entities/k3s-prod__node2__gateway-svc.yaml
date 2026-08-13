@@ -1,0 +1,11 @@
+# gateway-svc —— 订单链路业务网关（样例值请按实际核对）。
+name: gateway-svc
+type: gateway
+env: prod
+cluster: k3s-prod
+attrs:
+  # 端口/副本数待核对
+depends_on: [order-db, argocd]
+depended_by: [ingress]
+ops:
+  healthcheck: "curl -sf http://127.0.0.1:8080/healthz"   # 端口待核对

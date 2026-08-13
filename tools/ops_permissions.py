@@ -8,11 +8,12 @@
 - ``approve`` 表示需要审批：复用现有 dangerous-command 审批流程。
 - 命令不在任何等级 → 返回 None，交回原有检查（等效执行）。
 
-环境是可自定义列表（OPS-DELTA #11）：名称任意（test/uat/prod 只是内置默认），
-矩阵行为由定义里的 ``role`` 决定——``bare_metal_prod`` 定义 ``role: prod`` 就按
-prod 档判定，不依赖名字是 test/uat/prod。未定义的环境不做矩阵判定（交回原有
-检查），避免对未知环境误判。config 的 ``ops.environments`` 是权威来源，拓扑
-topology.yaml 的 environments 段不一致时以 config 为准。
+环境枚举固定为 local/test/dev/prod 四值（OPS-DELTA #42）。老自定义名
+（uat/staging/bare_metal_prod/...）读取时按档位映射、不报错：uat→prod 档、
+staging→dev 档、其余按环境定义 isolation（strict→prod、relaxed→dev）或名字
+推导——映射只打一次警告，权限语义不放松（uat→prod 只会更严不会更松）。
+config 的 ``ops.environments`` 是 /env 的权威名单（老自定义名映射为档位），
+拓扑 topology.yaml 的 environments 段不一致时以 config 为准。
 
 矩阵默认启用（OPS-DELTA #1）：``ops.permissions.enabled`` 缺省视为 true（显式
 ``false`` 仍可关闭，向后兼容），env 缺省读 config 的 ``ops.permissions.env``——
@@ -22,12 +23,12 @@ topology.yaml 的 environments 段不一致时以 config 为准。
 
 配置（config.yaml，ops 块）:
     ops:
-      environments:            # 可选：环境定义列表（不写则用内置 test/uat/prod）
+      environments:            # 可选：环境定义列表（不写则用内置四值 local/test/dev/prod）
         - {name: test, isolation: relaxed, role: test}
-        - {name: bare_metal_prod, isolation: strict, role: prod}
+        - {name: bare_metal_prod, isolation: strict, role: prod}   # 老自定义名 → 映射 prod 档
       permissions:
         enabled: true          # 缺省默认启用（OPS-DELTA #1）；显式 false 才关闭
-        env: test              # 当前操作环境（/env 切换，须在 environments 已定义列表；未配置则矩阵惰性）
+        env: test              # 当前操作环境（/env 切换，四值 local/test/dev/prod；老名按档位映射）
         role: test             # 会话角色（默认同 env，审计展示用）
         grades:                # 可选：覆盖内置分级正则（不写则用内置表）
           L1: [...]
@@ -36,7 +37,6 @@ topology.yaml 的 environments 段不一致时以 config 为准。
           L4: [...]
         matrix:                # 可选：按 env 名覆盖内置矩阵（不写则用内置矩阵）
           test: {L1: execute, L2: execute, L3: execute, L4: execute}
-          uat:  {L1: execute, L2: execute, L3: approve, L4: deny}
           prod: {L1: execute, L2: approve, L3: deny, L4: deny}
 """
 
@@ -105,22 +105,32 @@ _DEFAULT_GRADES: Dict[str, List[str]] = {
     ],
 }
 
-# 内置矩阵：等级 × 角色档 → execute / approve / deny（ops-agent-harness.md §3）。
-# env 名任意；矩阵行按环境的 role 落点（bare_metal_prod → role prod → prod 行）。
+# 内置矩阵：等级 × 档位 → execute / approve / deny（ops-agent-harness.md §3）。
+# 四值枚举 local/test/dev/prod（OPS-DELTA #42）：local/test/dev relaxed 全放行，
+# prod strict（L2 审批 / L3、L4 拒绝）。老 uat 行已删除——legacy uat 经档位
+# 映射到 prod 行（更严不更松），不再有独立的 uat 档。
 _DEFAULT_MATRIX: Dict[str, Dict[str, str]] = {
-    "test": {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
-    "uat":  {"L1": "execute", "L2": "execute", "L3": "approve", "L4": "deny"},
-    "prod": {"L1": "execute", "L2": "approve", "L3": "deny", "L4": "deny"},
+    "local": {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
+    "test":  {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
+    "dev":   {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
+    "prod":  {"L1": "execute", "L2": "approve", "L3": "deny", "L4": "deny"},
 }
 
 # 内置环境定义（config 未写 ops.environments 时的兜底，与 _CONFIG_TPL 生成一致）。
 # isolation 语义沿用 topology/ops-agent-harness.md：strict = 跨环境操作需审批，
-# relaxed = 自用放行；矩阵行为由 role 决定，isolation 为声明性展示字段。
+# relaxed = 自用放行；矩阵行为由档位决定，isolation 为声明性展示字段。
 _DEFAULT_ENVIRONMENTS: List[Dict[str, str]] = [
+    {"name": "local", "isolation": "relaxed", "role": "local"},
     {"name": "test", "isolation": "relaxed", "role": "test"},
-    {"name": "uat", "isolation": "strict", "role": "uat"},
+    {"name": "dev", "isolation": "relaxed", "role": "dev"},
     {"name": "prod", "isolation": "strict", "role": "prod"},
 ]
+
+# 环境四值枚举 + 老自定义名档位映射（OPS-DELTA #42）。
+_ENV_TIERS: tuple = ("local", "test", "dev", "prod")
+_LEGACY_ENV_TIER_MAP: Dict[str, str] = {"uat": "prod", "staging": "dev"}
+# 每个 legacy 名只警告一次（读取兼容：警告不阻断，老数据必须可读）。
+_WARNED_ENVS: set = set()
 
 # L1 例外：出现这些片段就不能算纯查询。
 _L1_EXCLUSIONS = [
@@ -132,6 +142,20 @@ _L1_EXCLUSIONS = [
     r"\becho\b.*\s>\s*[/~.]",
 ]
 _L1_EXCLUSIONS_COMPILED = [re.compile(p, re.IGNORECASE) for p in _L1_EXCLUSIONS]
+
+# 变更类命令清单（OPS-DELTA #32 prod 变更强制确认门）：服务重启 / 容器重建 /
+# 配置下发类。env=prod 时命中即 require_confirmation（approve 决策强制走人工
+# 确认门）；非 prod 档不触发（现状不变）。宁可多列——漏列的代价是 prod 变更
+# 无确认执行，多列的代价只是 prod 变更命令多一次人工确认。
+_CHANGE_COMMAND_RE = re.compile(
+    r"\bansible-playbook\b"
+    r"|\bkubectl\s+(?:apply|delete|edit|scale|rollout|drain|cordon)\b"
+    r"|\bdocker\s+compose\s+(?:up|restart|rm|down)\b"
+    r"|\bdocker\s+(?:restart|rm|stop)\b"
+    r"|\bsystemctl\s+(?:restart|stop)\b"
+    r"|\bhelm\s+(?:upgrade|install|uninstall)\b",
+    re.IGNORECASE,
+)
 
 
 def _load_config() -> Dict[str, Any]:
@@ -154,19 +178,90 @@ def _load_ops_config() -> Dict[str, Any]:
 
 
 def defined_environments(ops_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """已定义环境列表（ops.environments）；config 未定义时回退内置 test/uat/prod。
+    """已定义环境列表：四值档位 local/test/dev/prod（OPS-DELTA #42）。
 
-    这是 /env 命令与权限矩阵共用的权威名单：config 为准（拓扑 topology.yaml 的
-    environments 段不一致时以 config 为准），未定义环境不做矩阵判定。
+    这是 /env 命令与权限矩阵共用的权威名单：config ops.environments 里的
+    老自定义名（uat/staging/...）读取时按档位映射（打一次警告，不阻断），
+    映射后的档位为准——权限语义不放松（uat→prod 只会更严）。config 未定义
+    时回退内置四值。
     """
     ops = ops_config if ops_config is not None else _load_ops_config()
     envs = ops.get("environments") or []
     if not isinstance(envs, list) or not envs:
         return [dict(e) for e in _DEFAULT_ENVIRONMENTS]
-    return [
-        e for e in envs
-        if isinstance(e, dict) and str(e.get("name") or "").strip()
+    seen: Dict[str, Dict[str, Any]] = {}
+    for e in envs:
+        if not isinstance(e, dict):
+            continue
+        raw_name = str(e.get("name") or "").strip()
+        if not raw_name:
+            continue
+        tier = _map_env_tier(raw_name, ops)
+        if tier in seen:
+            continue
+        if raw_name.lower() in _ENV_TIERS:
+            seen[tier] = dict(e)
+        else:
+            canonical = next(d for d in _DEFAULT_ENVIRONMENTS if d["name"] == tier)
+            seen[tier] = dict(canonical)
+    return [seen[t] for t in _ENV_TIERS if t in seen] or [
+        dict(e) for e in _DEFAULT_ENVIRONMENTS
     ]
+
+
+def _raw_env_definition(env: str, ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """按名（大小写不敏感）查 config ops.environments 的原始定义（未映射）。
+
+    供档位映射读取 isolation/role（老自定义名映射时保留声明的权限语义）。
+    """
+    ops = ops_config if ops_config is not None else _load_ops_config()
+    envs = ops.get("environments") or []
+    if not isinstance(envs, list):
+        return None
+    for e in envs:
+        if isinstance(e, dict) and str(e.get("name") or "").strip().lower() == env:
+            return e
+    return None
+
+
+def _map_env_tier(env: str, ops_config: Optional[Dict[str, Any]] = None) -> str:
+    """env 名 → 四值档位（local/test/dev/prod）。
+
+    四值原样返回；老自定义名按档位映射：uat→prod、staging→dev；其余按
+    原始定义 isolation 推导（strict→prod、relaxed→dev，role 为四值时 role 优先），
+    无定义按名字推导（含 prod → prod、尾缀 local/test/dev → 对应档、默认 dev）。
+    映射只打一次警告（logger.warning），不阻断读取——老数据必须可读。
+    """
+    lower = str(env or "").strip().lower()
+    if lower in _ENV_TIERS:
+        return lower
+    mapped = _LEGACY_ENV_TIER_MAP.get(lower)
+    if mapped is None:
+        env_def = _raw_env_definition(lower, ops_config)
+        if env_def:
+            role = str(env_def.get("role") or "").strip().lower()
+            if role in _ENV_TIERS:
+                mapped = role
+            else:
+                isolation = str(env_def.get("isolation") or "").strip().lower()
+                mapped = "prod" if isolation == "strict" else "dev"
+        elif "prod" in lower:
+            mapped = "prod"
+        elif lower.endswith("local"):
+            mapped = "local"
+        elif lower.endswith("test"):
+            mapped = "test"
+        elif lower.endswith("dev"):
+            mapped = "dev"
+        else:
+            mapped = "dev"
+    if lower not in _WARNED_ENVS:
+        _WARNED_ENVS.add(lower)
+        logger.warning(
+            "ops_permissions: 环境 %r 不在枚举 %s 内，按档位映射为 %s（权限语义不放松）",
+            env, "/".join(_ENV_TIERS), mapped,
+        )
+    return mapped
 
 
 def _env_definition(env: str, ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
@@ -189,10 +284,12 @@ def _matrix_row(config: Dict[str, Any], env: str,
                 ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, str]]:
     """env 名 → 有效矩阵行（深拷贝，返回 None 表示未声明 → 交回原有检查）。
 
-    查表顺序（名称任意，矩阵行为由 isolation/role 决定）：
+    查表顺序（四值枚举，矩阵行为由档位决定）：
       1. 用户 ``matrix`` 按 env 名覆盖（在默认行基础上合并，行为同旧版 setdefault+update）；
-      2. 已定义环境：按定义的 role 落点（bare_metal_prod → prod 行）；
-      3. 未定义环境（legacy 名）：按内置 test/uat/prod 名兜底。
+      2. 已定义环境：按定义的 role 落点（bare_metal_prod → role prod → prod 行）；
+      3. 老自定义名（uat/staging/...）按档位映射（_map_env_tier，打一次警告；
+         uat→prod 档，权限只会更严不会更松）；
+      4. 内置名兜底（兼容旧矩阵）。
     """
     user_matrix = config.get("matrix") or {}
     if isinstance(user_matrix.get(env), dict):
@@ -204,6 +301,11 @@ def _matrix_row(config: Dict[str, Any], env: str,
         row = dict(_DEFAULT_MATRIX.get(role, {}))
         if row:
             return row
+    # 老自定义名（uat/staging/...）→ 档位映射（打一次警告；uat→prod 更严不更松）。
+    tier = _map_env_tier(env, ops_config)
+    row = dict(_DEFAULT_MATRIX.get(tier, {}))
+    if row:
+        return row
     return dict(_DEFAULT_MATRIX.get(env, {})) or None
 
 
@@ -251,6 +353,18 @@ def _active_role() -> str:
     return str(config.get("role") or _active_env() or "").strip().lower()
 
 
+def _is_prod_env(env: str, ops_config: Optional[Dict[str, Any]] = None) -> bool:
+    """env 是否按 prod 档处理（决定 require_confirmation 门）。
+
+    与环境定义里的 role 对齐（bare_metal_prod → role prod → prod 档）；
+    未定义/老自定义名按档位映射（uat → prod 档，权限语义不放松）。
+    """
+    role = _env_role(env, ops_config)
+    if role:
+        return role == "prod"
+    return _map_env_tier(env, ops_config) == "prod"
+
+
 def check_ops_command_permission(command: str, target_env: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """Grade a terminal command and apply the environment matrix.
 
@@ -258,6 +372,14 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     先做命令目标解析（tools/ops_target.py），命中拓扑实体时传入该实体的 env；
     为 None 或未命中时用会话 env（现状不变）。目标 env 未在矩阵声明时同样返回
     None（交回原有检查），避免对未知环境误判。
+
+    OPS-DELTA #32：decision 增加 ``require_confirmation`` 字段——变更类命令
+    （服务重启/容器重建/配置下发，见 ``_CHANGE_COMMAND_RE``）在 env 按 prod 档
+    判定（含映射的 uat）时默认 true，approval.py 对 approve+require_confirmation
+    强制走人工确认门（yolo / smart-approval / 永久 allowlist 都不能绕过）。
+    L3/L4 的 deny 仍硬拒，优先级不变（deny > require_confirmation）；未分级的
+    变更类命令在 prod 档合成审批级判定（否则 ansible-playbook 这类未列入分级
+    的命令会漏网）。非 prod 档及非变更类命令行为与现状一致。
 
     Returns:
       None                         — gate disabled / env unknown / grade execute
@@ -281,28 +403,43 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         return None
 
     grade = classify_command(command)
-    if grade is None:
-        return None
+    ops_config = _load_ops_config()
+    row = _matrix_row(config, env, ops_config) if grade is not None else None
 
-    # env 名查表（名称任意，矩阵行为由 isolation/role 决定）；未声明环境返回
-    # None，交回原有检查，避免对未知环境误判。
-    row = _matrix_row(config, env, _load_ops_config())
-    if row is None:
-        return None
+    env_tier = _map_env_tier(env, ops_config)
+    is_prod = _is_prod_env(env, ops_config)
+    is_change_cmd = bool(_CHANGE_COMMAND_RE.search(command))
+    require_confirmation = bool(is_prod and is_change_cmd)
 
-    action = row.get(grade, "execute")
-    if action == "execute":
-        return None
+    if grade is not None and row is not None:
+        action = row.get(grade, "execute")
+        if action == "execute":
+            # 未命中审批/拒绝档：除非是 prod 变更类（强制确认门），否则交回
+            # 原有检查（现状）。
+            if not require_confirmation:
+                return None
+            action = "approve"
+    else:
+        # 未分级（ansible-playbook 等未列入 _DEFAULT_GRADES）或未声明环境：
+        # 仅 prod 变更类命令合成审批级判定（确认门）；其余交回原有检查。
+        if not require_confirmation:
+            return None
+        action = "approve"
+        grade = grade or "L2"
 
     description = (
         f"命令分级 {grade}（{_grade_examples(grade)}）在 {env} 环境的权限矩阵"
         f"判定为 {'需要审批' if action == 'approve' else '拒绝'}"
     )
+    if require_confirmation:
+        description = f"⚠ prod 变更确认门：{description}"
     return {
         "action": action,
         "grade": grade,
         "env": env,
+        "env_tier": env_tier,
         "role": _active_role(),
+        "require_confirmation": require_confirmation,
         "description": description,
     }
 

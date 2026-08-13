@@ -47,13 +47,14 @@ def build_topo_discover_parser(subparsers, *, cmd_topo_discover: Callable) -> No
         description=(
             "SSH 进主机扫描 docker compose / k8s / 监听端口 / GPU，自动生成 "
             "schema v0.2 拓扑片段（第一层 host 行 + 第二层服务索引 + 第三层详情草案）。"
-            "发现结果带 needs_review=true，人工确认后才落盘（--dry-run 只预览）。"
+            "本机 localhost/省略 host 直接本地执行，无需凭据；发现结果带 "
+            "needs_review=true，人工确认后才落盘（--dry-run 只预览）。"
             "短选项：-H/--host、-e/--env、-u/--user、-k/--key；-h 仍为帮助。"
         ),
     )
     topo_discover_parser.add_argument(
         "-H", "--host",
-        help="目标主机 IP/主机名；支持逗号列表与 [3-8] 区间展开",
+        help="目标主机 IP/主机名；支持逗号列表与 [3-8] 区间展开。省略或 localhost = 本机发现，无需凭据",
     )
     topo_discover_parser.add_argument(
         "--hosts",
@@ -65,7 +66,7 @@ def build_topo_discover_parser(subparsers, *, cmd_topo_discover: Callable) -> No
     )
     topo_discover_parser.add_argument(
         "-u", "--user", default=None,
-        help="SSH 用户（默认 root）",
+        help="SSH 用户（默认 root；本机发现忽略）",
     )
     topo_discover_parser.add_argument(
         "-k", "--key", default=None,

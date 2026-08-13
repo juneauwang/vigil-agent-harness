@@ -8,6 +8,7 @@
 用法：
     vigil topo-discover --host <ip> --env <env> [--user <u>] [--key <path>]
                         [--dry-run] [--force] [--yes]
+    vigil topo-discover --env local             # host 省略 = 本机发现（无需凭据）
 """
 
 from __future__ import annotations
@@ -92,6 +93,14 @@ def _read_hosts_file(path: str) -> List[str]:
         if line and not line.startswith("#"):
             hosts.append(line)
     return hosts
+
+
+_LOCAL_HOST_ALIASES = ("localhost", "127.0.0.1", "::1")
+
+
+def _is_local_host(host: str) -> bool:
+    """host 是否本机（localhost/127.0.0.1/::1）：本机发现不走 SSH、无需凭据。"""
+    return str(host or "").strip().lower() in _LOCAL_HOST_ALIASES
 
 
 def _prompt_credentials(host: str, user: str, key: Optional[str],
@@ -182,14 +191,15 @@ def _confirm(force: bool, yes: bool) -> bool:
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(
         prog="vigil topo-discover",
-        description="SSH 进主机自动发现 docker/k8s/端口/GPU，生成 schema v0.2 拓扑片段，确认后落盘。",
+        description="SSH 进主机自动发现 docker/k8s/端口/GPU（本机 localhost/省略 host 直接本地执行），生成 schema v0.2 拓扑片段，确认后落盘。",
     )
     parser.add_argument("-H", "--host", default=None,
-                        help="目标主机 IP/主机名；支持逗号列表与 [3-8] 区间展开")
+                        help="目标主机 IP/主机名；支持逗号列表与 [3-8] 区间展开。省略或 localhost = 本机发现，无需凭据")
     parser.add_argument("--hosts", default=None,
                         help="主机列表文件（每行一个 host，忽略空白行/注释）")
     parser.add_argument("-e", "--env", required=True, help="目标环境（test/uat/prod/自定义）")
-    parser.add_argument("-u", "--user", default=None, help="SSH 用户（默认 root）")
+    parser.add_argument("-u", "--user", default=None,
+                        help="SSH 用户（默认 root；本机发现忽略）")
     parser.add_argument("-k", "--key", default=None, help="SSH 私钥路径（默认走 ssh-agent）")
     parser.add_argument("--password", action="store_true",
                         help="交互提示输入 SSH 密码（不落 argv；凭据走安全注入）")
@@ -206,9 +216,6 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--yes", action="store_true", help="跳过交互确认（配合 --force 可非交互落盘）")
     args = parser.parse_args(argv)
 
-    if not args.host and not args.hosts:
-        parser.error("需要 --host/-H 或 --hosts")
-
     host_candidates: List[str] = []
     if args.host:
         host_candidates.append(args.host)
@@ -224,17 +231,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"✗ {exc}", file=sys.stderr)
         return 2
     if not hosts:
-        print("✗ 未解析到任何目标主机", file=sys.stderr)
-        return 2
+        if args.host or args.hosts:
+            print("✗ 未解析到任何目标主机", file=sys.stderr)
+            return 2
+        # 批次十三 C4：host 省略 → 本机发现（WSL/单机无 sshd 也能跑）。
+        hosts = ["localhost"]
 
     home = _active_home()
+    is_local = _is_local_host(hosts[0])
     user = args.user or "root"
 
     password: Optional[str] = None
     if args.password and args.password_stdin:
         print("✗ --password 与 --password-stdin 不能同时使用", file=sys.stderr)
         return 2
-    if args.password:
+    if is_local and (args.password or args.password_stdin):
+        print("· 本机发现（localhost）不走 SSH：--password/--password-stdin 忽略，无需凭据。")
+    elif args.password:
         password = getpass.getpass(
             f"SSH 密码（{user}@{hosts[0]}，仅本次使用，安全存储不回显）："
         )
@@ -249,7 +262,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         if not args.key:
             print("✗ --key-passphrase 需要配合 --key 使用", file=sys.stderr)
             return 2
-        key_passphrase = getpass.getpass("SSH 私钥 passphrase（安全存储不回显）：")
+        if is_local:
+            print("· 本机发现（localhost）不走 SSH：--key/--key-passphrase 忽略。")
+        else:
+            key_passphrase = getpass.getpass("SSH 私钥 passphrase（安全存储不回显）：")
 
     sudo_password: Optional[str] = None
     if args.sudo_password:
@@ -262,7 +278,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         credential_kwargs["key_passphrase"] = key_passphrase
     if sudo_password is not None:
         credential_kwargs["sudo_password"] = sudo_password
-    creds = _prompt_credentials(hosts[0], user, args.key, **credential_kwargs)
+    if is_local:
+        # 本机发现无需 SSH 凭据；sudo 密码仍收集（本地 sudo -S 注入）。
+        creds: Dict[str, Any] = {}
+        if sudo_password is not None:
+            vault_file = _store_password(hosts[0], sudo_password, "sudo")
+            creds["sudo_password_file"] = str(_make_askpass_script(vault_file))
+    else:
+        creds = _prompt_credentials(hosts[0], user, args.key, **credential_kwargs)
 
     successes: List[Dict[str, Any]] = []
     failures: List[Dict[str, Any]] = []
@@ -305,8 +328,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("\n· 已写入：")
     for path in written_paths:
         print(f"    {home / path}")
-    print("\n· 提示：发现结果带 needs_review=true，请核对后再纳入权威拓扑"
-          "（topo_update 或人工确认后置为 false）。")
+    print("\n· 提示：发现结果只是草案（全部 needs_review=true），未经确认不参与权限判定。"
+          "请按三步完成 review：")
+    print("    1. 查看：vigil topo query（或会话内 topo_query）查看全部待审实体（needs_review=true）")
+    print("    2. 确认：对每个实体用 topo_update 修正名称/类型/endpoint，确认无误后置 needs_review=false")
+    print("    3. 效果：全部确认后实体进入权威拓扑，runbook 可按其绑定")
     return 1 if write_failures else 0
 
 

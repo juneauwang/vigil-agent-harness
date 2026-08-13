@@ -1,0 +1,14 @@
+# harbor —— 第二层完整档案（topo_query detail=True 时加载）；样例值请按实际核对。
+name: harbor
+type: registry
+env: prod
+cluster: k3s-prod
+endpoint: "203.0.113.10:30443"
+attrs:
+  version: v2.11
+  storage: /data/harbor
+  admin: your-name
+depends_on: [postgres]
+depended_by: [k3s-prod]                   # 镜像被 k3s-prod 拉取
+ops:
+  healthcheck: "curl -s http://localhost/api/v2.0/health"

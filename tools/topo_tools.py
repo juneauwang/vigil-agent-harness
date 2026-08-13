@@ -1,27 +1,26 @@
 """Topology (CMDB) tools for the Ops Agent Harness.
 
-Implements the three-layer topology schema v0.2 from ``ops-agent-harness.md``
-§2.2 (OPS-DELTA #6):
+Implements the three-layer topology schema v0.2/v0.3 from
+``ops-agent-harness.md`` §2.2 (OPS-DELTA #6 / #42):
 
-  topology.yaml            — layer 1: environments + hosts + cross_host + key_paths
+  topology.yaml            — layer 1: environments + clusters + hosts + cross_host + key_paths
   hosts/<hostname>.yaml    — layer 2: per-host services index (one row per service)
-  entities/<name>.yaml     — layer 3: per-service full profile (loaded on demand)
+  entities/<...>.yaml      — layer 3: per-service full profile (loaded on demand)
 
-The first layer is the overview injected into the system prompt (constant
-token cost as the platform grows); layer 2 is the authoritative service index
-that topo_query expands; layer 3 is the on-demand detail archive.  Services
-keep an independent name + env — the permission matrix / runbook bindings by
-service name stay valid across the layering.
+Schema v0.3 (OPS-DELTA #42) adds: ``cluster`` (three layers + top-level
+``clusters:`` overview), fixed env enum ``local/test/dev/prod`` (legacy custom
+names map by tier on read), L3 entity naming ``entities/{cluster}__{host}__{name}.yaml``
+(cross-host name collisions), and ``credential`` references on host rows /
+``ssh`` sections on entities (type/ref/user/port only — no plaintext secrets).
 
-Schema v0.1 (flat ``core_entities``) remains readable: ``load_topology`` +
-``_all_core_entities`` transparently expand old data into the same flat
-entity view (compat path), so old topology.yaml files keep working without
-rewrites.
+Read-compat is a hard requirement: v0.1 (flat ``core_entities``), v0.2
+(hosts/cross_host, old ``entities/<name>.yaml`` paths) and v0.3 all load;
+old files are never rewritten.  Writes only produce v0.3.
 
-Files live under the active ``HERMES_HOME``.  Runtime state (CPU/pods/alerts)
+Files live under the active Vigil home.  Runtime state (CPU/pods/alerts)
 is deliberately NOT stored here — the table only keeps the desired state.
 
-Data contract (schema v0.2, v0.1 compat): see ops-agent-harness.md §2.2.
+Data contract (schema v0.2/v0.3, v0.1 compat): see ops-agent-harness.md §2.2.
 """
 
 from __future__ import annotations
@@ -57,11 +56,13 @@ _TOPLEVEL_UPDATE_FIELDS = frozenset(
 _DEFAULT_TOPO_SCHEMA = {
     "name": "topo_query",
     "description": (
-        "查询运维拓扑表（平台 CMDB 事实层，三层模型 v0.2）。"
-        "无参返回第一层总览（hosts + cross_host，紧凑）；host=<name> 展开该主机的"
-        "第二层服务索引；entity=<name> 跨层名解析（先服务名再 host/cross_host）；"
-        "type=/env= 过滤扁平视图；detail=True 时按需加载第三层完整档案"
-        "（依赖关系、健康检查等）。"
+        "查询运维拓扑表（平台 CMDB 事实层，三层模型 v0.3）。"
+        "无参返回第一层总览（clusters + hosts + cross_host，紧凑）；host=<name> "
+        "展开该主机的第二层服务索引；entity=<name> 跨层名解析（先服务名再 "
+        "host/cross_host）；type=/env=/cluster= 过滤扁平视图（cluster 缺省 "
+        "显示 default）；detail=True 时按需加载第三层完整档案（依赖关系、健康检查、"
+        "ssh 连接引用等）。host 行的 credential 引用（type/ref/user/port）随行返回，"
+        "port 缺省 22，密码明文不落拓扑。"
         "执行任何运维操作前，先用本工具确认目标实体在拓扑表中的身份和环境；"
         "跨环境操作默认拒绝。"
     ),
@@ -70,7 +71,7 @@ _DEFAULT_TOPO_SCHEMA = {
         "properties": {
             "entity": {
                 "type": "string",
-                "description": "实体名（如 harbor）。省略时返回总览或按类型/环境过滤后的列表。",
+                "description": "实体名（如 harbor）。省略时返回总览或按类型/环境/集群过滤后的列表。",
             },
             "type": {
                 "type": "string",
@@ -78,11 +79,15 @@ _DEFAULT_TOPO_SCHEMA = {
             },
             "env": {
                 "type": "string",
-                "description": "按环境过滤（prod / test / uat ...）。",
+                "description": "按环境过滤（local / test / dev / prod 四值；老自定义名按档位映射）。",
+            },
+            "cluster": {
+                "type": "string",
+                "description": "按集群过滤（如 k3s-prod）；host 未标 cluster 时按 default 处理。",
             },
             "host": {
                 "type": "string",
-                "description": "按主机展开（v0.2）：返回该 host 及其第二层服务索引。",
+                "description": "按主机展开（v0.2/v0.3）：返回该 host 及其第二层服务索引。",
             },
             "detail": {
                 "type": "boolean",
@@ -129,10 +134,12 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
 _TOPO_DISCOVER_SCHEMA = {
     "name": "topo_discover",
     "description": (
-        "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU）并返回 schema v0.2 "
+        "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU）并返回 schema v0.3 "
         "片段。仅发现、不自动落盘（needs_review=true，dry_run 语义默认开启）；"
-        "确认后仍需通过人工流程或后续工具落盘。SSH 凭据走 ssh-agent/私钥或既有 "
-        "保险箱+askpass 注入，不接受明文密码参数。"
+        "发现结果只是草案，未经确认不参与权限判定——下一步用 topo_query 查看待审"
+        "实体、topo_update 逐条确认（修正名称/类型/endpoint 并置 needs_review=false）"
+        "后实体才进入权威拓扑。SSH 凭据走 ssh-agent/私钥或既有保险箱+askpass "
+        "注入，不接受明文密码参数。"
     ),
     "parameters": {
         "type": "object",
@@ -143,7 +150,11 @@ _TOPO_DISCOVER_SCHEMA = {
             },
             "env": {
                 "type": "string",
-                "description": "目标环境（test/uat/prod/自定义名）。",
+                "description": "目标环境（local/test/dev/prod 四值；老自定义名按档位映射）。",
+            },
+            "cluster": {
+                "type": "string",
+                "description": "集群名（可选）；缺省显示 default，实体文件名按 env 兜底。",
             },
             "user": {
                 "type": "string",
@@ -230,18 +241,18 @@ def load_topology(home: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     return _normalize(data)
 
 
-def _is_v2(topo: Dict[str, Any]) -> bool:
-    """Schema version discriminator: v0.2 (hosts/cross_host) vs v0.1 (flat core_entities).
+def _is_v2_or_v3(topo: Dict[str, Any]) -> bool:
+    """Schema version discriminator: v0.2/v0.3 (hosts/cross_host/clusters) vs v0.1.
 
-    ``version: 2`` wins; absent version falls back to shape detection so
-    hand-written files without the field still load as v0.2 when they use the
-    new layout.
+    ``version: 2`` or ``version: 3`` wins; absent version falls back to shape
+    detection (hosts/cross_host/clusters) so hand-written files without the
+    field still load as layered when they use the new layout.
     """
-    if topo.get("version") == 2:
+    if topo.get("version") in (2, 3):
         return True
     if "version" in topo:
         return False
-    return bool(topo.get("hosts") or topo.get("cross_host"))
+    return bool(topo.get("hosts") or topo.get("cross_host") or topo.get("clusters"))
 
 
 def _load_host_index(home: Path, host: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -289,12 +300,14 @@ def _all_services(topo: Dict[str, Any], home: Optional[Path] = None) -> List[Dic
         if index is None:
             continue
         host_env = host.get("env") or index.get("env") or ""
+        host_cluster = str(host.get("cluster") or index.get("cluster") or "default")
         for svc in index.get("services") or []:
             if not isinstance(svc, dict):
                 continue
             row = dict(svc)
             if not row.get("env"):
                 row["env"] = host_env
+            row.setdefault("cluster", host_cluster)
             row["_host"] = host.get("name", "")
             services.append(row)
     return services
@@ -311,7 +324,7 @@ def _all_core_entities(topo: Dict[str, Any], home: Optional[Path] = None) -> Lis
     The permission matrix / runbook bind by name+env — both views keep that
     contract (层级是组织方式不是命名空间).
     """
-    if not _is_v2(topo):
+    if not _is_v2_or_v3(topo):
         entities = list(topo.get("core_entities") or [])
         for env in topo.get("environments") or []:
             for name in env.get("core_entities") or []:
@@ -336,9 +349,10 @@ def topo_first_layer(topo: Dict[str, Any]) -> Dict[str, Any]:
     stay out of the injected block so token cost stays constant as the
     platform grows); v0.1 returns the flat core_entities (compat path).
     """
-    if _is_v2(topo):
+    if _is_v2_or_v3(topo):
         return {
             "environments": topo.get("environments") or [],
+            "clusters": [e for e in topo.get("clusters") or [] if isinstance(e, dict)],
             "hosts": [e for e in topo.get("hosts") or [] if isinstance(e, dict)],
             "cross_host": [e for e in topo.get("cross_host") or [] if isinstance(e, dict)],
             "key_paths": topo.get("key_paths") or [],
@@ -383,6 +397,7 @@ def _load_entity_file(home: Path, entity: Dict[str, Any]) -> Optional[Dict[str, 
         data = _normalize(data)
         data.setdefault("name", entity.get("name"))
         data.setdefault("env", entity.get("env"))
+        data.setdefault("cluster", str(entity.get("cluster") or "default"))
         data.setdefault("source", entity.get("source"))
         data.setdefault("last_verified", entity.get("last_verified"))
     return data
@@ -412,19 +427,21 @@ def topo_query(
     entity_type: Optional[str] = None,
     env: Optional[str] = None,
     host: Optional[str] = None,
+    cluster: Optional[str] = None,
     detail: bool = False,
     home: Optional[Path] = None,
 ) -> str:
     """Query the topology table. Returns a JSON string (tool contract).
 
-    OPS-DELTA #6 查询路径:
-      - 无参 → 第一层总览（紧凑：environments + hosts + cross_host）；
+    OPS-DELTA #6 / #42 查询路径:
+      - 无参 → 第一层总览（紧凑：environments + clusters + hosts + cross_host）；
       - ``host=<name>`` → 该 host + 其第二层服务索引；
       - ``entity=<name>`` → 跨层名解析：先第二层服务名，再第一层 host/cross_host
         （host 命中时附带其 services 列表）；
       - ``detail=True`` → 加载第三层完整档案；
-      - ``type=/env=`` → 扁平视图过滤（紧凑字段 name/type/env/endpoint/stale，
-        OPS-DELTA #30 方案 1：列表视图体积裁剪）。
+      - ``type=/env=/cluster=`` → 扁平视图过滤（紧凑字段 name/type/env/cluster/
+        endpoint/stale，OPS-DELTA #30 方案 1：列表视图体积裁剪；cluster 缺省
+        显示 "default"）。
     v0.1 数据（core_entities）走兼容路径，视图与现有行为一致。
     """
     home = home or _hermes_home()
@@ -446,41 +463,65 @@ def topo_query(
         entities = [e for e in entities if e.get("type") == entity_type]
     if env:
         entities = [e for e in entities if e.get("env") == env]
-    if not (entity_type or env):
+    if cluster:
+        entities = [e for e in entities if str(e.get("cluster") or "default") == cluster]
+    if not (entity_type or env or cluster):
         # 无参 → 第一层总览（紧凑）；v0.1 兼容：core_entities 扁平列表。
         return _overview(topo, home)
     rows = [_compact_row(e) for e in entities]
     return json.dumps({"count": len(rows), "entities": rows}, ensure_ascii=False, indent=2)
 
 
+def _with_cluster(entity: Dict[str, Any], cluster: str) -> Dict[str, Any]:
+    """服务行继承所属 host 的 cluster（host 查询返回时补全显示字段）。"""
+    entity.setdefault("cluster", cluster)
+    return entity
+
+
+def _credential_ref(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """凭据引用随行返回（LLM 可见）；port 缺省 22，返回时补齐。"""
+    cred = entity.get("credential")
+    if not isinstance(cred, dict):
+        return None
+    cred = dict(cred)
+    cred.setdefault("port", 22)
+    return cred
+
+
 def _compact_row(entity: Dict[str, Any]) -> Dict[str, Any]:
-    """Compact list-view row (OPS-DELTA #30 方案 1): name/type/env/endpoint/stale."""
-    return {
+    """Compact list-view row (OPS-DELTA #30 方案 1): name/type/env/cluster/endpoint/stale."""
+    row = {
         "name": entity.get("name", ""),
         "type": entity.get("type", ""),
         "env": entity.get("env", ""),
+        "cluster": str(entity.get("cluster") or "default"),
         "endpoint": entity.get("endpoint"),
         "stale": _stale_flag(entity.get("last_verified")),
     }
+    cred = _credential_ref(entity)
+    if cred is not None:
+        row["credential"] = cred
+    return row
 
 
 def _overview(topo: Dict[str, Any], home: Optional[Path] = None) -> str:
-    """First-layer overview (compact). v0.1 → core_entities list; v0.2 → hosts+cross_host."""
+    """First-layer overview (compact). v0.1 → core_entities list; v0.2/v0.3 → hosts+cross_host."""
     first = topo_first_layer(topo)
-    if _is_v2(topo):
+    if _is_v2_or_v3(topo):
         hosts = [_compact_row(h) for h in first["hosts"]]
         cross = [_compact_row(c) for c in first["cross_host"]]
         return json.dumps(
             {
-                "version": 2,
+                "version": int(topo.get("version") or 2),
                 "count": len(hosts) + len(cross) + len(_all_services(topo, home)),
                 "environments": first["environments"],
+                "clusters": first["clusters"],
                 "hosts": hosts,
                 "cross_host": cross,
                 "key_paths": first["key_paths"],
                 "note": (
                     "第一层总览（系统提示注入层，紧凑）。"
-                    "按 host=<name> 展开第二层服务索引；"
+                    "按 host=<name> 展开第二层服务索引；cluster=<name> 过滤；"
                     "entity=<name> 跨层解析；detail=True 进第三层详情。"
                 ),
             },
@@ -501,7 +542,7 @@ def _overview(topo: Dict[str, Any], home: Optional[Path] = None) -> str:
 
 def _query_host(topo: Dict[str, Any], home: Path, host: str, detail: bool) -> str:
     """Host query: layer-1 host row + its layer-2 services index."""
-    if not _is_v2(topo):
+    if not _is_v2_or_v3(topo):
         return tool_error(
             f"拓扑表是 schema v0.1（扁平 core_entities），无 host 概念；"
             f"请用 entity= 查询或迁移到 v0.2。"
@@ -511,9 +552,16 @@ def _query_host(topo: Dict[str, Any], home: Path, host: str, detail: bool) -> st
     if match is None:
         return tool_error(f"拓扑表中不存在 host: {host}")
     result = dict(match)
+    result.setdefault("cluster", "default")
+    cred = _credential_ref(result)
+    if cred is not None:
+        result["credential"] = cred
     result["_env_ref"] = _env_for_entity(topo, match)
     index = _load_host_index(home, match) or {}
-    result["services"] = [dict(s) for s in index.get("services") or [] if isinstance(s, dict)]
+    result["services"] = [
+        _with_cluster(dict(s), result["cluster"])
+        for s in index.get("services") or [] if isinstance(s, dict)
+    ]
     result["stale"] = _stale_flag(result.get("last_verified"))
     if detail:
         layer3 = _load_entity_file(home, match)
@@ -531,7 +579,7 @@ def _query_entity(topo: Dict[str, Any], home: Path, entity: str, detail: bool) -
     """
     matched_layer: str = ""
     match: Optional[Dict[str, Any]] = None
-    if _is_v2(topo):
+    if _is_v2_or_v3(topo):
         services = _all_services(topo, home)
         for svc in services:
             if svc.get("name") == entity:
@@ -554,10 +602,17 @@ def _query_entity(topo: Dict[str, Any], home: Path, entity: str, detail: bool) -
         return tool_error(f"拓扑表中不存在实体: {entity}")
 
     result = dict(match)
+    result.setdefault("cluster", "default")
+    cred = _credential_ref(result)
+    if cred is not None:
+        result["credential"] = cred
     result["_env_ref"] = _env_for_entity(topo, match)
     if matched_layer == "host":
         index = _load_host_index(home, match) or {}
-        result["services"] = [dict(s) for s in index.get("services") or [] if isinstance(s, dict)]
+        result["services"] = [
+            _with_cluster(dict(s), result["cluster"])
+            for s in index.get("services") or [] if isinstance(s, dict)
+        ]
     result["stale"] = _stale_flag(result.get("last_verified"))
     if detail:
         layer3 = _load_entity_file(home, match)
@@ -628,7 +683,9 @@ def topo_update(
         return tool_error(f"实体 {entity} 的 detail 路径非法（越界 HERMES_HOME）。")
 
     # PROD 变更 → 审批确认（钉在执行工具层，LLM 无法绕过）。
-    if env_name == "prod" or env_name.startswith("prod"):
+    # env 四值枚举 + 老自定义名按档位映射（uat → prod 档，权限语义不放松）。
+    from tools.topo_discovery import _env_tier
+    if _env_tier(env_name) == "prod":
         from tools.approval import request_tool_approval
         approval = request_tool_approval(
             "topo_update",
@@ -735,6 +792,7 @@ def _topology_data_exists(home: Optional[Path] = None) -> bool:
             data.get("core_entities")
             or data.get("hosts")
             or data.get("cross_host")
+            or data.get("clusters")
         )
     except Exception:
         return False
@@ -761,6 +819,7 @@ def _query_handler(args: Dict[str, Any], **kwargs) -> str:
         entity_type=args.get("type"),
         env=args.get("env"),
         host=args.get("host"),
+        cluster=args.get("cluster"),
         detail=bool(args.get("detail", False)),
     )
 
@@ -782,8 +841,14 @@ def _discover_handler(args: Dict[str, Any], **kwargs) -> str:
     creds: Dict[str, Any] = {"user": args.get("user") or "root"}
     if args.get("key"):
         creds["key_path"] = args.get("key")
-    discovery = discover_host(str(host), str(env), creds)
-    return json.dumps(discovery, ensure_ascii=False, default=str)
+    discovery = discover_host(str(host), str(env), creds, cluster=str(args.get("cluster") or ""))
+    pending = len(discovery.get("services") or [])
+    guide = (
+        f"发现完成：{pending} 个实体（全部 needs_review=true）。下一步："
+        "1) topo_query 查看待审实体；2) topo_update 逐条确认（修正名称/类型/"
+        "endpoint，置 needs_review=false）；3) 全部确认后告知用户，实体进入权威拓扑。"
+    )
+    return json.dumps({**discovery, "_guide": guide}, ensure_ascii=False, default=str)
 
 
 registry.register(

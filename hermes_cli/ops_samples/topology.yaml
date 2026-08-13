@@ -1,30 +1,24 @@
 # topology.yaml —— 第一层：平台拓扑总览（session 启动注入 system prompt，保持 <50 行）
-# 203.0.113.10 集群样例（schema v0.1，见 ops-agent-harness.md §2.2）；投入前请逐项核对。
-# 第二层完整档案在 entities/<name>.yaml，按需加载（topo_query detail=True）。
-version: 1
-updated_at: 2026-08-08
-sources: [terraform.tfstate, agent, manual]  # 实际同步源：tfstate（存在性/规格）+ agent（语义）+ 人工
+# schema v0.3（OPS-DELTA #42）：env 四值 local/test/dev/prod；cluster 三层贯通 + clusters 段；
+# L3 实体命名 entities/{cluster}__{host}__{name}.yaml；credential 只存引用不存密码明文，
+# 样例路径为占位符，投入前请替换。
+# 第一层 = 总览：clusters + hosts + cross_host；第二层 hosts/<hostname>.yaml；第三层 entities/。
+version: 3
+updated_at: 2026-08-13
+sources: [terraform.tfstate, agent, manual, discovered]
 environments:
-  - name: prod
-    entry: "ssh user@203.0.113.10"
-    isolation: strict                       # strict = 跨环境操作需审批
-    role: prod
-    core_entities: [harbor, k3s-prod, argocd, node1, node2]
-  - name: test
-    entry: "ssh test-jump"
-    isolation: relaxed
-    role: test
-    core_entities: [test-web]
-core_entities:
-  - {name: harbor, type: registry, env: prod, endpoint: "203.0.113.10:30443", owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/harbor.yaml}
-  - {name: k3s-prod, type: k8s, env: prod, endpoint: "https://203.0.113.10:6443", owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/k3s-prod.yaml}
-  - {name: argocd, type: service, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/argocd.yaml}
-  - {name: gateway-svc, type: gateway, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/gateway-svc.yaml}
-  - {name: order-db, type: db, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/order-db.yaml}
-  - {name: postgres, type: db, env: prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/postgres.yaml}
-  - {name: ingress, type: ingress, env: prod, owner: your-name, source: manual, last_verified: 2026-08-08, detail: entities/ingress.yaml}
-  - {name: node1, type: k8s-node, env: prod, role: control-plane, endpoint: "203.0.113.10", owner: your-name, source: agent, last_verified: 2026-08-08, detail: entities/node1.yaml}
-  - {name: node2, type: k8s-node, env: prod, role: worker, owner: your-name, source: agent, last_verified: 2026-08-08, detail: entities/node2.yaml}
-  - {name: test-web, type: service, env: test, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/test-web.yaml}
+  - {name: local, isolation: relaxed, role: local}
+  - {name: test, isolation: relaxed, role: test}
+  - {name: dev, isolation: relaxed, role: dev}
+  - {name: prod, isolation: strict, role: prod}
+clusters:
+  - {name: k3s-prod, env: prod, description: 生产 k3s 集群（阿里云 2 节点）, owner: your-name}
+hosts:
+  - {name: node1, env: prod, cluster: k3s-prod, endpoint: "203.0.113.10", role: control-plane, runtime: k3s, owner: your-name, source: agent, last_verified: 2026-08-08, services_index: hosts/node1.yaml, credential: {type: ssh_key, ref: "~/.vigil/keys/example-key.pem", user: root}}
+  - {name: node2, env: prod, cluster: k3s-prod, endpoint: "203.0.113.11", role: worker, runtime: k3s, owner: your-name, source: agent, last_verified: 2026-08-08, services_index: hosts/node2.yaml, credential: {type: ssh_key, ref: "~/.vigil/keys/example-key.pem", user: root}}
+  - {name: test-host, env: test, cluster: default, runtime: docker, owner: your-name, source: manual, last_verified: 2026-08-06, services_index: hosts/test-host.yaml}
+cross_host:
+  - {name: k3s-prod, type: k8s, env: prod, cluster: k3s-prod, endpoint: "https://203.0.113.10:6443", owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/k3s-prod__k3s-prod.yaml}
+  - {name: ingress, type: ingress, env: prod, cluster: k3s-prod, owner: your-name, source: manual, last_verified: 2026-08-08, detail: entities/k3s-prod__ingress.yaml}
 key_paths:
   - [ingress, gateway-svc, order-db]

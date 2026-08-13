@@ -62,7 +62,7 @@ def test_fresh_profile_data_present_tools_visible(tmp_path, monkeypatch):
     home = tmp_path / "hermes_home"
     home.mkdir()
     _seed_data(home)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
 
     names = _tool_names(home)
@@ -73,7 +73,7 @@ def test_fresh_profile_no_data_tools_hidden(tmp_path, monkeypatch):
     """全新空 profile（无数据、无 config）→ 工具隐藏（数据缺失门控）。"""
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
 
     names = _tool_names(home)
@@ -92,7 +92,7 @@ def test_explicit_disabled_hides_tools_even_with_data(tmp_path, monkeypatch):
         "  runbooks:\n    enabled: false\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
 
     names = _tool_names(home)

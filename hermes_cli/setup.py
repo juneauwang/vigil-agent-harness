@@ -360,34 +360,6 @@ def prompt_checklist(title: str, items: list, pre_selected: list = None) -> list
     return sorted(chosen)
 
 
-def _prompt_api_key(var: dict):
-    """Display a nicely formatted API key input screen for a single env var."""
-    tools = var.get("tools", [])
-    tools_str = ", ".join(tools[:3])
-    if len(tools) > 3:
-        tools_str += f", +{len(tools) - 3} more"
-
-    print()
-    print(color(f"  ─── {var.get('description', var['name'])} ───", Colors.CYAN))
-    print()
-    if tools_str:
-        print_info(f"  Enables: {tools_str}")
-    if var.get("url"):
-        print_info(f"  Get your key at: {var['url']}")
-    print()
-
-    if var.get("password"):
-        value = prompt(f"  {var.get('prompt', var['name'])}", password=True)
-    else:
-        value = prompt(f"  {var.get('prompt', var['name'])}")
-
-    if value:
-        save_env_value(var["name"], value)
-        print_success("  ✓ Saved")
-    else:
-        print_warning("  Skipped (configure later with 'vigil setup')")
-
-
 def _print_setup_summary(config: dict, hermes_home):
     """Print the setup completion summary (ops-focused tool surface)."""
     # Provider readiness — the one thing setup absolutely must produce.
@@ -3102,32 +3074,14 @@ def _run_quick_setup(config: dict, hermes_home):
                 print_warning(f"  Skipped {var['name']}")
 
     # Split missing optional vars by category
-    missing_tools = [v for v in missing_optional if v.get("category") == "tool"]
+    # 消费级工具（category=tool）不再在 setup 出现：运维用户直给默认就绪的
+    # 工具面（terminal/todo/skills/topo/runbook），想配 web/browser/voice 等
+    # 走 `vigil tools`（_DEFAULT_OFF_TOOLSETS 语义不变，见批次十二 D1）。
     missing_messaging = [
         v
         for v in missing_optional
         if v.get("category") == "messaging" and not v.get("advanced")
     ]
-
-    # ── Tool API keys (checklist) ──
-    if missing_tools:
-        print()
-        print_header("Tool API Keys")
-
-        checklist_labels = []
-        for var in missing_tools:
-            tools = var.get("tools", [])
-            tools_str = f" → {', '.join(tools[:2])}" if tools else ""
-            checklist_labels.append(f"{var.get('description', var['name'])}{tools_str}")
-
-        selected_indices = prompt_checklist(
-            "Which tools would you like to configure?",
-            checklist_labels,
-        )
-
-        for idx in selected_indices:
-            var = missing_tools[idx]
-            _prompt_api_key(var)
 
     # ── Messaging platforms (checklist then prompt for selected) ──
     if missing_messaging:

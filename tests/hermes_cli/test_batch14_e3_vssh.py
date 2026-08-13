@@ -1,0 +1,224 @@
+"""批次十四 E3 — ``vigil vssh`` 内置命令验收测试。
+
+覆盖：凭据引用解析（拓扑 credential → ssh_key/vault/askpass）；密码/passphrase
+经 SSH_ASKPASS 注入、明文不进 argv/env；port 缺省与 credential 覆盖；
+无凭据回退 ssh-agent/交互；``run()`` execvpe 执行 ssh。
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+from hermes_cli.subcommands import vssh as vssh_mod
+from hermes_cli.subcommands.vssh import (
+    _build_ssh_argv,
+    _resolve_topology_credential,
+    _split_hostspec,
+    run,
+)
+
+
+# ---------------------------------------------------------------------------
+# _build_ssh_argv
+# ---------------------------------------------------------------------------
+
+def test_build_argv_plain_no_credential():
+    """无凭据：纯 ssh argv（key 显式给 → -i），不注入 SSH_ASKPASS。"""
+    argv, env = _build_ssh_argv("h", user="root", key="/my/key")
+    assert argv == ["ssh", "-p", "22", "-i", "/my/key", "root@h"]
+    assert "SSH_ASKPASS" not in env
+
+
+def test_build_argv_ssh_key_credential():
+    """拓扑 ssh_key 引用 → -i 私钥路径（CLI key 优先于引用）。"""
+    argv, _ = _build_ssh_argv("db1", user="root",
+                              cred={"type": "ssh_key", "ref": "/keys/db.pem"})
+    assert argv == ["ssh", "-p", "22", "-i", "/keys/db.pem", "root@db1"]
+    argv, _ = _build_ssh_argv("db1", user="root", key="/cli/key",
+                              cred={"type": "ssh_key", "ref": "/keys/db.pem"})
+    assert argv == ["ssh", "-p", "22", "-i", "/cli/key", "root@db1"]
+
+
+def test_build_argv_vault_credential_injects_askpass_no_plaintext():
+    """vault 引用 → SSH_ASKPASS 脚本注入；凭据名/密码明文不进 argv/env。"""
+    argv, env = _build_ssh_argv("db1", user="ops",
+                                cred={"type": "vault", "ref": "db-pass"})
+    assert argv == ["ssh", "-p", "22", "ops@db1"]
+    assert env["SSH_ASKPASS_REQUIRE"] == "force"
+    assert env["SSH_ASKPASS"]
+    joined = " ".join(argv) + " " + " ".join(env.values())
+    assert "db-pass" not in joined
+    assert not any("db-pass" in v for v in env.values())
+
+
+def test_build_argv_vault_failure_falls_back(monkeypatch):
+    """vault 注入失败（askpass 构造异常）→ 回退无 SSH_ASKPASS 的普通 argv。"""
+    def boom(_path):
+        raise OSError("askpass write failed")
+    monkeypatch.setattr(vssh_mod, "_make_askpass_script", boom)
+    argv, env = _build_ssh_argv("db1", user="root",
+                                cred={"type": "vault", "ref": "db-pass"})
+    assert argv == ["ssh", "-p", "22", "root@db1"]
+    assert "SSH_ASKPASS" not in env
+
+
+def test_build_argv_askpass_credential():
+    """askpass 引用 → 直接作为 SSH_ASKPASS 脚本路径。"""
+    argv, env = _build_ssh_argv("h", user="root",
+                                cred={"type": "askpass", "ref": "/tmp/ask.sh"})
+    assert env["SSH_ASKPASS"] == "/tmp/ask.sh"
+    assert env["SSH_ASKPASS_REQUIRE"] == "force"
+    assert "root@h" in argv
+
+
+def test_build_argv_credential_port_overrides_default():
+    """credential 引用带 port → 覆盖 CLI 缺省 22。"""
+    argv, _ = _build_ssh_argv("h", user="root",
+                              cred={"type": "ssh_key", "ref": "/k", "port": 2222})
+    assert argv[2] == "2222"
+
+
+def test_build_argv_unknown_credential_type_ignored():
+    """未知 credential type → 忽略（不注入、不报错）。"""
+    argv, env = _build_ssh_argv("h", user="root",
+                                cred={"type": "bogus", "ref": "x"})
+    assert argv == ["ssh", "-p", "22", "root@h"]
+    assert "SSH_ASKPASS" not in env
+
+
+# ---------------------------------------------------------------------------
+# _split_hostspec
+# ---------------------------------------------------------------------------
+
+def test_split_hostspec():
+    assert _split_hostspec("alice@10.0.0.5") == ("alice", "10.0.0.5")
+    assert _split_hostspec("10.0.0.5") == ("root", "10.0.0.5")
+    # CLI -u 是缺省；hostspec 带 user@ 时优先。
+    assert _split_hostspec("alice@10.0.0.5", user="bob") == ("alice", "10.0.0.5")
+    assert _split_hostspec("10.0.0.5", user="bob") == ("bob", "10.0.0.5")
+    assert _split_hostspec("@10.0.0.5", user="ops") == ("ops", "10.0.0.5")
+
+
+# ---------------------------------------------------------------------------
+# _resolve_topology_credential
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def topo_home(tmp_path, monkeypatch):
+    (tmp_path / "topology.yaml").write_text(
+        "version: 3\n"
+        "hosts:\n"
+        "  - name: db1\n"
+        "    endpoint: 10.0.0.5\n"
+        "    credential:\n"
+        "      type: vault\n"
+        "      ref: db-pass\n"
+        "  - name: web1\n"
+        "    endpoint: 10.0.0.6\n"
+        "    credential:\n"
+        "      type: ssh_key\n"
+        "      ref: /keys/web.pem\n"
+        "  - name: plain\n"
+        "    endpoint: 10.0.0.7\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+    return tmp_path
+
+
+def test_resolve_topology_credential_by_name(topo_home):
+    assert _resolve_topology_credential("db1") == {"type": "vault", "ref": "db-pass"}
+    assert _resolve_topology_credential("web1") == {"type": "ssh_key", "ref": "/keys/web.pem"}
+
+
+def test_resolve_topology_credential_by_endpoint(topo_home):
+    assert _resolve_topology_credential("10.0.0.5") == {"type": "vault", "ref": "db-pass"}
+
+
+def test_resolve_topology_credential_missing(topo_home):
+    """无凭据引用 / 未知 host → None（回退 ssh-agent/交互）。"""
+    assert _resolve_topology_credential("plain") is None
+    assert _resolve_topology_credential("nope") is None
+
+
+def test_resolve_topology_credential_no_topology(tmp_path, monkeypatch):
+    """无拓扑文件 / 坏 YAML → None（不抛错）。"""
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+    assert _resolve_topology_credential("db1") is None
+    (tmp_path / "topology.yaml").write_text("{{{{ bad", encoding="utf-8")
+    assert _resolve_topology_credential("db1") is None
+
+
+# ---------------------------------------------------------------------------
+# run()
+# ---------------------------------------------------------------------------
+
+def test_run_execs_ssh_with_credential(monkeypatch, topo_home):
+    """带凭据 host：execvpe ssh，argv/env 无明文。"""
+    captured = {}
+
+    def fake_execvpe(name, argv, env):
+        captured["name"] = name
+        captured["argv"] = argv
+        captured["env"] = env
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execvpe", fake_execvpe)
+    args = SimpleNamespace(hostspec="db1", user=None, port=None, key=None,
+                           no_credential=False)
+    with pytest.raises(SystemExit):
+        run(args)
+    assert captured["name"] == "ssh"
+    assert captured["argv"][-1] == "root@db1"
+    assert captured["env"]["SSH_ASKPASS_REQUIRE"] == "force"
+    assert "db-pass" not in " ".join(captured["argv"])
+
+
+def test_run_no_credential_falls_back_to_agent(monkeypatch, topo_home):
+    """--no-credential：跳过拓扑读取，走 ssh-agent/交互（无 SSH_ASKPASS）。"""
+    captured = {}
+
+    def fake_execvpe(name, argv, env):
+        captured["argv"] = argv
+        captured["env"] = env
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execvpe", fake_execvpe)
+    args = SimpleNamespace(hostspec="db1", user=None, port=None, key=None,
+                           no_credential=True)
+    with pytest.raises(SystemExit):
+        run(args)
+    assert captured["argv"] == ["ssh", "-p", "22", "root@db1"]
+    assert "SSH_ASKPASS" not in captured["env"]
+
+
+def test_run_missing_hostspec_returns_2(capsys):
+    """缺 hostspec → 明确错误（exit 2），不执行 ssh。"""
+    assert run(SimpleNamespace(hostspec=None, user=None, port=None, key=None,
+                               no_credential=False)) == 2
+    assert "vssh 需要目标主机" in capsys.readouterr().err
+
+
+def test_vssh_subcommand_registered():
+    """``vigil vssh --help`` 可用：vssh 注册进顶层子命令，参数齐全。"""
+    proc = subprocess.run(
+        [sys.executable, "-m", "hermes_cli.main", "vssh", "--help"],
+        capture_output=True,
+        text=True,
+        cwd=str(REPO_ROOT),
+        timeout=180,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "常用运维命令第一块" in proc.stdout
+    assert "vault" in proc.stdout and "SSH_ASKPASS" in proc.stdout
+    assert "凭据引用" in proc.stdout and "无凭据回退 ssh-agent/交互" in proc.stdout
+    for flag in ("-p", "--port", "-i", "--key", "-u", "--user", "--no-credential"):
+        assert flag in proc.stdout

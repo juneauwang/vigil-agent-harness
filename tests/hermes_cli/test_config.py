@@ -67,6 +67,50 @@ class TestEnsureHermesHome:
 
 
 
+
+
+class TestEnsureHermesHomeFirstRunConfigTemplate:
+    """批次十二 D3：全新数据根首装即生成 config.yaml 模板（不覆盖、幂等）。"""
+
+    def test_fresh_home_writes_config_template_with_ops(self, tmp_path):
+        fresh = tmp_path / "vigil_fresh"
+        assert not fresh.exists()
+        with patch.dict(os.environ, {"VIGIL_HOME": str(fresh)}):
+            ensure_hermes_home()
+            config_path = fresh / "config.yaml"
+            assert config_path.exists()
+            data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            assert "ops" in data                       # 模板含 ops 段（批次七 #38 预置）
+            assert data["ops"]["environments"]
+            assert data["display"]["skin"] == "vigil"  # 模板显式 vigil 皮肤
+            assert config_path.read_text(encoding="utf-8").startswith("# 由 Vigil 首装生成")
+
+    def test_existing_config_never_overwritten(self, tmp_path):
+        home = tmp_path / "vigil_existing"
+        home.mkdir()
+        config_path = home / "config.yaml"
+        custom = "model:\n  default: my-custom-model\n"
+        config_path.write_text(custom, encoding="utf-8")
+        before = config_path.read_bytes()
+        with patch.dict(os.environ, {"VIGIL_HOME": str(home)}):
+            ensure_hermes_home()
+            assert config_path.read_bytes() == before  # 用户文件字节不变
+            assert "my-custom-model" in config_path.read_text(encoding="utf-8")
+
+    def test_ensure_twice_is_idempotent(self, tmp_path):
+        fresh = tmp_path / "vigil_idem"
+        with patch.dict(os.environ, {"VIGIL_HOME": str(fresh)}):
+            ensure_hermes_home()
+            config_path = fresh / "config.yaml"
+            first = config_path.read_bytes()
+            mtime = config_path.stat().st_mtime_ns
+            # 清掉进程内 memoization，强制完整重走 ensure 的目录骨架流程。
+            from hermes_cli import config as _cfg
+            _cfg._HERMES_HOME_ENSURED.discard(str(fresh))
+            ensure_hermes_home()
+            assert config_path.read_bytes() == first     # 内容不重复写
+            assert config_path.stat().st_mtime_ns == mtime
+
 class TestLoadConfigDefaults:
     def test_returns_defaults_when_no_file(self, tmp_path):
         with patch.dict(os.environ, {"VIGIL_HOME": str(tmp_path)}):
@@ -529,6 +573,32 @@ class TestOptionalEnvVarsRegistry:
         """
         from hermes_cli.config import OPTIONAL_ENV_VARS
         assert "HERMES_MAX_ITERATIONS" not in OPTIONAL_ENV_VARS
+
+    def test_nous_gateway_residual_keys_removed(self):
+        """批次十三 D2：NOUS_BASE_URL / FIRECRAWL_GATEWAY_URL / TOOL_GATEWAY_*
+        是 Nous 订阅残留，已从 OPTIONAL_ENV_VARS 删除（不出现在 setup/dashboard）。"""
+        from hermes_cli.config import OPTIONAL_ENV_VARS
+        for key in (
+            "NOUS_BASE_URL",
+            "FIRECRAWL_GATEWAY_URL",
+            "TOOL_GATEWAY_DOMAIN",
+            "TOOL_GATEWAY_SCHEME",
+            "TOOL_GATEWAY_USER_TOKEN",
+        ):
+            assert key not in OPTIONAL_ENV_VARS, f"{key} 不应出现在 OPTIONAL_ENV_VARS"
+
+    def test_gateway_env_keys_not_routed_as_env_config_keys(self):
+        """批次十三 D2：这些残留键不再被 `hermes config set/get` 特殊路由为 .env 键。"""
+        from hermes_cli.config import _is_env_config_key
+        for key in ("FIRECRAWL_GATEWAY_URL", "TOOL_GATEWAY_DOMAIN", "TOOL_GATEWAY_SCHEME"):
+            assert _is_env_config_key(key) is False, key
+
+    def test_web_tool_metadata_no_longer_advertises_gateway_envs(self):
+        """批次十三 D2：web 工具注册元数据不再把 Nous gateway env 列为需求。"""
+        from tools.web_tools import _web_requires_env
+        for key in ("FIRECRAWL_GATEWAY_URL", "TOOL_GATEWAY_DOMAIN",
+                    "TOOL_GATEWAY_SCHEME", "TOOL_GATEWAY_USER_TOKEN"):
+            assert key not in _web_requires_env(), key
 
 
 class TestMemoryProviderEnvVarsRegistry:

@@ -96,7 +96,7 @@ def test_discover_maps_services_ports_images():
     runner = _default_runner()
     d = discover_host("203.0.113.20", "prod", runner=runner)
 
-    assert d["version"] == 2
+    assert d["version"] == 3
     assert d["source"] == "discovered"
     assert d["needs_review"] is True
     assert d["last_verified"]
@@ -104,6 +104,7 @@ def test_discover_maps_services_ports_images():
     host = d["host"]
     assert host["name"] == "203.0.113.20"
     assert host["env"] == "prod"
+    assert host["cluster"] == "default"          # 未标 cluster → 显示 default
     assert host["endpoint"] == "203.0.113.20"
     assert host["runtime"] == "docker"
     assert host["source"] == "discovered"
@@ -125,10 +126,15 @@ def test_discover_maps_services_ports_images():
     assert "unidentified-22" not in names
     assert "unidentified-5432" not in names
 
-    # 第三层详情草案（detail 指向 entities/<name>.yaml）。
+    # 第三层详情草案：L3 命名 entities/{cluster}__{host}__{name}.yaml，
+    # cluster 空用 env 兜底（本用例无 cluster → prod__host__name）。
     assert d["details"]["harbor"]["name"] == "harbor"
     assert d["details"]["harbor"]["needs_review"] is True
-    assert names["harbor"]["detail"] == "entities/harbor.yaml"
+    assert d["details"]["harbor"]["cluster"] == "default"
+    assert names["harbor"]["detail"] == "entities/prod__203.0.113.20__harbor.yaml"
+    assert names["harbor"]["cluster"] == "default"
+    assert names["grafana"]["detail"] == "entities/prod__203.0.113.20__grafana.yaml"
+    assert names["unidentified-9090"]["detail"] == "entities/prod__203.0.113.20__unidentified-9090.yaml"
 
 
 def test_discover_credentials_never_in_output_or_command_strings():
@@ -141,6 +147,54 @@ def test_discover_credentials_never_in_output_or_command_strings():
     assert secret not in blob
     # 服务/详情数据也不含凭据字段。
     assert "password" not in json.dumps(d).lower()
+
+
+def test_entity_filename_no_collision_across_dimensions():
+    from tools.topo_discovery import _entity_filename
+
+    # 同 host 不同 app / 同 app 不同 host / 同 app 同 host 不同 cluster 全不冲突。
+    a = _entity_filename("k3s-prod", "node1", "postgres")
+    b = _entity_filename("k3s-prod", "node1", "harbor")
+    c = _entity_filename("k3s-prod", "node2", "postgres")
+    d = _entity_filename("k3s-a", "node1", "postgres")
+    assert len({a, b, c, d}) == 4
+    assert a == "entities/k3s-prod__node1__postgres.yaml"
+    # cluster 空 → env 兜底；都空 → default。
+    assert _entity_filename("", "node1", "postgres", "prod") == "entities/prod__node1__postgres.yaml"
+    assert _entity_filename("", "node1", "postgres", "") == "entities/default__node1__postgres.yaml"
+
+
+def test_entity_filename_sanitized_names_unambiguous():
+    from tools.topo_discovery import _entity_filename
+
+    # _sanitize_name 字符集（. _ -）保留；__ 分隔不歧义。
+    assert _entity_filename("prod", "node.a-1", "my_app-v2") == "entities/prod__node.a-1__my_app-v2.yaml"
+    assert _entity_filename("Prod Cluster", "Node.1", "PostgreSQL") == "entities/prod-cluster__node.1__postgresql.yaml"
+
+
+def test_discover_cluster_param_threads_into_host_row_and_details():
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod", runner=_default_runner())
+    assert d["host"]["cluster"] == "k3s-prod"
+    names = {s["name"]: s for s in d["services"]}
+    # 显式 cluster → L3 文件名用 cluster，不再用 env 兜底。
+    assert names["harbor"]["detail"] == "entities/k3s-prod__203.0.113.20__harbor.yaml"
+    assert names["harbor"]["cluster"] == "k3s-prod"
+    assert d["details"]["harbor"]["cluster"] == "k3s-prod"
+    assert d["details"]["harbor"]["detail"] == names["harbor"]["detail"]
+
+
+def test_discover_credential_derived_from_key_path_only():
+    runner = _default_runner()
+    d = discover_host("203.0.113.20", "prod",
+                      {"user": "ops", "key_path": "/keys/node1.pem"}, runner=runner)
+    assert d["host"]["credential"] == {
+        "type": "ssh_key", "ref": "/keys/node1.pem", "user": "ops", "port": 22,
+    }
+    # 密码走 askpass（无 key_path）→ 不写凭据引用，密码明文不进任何输出。
+    d2 = discover_host("203.0.113.20", "prod",
+                       {"user": "root", "password": "Sup3r-Secret!Password"}, runner=runner)
+    assert "credential" not in d2["host"]
+    assert "Sup3r-Secret!Password" not in json.dumps(d2)
 
 
 def test_discover_ssh_failure_raises_no_partial_data():
@@ -186,13 +240,77 @@ def test_discover_systemctl_services_merged_and_docker_priority():
     runner = _default_runner(**{"systemctl": SYSTEMCTL})
     d = discover_host("203.0.113.20", "prod", runner=runner)
     names = {s["name"]: s for s in d["services"]}
-    assert d["probes"]["systemctl"] == "ok"
+    assert d["probes"]["systemctl"] == "ok(2 服务，过滤 0 系统服务)"
     assert names["node-exporter"]["type"] == "systemd-service"
     assert names["node-exporter"]["attrs"]["unit"] == "node-exporter.service"
     assert names["node-exporter"]["attrs"]["source_probe"] == "systemctl"
     # systemctl 中出现 harbor 与 docker 容器同名 → docker 优先，不生成 systemd 行。
     assert names["harbor"]["type"] == "service"
     assert "inactive" not in names
+
+
+SYSTEMCTL_WITH_SYSTEM_SERVICES = """\
+  UNIT                     LOAD   ACTIVE SUB     DESCRIPTION
+  systemd-journald.service loaded active running Journal Service
+  systemd-logind.service   loaded active running Login Service
+  systemd-udevd.service    loaded active running Rule Manager
+  dbus.service             loaded active running D-Bus System Message Bus
+  user@1000.service        loaded active running User Manager for UID 1000
+  getty@tty1.service       loaded active running Getty on tty1
+  sshd.service             loaded active running OpenSSH Daemon
+  ssh.service              loaded active running OpenSSH Daemon (Debian)
+  containerd.service       loaded active running Container Runtime
+  node-exporter.service    loaded active running Prometheus Node Exporter
+  prometheus.service       loaded active running Prometheus
+  postgres.service         loaded active running PostgreSQL
+  nginx.service            loaded active running Nginx
+  redis.service            loaded active running Redis
+  mysql.service            loaded active running MySQL
+  inactive.service         loaded inactive dead   Not discovered
+"""
+
+
+def test_parse_systemctl_units_filters_system_services():
+    """C1：系统内部服务（systemd-*/dbus/getty*/user@*/sshd/containerd）被过滤，
+    业务服务（node-exporter/prometheus/postgres/nginx/redis/mysql）不误伤。"""
+    from tools.topo_discovery import (
+        _SYSTEMD_SYSTEM_SERVICES,
+        _SYSTEMD_SYSTEM_SERVICE_PREFIXES,
+        _count_systemd_filtered_units,
+        _parse_systemctl_units,
+    )
+
+    # 黑名单常量模块级可维护：前缀 + 精确名都覆盖 prompt 点名条目
+    # （ssh 为 Debian/Ubuntu 的 openssh unit 名，与 sshd 同一管理通道）。
+    assert {"systemd-", "user@", "getty"} <= set(_SYSTEMD_SYSTEM_SERVICE_PREFIXES)
+    assert {"dbus", "sshd", "ssh", "containerd"} <= _SYSTEMD_SYSTEM_SERVICES
+    # 业务服务名绝不在黑名单里。
+    assert not ({k[: -len(".service")] for k in ("postgres.service", "nginx.service",
+                                                  "redis.service", "mysql.service",
+                                                  "node-exporter.service",
+                                                  "prometheus.service")} & _SYSTEMD_SYSTEM_SERVICES)
+
+    units = _parse_systemctl_units(SYSTEMCTL_WITH_SYSTEM_SERVICES)
+    names = {u["name"]: u for u in units}
+    assert set(names) == {"node-exporter", "prometheus", "postgres", "nginx", "redis", "mysql"}
+    assert all(u["unit"].endswith(".service") for u in units)
+    # 过滤发生在解析层：系统服务不产出实体条目。
+    assert not any(u["name"].startswith(("systemd-", "user-", "getty-")) for u in units)
+    assert _count_systemd_filtered_units(SYSTEMCTL_WITH_SYSTEM_SERVICES) == 9
+
+
+def test_discover_systemctl_probe_records_filter_stats():
+    """C1：probes['systemctl'] 记录 `ok(N 服务，过滤 M 系统服务)` 过滤统计。"""
+    runner = FakeRunner(**{"systemctl": SYSTEMCTL_WITH_SYSTEM_SERVICES})
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert d["probes"]["systemctl"] == "ok(6 服务，过滤 9 系统服务)"
+    names = {s["name"]: s for s in d["services"]}
+    # 只有业务服务进拓扑；系统内部服务无 services/details 条目。
+    assert set(names) == {"node-exporter", "prometheus", "postgres", "nginx", "redis", "mysql"}
+    assert not any(n.startswith(("systemd-", "user-", "getty-")) or n in ("dbus", "sshd", "containerd")
+                   for n in names)
+    assert "systemd-journald" not in d["details"]
+    assert "dbus" not in d["details"]
 
 
 def test_discover_systemctl_unavailable_is_skipped():
@@ -213,6 +331,7 @@ def test_discover_ss_entries_record_source_probe():
     svc = next(s for s in d["services"] if s["name"] == "unidentified-9090")
     assert svc["attrs"]["source_probe"] == "ss"
     assert d["details"]["unidentified-9090"]["attrs"]["source_probe"] == "ss"
+    assert d["details"]["unidentified-9090"]["detail"] == svc["detail"]
 
 
 def test_build_ssh_runner_encrypted_key_uses_askpass_without_plaintext(tmp_path, monkeypatch):
@@ -286,6 +405,182 @@ def test_build_ssh_runner_sudo_password_uses_stdin_not_command_string(tmp_path, 
     assert calls["kwargs"]["input"] == sudo_secret + "\n"
     blob = json.dumps(calls["argv"]) + json.dumps(calls["kwargs"].get("env", {}))
     assert sudo_secret not in blob
+
+
+def test_discover_localhost_uses_local_runner_no_ssh_argv(monkeypatch):
+    """C4：host=localhost → 探测直接本地 subprocess 执行（shell 命令串，无 ssh argv）。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=127, stdout="", stderr="")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    d = discover_host("localhost", "prod", {"user": "ops", "key_path": "/keys/x.pem"})
+
+    assert calls, "本地 runner 应执行探测命令"
+    for cmd, kwargs in calls:
+        assert isinstance(cmd, str), "本地执行用 shell 命令串，不经 ssh argv"
+        assert "ssh" not in cmd
+        assert kwargs.get("shell") is True
+    assert d["host"]["endpoint"] == "localhost"
+    assert d["host"]["name"] == "localhost"
+    # 本机发现不走 SSH → 不写 ssh_key 凭据引用。
+    assert "credential" not in d["host"]
+
+
+def test_discover_empty_host_defaults_to_localhost(monkeypatch):
+    """C4：host 省略（空）→ 同样走本地 runner，endpoint 归一为 localhost。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=127, stdout="", stderr="")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    d = discover_host("", "local")
+    assert d["host"]["endpoint"] == "localhost"
+    assert calls and all(isinstance(c, str) and "ssh" not in c for c in calls)
+
+
+def test_discover_remote_host_still_uses_ssh(monkeypatch):
+    """C4：非 localhost（10.0.0.5）→ 仍走 SSH runner（argv[0] == ssh）。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        if argv and argv[0] == "ssh":
+            calls.append(argv)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected local argv: {argv}")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    d = discover_host("10.0.0.5", "prod")
+    assert calls and calls[0][0] == "ssh"
+    assert f"root@10.0.0.5" in calls[0]
+    assert d["host"]["endpoint"] == "10.0.0.5"
+
+
+def test_build_local_runner_sudo_password_uses_stdin(tmp_path, monkeypatch):
+    """C4：本地 sudo 复用 sudo_password_file → sudo -S 从 stdin 注入，命令串无明文。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    sudo_secret = "sudo-secret-88"
+    vault = tmp_path / "vault"
+    vault.write_text(sudo_secret, encoding="utf-8")
+    askpass = topodisc._make_askpass_script(vault)
+    calls = {}
+
+    def fake_run(cmd, **kwargs):
+        if isinstance(cmd, list) and cmd[:2] == ["/bin/sh", str(askpass)]:
+            return SimpleNamespace(returncode=0, stdout=sudo_secret + "\n", stderr="")
+        if isinstance(cmd, str) and cmd.startswith("sudo "):
+            calls["cmd"] = cmd
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        raise AssertionError(f"unexpected cmd: {cmd}")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = topodisc._build_local_runner(sudo_password_file=askpass)
+    result = runner("docker ps")
+
+    assert result.ok is True
+    assert calls["cmd"] == "sudo -S -p '' docker ps"
+    assert calls["kwargs"]["input"] == sudo_secret + "\n"
+    # 密码只在 stdin 注入；命令串/env 无明文。
+    blob = json.dumps(calls["cmd"]) + json.dumps(calls["kwargs"].get("env", {}))
+    assert sudo_secret not in blob
+
+
+def test_cli_host_omitted_defaults_to_localhost(tmp_path, monkeypatch, capsys):
+    """C4：host 省略 → CLI 默认本机发现，不要求凭据、不报错。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    seen = {}
+
+    def fake_discover(host, env, creds, **kwargs):
+        seen["host"] = host
+        seen["creds"] = creds
+        return _discovery("localhost")
+
+    def fake_prompt(*a, **kw):
+        raise AssertionError("本机发现不应调用 _prompt_credentials")
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", fake_discover)
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main(["--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert seen["host"] == "localhost"
+    assert seen["creds"] == {}
+    out = capsys.readouterr().out
+    assert "localhost" in out
+
+
+def test_cli_localhost_skips_ssh_credential_prompt(tmp_path, monkeypatch):
+    """C4：--host localhost 无 --user/--key → 不报错，凭据为空，直接本机发现。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    seen = {}
+
+    def fake_discover(host, env, creds, **kwargs):
+        seen["host"] = host
+        seen["creds"] = creds
+        return _discovery("localhost")
+
+    def fake_prompt(*a, **kw):
+        raise AssertionError("localhost 不应走 SSH 凭据交互")
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", fake_discover)
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main(["--host", "localhost", "--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert seen["host"] == "localhost"
+    assert seen["creds"] == {}
+
+
+def test_cli_remote_host_still_prompts_credentials(tmp_path, monkeypatch):
+    """C4：非 localhost 仍走 _prompt_credentials（SSH 路径不变）。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    seen = {}
+
+    def fake_prompt(host, user, key, **kwargs):
+        seen["host"] = host
+        return {"user": user, "key_path": key}
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", lambda *a, **kw: _discovery())
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main(["--host", "10.0.0.5", "--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert seen["host"] == "10.0.0.5"
 
 
 def test_cli_short_options_parse_and_flow(tmp_path, monkeypatch):
@@ -399,11 +694,11 @@ def test_cli_batch_confirm_once_and_writes_each_success(tmp_path, monkeypatch):
 # 落盘
 # ---------------------------------------------------------------------------
 
-def _discovery():
-    return discover_host("203.0.113.20", "prod", runner=_default_runner())
+def _discovery(host: str = "203.0.113.20", env: str = "prod"):
+    return discover_host(host, env, runner=_default_runner())
 
 
-def test_write_discovery_writes_v2_structure(tmp_path):
+def test_write_discovery_writes_v3_structure(tmp_path):
     home = tmp_path / "hermes_home"
     home.mkdir()
     d = _discovery()
@@ -415,13 +710,20 @@ def test_write_discovery_writes_v2_structure(tmp_path):
     data = yaml.safe_load(index.read_text(encoding="utf-8"))
     assert data["host"] == "203.0.113.20"
     assert data["env"] == "prod"
+    assert data["cluster"] == "default"
     assert {s["name"] for s in data["services"]} == {
         "harbor", "postgres", "grafana", "unidentified-9090"}
 
     topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
-    assert topo["version"] == 2
+    assert topo["version"] == 3
     assert topo["hosts"][0]["name"] == "203.0.113.20"
+    assert topo["hosts"][0]["cluster"] == "default"
     assert topo["hosts"][0]["services_index"] == "hosts/203.0.113.20.yaml"
+
+    # L3 命名：entities/{env}__{host}__{name}.yaml（cluster 空 → env 兜底）。
+    harbor = home / "entities" / "prod__203.0.113.20__harbor.yaml"
+    assert harbor.is_file()
+    assert yaml.safe_load(harbor.read_text(encoding="utf-8"))["name"] == "harbor"
 
     # 落盘结果能被 topo_tools 正常读取（第二层服务索引进扁平视图）。
     os.environ["VIGIL_HOME"] = str(home)
@@ -432,6 +734,32 @@ def test_write_discovery_writes_v2_structure(tmp_path):
         assert {s["name"] for s in node["services"]} >= {"harbor", "postgres"}
     finally:
         hc._LOAD_CONFIG_CACHE.clear()
+
+
+def test_write_discovery_same_app_two_hosts_no_entity_collision(tmp_path):
+    """L3 命名验收：同一应用跨两个 host 发现 → 两个实体文件不冲突。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    write_discovery(home, _discovery("node-a"))
+    write_discovery(home, _discovery("node-b"))
+    a = home / "entities" / "prod__node-a__harbor.yaml"
+    b = home / "entities" / "prod__node-b__harbor.yaml"
+    assert a.is_file() and b.is_file()
+    assert a != b
+    assert yaml.safe_load(a.read_text(encoding="utf-8"))["name"] == "harbor"
+    assert yaml.safe_load(b.read_text(encoding="utf-8"))["name"] == "harbor"
+
+
+def test_write_discovery_legacy_env_maps_to_tier_in_environments(tmp_path):
+    """写入端只产四值枚举：老自定义 env（uat）按档位映射为 prod，不追加 uat 定义。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    d = _discovery("node-a", env="uat")
+    write_discovery(home, d)
+    topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
+    envs = [e["name"] for e in topo["environments"]]
+    assert envs == ["prod"]
+    assert topo["environments"][0]["isolation"] == "strict"
 
 
 def test_write_discovery_refuses_v1_topology(tmp_path):
@@ -503,3 +831,23 @@ def test_topo_discover_cli_help_and_missing_args(tmp_path):
     assert proc.returncode == 0
     assert "--host" in proc.stdout and "--env" in proc.stdout
     assert "--dry-run" in proc.stdout and "--force" in proc.stdout
+
+
+def test_cli_write_prompt_contains_three_step_review_guidance(tmp_path, monkeypatch, capsys):
+    """批次十二 C2：落盘后提示给具体三步 review 指引（查看/确认/效果），不抽象说请核对。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.setattr(td, "discover_host", lambda *a, **kw: _discovery())
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": ["hosts/node1.yaml"]})
+    monkeypatch.setattr(td, "_prompt_credentials", lambda host, user, key: {"user": "root"})
+
+    rc = td.main(["--host", "203.0.113.20", "--env", "prod", "--yes"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "needs_review" in out
+    assert "1. 查看" in out and "2. 确认" in out and "3. 效果" in out
+    assert "topo_update" in out and "needs_review=false" in out
+    assert "未经确认不参与权限判定" in out
