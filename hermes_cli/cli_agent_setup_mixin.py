@@ -193,7 +193,22 @@ class CLIAgentSetupMixin:
         message into a chat that cannot work (#62935-adjacent UX class:
         keyless first run must route into onboarding, not a broken chat).
         """
+        from hermes_cli.auth import has_any_provider_configuration
         from hermes_cli.runtime_provider import resolve_runtime_provider
+
+        # Fast path: a completely unconfigured install (no model.provider, no
+        # API-key env, no custom providers, no OAuth login, no pool entry)
+        # cannot resolve anything — return False without running the probe
+        # chain.  The chain must never trigger lazy-deps installs or network
+        # probes just to answer "is anything configured?" (#v0.1.12 startup
+        # hang: bedrock auto-detect silently pip-installed boto3).  Explicit
+        # requested providers (e.g. ``--provider ollama``) bypass the gate.
+        _requested = (self.requested_provider or "").strip().lower()
+        if _requested in {"", "auto"} and not has_any_provider_configuration(
+            explicit_api_key=self._explicit_api_key,
+            explicit_base_url=self._explicit_base_url,
+        ):
+            return False
 
         try:
             runtime = resolve_runtime_provider(

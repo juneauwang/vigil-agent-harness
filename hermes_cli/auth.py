@@ -1986,6 +1986,69 @@ def _get_config_hint_for_unknown_provider(provider_name: str) -> str:
         return ""
 
 
+def has_any_provider_configuration(
+    *,
+    explicit_api_key: Optional[str] = None,
+    explicit_base_url: Optional[str] = None,
+) -> bool:
+    """Cheap read-only "is anything configured?" gate for probe paths.
+
+    Mirrors :func:`resolve_provider` tiers 1-6 (explicit CLI creds, config
+    ``model.provider`` / ``model.base_url`` / ``custom_providers``, env API
+    keys, OpenRouter credential pool, logged-in OAuth) — everything BEFORE
+    the AWS Bedrock auto-detect tier.  Pure config/env/auth-store reads:
+    never imports provider adapters, never triggers lazy-deps installs, never
+    touches the network (no boto3 / IMDS).
+
+    Returns False when an install is completely unconfigured so callers (e.g.
+    the first-run probe) can skip the full resolution chain entirely.
+    """
+    if explicit_api_key or explicit_base_url:
+        return True
+
+    try:
+        from hermes_cli.config import load_config
+
+        cfg = load_config() or {}
+    except Exception:
+        cfg = {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    _model_cfg = cfg.get("model")
+    if isinstance(_model_cfg, dict) and (_model_cfg.get("provider") or _model_cfg.get("base_url")):
+        return True
+    if cfg.get("custom_providers"):
+        return True
+
+    if has_usable_secret(os.getenv("OPENAI_API_KEY")) or has_usable_secret(os.getenv("OPENROUTER_API_KEY")):
+        return True
+    for _pid, _pconfig in PROVIDER_REGISTRY.items():
+        if _pconfig.auth_type != "api_key":
+            continue
+        for _env_var in _pconfig.api_key_env_vars:
+            if has_usable_secret(os.getenv(_env_var, "")):
+                return True
+
+    # OpenRouter credential pool (manual ``hermes auth add openrouter``).
+    try:
+        from agent.credential_pool import load_pool
+
+        if load_pool("openrouter").has_credentials():
+            return True
+    except Exception:
+        pass
+
+    # Logged-in OAuth provider (auth.json ``active_provider``).
+    try:
+        _store = _load_auth_store()
+        _active = _store.get("active_provider")
+        if _active and _active in PROVIDER_REGISTRY and get_auth_status(_active).get("logged_in"):
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def resolve_provider(
     requested: Optional[str] = None,
     *,

@@ -59,21 +59,124 @@ def _make_shell(cli, monkeypatch):
 # _runtime_credentials_ready
 # ---------------------------------------------------------------------------
 
+def _force_auto(shell):
+    """Force the first-run probe gate: requested=auto (fresh-install shape)."""
+    shell.requested_provider = "auto"
+    return shell
+
+
+def _mark_configured(monkeypatch):
+    """Make the fast-path see a configured install so the probe chain runs."""
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config",
+        lambda: {"model": {"provider": "openrouter"}},
+    )
+
+
+def test_credentials_ready_false_when_unconfigured_short_circuits(monkeypatch):
+    """Completely unconfigured install → False WITHOUT running the probe chain.
+
+    Regression for the #v0.1.12 startup hang: the old code always ran the
+    full chain, and the bedrock auto-detect tier silently pip-installed
+    boto3 (blocking on slow networks before first-run setup was offered).
+    """
+    cli = _import_cli()
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: {})
+    monkeypatch.setattr("hermes_cli.auth.has_usable_secret", lambda _v: False)
+    monkeypatch.setattr("hermes_cli.auth._load_auth_store", lambda *a, **k: {})
+
+    def _must_not_run(**kwargs):
+        raise AssertionError("probe chain must not run for an unconfigured install")
+
+    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", _must_not_run)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
+    assert shell._runtime_credentials_ready() is False
+
+
+def test_credentials_ready_short_circuit_skipped_when_env_key(monkeypatch):
+    """An API-key env var → probe chain runs (no short-circuit)."""
+    cli = _import_cli()
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: {})
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
+    calls = {"n": 0}
+
+    def _probe(**kwargs):
+        calls["n"] += 1
+        return {
+            "provider": "openrouter",
+            "api_key": "sk-test",
+            "base_url": "https://openrouter.ai/api/v1",
+            "source": "env",
+        }
+
+    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", _probe)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
+    assert shell._runtime_credentials_ready() is True
+    assert calls["n"] == 1
+
+
+def test_credentials_ready_short_circuit_skipped_when_custom_providers(monkeypatch):
+    """custom_providers in config → probe chain runs (no short-circuit)."""
+    cli = _import_cli()
+    monkeypatch.setattr(
+        "hermes_cli.config.load_config",
+        lambda: {"custom_providers": [{"name": "mybox", "base_url": "http://localhost:8000/v1"}]},
+    )
+    calls = {"n": 0}
+
+    def _probe(**kwargs):
+        calls["n"] += 1
+        return {
+            "provider": "custom",
+            "api_key": "",
+            "base_url": "http://localhost:8000/v1",
+            "source": "custom_provider",
+        }
+
+    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", _probe)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
+    assert shell._runtime_credentials_ready() is True
+    assert calls["n"] == 1
+
+
+def test_credentials_ready_short_circuit_skipped_when_explicit_request(monkeypatch):
+    """Explicit --provider (non-auto) → probe chain runs even with empty config."""
+    cli = _import_cli()
+    monkeypatch.setattr("hermes_cli.config.load_config", lambda: {})
+    calls = {"n": 0}
+
+    def _probe(**kwargs):
+        calls["n"] += 1
+        return {
+            "provider": "custom",
+            "api_key": "",
+            "base_url": "http://localhost:11434/v1",
+            "source": "custom_provider",
+        }
+
+    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", _probe)
+    shell = _make_shell(cli, monkeypatch)
+    shell.requested_provider = "ollama"
+    assert shell._runtime_credentials_ready() is True
+    assert calls["n"] == 1
+
 
 def test_credentials_ready_false_when_no_provider(monkeypatch):
     cli = _import_cli()
+    _mark_configured(monkeypatch)
 
     def _raise(**kwargs):
         raise AuthError("No inference provider configured.", code="no_provider_configured")
 
     monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", _raise)
-    shell = _make_shell(cli, monkeypatch)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
     assert shell._runtime_credentials_ready() is False
 
 
 def test_credentials_ready_false_on_empty_openrouter_key(monkeypatch):
     """The exact broken-chat state: provider resolves but api_key is empty."""
     cli = _import_cli()
+    _mark_configured(monkeypatch)
 
     monkeypatch.setattr(
         "hermes_cli.runtime_provider.resolve_runtime_provider",
@@ -84,12 +187,13 @@ def test_credentials_ready_false_on_empty_openrouter_key(monkeypatch):
             "source": "env/config",
         },
     )
-    shell = _make_shell(cli, monkeypatch)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
     assert shell._runtime_credentials_ready() is False
 
 
 def test_credentials_ready_true_with_key(monkeypatch):
     cli = _import_cli()
+    _mark_configured(monkeypatch)
 
     monkeypatch.setattr(
         "hermes_cli.runtime_provider.resolve_runtime_provider",
@@ -100,13 +204,14 @@ def test_credentials_ready_true_with_key(monkeypatch):
             "source": "env/config",
         },
     )
-    shell = _make_shell(cli, monkeypatch)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
     assert shell._runtime_credentials_ready() is True
 
 
 def test_credentials_ready_true_for_keyless_local_endpoint(monkeypatch):
     """ollama/llama.cpp-style custom endpoints need no key."""
     cli = _import_cli()
+    _mark_configured(monkeypatch)
 
     monkeypatch.setattr(
         "hermes_cli.runtime_provider.resolve_runtime_provider",
@@ -117,12 +222,13 @@ def test_credentials_ready_true_for_keyless_local_endpoint(monkeypatch):
             "source": "custom_provider",
         },
     )
-    shell = _make_shell(cli, monkeypatch)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
     assert shell._runtime_credentials_ready() is True
 
 
 def test_credentials_ready_true_for_callable_bearer_provider(monkeypatch):
     cli = _import_cli()
+    _mark_configured(monkeypatch)
 
     monkeypatch.setattr(
         "hermes_cli.runtime_provider.resolve_runtime_provider",
@@ -133,18 +239,19 @@ def test_credentials_ready_true_for_callable_bearer_provider(monkeypatch):
             "source": "entra",
         },
     )
-    shell = _make_shell(cli, monkeypatch)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
     assert shell._runtime_credentials_ready() is True
 
 
 def test_credentials_ready_never_prints(monkeypatch, capsys):
     cli = _import_cli()
+    _mark_configured(monkeypatch)
 
     def _raise(**kwargs):
         raise AuthError("No inference provider configured.", code="no_provider_configured")
 
     monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", _raise)
-    shell = _make_shell(cli, monkeypatch)
+    shell = _force_auto(_make_shell(cli, monkeypatch))
     capsys.readouterr()  # drain construction output
     shell._runtime_credentials_ready()
     out = capsys.readouterr()
