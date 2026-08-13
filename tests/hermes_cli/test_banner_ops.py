@@ -97,7 +97,9 @@ def test_load_banner_state_returns_off_dict_when_ops_off(tmp_path, monkeypatch):
 
     assert state is not None
     assert state["ops_enabled"] is False
-    assert state["env"] == ""
+    # OPS-DELTA #38：DEFAULT_CONFIG 预置 ops 段，env 默认 test；ops off 时
+    # banner 不渲染 ENV badge，故 env 值不影响展示。
+    assert state["env"] == "test"
     assert state["matrix_enabled"] is False
 
 
@@ -147,7 +149,12 @@ def test_unified_banner_non_ops_shares_console_header():
 
 
 def test_load_banner_state_matrix_default_on_without_enabled_key(tmp_path, monkeypatch):
-    """OPS-DELTA #1：矩阵默认启用——config 无 enabled 键也显示 matrix ON。"""
+    """OPS-DELTA #1/#38：矩阵默认启用——config 无 enabled 键也显示 matrix ON。
+
+    OPS-DELTA #38 起 default profile 即完整 ops harness（DEFAULT_CONFIG 预置
+    ops 段），用户 config 只写 permissions.env/role 时 merged 配置仍含
+    topology.enabled: true → ops_enabled True、矩阵默认启用。
+    """
     _fresh_state()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text(yaml.safe_dump({
@@ -158,8 +165,9 @@ def test_load_banner_state_matrix_default_on_without_enabled_key(tmp_path, monke
 
     state = banner._load_banner_state()
 
-    assert state["ops_enabled"] is False  # 无显式 ops 开关 → 非 ops banner 布局
-    assert state["matrix_enabled"] is True  # 但矩阵语义为默认启用
+    assert state["ops_enabled"] is True  # default profile = ops harness
+    assert state["matrix_enabled"] is True  # 矩阵语义默认启用
+    assert state["env"] == "prod"
 
 
 def test_unified_banner_no_topology_guides_ops_init():
