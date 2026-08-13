@@ -899,6 +899,43 @@ def _seed_first_run_ops_samples(home: Path) -> None:
         logger.debug("first-run ops sample seeding skipped", exc_info=True)
 
 
+
+def _seed_first_run_config_template(home: Path) -> None:
+    """Fresh-install seeding: write a commented config.yaml template.
+
+    First-run UX (OPS-DELTA #45 / batch-12 D3): a brand-new data root gets a
+    full ``DEFAULT_CONFIG`` template (ops section included, ``display.skin:
+    vigil``) so technical users who prefer editing config directly never have
+    to run ``vigil setup`` to get a config file. Idempotent + never overwrites:
+    an existing ``config.yaml`` (user data) is skipped unconditionally; only a
+    root created by this very call is seeded. Best-effort: a serialization
+    failure must not block first launch — ``load_config()`` falls back to
+    in-memory defaults exactly as it did before.
+    """
+    config_path = home / "config.yaml"
+    if config_path.exists():
+        return
+    try:
+        import yaml
+
+        cfg = copy.deepcopy(DEFAULT_CONFIG)
+        display = cfg.setdefault("display", {})
+        if isinstance(display, dict):
+            display["skin"] = "vigil"
+        header = (
+            "# 由 Vigil 首装生成（可直接编辑；也可运行 vigil setup 交互配置）。\n"
+            "# 本文件是完整默认模板：删行 = 回退到内置默认值，改行 = 用户配置。\n"
+            "# 再次运行 Vigil 不会覆盖本文件（已存在即跳过）。\n"
+        )
+        config_path.write_text(
+            header + yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        _secure_file(config_path)
+    except (Exception, SystemExit):
+        logger.debug("first-run config template seeding skipped", exc_info=True)
+
+
 # Home paths whose directory skeleton has been created this process — see
 # ensure_hermes_home(). Only successful passes are recorded, so a raised
 # managed-mode/missing-profile error keeps re-checking on later loads.
@@ -953,8 +990,9 @@ def ensure_hermes_home():
             d.mkdir(parents=True, exist_ok=True)
             _secure_dir(d)
         if home_was_created:
-            # 首装（数据根此前不存在）→ 铺 ops 样例到 default profile 根位置；
-            # 既有数据根一律跳过（静默无感，不覆盖不迁移）。
+            # 首装（数据根此前不存在）→ 铺 config.yaml 模板 + ops 样例到 default
+            # profile 根位置；既有数据根一律跳过（静默无感，不覆盖不迁移）。
+            _seed_first_run_config_template(home)
             _seed_first_run_ops_samples(home)
         _ensure_default_soul_md(home)
 
