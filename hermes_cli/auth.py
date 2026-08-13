@@ -28,6 +28,7 @@ import stat
 import sys
 import base64
 import hashlib
+import importlib.util
 import subprocess
 import threading
 import time
@@ -2175,12 +2176,16 @@ def resolve_provider(
 
     # AWS Bedrock — detect via boto3 credential chain (IAM roles, SSO, env vars).
     # This runs after API-key providers so explicit keys always win.
-    try:
-        from agent.bedrock_adapter import has_aws_credentials
-        if has_aws_credentials():
-            return "bedrock"
-    except ImportError:
-        pass  # boto3 not installed — skip Bedrock auto-detection
+    # Probe paths are READ-ONLY: boto3 missing → skip silently.  Never trigger
+    # lazy-deps auto-install from detection (a fresh install without boto3
+    # must not hang on a silent ``pip install boto3`` — #v0.1.12 startup bug).
+    if importlib.util.find_spec("boto3") is not None:
+        try:
+            from agent.bedrock_adapter import has_aws_credentials
+            if has_aws_credentials():
+                return "bedrock"
+        except ImportError:
+            pass  # boto3 present but adapter deps missing — skip silently
 
     raise AuthError(
         "No inference provider configured. Run 'vigil model' to choose a "
