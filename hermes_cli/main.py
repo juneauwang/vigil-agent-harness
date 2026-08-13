@@ -425,6 +425,7 @@ from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
+from hermes_cli.subcommands.vssh import build_vssh_parser
 from hermes_cli.subcommands.watch import build_watch_parser
 from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.subcommands.profile import build_profile_parser
@@ -4599,6 +4600,13 @@ def cmd_watch(args):
     from hermes_cli.watch import watch_command
 
     return watch_command(args)
+
+
+def cmd_vssh(args):
+    """常用运维命令：vault 安全凭据的交互 SSH（OPS-DELTA #26 产品化）。"""
+    from hermes_cli.subcommands.vssh import run as vssh_run
+
+    return vssh_run(args)
 
 
 def cmd_cron(args):
@@ -12464,6 +12472,7 @@ def main():
     # topo-discover command  (parser built in hermes_cli/subcommands/topo_discover.py)
     # =========================================================================
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
+    build_vssh_parser(subparsers, cmd_vssh=cmd_vssh)
     build_watch_parser(subparsers, cmd_watch=cmd_watch)
 
     # =========================================================================
