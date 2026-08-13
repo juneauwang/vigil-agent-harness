@@ -2,6 +2,7 @@
 name: node2
 type: k8s-node
 env: prod
+cluster: k3s-prod
 role: worker
 attrs:
   internal_ip: 203.0.113.14
@@ -9,7 +10,7 @@ attrs:
   spec: ecs.e-c1m2.xlarge
   k8s_version: v1.28.15
   disk: "cloud_essd_entry 40G (29G used, 73%)"
-  ssh: "ssh -i ~/.ssh/aliyun_nopass.pem user@203.0.113.11"
+  # 连接方式见 topology.yaml hosts 行的 credential 引用（样例为占位符）
   maintenance_window: "周日 02:00-04:00（示例，待调整）"
   verified_via: terraform.tfstate
 depends_on: []

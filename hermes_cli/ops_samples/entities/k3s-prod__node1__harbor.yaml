@@ -2,6 +2,7 @@
 name: harbor
 type: registry
 env: prod
+cluster: k3s-prod
 endpoint: "203.0.113.10:30443"
 attrs:
   version: v2.11

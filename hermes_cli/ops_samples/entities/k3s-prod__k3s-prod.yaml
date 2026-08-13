@@ -2,6 +2,7 @@
 name: k3s-prod
 type: k8s
 env: prod
+cluster: k3s-prod
 endpoint: "https://203.0.113.10:6443"
 attrs:
   distro: k3s

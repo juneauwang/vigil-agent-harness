@@ -1,0 +1,14 @@
+# postgres —— 生产数据库实例（样例值请按实际核对）。
+name: postgres
+type: db
+env: prod
+cluster: k3s-prod
+ssh:                                      # 覆盖 host 级默认（OPS-DELTA #42）
+  user: dbadmin
+  credential: {type: ssh_key, ref: "~/.vigil/keys/example-db-key.pem", user: dbadmin}
+attrs:
+  version: "16"                           # 样例值，请核对
+  # 端口/密码不落拓扑文件（凭据只存引用）
+depended_by: [harbor, order-db]
+ops:
+  healthcheck: "pg_isready"

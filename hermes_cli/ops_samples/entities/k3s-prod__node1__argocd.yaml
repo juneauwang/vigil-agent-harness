@@ -2,6 +2,7 @@
 name: argocd
 type: service
 env: prod
+cluster: k3s-prod
 attrs:
   namespace: argocd
   # 对外地址待核对（NodePort/LB），确认后补 endpoint

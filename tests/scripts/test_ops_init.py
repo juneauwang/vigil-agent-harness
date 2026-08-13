@@ -145,7 +145,7 @@ def test_init_idempotent_and_force(tmp_path, entry):
     proc = _run_init(root, "--no-alias", "--force", entry=entry)
     assert proc.returncode == 0
     assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
-    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 2
+    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 3
     assert (home / "hosts" / "node1.yaml").is_file()
     # --force 重铺样例但不删除用户自建文件（mine.yaml 保留）。
     assert set(p.stem for p in runbooks_dir.glob("*.yaml")) >= set(SAMPLE_RUNBOOK_NAMES)
@@ -266,7 +266,10 @@ def test_topo_update_test_entity_writes_source_agent(ops_home):
     assert result["env"] == "test"
     assert result["last_verified"] == _dt.date.today().isoformat()
 
-    data = yaml.safe_load((ops_home / "entities" / "test-web.yaml").read_text(encoding="utf-8"))
+    # L3 命名：entities/{cluster}__{host}__{name}.yaml（test-host cluster=default）。
+    data = yaml.safe_load(
+        (ops_home / "entities" / "default__test-host__test-web.yaml").read_text(encoding="utf-8")
+    )
     assert data["source"] == "agent"
     assert data["status"] == "degraded"
     assert data["last_verified"] == _dt.date.today().isoformat()
@@ -281,13 +284,17 @@ def test_sample_topology_stays_valid_and_under_50_lines():
     lines = (SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8").splitlines()
     assert len(lines) < 50, "第一层注入 system prompt，必须保持 <50 行"
     data = yaml.safe_load("\n".join(lines))
-    # v0.2 三层：hosts + cross_host（第一层）+ hosts/ 服务索引（第二层）
+    # v0.3 三层：clusters + hosts + cross_host（第一层）+ hosts/ 服务索引（第二层）
     # → 扁平实体集 == entities/ 第三层档案集（样例完整性契约）。
-    assert data["version"] == 2
+    assert data["version"] == 3
     hosts = data["hosts"]
     cross_host = data["cross_host"]
     assert {h["name"] for h in hosts} == {"node1", "node2", "test-host"}
     assert {c["name"] for c in cross_host} == {"k3s-prod", "ingress"}
+    clusters = data.get("clusters") or []
+    assert {c["name"] for c in clusters} == {"k3s-prod"}
+    assert all(c["env"] in ("local", "test", "dev", "prod") for c in clusters)
+    assert {e["name"] for e in data["environments"]} == {"local", "test", "dev", "prod"}
     for host in hosts:
         assert (SAMPLE_DIR / host["services_index"]).is_file(), \
             f"services_index 指向缺失: {host['services_index']}"
@@ -299,13 +306,23 @@ def test_sample_topology_stays_valid_and_under_50_lines():
         )
         flat |= {s["name"] for s in index["services"]}
         detail_entities |= {s["name"] for s in index["services"]}
-        if (SAMPLE_DIR / "entities" / f"{host['name']}.yaml").is_file():
+        # cluster 三层贯通：hosts 行 cluster == 服务索引头 cluster。
+        host_cluster = host.get("cluster") or "default"
+        assert index.get("cluster") == host_cluster
+        # L3 命名：实体文件 = entities/{cluster}__{host}__{name}.yaml。
+        host_profile = SAMPLE_DIR / "entities" / f"{host_cluster}__{host['name']}__{host['name']}.yaml"
+        if host_profile.is_file():
             detail_entities.add(host["name"])
         for svc in index["services"]:
             assert (SAMPLE_DIR / svc["detail"]).is_file(), f"detail 指向缺失: {svc['detail']}"
-    assert flat >= set(SAMPLE_ENTITY_NAMES)
+            svc_cluster = svc.get("cluster") or host_cluster
+            assert svc["detail"] == f"entities/{svc_cluster}__{host['name']}__{svc['name']}.yaml", \
+                f"L3 命名不符合规则: {svc['detail']}"
+    # L3 文件名 = {cluster}__{host}__{name}.yaml：与扁平实体集按 name 部分比较。
+    sample_names = {stem.rsplit("__", 1)[-1] for stem in SAMPLE_ENTITY_NAMES}
+    assert flat >= sample_names
     # 第三层档案集 = 有 detail 的实体（服务 + cross_host + 有档案的 host）。
-    assert detail_entities == set(SAMPLE_ENTITY_NAMES)
+    assert detail_entities == sample_names
     for ent in cross_host:
         assert (SAMPLE_DIR / ent["detail"]).is_file(), f"detail 指向缺失: {ent['detail']}"
     assert data["key_paths"] == [["ingress", "gateway-svc", "order-db"]]

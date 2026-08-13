@@ -2,6 +2,7 @@
 name: ingress
 type: ingress
 env: prod
+cluster: k3s-prod
 attrs:
   # k3s 默认 traefik；对外域名/端口待核对
 depends_on: [gateway-svc]

@@ -2,6 +2,7 @@
 name: gateway-svc
 type: gateway
 env: prod
+cluster: k3s-prod
 attrs:
   # 端口/副本数待核对
 depends_on: [order-db, argocd]

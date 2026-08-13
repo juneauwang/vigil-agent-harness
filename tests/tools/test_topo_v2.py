@@ -90,18 +90,19 @@ def _load(result: str) -> dict:
 # v0.2 样例解析 / 双版本兼容
 # ---------------------------------------------------------------------------
 
-def test_v2_sample_parses_and_entity_count():
+def test_v3_sample_parses_and_entity_count():
     data = yaml.safe_load((SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8"))
-    assert data["version"] == 2
+    assert data["version"] == 3
     assert {h["name"] for h in data["hosts"]} == {"node1", "node2", "test-host"}
     assert {c["name"] for c in data["cross_host"]} == {"k3s-prod", "ingress"}
+    assert {c["name"] for c in (data.get("clusters") or [])} == {"k3s-prod"}
     # 样例第一层保持 <50 行（注入 system prompt 的硬约束）。
     lines = (SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8").splitlines()
     assert len(lines) < 50
 
 
-def test_flat_view_equivalent_between_v1_and_v2(tmp_path, monkeypatch):
-    """v0.1 旧格式解析成功，且扁平实体视图与 v0.2 等价（name+env 契约）。"""
+def test_flat_view_equivalent_between_v1_and_v3(tmp_path, monkeypatch):
+    """v0.1 旧格式解析成功，且扁平实体视图与 v0.2/v0.3 等价（name+env 契约）。"""
     v1 = tmp_path / "v1"
     v2 = tmp_path / "v2"
     v1.mkdir()
@@ -138,15 +139,18 @@ def test_topology_data_exists_v2(tmp_path, monkeypatch):
 # 查询路径
 # ---------------------------------------------------------------------------
 
-def test_topo_query_overview_v2_is_compact_first_layer(topo_home):
+def test_topo_query_overview_v3_is_compact_first_layer(topo_home):
     if (topo_home / "topology.yaml").read_text().startswith("version: 1"):
         pytest.skip("v0.1 无 host 概念")
     result = _load(topo_query(home=topo_home))
-    assert result["version"] == 2
+    assert result["version"] == 3
     assert {h["name"] for h in result["hosts"]} == {"node1", "node2", "test-host"}
     assert {c["name"] for c in result["cross_host"]} == {"k3s-prod", "ingress"}
-    # 紧凑行：只含 name/type/env/endpoint/stale（#30 方案 1）。
-    assert set(result["hosts"][0].keys()) == {"name", "type", "env", "endpoint", "stale"}
+    # 紧凑行：name/type/env/cluster/endpoint/stale（#30 方案 1 + OPS-DELTA #42
+    # cluster；带 credential 的行随行返回引用）。
+    row = result["hosts"][0]
+    assert {"name", "type", "env", "cluster", "endpoint", "stale"} <= set(row.keys())
+    assert row["cluster"] == "k3s-prod"
     assert result["count"] == 11  # 3 hosts + 2 cross_host + 6 services
 
 
@@ -192,13 +196,15 @@ def test_topo_query_cross_layer_entity_resolution(topo_home):
     assert harbor.get("detail") in (None, "entities/harbor.yaml") or "detail" in harbor
 
     # entity=node1（第一层 host）→ host + services 列表。
-    if (topo_home / "topology.yaml").read_text().startswith("version: 2"):
+    topo_head = (topo_home / "topology.yaml").read_text()
+    if topo_head.startswith(("version: 2", "version: 3")):
         node1 = _load(topo_query(entity="node1", home=topo_home))
         assert node1["name"] == "node1"
+        assert node1["cluster"] == "k3s-prod"
         assert {s["name"] for s in node1["services"]} == {"harbor", "argocd", "order-db", "postgres"}
 
     # entity=k3s-prod（第一层 cross_host）。
-    if (topo_home / "topology.yaml").read_text().startswith("version: 2"):
+    if topo_head.startswith(("version: 2", "version: 3")):
         k3s = _load(topo_query(entity="k3s-prod", home=topo_home))
         assert k3s["name"] == "k3s-prod" and k3s["type"] == "k8s"
 
@@ -218,8 +224,9 @@ def test_topo_query_type_env_filter_compact(topo_home):
         pytest.skip("v0.1 fixture 无 db 实体（db 列表断言走 v0.2 样例）")
     result = _load(topo_query(entity_type="db", env="prod", home=topo_home))
     assert {e["name"] for e in result["entities"]} == {"order-db", "postgres"}
-    # 紧凑字段（#30 方案 1）——列表视图不再全量 8 字段。
-    assert set(result["entities"][0].keys()) == {"name", "type", "env", "endpoint", "stale"}
+    # 紧凑字段（#30 方案 1 + OPS-DELTA #42 cluster）。
+    assert set(result["entities"][0].keys()) == {
+        "name", "type", "env", "cluster", "endpoint", "stale"}
 
 
 # ---------------------------------------------------------------------------
@@ -264,8 +271,8 @@ def test_ops_target_service_env_resolution_v2(tmp_path, monkeypatch):
             svc["endpoint"] = "gw.internal"
             svc["attrs"] = {"public_ip": "203.0.113.22"}
     index.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
-    (home / "entities" / "gateway-svc.yaml").write_text(
-        "name: gateway-svc\nenv: prod\nattrs:\n  public_ip: 203.0.113.22\n",
+    (home / "entities" / "k3s-prod__node2__gateway-svc.yaml").write_text(
+        "name: gateway-svc\nenv: prod\ncluster: k3s-prod\nattrs:\n  public_ip: 203.0.113.22\n",
         encoding="utf-8",
     )
     monkeypatch.setenv("VIGIL_HOME", str(home))

@@ -2,6 +2,7 @@
 name: node1
 type: k8s-node
 env: prod
+cluster: k3s-prod
 role: control-plane
 endpoint: "203.0.113.10"
 attrs:
@@ -12,7 +13,7 @@ attrs:
   memory_gb: 8
   disk: "cloud_essd_entry 40G (13G used, 31%)"
   distro: k3s
-  ssh: "ssh -i ~/.ssh/aliyun_nopass.pem user@203.0.113.10"
+  # 连接方式见 topology.yaml hosts 行的 credential 引用（样例为占位符）
   maintenance_window: "周日 02:00-04:00（示例，待调整）"
   verified_via: terraform.tfstate
 depends_on: []

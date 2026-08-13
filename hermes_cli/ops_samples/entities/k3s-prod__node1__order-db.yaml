@@ -2,9 +2,10 @@
 name: order-db
 type: db
 env: prod
+cluster: k3s-prod
 attrs:
   engine: postgresql
-  # 连接信息不落拓扑文件（见密钥管理）
+  # 连接信息/密码不落拓扑文件（见密钥管理；凭据只存引用）
 depends_on: [postgres]
 depended_by: [gateway-svc]
 ops:

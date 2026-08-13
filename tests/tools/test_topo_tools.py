@@ -414,6 +414,57 @@ def test_topo_query_entity_ssh_section_overrides_host_level(topo_home_v3):
     assert result["detail"]["ssh"]["credential"]["ref"] == "~/.vigil/keys/postgres.pem"
 
 
+def test_v02_old_topology_loads_bytes_and_mtime_unchanged(tmp_path, monkeypatch):
+    """读取兼容硬要求：v0.2 老文件完整加载，原文件字节/mtime 不变。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    files = {
+        "topology.yaml": V2_TOPO_YAML,
+        "hosts/node1.yaml": V2_NODE1_INDEX,
+        "entities/harbor.yaml": V2_HARBOR,
+        "entities/postgres.yaml": V2_POSTGRES,
+        "entities/k3s-prod.yaml": "name: k3s-prod\ntype: k8s\nenv: prod\n",
+    }
+    _write_topo(home, files)
+    before = {rel: (home / rel).read_bytes() for rel in files}
+    mtimes = {rel: (home / rel).stat().st_mtime_ns for rel in files}
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    import hermes_cli.config as _hc
+    _hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        host_row = _load(topo_query(host="node1"))
+        assert {s["name"] for s in host_row["services"]} == {"harbor", "postgres"}
+        assert host_row["cluster"] == "default"   # v0.2 host 无 cluster → 补 default
+        detail = _load(topo_query(entity="harbor", detail=True))
+        assert detail["detail"]["depends_on"] == ["postgres"]
+        overview = _load(topo_query())
+        assert overview["version"] == 2
+    finally:
+        _hc._LOAD_CONFIG_CACHE.clear()
+    after = {rel: (home / rel).read_bytes() for rel in files}
+    assert after == before
+    assert all(mtimes[rel] == (home / rel).stat().st_mtime_ns for rel in files)
+
+
+def test_v03_topology_loads_cluster_shape_without_version_field(tmp_path, monkeypatch):
+    """version 缺失时 shape 检测：hosts/cross_host/clusters 都在 → 分层结构。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    no_version = V3_TOPO_YAML.replace("version: 3\n", "")
+    _write_topo(home, {
+        "topology.yaml": no_version,
+        "hosts/node1.yaml": V3_NODE1_INDEX,
+        "entities/k3s-prod__node1__postgres.yaml": V3_POSTGRES,
+    })
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    import hermes_cli.config as _hc
+    _hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        host_row = _load(topo_query(host="node1"))
+        assert {s["name"] for s in host_row["services"]} == {"postgres", "harbor"}
+        assert host_row["cluster"] == "k3s-prod"
+    finally:
+        _hc._LOAD_CONFIG_CACHE.clear()
 
 
 def test_topo_discover_tool_registered_in_topo_toolset():
