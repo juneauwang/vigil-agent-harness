@@ -298,9 +298,45 @@ def _parse_ss_tlnp(output: str) -> List[Dict[str, Any]]:
     return listeners
 
 
-def _parse_systemctl_units(output: str) -> List[Dict[str, Any]]:
-    """systemctl list-units --type=service → running/active 服务名列表。"""
-    services: List[Dict[str, Any]] = []
+# systemctl 系统内部服务黑名单（批次十三 C1）：系统自身服务不进拓扑噪音，
+# 用户部署的业务服务（node-exporter/prometheus/nginx/mysql/redis/postgres 等）
+# 不得误伤。前缀在原始 unit 名上匹配（user@1000.service 前缀 user@）；精确名
+# 按去 .service 后缀的单元名匹配。
+_SYSTEMD_SYSTEM_SERVICE_PREFIXES = (
+    "systemd-",          # systemd 自身（journald/logind/udevd/resolved 等）
+    "user@",             # 用户会话
+    "user-runtime-dir@", # 用户会话运行时目录
+    "getty",             # 登录终端
+    "serial-getty",      # 串口登录终端
+)
+_SYSTEMD_SYSTEM_SERVICES = frozenset({
+    "dbus",                # 系统消息总线
+    "polkit",              # 授权代理
+    "sshd",                # 管理通道（与 ss 探测排除 22 端口一致）
+    "ssh",                 # Debian/Ubuntu openssh 管理通道（unit 名为 ssh.service）
+    "containerd",          # 已被 docker 探测覆盖
+    "console-getty",       # 控制台登录终端（getty 族）
+    "console-setup",       # 启动期控制台配置
+    "keyboard-setup",      # 启动期键盘配置
+    "kmod-static-nodes",   # 启动期设备节点
+    "setvtrgb",            # 虚拟终端配色
+    "snapd",               # snap 包管理器 daemon
+    "snapd.seeded",        # snap 首次 seed
+    "rsyslog",             # 系统日志
+    "unattended-upgrades", # Ubuntu 自动安全更新
+    "wsl-pro",             # WSL 系统代理
+})
+
+
+def _is_systemd_system_service(unit: str) -> bool:
+    """原始 unit 名是否命中系统内部服务黑名单（前缀/精确名）。"""
+    if unit.startswith(_SYSTEMD_SYSTEM_SERVICE_PREFIXES):
+        return True
+    return unit[: -len(".service")] in _SYSTEMD_SYSTEM_SERVICES
+
+
+def _iter_systemctl_unit_rows(output: str):
+    """逐行产出 systemctl 输出里的 active/running 服务行 ``(unit, active, sub)``。"""
     for line in output.splitlines():
         line = line.strip()
         if not line or line.startswith("UNIT"):
@@ -309,16 +345,37 @@ def _parse_systemctl_units(output: str) -> List[Dict[str, Any]]:
         if len(parts) < 4 or not parts[0].endswith(".service"):
             continue
         unit = parts[0]
-        name = unit[: -len(".service")]
         active = parts[2].lower()
         sub = parts[3].lower()
         if active in ("active", "running") or sub == "running":
-            services.append({
-                "name": _sanitize_name(name),
-                "unit": unit,
-                "state": sub or active,
-            })
+            yield unit, active, sub
+
+
+def _parse_systemctl_units(output: str) -> List[Dict[str, Any]]:
+    """systemctl list-units --type=service → 过滤系统内部服务后的运行中服务列表。
+
+    过滤在解析层做（系统服务不进 services/details），统计由
+    :func:`_count_systemd_filtered_units` 供 probes 文案使用。
+    """
+    services: List[Dict[str, Any]] = []
+    for unit, active, sub in _iter_systemctl_unit_rows(output):
+        if _is_systemd_system_service(unit):
+            continue
+        name = unit[: -len(".service")]
+        services.append({
+            "name": _sanitize_name(name),
+            "unit": unit,
+            "state": sub or active,
+        })
     return services
+
+
+def _count_systemd_filtered_units(output: str) -> int:
+    """统计被系统服务黑名单过滤的 active 服务数（probes 文案用）。"""
+    return sum(
+        1 for unit, _active, _sub in _iter_systemctl_unit_rows(output)
+        if _is_systemd_system_service(unit)
+    )
 
 
 def _parse_nvidia_smi(output: str) -> List[str]:
@@ -530,8 +587,10 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
         runner, "systemctl list-units --type=service --no-pager --no-legend 2>/dev/null"
     )
     if systemd_res.ok:
-        probes["systemctl"] = "ok"
-        for unit in _parse_systemctl_units(systemd_res.stdout):
+        systemd_units = _parse_systemctl_units(systemd_res.stdout)
+        systemd_filtered = _count_systemd_filtered_units(systemd_res.stdout)
+        probes["systemctl"] = f"ok({len(systemd_units)} 服务，过滤 {systemd_filtered} 系统服务)"
+        for unit in systemd_units:
             name = unit["name"]
             if name in [s["name"] for s in services]:
                 # docker/k8s 已发现的服务优先，systemd 同名只补充不覆盖。

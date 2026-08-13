@@ -240,13 +240,77 @@ def test_discover_systemctl_services_merged_and_docker_priority():
     runner = _default_runner(**{"systemctl": SYSTEMCTL})
     d = discover_host("203.0.113.20", "prod", runner=runner)
     names = {s["name"]: s for s in d["services"]}
-    assert d["probes"]["systemctl"] == "ok"
+    assert d["probes"]["systemctl"] == "ok(2 服务，过滤 0 系统服务)"
     assert names["node-exporter"]["type"] == "systemd-service"
     assert names["node-exporter"]["attrs"]["unit"] == "node-exporter.service"
     assert names["node-exporter"]["attrs"]["source_probe"] == "systemctl"
     # systemctl 中出现 harbor 与 docker 容器同名 → docker 优先，不生成 systemd 行。
     assert names["harbor"]["type"] == "service"
     assert "inactive" not in names
+
+
+SYSTEMCTL_WITH_SYSTEM_SERVICES = """\
+  UNIT                     LOAD   ACTIVE SUB     DESCRIPTION
+  systemd-journald.service loaded active running Journal Service
+  systemd-logind.service   loaded active running Login Service
+  systemd-udevd.service    loaded active running Rule Manager
+  dbus.service             loaded active running D-Bus System Message Bus
+  user@1000.service        loaded active running User Manager for UID 1000
+  getty@tty1.service       loaded active running Getty on tty1
+  sshd.service             loaded active running OpenSSH Daemon
+  ssh.service              loaded active running OpenSSH Daemon (Debian)
+  containerd.service       loaded active running Container Runtime
+  node-exporter.service    loaded active running Prometheus Node Exporter
+  prometheus.service       loaded active running Prometheus
+  postgres.service         loaded active running PostgreSQL
+  nginx.service            loaded active running Nginx
+  redis.service            loaded active running Redis
+  mysql.service            loaded active running MySQL
+  inactive.service         loaded inactive dead   Not discovered
+"""
+
+
+def test_parse_systemctl_units_filters_system_services():
+    """C1：系统内部服务（systemd-*/dbus/getty*/user@*/sshd/containerd）被过滤，
+    业务服务（node-exporter/prometheus/postgres/nginx/redis/mysql）不误伤。"""
+    from tools.topo_discovery import (
+        _SYSTEMD_SYSTEM_SERVICES,
+        _SYSTEMD_SYSTEM_SERVICE_PREFIXES,
+        _count_systemd_filtered_units,
+        _parse_systemctl_units,
+    )
+
+    # 黑名单常量模块级可维护：前缀 + 精确名都覆盖 prompt 点名条目
+    # （ssh 为 Debian/Ubuntu 的 openssh unit 名，与 sshd 同一管理通道）。
+    assert {"systemd-", "user@", "getty"} <= set(_SYSTEMD_SYSTEM_SERVICE_PREFIXES)
+    assert {"dbus", "sshd", "ssh", "containerd"} <= _SYSTEMD_SYSTEM_SERVICES
+    # 业务服务名绝不在黑名单里。
+    assert not ({k[: -len(".service")] for k in ("postgres.service", "nginx.service",
+                                                  "redis.service", "mysql.service",
+                                                  "node-exporter.service",
+                                                  "prometheus.service")} & _SYSTEMD_SYSTEM_SERVICES)
+
+    units = _parse_systemctl_units(SYSTEMCTL_WITH_SYSTEM_SERVICES)
+    names = {u["name"]: u for u in units}
+    assert set(names) == {"node-exporter", "prometheus", "postgres", "nginx", "redis", "mysql"}
+    assert all(u["unit"].endswith(".service") for u in units)
+    # 过滤发生在解析层：系统服务不产出实体条目。
+    assert not any(u["name"].startswith(("systemd-", "user-", "getty-")) for u in units)
+    assert _count_systemd_filtered_units(SYSTEMCTL_WITH_SYSTEM_SERVICES) == 9
+
+
+def test_discover_systemctl_probe_records_filter_stats():
+    """C1：probes['systemctl'] 记录 `ok(N 服务，过滤 M 系统服务)` 过滤统计。"""
+    runner = FakeRunner(**{"systemctl": SYSTEMCTL_WITH_SYSTEM_SERVICES})
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert d["probes"]["systemctl"] == "ok(6 服务，过滤 9 系统服务)"
+    names = {s["name"]: s for s in d["services"]}
+    # 只有业务服务进拓扑；系统内部服务无 services/details 条目。
+    assert set(names) == {"node-exporter", "prometheus", "postgres", "nginx", "redis", "mysql"}
+    assert not any(n.startswith(("systemd-", "user-", "getty-")) or n in ("dbus", "sshd", "containerd")
+                   for n in names)
+    assert "systemd-journald" not in d["details"]
+    assert "dbus" not in d["details"]
 
 
 def test_discover_systemctl_unavailable_is_skipped():
