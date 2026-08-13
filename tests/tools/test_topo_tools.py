@@ -493,6 +493,39 @@ def test_topo_discover_handler_returns_fragment_without_writing(tmp_path, monkey
         {"host": "203.0.113.20", "env": "prod", "dry_run": True}
     ))
 
-    assert result == fragment
+    # 发现片段原样透传（不落盘），另附 _guide 下一步引导（批次十二 C3）。
+    for key, value in fragment.items():
+        assert result[key] == value
+    assert result["_guide"].startswith("发现完成：0 个实体")
+    assert "topo_query" in result["_guide"] and "topo_update" in result["_guide"]
     assert not (tmp_path / "hermes_home" / "topology.yaml").exists()
     assert not (tmp_path / "hermes_home" / "hosts").exists()
+
+
+def test_topo_discover_handler_returns_guide_with_next_steps(topo_home_v3, monkeypatch):
+    """批次十二 C3：topo_discover 工具返回 JSON + _guide 下一步引导（LLM 不再绕圈）。"""
+    import json as _json
+    from tools import topo_tools as tt_mod
+    from tools.topo_tools import _discover_handler, _TOPO_DISCOVER_SCHEMA
+
+    def fake_discover(host, env, creds, *, cluster="", runner=None, skip_unidentified=False):
+        return {
+            "version": 3,
+            "source": "discovered",
+            "last_verified": "2026-08-13",
+            "needs_review": True,
+            "host": {"name": host, "env": env, "cluster": cluster or "default"},
+            "services": [{"name": "postgres", "type": "db", "env": env}],
+            "details": {},
+            "probes": {},
+        }
+
+    monkeypatch.setattr(tt_mod, "discover_host", fake_discover)
+    result = _json.loads(_discover_handler({"host": "node1", "env": "prod", "cluster": "k3s-prod"}))
+    assert result["_guide"].startswith("发现完成：1 个实体")
+    assert "topo_query" in result["_guide"] and "topo_update" in result["_guide"]
+    assert "needs_review=false" in result["_guide"]
+    # schema description 同步确认指引（发现后需确认，用 topo_update 置 false）。
+    assert "topo_update" in _TOPO_DISCOVER_SCHEMA["description"]
+    assert "needs_review=false" in _TOPO_DISCOVER_SCHEMA["description"]
+    assert "未经确认不参与权限判定" in _TOPO_DISCOVER_SCHEMA["description"]

@@ -591,3 +591,23 @@ def test_topo_discover_cli_help_and_missing_args(tmp_path):
     assert proc.returncode == 0
     assert "--host" in proc.stdout and "--env" in proc.stdout
     assert "--dry-run" in proc.stdout and "--force" in proc.stdout
+
+
+def test_cli_write_prompt_contains_three_step_review_guidance(tmp_path, monkeypatch, capsys):
+    """批次十二 C2：落盘后提示给具体三步 review 指引（查看/确认/效果），不抽象说请核对。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.setattr(td, "discover_host", lambda *a, **kw: _discovery())
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": ["hosts/node1.yaml"]})
+    monkeypatch.setattr(td, "_prompt_credentials", lambda host, user, key: {"user": "root"})
+
+    rc = td.main(["--host", "203.0.113.20", "--env", "prod", "--yes"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "needs_review" in out
+    assert "1. 查看" in out and "2. 确认" in out and "3. 效果" in out
+    assert "topo_update" in out and "needs_review=false" in out
+    assert "未经确认不参与权限判定" in out

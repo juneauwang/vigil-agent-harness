@@ -305,8 +305,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     print("\n· 已写入：")
     for path in written_paths:
         print(f"    {home / path}")
-    print("\n· 提示：发现结果带 needs_review=true，请核对后再纳入权威拓扑"
-          "（topo_update 或人工确认后置为 false）。")
+    print("\n· 提示：发现结果只是草案（全部 needs_review=true），未经确认不参与权限判定。"
+          "请按三步完成 review：")
+    print("    1. 查看：vigil topo query（或会话内 topo_query）查看全部待审实体（needs_review=true）")
+    print("    2. 确认：对每个实体用 topo_update 修正名称/类型/endpoint，确认无误后置 needs_review=false")
+    print("    3. 效果：全部确认后实体进入权威拓扑，runbook 可按其绑定")
     return 1 if write_failures else 0
 
 

@@ -134,10 +134,12 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
 _TOPO_DISCOVER_SCHEMA = {
     "name": "topo_discover",
     "description": (
-        "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU）并返回 schema v0.2 "
+        "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU）并返回 schema v0.3 "
         "片段。仅发现、不自动落盘（needs_review=true，dry_run 语义默认开启）；"
-        "确认后仍需通过人工流程或后续工具落盘。SSH 凭据走 ssh-agent/私钥或既有 "
-        "保险箱+askpass 注入，不接受明文密码参数。"
+        "发现结果只是草案，未经确认不参与权限判定——下一步用 topo_query 查看待审"
+        "实体、topo_update 逐条确认（修正名称/类型/endpoint 并置 needs_review=false）"
+        "后实体才进入权威拓扑。SSH 凭据走 ssh-agent/私钥或既有保险箱+askpass "
+        "注入，不接受明文密码参数。"
     ),
     "parameters": {
         "type": "object",
@@ -840,7 +842,13 @@ def _discover_handler(args: Dict[str, Any], **kwargs) -> str:
     if args.get("key"):
         creds["key_path"] = args.get("key")
     discovery = discover_host(str(host), str(env), creds, cluster=str(args.get("cluster") or ""))
-    return json.dumps(discovery, ensure_ascii=False, default=str)
+    pending = len(discovery.get("services") or [])
+    guide = (
+        f"发现完成：{pending} 个实体（全部 needs_review=true）。下一步："
+        "1) topo_query 查看待审实体；2) topo_update 逐条确认（修正名称/类型/"
+        "endpoint，置 needs_review=false）；3) 全部确认后告知用户，实体进入权威拓扑。"
+    )
+    return json.dumps({**discovery, "_guide": guide}, ensure_ascii=False, default=str)
 
 
 registry.register(
