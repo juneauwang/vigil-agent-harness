@@ -79,6 +79,43 @@ def topo_home(tmp_path, monkeypatch):
         _hc._LOAD_CONFIG_CACHE.clear()
 
 
+V2_TOPO_YAML = """\
+version: 2
+updated_at: 2026-08-12
+environments:
+  - {name: prod, isolation: strict, role: prod}
+hosts:
+  - {name: node1, env: prod, endpoint: "203.0.113.10", services_index: hosts/node1.yaml}
+  - {name: node2, env: prod, endpoint: "203.0.113.11", services_index: hosts/node2.yaml}
+cross_host:
+  - {name: k3s-prod, type: k8s, env: prod, detail: entities/k3s-prod.yaml}
+"""
+
+V2_NODE1_INDEX = """\
+host: node1
+env: prod
+services:
+  - {name: harbor, type: registry, env: prod, detail: entities/harbor.yaml}
+  - {name: postgres, type: db, env: prod, detail: entities/postgres.yaml}
+"""
+
+V2_HARBOR = """\
+name: harbor
+type: registry
+env: prod
+attrs:
+  version: v2.11
+depends_on: [postgres]
+"""
+
+V2_POSTGRES = """\
+name: postgres
+type: db
+env: prod
+attrs:
+  version: "16"
+"""
+
 V3_TOPO_YAML = """\
 version: 3
 updated_at: 2026-08-13
@@ -132,6 +169,26 @@ def _write_topo(home, files: dict):
         p = home / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(text, encoding="utf-8")
+
+
+@pytest.fixture
+def topo_home_v2(tmp_path, monkeypatch):
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    _write_topo(home, {
+        "topology.yaml": V2_TOPO_YAML,
+        "hosts/node1.yaml": V2_NODE1_INDEX,
+        "entities/harbor.yaml": V2_HARBOR,
+        "entities/postgres.yaml": V2_POSTGRES,
+        "entities/k3s-prod.yaml": "name: k3s-prod\ntype: k8s\nenv: prod\n",
+    })
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    import hermes_cli.config as _hc
+    _hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        yield home
+    finally:
+        _hc._LOAD_CONFIG_CACHE.clear()
 
 
 @pytest.fixture
@@ -336,6 +393,25 @@ def test_topo_query_overview_includes_clusters_v3(topo_home_v3):
     assert {h["name"] for h in result["hosts"]} == {"node1", "test-host"}
 
 
+def test_topo_query_credential_reference_returned_with_port_default(topo_home_v3):
+    """host credential 引用随 topo_query 返回；port 缺省 22。"""
+    host_row = _load(topo_query(host="node1"))
+    assert host_row["credential"]["type"] == "ssh_key"
+    assert host_row["credential"]["ref"] == "~/.vigil/keys/node1.pem"
+    assert host_row["credential"]["user"] == "root"
+    assert host_row["credential"]["port"] == 22
+    # 总览紧凑行同样带 credential（LLM 直接拿"怎么连"）。
+    overview = _load(topo_query(cluster="k3s-prod"))
+    node1_row = next(e for e in overview["entities"] if e["name"] == "node1")
+    assert node1_row["credential"]["port"] == 22
+
+
+def test_topo_query_entity_ssh_section_overrides_host_level(topo_home_v3):
+    """实体 ssh 段（L3 detail）覆盖 host 级默认连接信息。"""
+    result = _load(topo_query(entity="postgres", detail=True))
+    assert result["detail"]["ssh"]["user"] == "dbadmin"
+    assert result["detail"]["ssh"]["credential"]["type"] == "ssh_key"
+    assert result["detail"]["ssh"]["credential"]["ref"] == "~/.vigil/keys/postgres.pem"
 
 
 

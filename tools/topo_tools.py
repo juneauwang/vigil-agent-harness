@@ -476,6 +476,16 @@ def _with_cluster(entity: Dict[str, Any], cluster: str) -> Dict[str, Any]:
     return entity
 
 
+def _credential_ref(entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """凭据引用随行返回（LLM 可见）；port 缺省 22，返回时补齐。"""
+    cred = entity.get("credential")
+    if not isinstance(cred, dict):
+        return None
+    cred = dict(cred)
+    cred.setdefault("port", 22)
+    return cred
+
+
 def _compact_row(entity: Dict[str, Any]) -> Dict[str, Any]:
     """Compact list-view row (OPS-DELTA #30 方案 1): name/type/env/cluster/endpoint/stale."""
     row = {
@@ -486,6 +496,9 @@ def _compact_row(entity: Dict[str, Any]) -> Dict[str, Any]:
         "endpoint": entity.get("endpoint"),
         "stale": _stale_flag(entity.get("last_verified")),
     }
+    cred = _credential_ref(entity)
+    if cred is not None:
+        row["credential"] = cred
     return row
 
 
@@ -538,6 +551,9 @@ def _query_host(topo: Dict[str, Any], home: Path, host: str, detail: bool) -> st
         return tool_error(f"拓扑表中不存在 host: {host}")
     result = dict(match)
     result.setdefault("cluster", "default")
+    cred = _credential_ref(result)
+    if cred is not None:
+        result["credential"] = cred
     result["_env_ref"] = _env_for_entity(topo, match)
     index = _load_host_index(home, match) or {}
     result["services"] = [
@@ -585,6 +601,9 @@ def _query_entity(topo: Dict[str, Any], home: Path, entity: str, detail: bool) -
 
     result = dict(match)
     result.setdefault("cluster", "default")
+    cred = _credential_ref(result)
+    if cred is not None:
+        result["credential"] = cred
     result["_env_ref"] = _env_for_entity(topo, match)
     if matched_layer == "host":
         index = _load_host_index(home, match) or {}
