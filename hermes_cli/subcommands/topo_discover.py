@@ -10,6 +10,35 @@ from __future__ import annotations
 from typing import Callable
 
 
+def _dispatch(args, cmd_topo_discover=None):
+    """把顶层 Namespace 还原为 CLI argv 后交给独立 main（避免 main.py 重复拼参数）。"""
+    from hermes_cli.topo_discover import main as topo_discover_main
+
+    argv = []
+    if getattr(args, "host", None):
+        argv += ["-H", args.host]
+    if getattr(args, "hosts", None):
+        argv += ["--hosts", args.hosts]
+    argv += ["-e", args.env]
+    if getattr(args, "user", None):
+        argv += ["-u", args.user]
+    if getattr(args, "key", None):
+        argv += ["-k", args.key]
+    for flag, dest in (
+        ("--password", "password"),
+        ("--password-stdin", "password_stdin"),
+        ("--key-passphrase", "key_passphrase"),
+        ("--sudo-password", "sudo_password"),
+        ("--skip-unidentified", "skip_unidentified"),
+        ("--dry-run", "dry_run"),
+        ("--force", "force"),
+        ("--yes", "yes"),
+    ):
+        if getattr(args, dest, False):
+            argv.append(flag)
+    return topo_discover_main(argv)
+
+
 def build_topo_discover_parser(subparsers, *, cmd_topo_discover: Callable) -> None:
     """Attach the ``topo-discover`` subcommand to ``subparsers``."""
     topo_discover_parser = subparsers.add_parser(
@@ -19,23 +48,48 @@ def build_topo_discover_parser(subparsers, *, cmd_topo_discover: Callable) -> No
             "SSH 进主机扫描 docker compose / k8s / 监听端口 / GPU，自动生成 "
             "schema v0.2 拓扑片段（第一层 host 行 + 第二层服务索引 + 第三层详情草案）。"
             "发现结果带 needs_review=true，人工确认后才落盘（--dry-run 只预览）。"
+            "短选项：-H/--host、-e/--env、-u/--user、-k/--key；-h 仍为帮助。"
         ),
     )
     topo_discover_parser.add_argument(
-        "--host", required=True,
-        help="目标主机 IP/主机名（作为 host endpoint）",
+        "-H", "--host",
+        help="目标主机 IP/主机名；支持逗号列表与 [3-8] 区间展开",
     )
     topo_discover_parser.add_argument(
-        "--env", required=True,
+        "--hosts",
+        help="主机列表文件（每行一个 host，忽略空白行/注释）",
+    )
+    topo_discover_parser.add_argument(
+        "-e", "--env", required=True,
         help="目标环境（test/uat/prod/自定义名）",
     )
     topo_discover_parser.add_argument(
-        "--user", default=None,
+        "-u", "--user", default=None,
         help="SSH 用户（默认 root）",
     )
     topo_discover_parser.add_argument(
-        "--key", default=None,
-        help="SSH 私钥路径（默认走 ssh-agent；密码经提示输入并安全存储）",
+        "-k", "--key", default=None,
+        help="SSH 私钥路径（默认走 ssh-agent；凭据经安全注入，命令行/日志不出现明文）",
+    )
+    topo_discover_parser.add_argument(
+        "--password", action="store_true",
+        help="交互提示输入 SSH 密码（不落 argv）",
+    )
+    topo_discover_parser.add_argument(
+        "--password-stdin", action="store_true",
+        help="从 stdin 读取 SSH 密码（管道场景）",
+    )
+    topo_discover_parser.add_argument(
+        "--key-passphrase", action="store_true",
+        help="交互提示输入加密私钥 passphrase（需配合 --key）",
+    )
+    topo_discover_parser.add_argument(
+        "--sudo-password", action="store_true",
+        help="交互提示输入 sudo 密码，用于 docker/kubectl 等提权探测",
+    )
+    topo_discover_parser.add_argument(
+        "--skip-unidentified", action="store_true",
+        help="跳过 ss 端口扫描生成的 unidentified 服务",
     )
     topo_discover_parser.add_argument(
         "--dry-run", action="store_true",
@@ -49,4 +103,4 @@ def build_topo_discover_parser(subparsers, *, cmd_topo_discover: Callable) -> No
         "--yes", action="store_true",
         help="跳过交互确认（配合 --force 可非交互落盘）",
     )
-    topo_discover_parser.set_defaults(func=cmd_topo_discover)
+    topo_discover_parser.set_defaults(func=_dispatch)
