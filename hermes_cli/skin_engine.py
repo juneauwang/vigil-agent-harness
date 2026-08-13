@@ -2,12 +2,12 @@
 
 A data-driven skin system that lets users (and Vigil itself) customize the
 visual appearance across the CLI, the TUI, and the desktop GUI from a single
-file. Skins are defined as YAML files in ~/.hermes/skins/ or as built-in presets.
+file. Skins are defined as YAML files in ~/.vigil/skins/ or as built-in presets.
 No code changes are needed to add a new skin.
 
 This module is the source of truth: it resolves the active skin, and the gateway
 pushes the resolved palette to the TUI and desktop (see tui_gateway's
-``resolve_skin`` / ``skin.changed``). A skin dropped in ~/.hermes/skins/ therefore
+``resolve_skin`` / ``skin.changed``). A skin dropped in ~/.vigil/skins/ therefore
 themes all three surfaces at once — the theme analogue of the plugin SDK.
 
 SKIN YAML SCHEMA
@@ -122,7 +122,7 @@ USAGE
     print(skin.get_branding("agent_name"))  # "Vigil"
 
     set_active_skin("ares")               # Switch to built-in ares skin
-    set_active_skin("mytheme")            # Switch to user skin from ~/.hermes/skins/
+    set_active_skin("mytheme")            # Switch to user skin from ~/.vigil/skins/
 
 BUILT-IN SKINS
 ==============
@@ -137,7 +137,7 @@ BUILT-IN SKINS
 USER SKINS
 ==========
 
-Drop a YAML file in ``~/.hermes/skins/<name>.yaml`` following the schema above.
+Drop a YAML file in ``~/.vigil/skins/<name>.yaml`` following the schema above.
 Activate with ``/skin <name>`` in the CLI or ``display.skin: <name>`` in config.yaml.
 """
 
@@ -146,7 +146,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from hermes_constants import get_hermes_home
+from hermes_constants import get_vigil_skin_dir
 
 logger = logging.getLogger(__name__)
 
@@ -864,7 +864,7 @@ _active_skin_name: str = "default"
 
 def _skins_dir() -> Path:
     """User skins directory."""
-    return get_hermes_home() / "skins"
+    return get_vigil_skin_dir()
 
 
 def _load_skin_from_yaml(path: Path) -> Optional[Dict[str, Any]]:

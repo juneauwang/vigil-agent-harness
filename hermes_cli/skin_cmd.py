@@ -15,13 +15,13 @@ import re
 import sys
 from pathlib import Path
 
-from hermes_constants import display_hermes_home, get_hermes_home
+from hermes_constants import get_vigil_skin_dir
 
 _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 
 def _skins_dir() -> Path:
-    return get_hermes_home() / "skins"
+    return get_vigil_skin_dir()
 
 
 def _active_skin() -> str:
@@ -81,7 +81,7 @@ def _skin_set(key: str, value: str, skin: str | None) -> int:
     if target != name:
         _use(target)
 
-    print(f"✓ {key} = {value} in {display_hermes_home()}/skins/{target}.yaml (live within ~1s)")
+    print(f"✓ {key} = {value} in {_skins_dir()}/{target}.yaml (live within ~1s)")
     return 0
 
 

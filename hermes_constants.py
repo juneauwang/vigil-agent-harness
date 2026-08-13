@@ -14,6 +14,7 @@ from pathlib import Path
 
 _profile_fallback_warned: bool = False
 _legacy_fallback_warned: bool = False
+_legacy_skin_warned: bool = False
 _UNSET = object()
 _HERMES_HOME_OVERRIDE: ContextVar[str | object] = ContextVar(
     "_HERMES_HOME_OVERRIDE", default=_UNSET
@@ -158,6 +159,50 @@ def _warn_legacy_fallback_once(root: Path) -> None:
         sys.stderr.flush()
     except Exception:
         pass
+
+
+def get_vigil_native_home() -> Path:
+    """Return the Vigil-native data root for skin assets.
+
+    Skin 是用户可见的品牌皮肤，读取路径不跟随 HERMES_HOME 残留或旧 hermes
+    数据根兜底：只有显式 VIGIL_HOME 会覆盖，否则固定平台原生 ``~/.vigil``。
+    """
+    vigil_val = os.environ.get("VIGIL_HOME", "").strip()
+    if vigil_val:
+        return Path(vigil_val)
+    return _vigil_native_home_dir(Path.home())
+
+
+def _warn_legacy_skin_root_once(skin_root: Path | None = None) -> None:
+    """检测到当前数据根落在旧 hermes 布局时，一次性提示 skin 已切换。"""
+    global _legacy_skin_warned
+    if _legacy_skin_warned:
+        return
+    _legacy_skin_warned = True
+    try:
+        current = get_hermes_home()
+        if not _looks_like_vigil_legacy_data(current):
+            return
+        if skin_root is not None and Path(skin_root) == current:
+            # 显式 VIGIL_HOME 指向旧目录时跟随用户配置，不需要迁移提示。
+            return
+        primary = _vigil_native_home_dir(Path.home())
+        msg = (
+            f"[VIGIL skin] 检测到旧 Hermes 数据根 {current}，"
+            f"skin 已固定从 {primary / 'skins'} 读取；"
+            f"建议迁移到 {primary} 或清理残留。"
+        )
+        sys.stderr.write(msg + "\n")
+        sys.stderr.flush()
+    except Exception:
+        pass
+
+
+def get_vigil_skin_dir() -> Path:
+    """Return the skin directory bound to the Vigil-native data root."""
+    root = get_vigil_native_home()
+    _warn_legacy_skin_root_once(root)
+    return root / "skins"
 
 
 def _get_platform_default_hermes_home() -> Path:
