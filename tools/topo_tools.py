@@ -35,6 +35,7 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
+from tools.topo_discovery import discover_host
 from tools.registry import registry, tool_error
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,46 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
             },
         },
         "required": ["entity", "updates"],
+    },
+}
+
+_TOPO_DISCOVER_SCHEMA = {
+    "name": "topo_discover",
+    "description": (
+        "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU）并返回 schema v0.2 "
+        "片段。仅发现、不自动落盘（needs_review=true，dry_run 语义默认开启）；"
+        "确认后仍需通过人工流程或后续工具落盘。SSH 凭据走 ssh-agent/私钥或既有 "
+        "保险箱+askpass 注入，不接受明文密码参数。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "host": {
+                "type": "string",
+                "description": "目标主机 IP/主机名（单台）。",
+            },
+            "env": {
+                "type": "string",
+                "description": "目标环境（test/uat/prod/自定义名）。",
+            },
+            "user": {
+                "type": "string",
+                "description": "SSH 用户，默认 root。",
+            },
+            "key": {
+                "type": "string",
+                "description": "SSH 私钥路径；缺省走 ssh-agent。",
+            },
+            "dry_run": {
+                "type": "boolean",
+                "description": "只预览发现片段，不落盘。工具场景默认 true。",
+            },
+            "force": {
+                "type": "boolean",
+                "description": "工具场景不自动落盘，此参数仅保留 CLI 对齐。",
+            },
+        },
+        "required": ["host", "env"],
     },
 }
 
@@ -733,6 +774,19 @@ def _update_handler(args: Dict[str, Any], **kwargs) -> str:
     )
 
 
+def _discover_handler(args: Dict[str, Any], **kwargs) -> str:
+    """会话内发起拓扑发现：复用 discover_host，只返回片段，不落盘。"""
+    host = args.get("host")
+    env = args.get("env")
+    if not host or not env:
+        return tool_error("topo_discover 需要 host 与 env")
+    creds: Dict[str, Any] = {"user": args.get("user") or "root"}
+    if args.get("key"):
+        creds["key_path"] = args.get("key")
+    discovery = discover_host(str(host), str(env), creds)
+    return json.dumps(discovery, ensure_ascii=False, default=str)
+
+
 registry.register(
     name="topo_query",
     toolset="topo",
@@ -751,4 +805,13 @@ registry.register(
     check_fn=check_topo_requirements,
     emoji="✏️",
     max_result_size_chars=30_000,
+)
+
+registry.register(
+    name="topo_discover",
+    toolset="topo",
+    schema=_TOPO_DISCOVER_SCHEMA,
+    handler=_discover_handler,
+    emoji="🛰️",
+    max_result_size_chars=60_000,
 )
