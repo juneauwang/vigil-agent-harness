@@ -33,7 +33,7 @@ def rb_home(tmp_path, monkeypatch):
     (home / "runbooks").mkdir(parents=True)
     for src in sorted(SAMPLE_RUNBOOKS.glob("*.yaml")):
         shutil.copy2(src, home / "runbooks" / src.name)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         yield home
@@ -262,9 +262,30 @@ def test_check_runbook_requirements_no_data(tmp_path, monkeypatch):
 
     home = tmp_path / "empty_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         assert check_runbook_requirements() is False
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+
+def test_sibling_ops_profile_no_longer_fallback(tmp_path, monkeypatch):
+    """OPS-DELTA #14 回退删除：default 无 runbooks 数据 + sibling ops profile
+    有数据 → 不回退，工具不可用且提示"数据缺失"。"""
+    import hermes_cli.config as hc
+
+    root = tmp_path / "vigil_root"
+    (root / "profiles" / "ops" / "runbooks").mkdir(parents=True)
+    (root / "profiles" / "ops" / "runbooks" / "demo.yaml").write_text(
+        "name: demo\ntitle: demo\nsteps:\n  - {id: s1, commands: [ls]}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIGIL_HOME", str(root))
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        assert check_runbook_requirements() is False
+        result = _load(runbook_load("demo"))
+        assert "runbooks 数据不存在" in result.get("error", "")
     finally:
         hc._LOAD_CONFIG_CACHE.clear()

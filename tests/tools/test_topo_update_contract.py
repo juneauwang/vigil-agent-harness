@@ -41,7 +41,7 @@ def topo_home(tmp_path, monkeypatch):
     (home / "entities" / "web-test.yaml").write_text(
         "name: web-test\nenv: test\nattrs:\n  version: v1\n", encoding="utf-8"
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     import hermes_cli.config as _hc
     _hc._LOAD_CONFIG_CACHE.clear()
     try:

@@ -74,7 +74,7 @@ def topo_home(tmp_path, monkeypatch, request):
         _seed_v2(home)
     else:
         _seed_v1(home)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         yield home
@@ -126,7 +126,7 @@ def test_topology_data_exists_v2(tmp_path, monkeypatch):
     (home / "topology.yaml").write_text(
         "version: 2\nhosts:\n  - {name: node1, env: prod}\n", encoding="utf-8"
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     assert topo_tools.check_topo_requirements() is True
     # 空 v2（无 hosts/cross_host）→ 视为未就位。
@@ -268,7 +268,7 @@ def test_ops_target_service_env_resolution_v2(tmp_path, monkeypatch):
         "name: gateway-svc\nenv: prod\nattrs:\n  public_ip: 203.0.113.22\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         target = resolve_command_target("ssh user@gw.internal 'systemctl status gateway'")

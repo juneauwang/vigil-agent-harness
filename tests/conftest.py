@@ -62,6 +62,12 @@ if not os.environ.get("HERMES_HOME"):
     _SESSION_HERMES_HOME = tempfile.mkdtemp(prefix="hermes-test-home-")
     os.environ["HERMES_HOME"] = _SESSION_HERMES_HOME
     atexit.register(shutil.rmtree, _SESSION_HERMES_HOME, True)
+# VIGIL_HOME is the only env var that drives ``get_hermes_home()`` now
+# (HERMES_HOME compat was removed — Vigil ignores it). Without sandboxing it
+# here, module-level ``setup_logging()`` / ``SessionDB`` in test imports
+# would resolve to the developer's real ``~/.vigil``.
+if not os.environ.get("VIGIL_HOME"):
+    os.environ["VIGIL_HOME"] = os.environ["HERMES_HOME"]
 
 #: HERMES_HOME as it stood when conftest was imported - i.e. before any test
 #: module could import code that configures logging. Recorded so the guard in
@@ -422,8 +428,9 @@ def _hermetic_environment(tmp_path, monkeypatch):
     # custom host resolution override/delete this explicitly.
     monkeypatch.setenv("HERMES_HONCHO_HOST", "hermes")
 
-    # 3. Redirect HERMES_HOME to a per-test tempdir. Code that reads
-    #    ``~/.hermes/*`` via ``get_hermes_home()`` now gets the tempdir.
+    # 3. Redirect HERMES_HOME + VIGIL_HOME to a per-test tempdir. Code that
+    #    reads the data root via ``get_hermes_home()`` now follows VIGIL_HOME
+    #    (HERMES_HOME compat removed) and gets the tempdir.
     #
     #    NOTE: We do NOT also redirect HOME. Doing so broke CI because
     #    some tests (and their transitive deps) spawn subprocesses that
@@ -439,6 +446,7 @@ def _hermetic_environment(tmp_path, monkeypatch):
     (fake_hermes_home / "memories").mkdir()
     (fake_hermes_home / "skills").mkdir()
     monkeypatch.setenv("HERMES_HOME", str(fake_hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(fake_hermes_home))
 
     # 3b. hermes_state computes ``DEFAULT_DB_PATH = get_hermes_home() / "state.db"``
     #     at import time. When the module is first imported at collection (any

@@ -33,29 +33,34 @@ class TestSkinConfig:
 
 
 class TestBuiltinSkins:
-    def test_ares_skin_loads(self):
+    def test_vigil_skin_loads(self):
         from hermes_cli.skin_engine import load_skin
-        skin = load_skin("ares")
-        assert skin.name == "ares"
-        assert skin.tool_prefix == "╎"
-        # Crimson identity: border stays red-dominant (exact values are owned
-        # by the palette audit in test_skin_palettes.py, which enforces
+        skin = load_skin("vigil")
+        assert skin.name == "vigil"
+        assert skin.tool_prefix == "┊"
+        # Blue-black identity: border stays blue-dominant (exact values are
+        # owned by the palette audit in test_skin_palettes.py, which enforces
         # contrast floors — don't pin literals here).
         border = skin.get_color("banner_border")
         r, g, b = (int(border[i:i + 2], 16) for i in (1, 3, 5))
-        assert r > g and r > b, f"ares border lost its crimson: {border}"
-        assert skin.get_color("response_border") == "#C7A96B"
-        assert skin.get_color("session_label") == "#C7A96B"
-        assert skin.get_color("session_border") == "#6E584B"
-        assert skin.get_branding("agent_name") == "Ares Agent"
+        assert b > r, f"vigil border lost its blue: {border}"
+        assert skin.get_color("response_border") == "#4A90D9"
+        assert skin.get_color("session_label") == "#8FB8E8"
+        assert skin.get_branding("prompt_symbol") == "◉ Vigil >"
 
-    def test_ares_has_spinner_customization(self):
+    def test_unknown_skin_falls_back_to_vigil_palette(self):
         from hermes_cli.skin_engine import load_skin
-        skin = load_skin("ares")
-        wings = skin.get_spinner_wings()
-        assert len(wings) > 0
-        assert isinstance(wings[0], tuple)
-        assert len(wings[0]) == 2
+        # 已删除的内置皮肤（slate/ares/...）→ 回退 vigil 色值，不抛异常。
+        for name in ("slate", "ares", "mono", "daylight", "charizard"):
+            skin = load_skin(name)
+            assert skin.get_color("banner_title") == "#8FB8E8"  # vigil 蓝
+
+    def test_default_is_vigil_blue_black(self):
+        from hermes_cli.skin_engine import load_skin
+        skin = load_skin("default")
+        assert skin.name == "default"
+        assert skin.get_color("banner_title") == "#8FB8E8"
+        assert skin.get_color("ui_accent") == "#4A90D9"
 
 
 
@@ -67,25 +72,45 @@ class TestBuiltinSkins:
 class TestSkinManagement:
     def test_set_active_skin(self):
         from hermes_cli.skin_engine import set_active_skin, get_active_skin, get_active_skin_name
-        skin = set_active_skin("ares")
-        assert skin.name == "ares"
-        assert get_active_skin_name() == "ares"
-        assert get_active_skin().name == "ares"
+        skin = set_active_skin("vigil")
+        assert skin.name == "vigil"
+        assert get_active_skin_name() == "vigil"
+        assert get_active_skin().name == "vigil"
 
 
     def test_list_skins_includes_builtins(self):
         from hermes_cli.skin_engine import list_skins
         skins = list_skins()
         names = [s["name"] for s in skins]
-        assert "default" in names
-        assert "ares" in names
-        assert "mono" in names
-        assert "slate" in names
-        assert "daylight" in names
-        assert "warm-lightmode" in names
+        assert names == ["default", "vigil"]
+        assert not ({"ares", "mono", "slate", "daylight", "warm-lightmode",
+                     "poseidon", "sisyphus", "charizard"} & set(names))
         for s in skins:
             assert "source" in s
             assert s["source"] == "builtin"
+
+    def test_config_skin_deleted_name_startup_ok_and_warns_once(self, tmp_path, monkeypatch):
+        """display.skin 引用已删除皮肤（slate）→ init 不崩、回退 vigil、警告一次。"""
+        from hermes_cli import skin_engine
+        skin_engine._UNKNOWN_SKIN_WARNED.clear()
+        monkeypatch.setattr(
+            skin_engine, "_skins_dir", lambda: tmp_path / "empty-skins"
+        )
+        warns = []
+        monkeypatch.setattr(
+            skin_engine.logger,
+            "warning",
+            lambda msg, *args: warns.append(msg % args if args else msg),
+        )
+        try:
+            skin_engine.init_skin_from_config({"display": {"skin": "slate"}})
+            skin_engine.init_skin_from_config({"display": {"skin": "slate"}})
+        finally:
+            skin_engine._UNKNOWN_SKIN_WARNED.clear()
+
+        assert skin_engine.get_active_skin_name() == "slate"
+        assert skin_engine.get_active_skin().get_color("banner_title") == "#8FB8E8"
+        assert len([w for w in warns if "not found" in w]) == 1
 
 
 
@@ -116,7 +141,7 @@ class TestUserSkins:
         assert skin.get_branding("agent_name") == "Custom Agent"
         assert skin.tool_prefix == "▸"
         # Should inherit defaults for unspecified colors
-        assert skin.get_color("banner_border") == "#CD7F32"  # from default
+        assert skin.get_color("banner_border") == "#3E6B9B"  # from default (vigil 蓝黑)
 
     def test_load_user_skin_invalid_section_types_fall_back_to_defaults(self, tmp_path, monkeypatch):
         from hermes_cli.skin_engine import load_skin
@@ -143,9 +168,10 @@ class TestUserSkins:
         skin = load_skin("broken")
 
         assert skin.name == "broken"
-        assert skin.get_color("banner_title") == "#FFD700"
+        assert skin.get_color("banner_title") == "#8FB8E8"
         assert skin.get_branding("agent_name") == "Vigil"
-        assert skin.spinner.get("waiting_faces", []) == []
+        # 无效 spinner 段被忽略 → 继承 default（vigil）的 spinner。
+        assert skin.spinner.get("waiting_faces") == ["(·)", "(·|)", "(·/)", "(·\\)"]
         assert skin.tool_emojis == {}
         assert skin.tool_prefix == "!"
 
@@ -173,24 +199,23 @@ class TestDisplayIntegration:
     def test_tool_message_uses_skin_prefix(self):
         from hermes_cli.skin_engine import set_active_skin
         from agent.display import get_cute_tool_message
-        set_active_skin("ares")
+        set_active_skin("vigil")
         msg = get_cute_tool_message("terminal", {"command": "ls"}, 0.5)
-        assert msg.startswith("╎")
-        assert "┊" not in msg
+        assert msg.startswith("┊")
 
 
 class TestCliBrandingHelpers:
 
 
-    def test_active_goodbye_ares(self):
+    def test_active_goodbye_default(self):
         from hermes_cli.skin_engine import set_active_skin, get_active_goodbye
 
-        set_active_skin("ares")
-        assert get_active_goodbye() == "Farewell, warrior! ⚔"
+        set_active_skin("default")
+        assert get_active_goodbye() == "Goodbye! ⚕"
 
     def test_prompt_toolkit_style_overrides_cover_tui_classes(self):
         from hermes_cli.skin_engine import set_active_skin, get_prompt_toolkit_style_overrides
-        set_active_skin("ares")
+        set_active_skin("vigil")
         overrides = get_prompt_toolkit_style_overrides()
         required = {
             "input-area",
@@ -248,7 +273,7 @@ class TestCliBrandingHelpers:
             get_prompt_toolkit_style_overrides,
         )
 
-        set_active_skin("ares")
+        set_active_skin("vigil")
         skin = get_active_skin()
         overrides = get_prompt_toolkit_style_overrides()
         assert overrides["prompt"] == skin.get_color("prompt")
@@ -265,9 +290,3 @@ class TestCliBrandingHelpers:
         assert overrides["clarify-title"] == f"{skin.get_color('banner_title')} bold"
         assert overrides["sudo-prompt"] == f"{skin.get_color('ui_error')} bold"
         assert overrides["approval-title"] == f"{skin.get_color('ui_warn')} bold"
-
-        set_active_skin("daylight")
-        skin = get_active_skin()
-        overrides = get_prompt_toolkit_style_overrides()
-        assert overrides["status-bar"] == f"bg:{skin.get_color('status_bar_bg')} {skin.get_color('banner_text')}"
-        assert overrides["voice-status"] == f"bg:{skin.get_color('voice_status_bg')} {skin.get_color('ui_label')}"

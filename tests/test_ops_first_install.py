@@ -41,9 +41,9 @@ def _clear_caches():
 
 
 def _fresh_home(tmp_path: Path, monkeypatch, name: str = "vigil-fresh") -> Path:
-    """Point HERMES_HOME at a not-yet-existing data root (true first install)."""
+    """Point VIGIL_HOME at a not-yet-existing data root (true first install)."""
     home = tmp_path / name
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     return home
 
 
@@ -125,7 +125,7 @@ class TestFirstRunSeeding:
         soul = home / "SOUL.md"
         soul.write_text("my custom soul\n", encoding="utf-8")
         mtimes = {p: p.stat().st_mtime_ns for p in (home / "config.yaml", topo, soul)}
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         hc.ensure_hermes_home()
         for p, m in mtimes.items():
             assert p.stat().st_mtime_ns == m, p

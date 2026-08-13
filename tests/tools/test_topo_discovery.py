@@ -293,7 +293,7 @@ def test_cli_short_options_parse_and_flow(tmp_path, monkeypatch):
 
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     seen = {}
 
     def fake_prompt(host, user, key, **kwargs):
@@ -321,7 +321,7 @@ def test_cli_password_stdin_flows_to_prompt_credentials(tmp_path, monkeypatch):
 
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(td.sys, "stdin", io.StringIO("pipe-secret\n"))
     seen = {}
 
@@ -358,7 +358,7 @@ def test_cli_batch_scan_continues_after_single_failure(tmp_path, monkeypatch):
 
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(td, "_prompt_credentials", lambda host, user, key: {"user": user})
     calls = []
 
@@ -381,7 +381,7 @@ def test_cli_batch_confirm_once_and_writes_each_success(tmp_path, monkeypatch):
 
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(td, "_prompt_credentials", lambda host, user, key: {"user": user})
     monkeypatch.setattr(td, "discover_host", lambda host, env, creds, **kw: _discovery())
     writes = []
@@ -424,7 +424,7 @@ def test_write_discovery_writes_v2_structure(tmp_path):
     assert topo["hosts"][0]["services_index"] == "hosts/203.0.113.20.yaml"
 
     # 落盘结果能被 topo_tools 正常读取（第二层服务索引进扁平视图）。
-    os.environ["HERMES_HOME"] = str(home)
+    os.environ["VIGIL_HOME"] = str(home)
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         from tools.topo_tools import topo_query
@@ -468,7 +468,7 @@ def test_write_discovery_dry_run_not_applied_by_cli(tmp_path, monkeypatch):
 
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     calls = {"discover": 0, "write": 0}
 
     def fake_discover(*a, **kw):

@@ -1,13 +1,15 @@
-"""OPS-DELTA #14 — topo/runbook 工具集默认注册 + 迁移路径。
+"""OPS-DELTA #14（修订）— topo/runbook 工具集默认注册 + 数据只挂 home 根。
 
 验收点：
   - ``_get_platform_tools({}, 'cli')`` 返回含 topo/runbook（default profile
     开箱即用 ops 能力）；
   - 显式 ``platform_toolsets.cli`` 列表权威（[hermes-cli] 不自动加）；
   - 平台为 telegram / cron 时不加（不污染消息平台）；
-  - 迁移路径：default profile（HERMES_HOME=<root>）能读到 ops profile
-    （<root>/profiles/ops）的拓扑/runbook 数据（topo_query / runbook_load /
+  - 数据只挂在解析出的 home 根（VIGIL_HOME 指向的目录）下：
+    home/topology.yaml + home/runbooks → 工具可用（topo_query / runbook_load /
     check_fn / topo memory provider 全部生效）；
+  - sibling ops profile（<root>/profiles/ops）数据不再回退：home 根无数据 →
+    工具不可用（OPS-DELTA #14 回退已删除，无老用户）；
   - 无数据时 topo_query 仍不可用（check_fn 数据存在性门控，行为不变）。
 """
 
@@ -53,27 +55,25 @@ def test_non_cli_platforms_not_polluted(platform):
 @pytest.fixture
 def ops_root(tmp_path, monkeypatch):
     root = tmp_path / "vigil_root"
-    ops_home = root / "profiles" / "ops"
-    ops_home.mkdir(parents=True)
-    (ops_home / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
-    (ops_home / "entities").mkdir()
-    (ops_home / "entities" / "harbor.yaml").write_text(
+    root.mkdir()
+    (root / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
+    (root / "entities").mkdir()
+    (root / "entities" / "harbor.yaml").write_text(
         "name: harbor\ntype: registry\n", encoding="utf-8"
     )
-    (ops_home / "runbooks").mkdir()
-    (ops_home / "runbooks" / "demo.yaml").write_text(
+    (root / "runbooks").mkdir()
+    (root / "runbooks" / "demo.yaml").write_text(
         "name: demo\ntitle: demo\nsteps:\n  - {id: s1, commands: [ls]}\n",
         encoding="utf-8",
     )
-    # default profile = root 本身（HERMES_HOME 直接指向 root）
-    monkeypatch.setenv("HERMES_HOME", str(root))
+    monkeypatch.setenv("VIGIL_HOME", str(root))
     hc._LOAD_CONFIG_CACHE.clear()
     yield root
     hc._LOAD_CONFIG_CACHE.clear()
 
 
-def test_default_profile_reads_ops_profile_topology(ops_root, monkeypatch):
-    """迁移路径：default profile 直接读到 ops profile 的拓扑/runbook 数据。"""
+def test_home_root_data_enables_topo_runbook(ops_root, monkeypatch):
+    """数据铺在 home 根 → 拓扑/runbook 工具开箱即用。"""
     from tools.runbook_tools import check_runbook_requirements, runbook_load
     from tools.topo_tools import check_topo_requirements, topo_query
 
@@ -88,7 +88,7 @@ def test_default_profile_reads_ops_profile_topology(ops_root, monkeypatch):
     assert loaded["name"] == "demo"
 
 
-def test_default_profile_topo_provider_injects_block(ops_root):
+def test_home_root_topo_provider_injects_block(ops_root):
     from plugins.memory.topo import TopoMemoryProvider
 
     provider = TopoMemoryProvider()
@@ -98,18 +98,44 @@ def test_default_profile_topo_provider_injects_block(ops_root):
     assert block.startswith("## TOPO") and "harbor" in block
 
 
+def test_sibling_ops_profile_data_not_read(tmp_path, monkeypatch):
+    """OPS-DELTA #14 回退删除：home 根无数据 + sibling ops profile 有数据 →
+    工具不可用（不再回退 <root>/profiles/ops）。"""
+    root = tmp_path / "vigil_root"
+    ops_home = root / "profiles" / "ops"
+    ops_home.mkdir(parents=True)
+    (ops_home / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
+    (ops_home / "runbooks").mkdir()
+    (ops_home / "runbooks" / "demo.yaml").write_text(
+        "name: demo\ntitle: demo\nsteps:\n  - {id: s1, commands: [ls]}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIGIL_HOME", str(root))
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        from tools.runbook_tools import check_runbook_requirements
+        from tools.topo_tools import check_topo_requirements, topo_query
+
+        assert check_topo_requirements() is False
+        assert check_runbook_requirements() is False
+        payload = json.loads(topo_query())
+        assert payload.get("error")
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+
 def test_no_data_topo_query_still_unavailable(tmp_path, monkeypatch):
-    """无 topology.yaml（且无 sibling ops profile）→ 工具仍不可用（现状）。"""
+    """无 topology.yaml → 工具仍不可用（现状）。"""
     home = tmp_path / "empty_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     from tools.topo_tools import check_topo_requirements
     assert check_topo_requirements() is False
 
 
 def test_ops_topology_explicit_false_still_disables(ops_root, monkeypatch):
-    """显式 ops.topology.enabled: false → 即使数据在 ops profile 也关闭。"""
+    """显式 ops.topology.enabled: false → 即使数据在 home 根也关闭。"""
     root = ops_root
     (root / "config.yaml").write_text(
         "ops:\n  topology:\n    enabled: false\n", encoding="utf-8"

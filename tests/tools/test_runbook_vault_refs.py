@@ -47,7 +47,7 @@ def rb_home(tmp_path, monkeypatch):
     (home / "runbooks" / "rotate-creds.yaml").write_text(
         yaml.safe_dump(RUNBOOK, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     yield home
     hc._LOAD_CONFIG_CACHE.clear()

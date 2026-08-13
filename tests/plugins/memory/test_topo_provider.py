@@ -39,7 +39,7 @@ def topo_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes_home"
     home.mkdir()
     (home / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     yield home
     hc._LOAD_CONFIG_CACHE.clear()
@@ -130,7 +130,7 @@ def test_v2_render_injects_only_first_layer(tmp_path, monkeypatch):
     home.mkdir()
     shutil.copy2(sample / "topology.yaml", home / "topology.yaml")
     shutil.copytree(sample / "hosts", home / "hosts")
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
 
     provider = TopoMemoryProvider()
