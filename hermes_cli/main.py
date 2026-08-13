@@ -2692,8 +2692,10 @@ def cmd_chat(args):
             accept_hooks=getattr(args, "accept_hooks", False),
         )
 
-    # Import and run the CLI
+    # Import and run the CLI（import 即触发 CLI_CONFIG=load_cli_config() 等重加载）
+    _progress_hint("· 加载配置与模型…")
     from cli import main as cli_main
+    _progress_hint("· 启动就绪")
 
     # Build kwargs from args
     kwargs = {
@@ -10759,6 +10761,27 @@ def _resolve_deferred_platform_cli_command(command_name: str | None) -> None:
         )
 
 
+# E2 启动进度提示：轻量 print（不额外 IO），仅交互 tty + 非 CI + 非 oneshot 打印。
+# oneshot 模式 stdout 只允许最终回复（_run_and_exit_oneshot），故 main 会关掉开关。
+_STARTUP_PROGRESS = True
+
+
+def _startup_progress_enabled() -> bool:
+    """进度提示开关：交互 tty + 非 CI + 非 oneshot（管道/CI/脚本不打印）。"""
+    if not _STARTUP_PROGRESS or os.environ.get("CI"):
+        return False
+    try:
+        return sys.stdin.isatty()
+    except (AttributeError, OSError):
+        return False
+
+
+def _progress_hint(message: str) -> None:
+    """轻量启动进度提示（E2）：纯 print + flush，不做额外 IO，不阻断失败。"""
+    if _startup_progress_enabled():
+        print(message, flush=True)
+
+
 _AGENT_COMMANDS = {None, "chat", "acp", "rl"}
 _AGENT_SUBCOMMANDS = {
     "cron": ("cron_command", {"run", "tick"}),
@@ -10808,6 +10831,7 @@ def _prepare_agent_startup(args) -> None:
         return
 
     _accept_hooks = bool(getattr(args, "accept_hooks", False))
+    _progress_hint("· 加载插件与工具…")
     try:
         from hermes_cli.plugins import discover_plugins
 
@@ -10817,6 +10841,7 @@ def _prepare_agent_startup(args) -> None:
             "plugin discovery failed at CLI startup",
             exc_info=True,
         )
+    _progress_hint("· 插件与工具加载完成")
     _run_inline_mcp_discovery = True
     if _is_tui_chat_launch(args):
         # The TUI launcher hands off to a dedicated startup path that already
@@ -12558,6 +12583,11 @@ def main():
         parser.formatter_class = argparse.RawDescriptionHelpFormatter
         parser.print_help()
         return
+
+    # E2: oneshot stdout 只允许最终回复 → 关闭启动进度提示。
+    if getattr(args, "oneshot", None):
+        global _STARTUP_PROGRESS
+        _STARTUP_PROGRESS = False
 
     # Handle --version flag
     if args.version:
