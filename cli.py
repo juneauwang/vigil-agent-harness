@@ -5238,10 +5238,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             None,
         )
         if env_def is None:
-            available = ", ".join(str(d.get("name")) for d in env_defs) or "test/uat/prod"
+            available = ", ".join(str(d.get("name")) for d in env_defs) or "local/test/dev/prod"
             self._console_print(
                 f"  ✗ 未定义环境 '{name}'。可用环境: {available}"
-                "（如需新增，在 config.yaml ops.environments 中定义）"
             )
             return
 
