@@ -2,7 +2,13 @@
 
 Pure-data leaf module: DEFAULT_CONFIG and OPTIONAL_ENV_VARS, extracted
 verbatim from hermes_cli/config.py. Must not import from hermes_cli.config.
+
+The only cross-module dependency is ops.environments, which mirrors
+hermes_cli/ops_init.py's env-tier table so first-install defaults and
+``vigil ops-init`` generated profiles stay in sync (OPS-DELTA #38).
 """
+
+from hermes_cli.ops_init import _DEFAULT_ENV_DEFS
 
 DEFAULT_CONFIG = {
     "model": "",
@@ -10,6 +16,12 @@ DEFAULT_CONFIG = {
     "fallback_providers": [],
     "credential_pool_strategies": {},
     "toolsets": ["hermes-cli"],
+    # 各平台显式启用的工具集列表（setup wizard / `vigil tools` 写入）。
+    # Vigil 默认：cli 平台直接列 topo/runbook（OPS-DELTA #38）——首装 default
+    # profile 即为完整 ops harness，与 vigil ops-init 生成的 ops profile 一致。
+    "platform_toolsets": {
+        "cli": ["hermes-cli", "topo", "runbook"],
+    },
     # SQLite journal mode used by every Hermes database opener. WAL is the
     # normal default; set DELETE for weak-fsync/shared filesystems where WAL is
     # not crash-safe (for example macOS virtiofs, NFS, or SMB).
@@ -1659,7 +1671,12 @@ DEFAULT_CONFIG = {
         # Set to a provider name to activate: "openviking", "mem0",
         # "hindsight", "holographic", "retaindb", "byterover".
         # Only ONE external provider is allowed at a time.
-        "provider": "",
+        # Vigil (OPS-DELTA #14): 默认 topo——TOPO 段经 memory-provider 外部块
+        # 注入 system prompt（零侵入注入槽位）；provider 本身按 topology.yaml
+        # 数据存在性门控（is_available），无数据/显式关闭时零影响，非 ops
+        # profile 不产生任何 prompt 变化。显式 "" 仍是关闭外部 provider 的
+        # 语义（向后兼容）。
+        "provider": "topo",
     },
 
     # Subagent delegation — override the provider:model used by delegate_task
@@ -2356,7 +2373,11 @@ DEFAULT_CONFIG = {
             #     discoverable through tool_search only.
             # "auto"/"on" — activate when at least one deferrable tool exists.
             # "off" — disable entirely. Tools-array assembly is a pass-through.
-            "enabled": "auto",
+            # Vigil 默认 off（OPS-DELTA #38）：auto 会把非核心工具换成
+            # tool_search/tool_describe/tool_call 三个桥接工具，topo_* 被延后、
+            # 不出现在 schema，topo_query/topo_update 将不可用。需要桥接的用户
+            # 可显式改回 "auto"（与 vigil ops-init 模板同因）。
+            "enabled": "off",
             # Listing budget as a percentage of the active model's context
             # length. Effective budget = min(this % of context,
             # listing_max_tokens). Range 0..100.
@@ -2378,6 +2399,35 @@ DEFAULT_CONFIG = {
             # Absolute cap on the embedded listing in tokens (chars/4
             # estimate), regardless of context size. Range 200..60000.
             "listing_max_tokens": 4000,
+        },
+    },
+
+    # Vigil ops harness（OPS-DELTA #38）：首装即完整 ops harness——default
+    # profile 自带 ops 配置段，与 vigil ops-init 生成的 ops profile 一致。
+    # env: test 是安全默认（test 起步，L2 放行；生产接管需显式改为 prod）。
+    # environments 与 hermes_cli/ops_init.py _DEFAULT_ENV_DEFS 同源：权限矩阵
+    # 按 env 名查表（test 起步安全；uat/prod strict 需审批），是 /env 命令的
+    # 可用名单；topology.yaml 的 environments 段须与这里同源，不一致以 config 为准。
+    "ops": {
+        "environments": [dict(d) for d in _DEFAULT_ENV_DEFS],
+        "topology": {
+            "enabled": True,
+        },
+        "runbooks": {
+            "enabled": True,
+        },
+        "prometheus": {
+            "endpoint": "",       # 如 http://127.0.0.1:9090；空 = prom_query 不可用
+            "alertmanager": "",   # 如 http://127.0.0.1:9093；空 = alert_query 不可用
+            "vault_path": "",     # 可选：本机保险箱 JSON 凭据条目（{"user": ..., "pass": ...}）
+        },
+        "watch": {
+            "enabled": False,     # 值守采集（vigil watch install 常驻服务）：显式 true + alertmanager 配置后才采集
+        },
+        "permissions": {
+            "enabled": True,
+            "env": "test",
+            "role": "test",
         },
     },
 

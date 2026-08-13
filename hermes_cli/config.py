@@ -328,7 +328,7 @@ _EXTRA_ENV_KEYS = frozenset({
 import yaml
 
 from hermes_cli.colors import Colors, color
-from hermes_cli.default_soul import DEFAULT_SOUL_MD, is_legacy_template_soul
+from hermes_cli.default_soul import DEFAULT_SOUL_MD, default_soul_for_config, is_legacy_template_soul
 
 
 # =============================================================================
@@ -837,13 +837,35 @@ def _secure_file(path):
         pass
 
 
+def _default_soul_for_home(home: Path) -> str:
+    """Pick the seed SOUL persona from the profile's own config.yaml.
+
+    OPS-DELTA #38：ops persona 与 ops 运行时绑定——profile 配置含 ops 段时
+    注入 ops persona（default 首装自带 ops 段，DEFAULT_CONFIG 已预置）；用户
+    明确移除 ops 段（config.yaml 无 ops 键或为空）→ 降级通用 persona，不自称
+    ops harness，防止"有 persona 无工具"的错位。首装无 config.yaml → 按
+    DEFAULT_CONFIG（含 ops 段）取 ops persona。
+    """
+    config_path = home / "config.yaml"
+    if not config_path.is_file():
+        return DEFAULT_SOUL_MD
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            raw = fast_safe_load(f) or {}
+    except Exception:
+        raw = {}
+    return default_soul_for_config(raw)
+
+
 def _ensure_default_soul_md(home: Path) -> None:
     """Seed a default SOUL.md into HERMES_HOME, upgrading legacy empty templates.
 
-    First run: write DEFAULT_SOUL_MD. Existing installs whose SOUL.md is still
-    the old comment-only scaffold (seeded by older install.sh / install.ps1 /
-    docker images, which shadowed the runtime default) get upgraded in place to
-    DEFAULT_SOUL_MD. A SOUL.md the user actually customized is never touched.
+    First run: write the persona matching the profile config (ops persona when
+    the profile has an ops section — the default; generic persona when the
+    user removed it). Existing installs whose SOUL.md is still the old
+    comment-only scaffold (seeded by older install.sh / install.ps1 / docker
+    images, which shadowed the runtime default) get upgraded in place to the
+    matching persona. A SOUL.md the user actually customized is never touched.
     """
     soul_path = home / "SOUL.md"
     if soul_path.exists():
@@ -854,8 +876,27 @@ def _ensure_default_soul_md(home: Path) -> None:
         if not is_legacy_template_soul(existing):
             return
         # Legacy empty template -> upgrade to the real default in place.
-    soul_path.write_text(DEFAULT_SOUL_MD, encoding="utf-8")
+    soul_path.write_text(_default_soul_for_home(home), encoding="utf-8")
     _secure_file(soul_path)
+
+
+def _seed_first_run_ops_samples(home: Path) -> None:
+    """Fresh-install seeding: place the ops sample topology + runbooks at the
+    data root so the default profile is a complete ops harness out of the box
+    (OPS-DELTA #38).
+
+    Only runs when the data root was just created by this call — a pre-existing
+    install (老安装/升级) is never touched: no overwrite, no auto-migration.
+    Idempotent: existing targets are skipped. Best-effort: a missing sample
+    bundle (broken package) must not block first launch — the topo/runbook
+    tools are data-existence gated and stay hidden without data, same as a
+    pre-sample install.
+    """
+    try:
+        from hermes_cli.ops_init import seed_ops_samples
+        seed_ops_samples(home)
+    except (Exception, SystemExit):
+        logger.debug("first-run ops sample seeding skipped", exc_info=True)
 
 
 # Home paths whose directory skeleton has been created this process — see
@@ -900,6 +941,7 @@ def ensure_hermes_home():
         finally:
             os.umask(old_umask)
     else:
+        home_was_created = not home.exists()
         home.mkdir(parents=True, exist_ok=True)
         _secure_dir(home)
         for subdir in (
@@ -909,6 +951,10 @@ def ensure_hermes_home():
             d = home / subdir
             d.mkdir(parents=True, exist_ok=True)
             _secure_dir(d)
+        if home_was_created:
+            # 首装（数据根此前不存在）→ 铺 ops 样例到 default profile 根位置；
+            # 既有数据根一律跳过（静默无感，不覆盖不迁移）。
+            _seed_first_run_ops_samples(home)
         _ensure_default_soul_md(home)
 
     _HERMES_HOME_ENSURED.add(key)
@@ -1861,7 +1907,6 @@ _EXTRA_KNOWN_ROOT_KEYS = {
     "video_gen",         # video-generation provider config (agent/video_gen_registry.py)
     "plugins",           # plugin enable/disable lists (hermes_cli/plugins_cmd.py)
     "smart_model_routing",   # written by the setup wizard (hermes_cli/setup.py)
-    "platform_toolsets",     # written by the setup wizard (hermes_cli/setup.py)
     "known_plugin_toolsets", # written/read by hermes_cli/tools_config.py toolset-save flow
     "known_builtin_toolsets",  # ditto — which builtin toolsets a platform's checklist has offered
     "session_reset",         # top-level form read by gateway/config.py + setup

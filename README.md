@@ -44,7 +44,7 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 
 | 层 | 载体 | 职责 |
 |---|---|---|
-| **事实层** | 平台拓扑表（`topo_query` / `topo_update`） | 长记忆地记住平台：实体、环境、依赖、归属。任何运维动作前先确认目标身份与环境；跨环境操作默认拒绝 |
+| **事实层** | 平台拓扑表（`topo_query` / `topo_update` / `topo-discover`） | 长记忆地记住平台：实体、环境、依赖、归属。`topo-discover` 自动发现（SSH 扫 docker/k8s/端口）生成，任何运维动作前先确认目标身份与环境；跨环境操作默认拒绝 |
 | **程序层** | runbook（`runbook_load` / `runbook_checkpoint`） | 唯一允许的「怎么动」：事故处理按 runbook 匹配流程执行；部署按 checklist 阶段门推进，不允许跳过 |
 | **纵深防御** | 权限矩阵（命令分级 L1–L4 × 环境 test/uat/prod） | 命令 → **执行 / 审批 / 拒绝** 三态裁决。矩阵 DENY 不可被 yolo、mode=off 或 allowlist 绕过；approve 必须有真人在场 |
 
@@ -87,19 +87,27 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 # 1. 安装（生成 vigil 命令入口）
 pip install vigil-agent-harness
 
-# 2.（可选）铺样例数据——运维能力（topo/runbook/权限矩阵）默认加载，
-#    ops-init 只负责生成配置 + 样例拓扑 + 样例 runbook，不是启用能力的前置门槛
-vigil ops-init         # 生成 ~/.vigil/profiles/ops 下的配置 + 样例拓扑 + 样例 runbook
+# 2. 直接进入 Vigil——ops 能力默认加载（topology / runbooks / 权限矩阵），
+#    全新安装的 default profile 自带 ops 配置与样例拓扑，无需任何初始化
+vigil
 
-# 3. 配置模型（如 DeepSeek）——在 ~/.vigil/profiles/ops/config.yaml
-#    添加 model 段，并在同目录 .env 放 API key
-
-# 4. 进入 Vigil
-vigil -p ops
+# 3. 配置模型（如 DeepSeek）——在 ~/.vigil/config.yaml 添加 model 段，
+#    并在同目录 .env 放 API key
 ```
 
-首次进入后，把拓扑表改成你自己的平台（`topology.yaml` + `entities/`），
-然后让它干第一件真活：**"检查拓扑里哪些实体 last_verified 过期了"**。
+> 如需手动重建样例 profile，可用 `vigil ops-init`（可选——老用户/自托管
+> 显式重建或迁移仍可用，首装已不需要）。
+
+首次进入后，让 Vigil 摸清你的平台：**自动发现拓扑**——把每台机器的 IP 和
+SSH 凭据告诉它，它会 SSH 进去扫 docker / k8s / systemd 服务 / 端口，生成实体
+清单供你确认后落盘：
+
+```bash
+vigil topo-discover          # 引导式：填 IP + 凭据 → 扫描 → 人工确认 → 写入 topology.yaml
+```
+
+也可以手动编辑拓扑表（`topology.yaml` + `entities/`，高级用法）。然后让它干
+第一件真活：**"检查拓扑里哪些实体 last_verified 过期了"**。
 
 ### 从源码安装（开发者 / 自托管）
 
