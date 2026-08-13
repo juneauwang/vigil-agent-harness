@@ -14904,6 +14904,22 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 print(f"Title:          {session_title}")
             print(f"Duration:       {duration_str}")
             print(f"Messages:       {msg_count} ({user_msgs} user, {tool_calls} tool calls)")
+
+            # OPS-DELTA #7：退出时自动汇总本次会话 token 用量（纯 UI 呈现，
+            # 零新数据逻辑——字段读取与 _show_usage 同一来源；无 live agent
+            # 或 0 次调用时不打印，避免 0-token 噪音行）。
+            agent = getattr(self, "agent", None)
+            api_calls = getattr(agent, "session_api_calls", 0) or 0
+            if agent is not None and api_calls > 0:
+                inp = getattr(agent, "session_input_tokens", 0) or 0
+                out = getattr(agent, "session_output_tokens", 0) or 0
+                total = getattr(agent, "session_total_tokens", 0) or 0
+                cache_read = getattr(agent, "session_cache_read_tokens", 0) or 0
+                reasoning = getattr(agent, "session_reasoning_tokens", 0) or 0
+                # 口径与状态栏 token 行（E4）一致：in/out 为净值（扣除缓存），
+                # 缓存命中单独列出（毛值 total 含缓存，直接相加会误导）。
+                print(f"Tokens:         📊 本次会话: 输入 {inp:,} · 输出 {out:,} · "
+                      f"缓存 {cache_read:,} · reasoning {reasoning:,} · 总计 {total:,} tokens")
         else:
             try:
                 from hermes_cli.skin_engine import get_active_goodbye
