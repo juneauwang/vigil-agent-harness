@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import yaml
+
 import pytest
 
 import hermes_constants
@@ -68,6 +70,80 @@ def topo_home(tmp_path, monkeypatch):
     # repo's standard pattern) — never patch the function object: hermes_cli
     # config binds it at import time, and a patched binding would leak across
     # tests once config.py is first imported.
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    import hermes_cli.config as _hc
+    _hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        yield home
+    finally:
+        _hc._LOAD_CONFIG_CACHE.clear()
+
+
+V3_TOPO_YAML = """\
+version: 3
+updated_at: 2026-08-13
+environments:
+  - {name: local, isolation: relaxed, role: local}
+  - {name: test, isolation: relaxed, role: test}
+  - {name: dev, isolation: relaxed, role: dev}
+  - {name: prod, isolation: strict, role: prod}
+clusters:
+  - {name: k3s-prod, env: prod, description: 生产 k3s 集群, owner: your-name}
+hosts:
+  - {name: node1, env: prod, cluster: k3s-prod, endpoint: "203.0.113.10", services_index: hosts/node1.yaml, credential: {type: ssh_key, ref: "~/.vigil/keys/node1.pem", user: root}}
+  - {name: test-host, env: test, runtime: docker, services_index: hosts/test-host.yaml}
+cross_host:
+  - {name: ingress, type: ingress, env: prod, cluster: k3s-prod, detail: entities/k3s-prod__ingress.yaml}
+"""
+
+V3_NODE1_INDEX = """\
+host: node1
+env: prod
+cluster: k3s-prod
+services:
+  - {name: postgres, type: db, env: prod, endpoint: "203.0.113.10:5432", detail: entities/k3s-prod__node1__postgres.yaml}
+  - {name: harbor, type: registry, env: prod, endpoint: "203.0.113.10:30443", detail: entities/k3s-prod__node1__harbor.yaml}
+"""
+
+V3_TEST_INDEX = """\
+host: test-host
+env: test
+services:
+  - {name: test-web, type: service, env: test, detail: entities/test__test-host__test-web.yaml}
+"""
+
+V3_POSTGRES = """\
+name: postgres
+type: db
+env: prod
+cluster: k3s-prod
+ssh:
+  user: dbadmin
+  credential: {type: ssh_key, ref: "~/.vigil/keys/postgres.pem", user: dbadmin}
+attrs:
+  version: "16"
+ops:
+  healthcheck: "pg_isready"
+"""
+
+
+def _write_topo(home, files: dict):
+    for rel, text in files.items():
+        p = home / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+
+
+@pytest.fixture
+def topo_home_v3(tmp_path, monkeypatch):
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    _write_topo(home, {
+        "topology.yaml": V3_TOPO_YAML,
+        "hosts/node1.yaml": V3_NODE1_INDEX,
+        "hosts/test-host.yaml": V3_TEST_INDEX,
+        "entities/k3s-prod__node1__postgres.yaml": V3_POSTGRES,
+    })
     monkeypatch.setenv("VIGIL_HOME", str(home))
     import hermes_cli.config as _hc
     _hc._LOAD_CONFIG_CACHE.clear()
@@ -232,6 +308,36 @@ def test_check_topo_requirements_data_existence_gating(tmp_path, monkeypatch):
         "ops:\n  topology:\n    enabled: true\n", encoding="utf-8"
     )
     assert _check() is False
+
+
+def test_topo_query_cluster_filter_v3(topo_home_v3):
+    """cluster= 过滤只返回该 cluster 的 host/服务/cross_host 行。"""
+    result = _load(topo_query(cluster="k3s-prod"))
+    names = {e["name"] for e in result["entities"]}
+    assert names == {"node1", "postgres", "harbor", "ingress"}
+    assert all((e.get("cluster") or "default") == "k3s-prod" for e in result["entities"])
+
+
+def test_topo_query_cluster_default_for_host_without_cluster(topo_home_v3):
+    """host 无 cluster → 显示 default（不写回文件）。"""
+    result = _load(topo_query(cluster="default"))
+    names = {e["name"] for e in result["entities"]}
+    assert names == {"test-host", "test-web"}
+    host_row = _load(topo_query(host="test-host"))
+    assert host_row["cluster"] == "default"
+    topo = yaml.safe_load((topo_home_v3 / "topology.yaml").read_text(encoding="utf-8"))
+    assert "cluster" not in next(h for h in topo["hosts"] if h["name"] == "test-host")
+
+
+def test_topo_query_overview_includes_clusters_v3(topo_home_v3):
+    result = _load(topo_query())
+    assert result["version"] == 3
+    assert {c["name"] for c in result["clusters"]} == {"k3s-prod"}
+    assert {h["name"] for h in result["hosts"]} == {"node1", "test-host"}
+
+
+
+
 
 
 def test_topo_discover_tool_registered_in_topo_toolset():
