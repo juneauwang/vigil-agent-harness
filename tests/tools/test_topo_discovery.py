@@ -47,6 +47,12 @@ KUBE = (
     '"spec":{"template":{"spec":{"containers":[{"image":"grafana/grafana:10"}]}}}}'
     ']}'
 )
+SYSTEMCTL = """\
+  UNIT                 LOAD   ACTIVE SUB     DESCRIPTION
+  harbor.service        loaded active running Harbor systemd service
+  node-exporter.service loaded active running Prometheus Node Exporter
+  inactive.service      loaded inactive dead   Not discovered
+"""
 
 
 class FakeRunner:
@@ -62,8 +68,10 @@ class FakeRunner:
             if key in cmd:
                 if isinstance(value, Exception):
                     raise value
+                if isinstance(value, ProbeResult):
+                    return value
                 if isinstance(value, tuple):
-                    return ProbeResult(value[0], value[1])
+                    return ProbeResult(value[0], value[1], value[2] if len(value) > 2 else "")
                 return ProbeResult(value)
         return ProbeResult("", 127)
 
@@ -160,6 +168,231 @@ def test_discover_parses_compose_ls_plain_fallback():
     )
     d = discover_host("203.0.113.20", "prod", runner=runner)
     assert d["host"]["attrs"]["compose_projects"] == ["harbor"]
+
+
+def test_discover_docker_permission_denied_is_explicit():
+    runner = _default_runner(
+        **{
+            "docker ps": ProbeResult("", 1, "permission denied while trying to connect to the Docker daemon"),
+            "compose ls": ProbeResult("", 1, "permission denied"),
+        }
+    )
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert "权限不足" in d["probes"]["docker"]
+    assert "--sudo-password" in d["probes"]["docker"]
+
+
+def test_discover_systemctl_services_merged_and_docker_priority():
+    runner = _default_runner(**{"systemctl": SYSTEMCTL})
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    names = {s["name"]: s for s in d["services"]}
+    assert d["probes"]["systemctl"] == "ok"
+    assert names["node-exporter"]["type"] == "systemd-service"
+    assert names["node-exporter"]["attrs"]["unit"] == "node-exporter.service"
+    assert names["node-exporter"]["attrs"]["source_probe"] == "systemctl"
+    # systemctl 中出现 harbor 与 docker 容器同名 → docker 优先，不生成 systemd 行。
+    assert names["harbor"]["type"] == "service"
+    assert "inactive" not in names
+
+
+def test_discover_systemctl_unavailable_is_skipped():
+    d = discover_host("203.0.113.20", "prod", runner=_default_runner())
+    assert d["probes"]["systemctl"] == "skipped（systemctl 不可用）"
+
+
+def test_discover_skip_unidentified_filters_ss_entries():
+    d = discover_host("203.0.113.20", "prod", runner=_default_runner(),
+                      skip_unidentified=True)
+    assert not any(s["name"].startswith("unidentified-") for s in d["services"])
+    # 已识别服务照常保留。
+    assert "harbor" in {s["name"] for s in d["services"]}
+
+
+def test_discover_ss_entries_record_source_probe():
+    d = discover_host("203.0.113.20", "prod", runner=_default_runner())
+    svc = next(s for s in d["services"] if s["name"] == "unidentified-9090")
+    assert svc["attrs"]["source_probe"] == "ss"
+    assert d["details"]["unidentified-9090"]["attrs"]["source_probe"] == "ss"
+
+
+def test_build_ssh_runner_encrypted_key_uses_askpass_without_plaintext(tmp_path, monkeypatch):
+    import subprocess
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    key = tmp_path / "id_ed25519"
+    passphrase = "test-key-passphrase-42"
+    subprocess.run(
+        ["ssh-keygen", "-q", "-t", "ed25519", "-N", passphrase, "-f", str(key)],
+        check=True, capture_output=True,
+    )
+    vault = tmp_path / "vault"
+    vault.write_text(passphrase, encoding="utf-8")
+    askpass = topodisc._make_askpass_script(vault)
+    calls = {}
+
+    def fake_run(argv, **kwargs):
+        if argv and argv[0] == "ssh":
+            calls["argv"] = argv
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(returncode=0, stdout="connected", stderr="")
+        if argv[:2] == ["/bin/sh", str(askpass)]:
+            return SimpleNamespace(returncode=0, stdout=passphrase + "\n", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = topodisc._build_ssh_runner(
+        "203.0.113.20", "root", key_path=str(key), key_passphrase_file=askpass
+    )
+    result = runner("echo ok")
+
+    assert result.ok is True
+    assert "BatchMode=yes" not in calls["argv"]
+    assert "PreferredAuthentications=publickey" in calls["argv"]
+    assert calls["kwargs"]["env"]["SSH_ASKPASS"] == str(askpass)
+    blob = json.dumps(calls["argv"]) + json.dumps(calls["kwargs"]["env"])
+    assert passphrase not in blob
+
+
+def test_build_ssh_runner_sudo_password_uses_stdin_not_command_string(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    sudo_secret = "sudo-secret-77"
+    vault = tmp_path / "vault"
+    vault.write_text(sudo_secret, encoding="utf-8")
+    askpass = topodisc._make_askpass_script(vault)
+    calls = {}
+
+    def fake_run(argv, **kwargs):
+        if argv and argv[0] == "ssh":
+            calls["argv"] = argv
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        if argv[:2] == ["/bin/sh", str(askpass)]:
+            return SimpleNamespace(returncode=0, stdout=sudo_secret + "\n", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = topodisc._build_ssh_runner(
+        "203.0.113.20", "root", sudo_password_file=askpass
+    )
+    result = runner("docker ps")
+
+    assert result.ok is True
+    assert "sudo -S -p '' docker ps" in calls["argv"][-1]
+    assert calls["kwargs"]["input"] == sudo_secret + "\n"
+    blob = json.dumps(calls["argv"]) + json.dumps(calls["kwargs"].get("env", {}))
+    assert sudo_secret not in blob
+
+
+def test_cli_short_options_parse_and_flow(tmp_path, monkeypatch):
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    seen = {}
+
+    def fake_prompt(host, user, key, **kwargs):
+        seen.update(kwargs)
+        return {"user": user}
+
+    def fake_discover(host, env, creds, **kwargs):
+        return _discovery()
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", fake_discover)
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main([
+        "-H", "203.0.113.20", "-e", "prod", "-u", "root", "-k", "/tmp/id_ed25519",
+        "--dry-run", "--yes",
+    ])
+    assert rc == 0
+
+
+def test_cli_password_stdin_flows_to_prompt_credentials(tmp_path, monkeypatch):
+    import io
+
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(td.sys, "stdin", io.StringIO("pipe-secret\n"))
+    seen = {}
+
+    def fake_prompt(host, user, key, **kwargs):
+        seen.update(kwargs)
+        return {"user": user}
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", lambda *a, **kw: _discovery())
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main([
+        "--host", "203.0.113.20", "--env", "prod", "--password-stdin",
+        "--dry-run", "--yes",
+    ])
+    assert rc == 0
+    assert seen["password"] == "pipe-secret"
+
+
+def test_host_expansion_ranges_and_lists():
+    import hermes_cli.topo_discover as td
+
+    assert td._expand_hosts(["10.123.66.23[3-8]"]) == [
+        "10.123.66.233", "10.123.66.234", "10.123.66.235",
+        "10.123.66.236", "10.123.66.237", "10.123.66.238",
+    ]
+    assert td._expand_hosts(["10.123.66.233,10.123.66.234"]) == [
+        "10.123.66.233", "10.123.66.234",
+    ]
+
+
+def test_cli_batch_scan_continues_after_single_failure(tmp_path, monkeypatch):
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(td, "_prompt_credentials", lambda host, user, key: {"user": user})
+    calls = []
+
+    def fake_discover(host, env, creds, **kwargs):
+        calls.append(host)
+        if host.endswith(".234"):
+            raise DiscoveryError("connection refused")
+        return _discovery()
+
+    monkeypatch.setattr(td, "discover_host", fake_discover)
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main(["--host", "10.123.66.23[3-8]", "--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert len(calls) == 6
+
+
+def test_cli_batch_confirm_once_and_writes_each_success(tmp_path, monkeypatch):
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setattr(td, "_prompt_credentials", lambda host, user, key: {"user": user})
+    monkeypatch.setattr(td, "discover_host", lambda host, env, creds, **kw: _discovery())
+    writes = []
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: writes.append(a) or {"written": []})
+    confirm_calls = []
+    monkeypatch.setattr(td, "_confirm", lambda force, yes: confirm_calls.append(1) or True)
+
+    rc = td.main(["--host", "10.123.66.23[3-8]", "--env", "prod", "--yes"])
+    assert rc == 0
+    assert confirm_calls == [1]
+    assert len(writes) == 6
 
 
 # ---------------------------------------------------------------------------

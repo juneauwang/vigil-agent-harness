@@ -232,3 +232,34 @@ def test_check_topo_requirements_data_existence_gating(tmp_path, monkeypatch):
         "ops:\n  topology:\n    enabled: true\n", encoding="utf-8"
     )
     assert _check() is False
+
+
+def test_topo_discover_tool_registered_in_topo_toolset():
+    from tools.registry import registry
+
+    entry = registry.get_entry("topo_discover")
+    assert entry is not None
+    assert entry.toolset == "topo"
+    assert "topo_discover" in registry.get_tool_names_for_toolset("topo")
+
+
+def test_topo_discover_handler_returns_fragment_without_writing(tmp_path, monkeypatch):
+    fragment = {
+        "version": 2,
+        "source": "discovered",
+        "needs_review": True,
+        "host": {"name": "203.0.113.20", "env": "prod"},
+        "services": [],
+        "details": {},
+        "probes": {},
+    }
+    monkeypatch.setattr(topo_tools, "discover_host", lambda *a, **kw: fragment)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_home"))
+
+    result = json.loads(topo_tools._discover_handler(
+        {"host": "203.0.113.20", "env": "prod", "dry_run": True}
+    ))
+
+    assert result == fragment
+    assert not (tmp_path / "hermes_home" / "topology.yaml").exists()
+    assert not (tmp_path / "hermes_home" / "hosts").exists()
