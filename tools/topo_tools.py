@@ -662,7 +662,9 @@ def topo_update(
         return tool_error(f"实体 {entity} 的 detail 路径非法（越界 HERMES_HOME）。")
 
     # PROD 变更 → 审批确认（钉在执行工具层，LLM 无法绕过）。
-    if env_name == "prod" or env_name.startswith("prod"):
+    # env 四值枚举 + 老自定义名按档位映射（uat → prod 档，权限语义不放松）。
+    from tools.topo_discovery import _env_tier
+    if _env_tier(env_name) == "prod":
         from tools.approval import request_tool_approval
         approval = request_tool_approval(
             "topo_update",

@@ -81,7 +81,7 @@ def guard_env(tmp_path, monkeypatch):
         (tmp_path / "entities").mkdir(exist_ok=True)
         (tmp_path / "entities" / "node2.yaml").write_text(NODE2_YAML, encoding="utf-8")
         (tmp_path / "entities" / "test-web.yaml").write_text(TESTWEB_YAML, encoding="utf-8")
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         hc._LOAD_CONFIG_CACHE.clear()
         approval_module._YOLO_MODE_FROZEN = False
         approval_module.clear_session(SESSION)
@@ -296,8 +296,8 @@ def test_custom_env_role_test_executes_l3(guard_env):
     assert result["approved"] is True
 
 
-def test_undeclared_env_leaves_existing_flow(guard_env):
-    """ops.environments 已定义列表之外的 env → 不做矩阵判定，交回原有检查。"""
+def test_undeclared_env_maps_dev_tier_leaves_existing_flow(guard_env):
+    """OPS-DELTA #42：已定义列表之外的 env（staging）按档位映射 dev → 查询放行。"""
     guard_env("staging", environments=[
         {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
     ])

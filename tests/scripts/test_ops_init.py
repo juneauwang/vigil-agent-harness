@@ -68,7 +68,7 @@ def ops_home(tmp_path, monkeypatch, request):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     home = root / "profiles" / "ops"
     assert home.is_dir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         yield home
@@ -109,11 +109,12 @@ def test_init_creates_profile_config_and_topology(ops_home):
     perms = cfg["ops"]["permissions"]
     assert perms["enabled"] is True
     assert perms["env"] == "test" and perms["role"] == "test"  # 安全默认
-    # ops.environments 默认三档（OPS-DELTA #11：env 可自定义的向后兼容基线）
+    # ops.environments 四值枚举（OPS-DELTA #42：local/test/dev relaxed、prod strict）
     env_defs = cfg["ops"]["environments"]
-    assert [d["name"] for d in env_defs] == ["test", "uat", "prod"]
-    assert env_defs[0]["role"] == "test" and env_defs[2]["role"] == "prod"
-    assert env_defs[1]["isolation"] == "strict" and env_defs[2]["isolation"] == "strict"
+    assert [d["name"] for d in env_defs] == ["local", "test", "dev", "prod"]
+    assert env_defs[0]["role"] == "local" and env_defs[3]["role"] == "prod"
+    assert env_defs[0]["isolation"] == "relaxed" and env_defs[3]["isolation"] == "strict"
+    assert env_defs[2]["isolation"] == "relaxed"  # dev relaxed
     # load_config_readonly 会把 "off" 规范化为 False；行为级校验看 ts_load()。
     assert cfg["tools"]["tool_search"]["enabled"] in ("off", False)
 
@@ -172,25 +173,25 @@ def test_env_flag_sets_permissions(tmp_path, monkeypatch, entry):
     proc = _run_init(root, "--no-alias", "--env", "prod", entry=entry)
     assert proc.returncode == 0
     home = root / "profiles" / "ops"
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     perms = _load_permissions(home)
     assert perms["env"] == "prod" and perms["role"] == "prod"
 
 
-def test_env_flag_custom_env_defines_environments(tmp_path, monkeypatch):
-    """--env bare_metal_prod：自定义环境名生成配置成功，且矩阵按 role=prod 判定。
+def test_env_flag_custom_env_maps_to_tier(tmp_path, monkeypatch):
+    """--env bare_metal_prod：老自定义名按档位映射到 prod（OPS-DELTA #42）。
 
-    自定义名不再被 argparse choices 锁死（OPS-DELTA #11）；自动追加定义到
-    ops.environments（isolation/role 推导，可在 config.yaml 调整）。
+    写入端只产四值枚举：不再追加自定义定义；ops.permissions.env 落映射后的
+    prod 档，role=prod，权限矩阵按 prod 档判定（L3 拒绝 / L2 审批）。
     """
     root = tmp_path / "hermes-root"
     proc = _run_init(root, "--no-alias", "--env", "bare_metal_prod", entry="module")
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "映射" in proc.stdout + proc.stderr           # 映射打一次警告（提示）
     home = root / "profiles" / "ops"
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     perms = _load_permissions(home)
-    assert perms["env"] == "bare_metal_prod"
-    # 生成配置里 role 跟随环境定义（prod），不是环境名本身
+    assert perms["env"] == "prod"                        # 映射后的档位，不是原名
     assert perms["role"] == "prod"
 
     hc._LOAD_CONFIG_CACHE.clear()
@@ -199,15 +200,30 @@ def test_env_flag_custom_env_defines_environments(tmp_path, monkeypatch):
     finally:
         hc._LOAD_CONFIG_CACHE.clear()
     env_defs = cfg["ops"]["environments"]
-    names = [d["name"] for d in env_defs]
-    assert names == ["test", "uat", "prod", "bare_metal_prod"]
-    bmp = next(d for d in env_defs if d["name"] == "bare_metal_prod")
-    assert bmp["role"] == "prod" and bmp["isolation"] == "strict"
+    assert [d["name"] for d in env_defs] == ["local", "test", "dev", "prod"]
+    prod = next(d for d in env_defs if d["name"] == "prod")
+    assert prod["role"] == "prod" and prod["isolation"] == "strict"
 
-    # 权限矩阵按自定义 env 名判定：bare_metal_prod → prod 档（L3 拒绝 / L2 审批）
+    # 权限矩阵按映射后的档位判定（bare_metal_prod → prod 档）。
     assert check_ops_command_permission("rm -rf /var/log")["action"] == "deny"
-    assert check_ops_command_permission("rm -rf /var/log")["env"] == "bare_metal_prod"
     assert check_ops_command_permission("systemctl restart myapp")["action"] == "approve"
+
+
+def test_env_flag_legacy_uat_maps_prod_tier(tmp_path, monkeypatch):
+    """--env uat：老自定义名 → prod 档（更严不更松），写入端只产四值。"""
+    root = tmp_path / "hermes-root"
+    proc = _run_init(root, "--no-alias", "--env", "uat", entry="module")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "映射" in proc.stdout + proc.stderr
+    home = root / "profiles" / "ops"
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    perms = _load_permissions(home)
+    assert perms["env"] == "prod" and perms["role"] == "prod"
+    # 权限判定 = prod 档语义（L3 deny / L2 approve / 变更确认门）。
+    deny = check_ops_command_permission("rm -rf /var/log")
+    assert deny["action"] == "deny" and deny["env_tier"] == "prod"
+    approve = check_ops_command_permission("systemctl restart myapp")
+    assert approve["action"] == "approve" and approve["env_tier"] == "prod"
 
 
 def test_env_flag_invalid_name_errors_listing_available(tmp_path):

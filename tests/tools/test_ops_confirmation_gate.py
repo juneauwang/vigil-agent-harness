@@ -31,7 +31,7 @@ def _cfg(tmp_path, env, *, enabled=True) -> None:
 def perm_env(tmp_path, monkeypatch):
     def _activate(env, *, enabled=True):
         _cfg(tmp_path, env, enabled=enabled)
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         hc._LOAD_CONFIG_CACHE.clear()
         return tmp_path
 
@@ -95,12 +95,14 @@ def test_gate_disabled_zero_impact(perm_env):
         assert check_ops_command_permission(cmd) is None, cmd
 
 
-def test_uat_change_commands_unchanged(perm_env):
-    """uat：L2 approve 但非 prod → require_confirmation=false（现状行为）。"""
+def test_uat_maps_prod_tier_triggers_confirmation_gate(perm_env):
+    """OPS-DELTA #42：legacy uat → prod 档（更严不更松）→ 变更确认门触发。"""
     perm_env("uat")
     result = check_ops_command_permission("systemctl restart myapp")
-    # uat 矩阵 L2=execute → 现状 None；L3（kubectl apply）→ approve 不带确认门
-    assert result is None or result.get("require_confirmation") is False
+    assert result is not None
+    assert result["env_tier"] == "prod"
+    assert result["require_confirmation"] is True
+    assert "prod 变更确认门" in result["description"]
 
 
 def test_non_change_approve_in_prod_not_confirmation_gated(perm_env):

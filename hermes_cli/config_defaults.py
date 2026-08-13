@@ -2405,9 +2405,11 @@ DEFAULT_CONFIG = {
     # Vigil ops harness（OPS-DELTA #38）：首装即完整 ops harness——default
     # profile 自带 ops 配置段，与 vigil ops-init 生成的 ops profile 一致。
     # env: test 是安全默认（test 起步，L2 放行；生产接管需显式改为 prod）。
-    # environments 与 hermes_cli/ops_init.py _DEFAULT_ENV_DEFS 同源：权限矩阵
-    # 按 env 名查表（test 起步安全；uat/prod strict 需审批），是 /env 命令的
-    # 可用名单；topology.yaml 的 environments 段须与这里同源，不一致以 config 为准。
+    # environments 与 hermes_cli/ops_init.py _DEFAULT_ENV_DEFS 同源：四值枚举
+    # local/test/dev/prod（OPS-DELTA #42，local/test/dev relaxed、prod strict），
+    # 是 /env 命令的可用名单；老自定义名（uat/staging/...）读取时按档位映射
+    # （uat→prod 档，权限只会更严不会更松）；topology.yaml 的 environments 段
+    # 须与这里同源，不一致以 config 为准。
     "ops": {
         "environments": [dict(d) for d in _DEFAULT_ENV_DEFS],
         "topology": {

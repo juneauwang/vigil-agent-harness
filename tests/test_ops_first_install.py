@@ -50,7 +50,7 @@ def _fresh_home(tmp_path: Path, monkeypatch, name: str = "vigil-fresh") -> Path:
 class TestDefaultConfigOps:
     def test_default_config_has_ops_section_with_safe_defaults(self):
         ops = DEFAULT_CONFIG["ops"]
-        assert [e["name"] for e in ops["environments"]] == ["test", "uat", "prod"]
+        assert [e["name"] for e in ops["environments"]] == ["local", "test", "dev", "prod"]
         assert ops["topology"]["enabled"] is True
         assert ops["runbooks"]["enabled"] is True
         assert ops["watch"]["enabled"] is False
