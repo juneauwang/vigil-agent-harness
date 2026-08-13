@@ -3617,6 +3617,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["web_search", "web_extract"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "PARALLEL_API_KEY": {
         "description": "Parallel API key for AI-native web search and extract",
@@ -3625,6 +3626,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["web_search", "web_extract"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "FIRECRAWL_API_KEY": {
         "description": "Firecrawl API key for web search and scraping",
@@ -3633,6 +3635,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["web_search", "web_extract"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "FIRECRAWL_API_URL": {
         "description": "Firecrawl API URL for self-hosted instances (optional)",
@@ -3681,6 +3684,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["web_search", "web_extract"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "SEARXNG_URL": {
         "description": "URL of your SearXNG instance for free self-hosted web search",
@@ -3689,6 +3693,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["web_search"],
         "password": False,
         "category": "tool",
+        "advanced": True,
     },
     "BRAVE_SEARCH_API_KEY": {
         "description": "Brave Search API subscription token (free tier: 2,000 queries/mo)",
@@ -3697,6 +3702,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["web_search"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "BROWSERBASE_API_KEY": {
         "description": "Browserbase API key for cloud browser (optional — local browser works without this)",
@@ -3705,6 +3711,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["browser_navigate", "browser_click"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "BROWSERBASE_PROJECT_ID": {
         "description": "Browserbase project ID (optional — only needed for cloud browser)",
@@ -3713,6 +3720,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["browser_navigate", "browser_click"],
         "password": False,
         "category": "tool",
+        "advanced": True,
     },
     "BROWSER_USE_API_KEY": {
         "description": "Browser Use API key for cloud browser (optional — local browser works without this)",
@@ -3721,6 +3729,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["browser_navigate", "browser_click"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "FIRECRAWL_BROWSER_TTL": {
         "description": "Firecrawl browser session TTL in seconds (optional, default 300)",
@@ -3728,6 +3737,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["browser_navigate", "browser_click"],
         "password": False,
         "category": "tool",
+        "advanced": True,
     },
     "AGENT_BROWSER_ENGINE": {
         "description": "Browser engine for local mode: auto (default Chrome), lightpanda (faster, no screenshots), chrome",
@@ -3745,6 +3755,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["browser_navigate", "browser_click"],
         "password": False,
         "category": "tool",
+        "advanced": True,
     },
     "CAMOFOX_API_KEY": {
         "description": "Optional bearer token sent as Authorization header to a remote/authenticated Camofox server",
@@ -3762,6 +3773,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["image_generate", "video_generate"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "KREA_API_KEY": {
         "description": "Krea API key for Krea 2 image generation (Medium + Large)",
@@ -3770,6 +3782,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["image_generate"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "VOICE_TOOLS_OPENAI_KEY": {
         "description": "OpenAI API key for voice transcription (Whisper) and OpenAI TTS",
@@ -3778,6 +3791,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["voice_transcription", "openai_tts"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "ELEVENLABS_API_KEY": {
         "description": "ElevenLabs API key for premium text-to-speech voices and Scribe transcription",
@@ -3786,6 +3800,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["elevenlabs_tts", "voice_transcription"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "MISTRAL_API_KEY": {
         "description": "Mistral API key for Voxtral TTS and transcription (STT)",
@@ -3793,6 +3808,7 @@ OPTIONAL_ENV_VARS = {
         "url": "https://console.mistral.ai/",
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "PORCUPINE_ACCESS_KEY": {
         "description": "Picovoice access key for the Porcupine 'Hey Hermes' wake word engine (optional; openWakeWord is the free default)",
@@ -3800,6 +3816,7 @@ OPTIONAL_ENV_VARS = {
         "url": "https://console.picovoice.ai/",
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "GITHUB_TOKEN": {
         "description": "GitHub token for Skills Hub (higher API rate limits, skill publish)",
@@ -3807,6 +3824,7 @@ OPTIONAL_ENV_VARS = {
         "url": "https://github.com/settings/tokens",
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
 
     # ── Bundled skills (opt-in: only needed if the user uses that skill) ──
@@ -3855,11 +3873,13 @@ OPTIONAL_ENV_VARS = {
         "tools": ["honcho_context"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "HONCHO_BASE_URL": {
         "description": "Base URL for self-hosted Honcho instances (no API key needed)",
         "prompt": "Honcho base URL (e.g. http://localhost:8000)",
         "category": "tool",
+        "advanced": True,
     },
 
     # ── Hindsight ──
@@ -3870,6 +3890,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["hindsight_recall"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "HINDSIGHT_API_URL": {
         "description": "Base URL for the Hindsight API (default: https://api.hindsight.vectorize.io)",
@@ -3886,6 +3907,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["supermemory_search"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
 
     # ── Mem0 ──
@@ -3896,6 +3918,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["mem0_search"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
 
     # ── RetainDB ──
@@ -3906,6 +3929,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["retaindb_search"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "RETAINDB_BASE_URL": {
         "description": "Base URL for self-hosted RetainDB instances (default: https://api.retaindb.com)",
@@ -3922,6 +3946,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["brv_query"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
 
     # ── OpenViking ──
@@ -3931,6 +3956,7 @@ OPTIONAL_ENV_VARS = {
         "tools": ["viking_search"],
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "OPENVIKING_ENDPOINT": {
         "description": "OpenViking server URL (default: http://127.0.0.1:1933)",
@@ -3946,6 +3972,7 @@ OPTIONAL_ENV_VARS = {
         "url": "https://cloud.langfuse.com",
         "password": False,
         "category": "tool",
+        "advanced": True,
     },
     "HERMES_LANGFUSE_SECRET_KEY": {
         "description": "Langfuse project secret key (sk-lf-...)",
@@ -3953,6 +3980,7 @@ OPTIONAL_ENV_VARS = {
         "url": "https://cloud.langfuse.com",
         "password": True,
         "category": "tool",
+        "advanced": True,
     },
     "HERMES_LANGFUSE_BASE_URL": {
         "description": "Langfuse server URL (default: https://cloud.langfuse.com)",
