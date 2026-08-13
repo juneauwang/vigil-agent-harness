@@ -238,17 +238,15 @@ class CLIAgentSetupMixin:
 
         Called from the interactive startup path when
         ``_runtime_credentials_ready()`` is False and stdin is a TTY. Runs the
-        exact same flow as ``hermes model`` (which fronts Quick Setup / Nous
-        Portal OAuth as the first, recommended option) so there is a single
-        source of truth for provider onboarding. Returns True when a provider
-        was configured.
+        exact same flow as ``hermes model`` (which fronts provider picker) so
+        there is a single source of truth for provider onboarding. Returns
+        True when a provider was configured.
         """
         from cli import _cprint, logger
 
         _cprint("")
         _cprint("⚕ No inference provider is configured yet — let's fix that.")
-        _cprint("  You'll pick a provider (Nous Portal OAuth is the fastest; "
-                "no API key needed) and a model.")
+        _cprint("  You'll pick a provider (OpenRouter / DeepSeek / local endpoints…) and a model.")
         try:
             answer = input("  Set up a provider now? [Y/n]: ").strip().lower()
         except (KeyboardInterrupt, EOFError):
