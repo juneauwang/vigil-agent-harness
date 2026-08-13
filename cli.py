@@ -5238,10 +5238,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             None,
         )
         if env_def is None:
-            available = ", ".join(str(d.get("name")) for d in env_defs) or "test/uat/prod"
+            available = ", ".join(str(d.get("name")) for d in env_defs) or "local/test/dev/prod"
             self._console_print(
                 f"  ✗ 未定义环境 '{name}'。可用环境: {available}"
-                "（如需新增，在 config.yaml ops.environments 中定义）"
             )
             return
 
@@ -10308,10 +10307,6 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._manual_compress(cmd_original)
         elif canonical == "usage":
             self._handle_usage_command(cmd_original)
-        elif canonical == "subscription":
-            self._show_subscription()
-        elif canonical == "topup":
-            self._show_billing(cmd_original)
         elif canonical == "insights":
             self._show_insights(cmd_original)
         elif canonical == "copy":
@@ -11538,9 +11533,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         which would otherwise early-return before any credits showed.
         """
         if not self.agent:
-            if self._print_nous_credits_block():
-                self._print_usage_cta()
-            else:
+            if not self._print_nous_credits_block():
                 print("(._.) No active agent -- send a message first.")
             return
 
@@ -11548,9 +11541,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         calls = agent.session_api_calls
 
         if calls == 0:
-            if self._print_nous_credits_block():
-                self._print_usage_cta()
-            else:
+            if not self._print_nous_credits_block():
                 print("(._.) No API calls made yet in this session.")
             return
 
@@ -11621,8 +11612,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Nous credits magnitudes + monthly-grant gauge (agent-independent — also
         # runs at the no-agent / no-calls early-returns above). See the helper.
-        if self._print_nous_credits_block():
-            self._print_usage_cta()
+        self._print_nous_credits_block()
 
         if self.verbose:
             logging.getLogger().setLevel(logging.DEBUG)
@@ -14597,15 +14587,15 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
                 # Durable, provider-agnostic billing CTA below the response. The
                 # response panel carries the full guidance; this pins the single
-                # action to take (Nous → /topup, other providers → their billing
+                # action to take (Nous → /usage, other providers → their billing
                 # page) so it stays visible instead of scrolling away as prose.
                 if result and result.get("failure_reason") == "billing":
                     _bb = result.get("billing_block") or {}
                     _prov_label = _bb.get("provider_label") or "your provider"
                     if _bb.get("is_nous"):
                         _cta_lines = [
-                            "Run [bold]/topup[/] to add credits, or "
-                            "[bold]/subscription[/] to change plan.",
+                            "Run [bold]/usage[/] to check your balance, or "
+                            "manage billing on the portal.",
                         ]
                     else:
                         _url = _bb.get("billing_url")

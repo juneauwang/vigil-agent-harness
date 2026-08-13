@@ -316,9 +316,6 @@ COMMAND_REGISTRY: list[CommandDef] = [
                gateway_only=True, busy_policy="dispatch"),
     CommandDef("usage", "Show token usage and rate limits; `reset` redeems a banked Codex limit reset", "Info",
                args_hint="[reset [--force]]"),
-    CommandDef("subscription", "View your Nous plan and change it in the browser", "Info",
-               cli_only=True, aliases=("upgrade",)),
-    CommandDef("topup", "Show your Nous balance and manage billing on the portal", "Info"),
     CommandDef("insights", "Show usage insights and analytics", "Info",
                args_hint="[days]"),
     CommandDef("platforms", "Show gateway/messaging platform status", "Info",
@@ -1250,8 +1247,6 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 # surface (CLI, TUI, Telegram, Discord). Keep this list TIGHT and intentional —
 # the telegram-parity test reads it so an entry here is a deliberate
 # "Slack-via-/hermes" decision, not a silent clamp.
-#   - topup: the billing/balance surface; reached via /hermes topup on Slack.
-#     (the rehaul folded the old /credits + /billing surfaces into /topup.)
 #   - moa: high-cost slash mode, available through /hermes moa to avoid
 #     displacing existing native Slack slash commands at the 50-command cap.
 #   - debug: the log/report upload surface; reached via /hermes debug on Slack.
@@ -1274,7 +1269,7 @@ _SLACK_PRIORITY_ALIASES = ("btw", "bg")
 #   - refine: on-demand memory/skill review; reached via /hermes refine on
 #     Slack. Added at the 50-cap — a native slot would clamp an existing
 #     native slash.
-_SLACK_VIA_HERMES_ONLY = frozenset({"topup", "moa", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine"})
+_SLACK_VIA_HERMES_ONLY = frozenset({"moa", "debug", "egress", "init", "version", "diff", "update", "heartbeat", "refine"})
 
 
 def _sanitize_slack_name(raw: str) -> str:
