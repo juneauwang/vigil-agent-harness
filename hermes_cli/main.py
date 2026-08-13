@@ -1522,6 +1522,52 @@ def _read_tui_active_session_file(path: Optional[str]) -> Optional[str]:
         return None
 
 
+# E4: 已知模型的 $/Mtok 单价（input, cache_read, output）——只列已知单价，
+# 未知模型省略价格行。deepseek-v4 系列沿用 DeepSeek 公开定价结构，按需扩展。
+_MODEL_PRICE_PER_MTOK = {
+    "deepseek-v4-flash": (0.28, 0.028, 0.42),
+    "deepseek-v4-pro": (0.56, 0.056, 1.68),
+}
+
+
+def _match_model_price(model: Optional[str]) -> Optional[str]:
+    """模型名 → 价格表键（去 provider 前缀：deepseek/deepseek-v4-pro → deepseek-v4-pro）。"""
+    if not model:
+        return None
+    name = str(model).strip()
+    if "/" in name:
+        name = name.rsplit("/", 1)[-1]
+    return name if name in _MODEL_PRICE_PER_MTOK else None
+
+
+def _estimate_session_cost_usd(model: Optional[str], input_tokens: int,
+                               output_tokens: int, cache_read_tokens: int) -> Optional[float]:
+    """会话 token 费用估算（$/Mtok）；模型未知 → None（省略价格行）。"""
+    key = _match_model_price(model)
+    if key is None:
+        return None
+    price_in, price_cache, price_out = _MODEL_PRICE_PER_MTOK[key]
+    return (input_tokens * price_in + cache_read_tokens * price_cache
+            + output_tokens * price_out) / 1_000_000
+
+
+def _format_session_token_line(total_tokens: int, input_tokens: int, output_tokens: int,
+                               cache_read_tokens: int, reasoning_tokens: int,
+                               *, model: Optional[str] = None,
+                               cost: Optional[float] = None) -> str:
+    """Token 行显示（E4）：``cache read A/B``（A=命中缓存数，B=总输入即命中率）+ 可选价格。"""
+    total_input = input_tokens + cache_read_tokens
+    line = (
+        f"Tokens:         {total_tokens} (in {input_tokens}, out {output_tokens}, "
+        f"cache read {cache_read_tokens}/{total_input}, reasoning {reasoning_tokens})"
+    )
+    if cost is None:
+        cost = _estimate_session_cost_usd(model, input_tokens, output_tokens, cache_read_tokens)
+    if cost is not None:
+        line += f"  (≈${cost:.2f})"
+    return line
+
+
 def _print_tui_exit_summary(
     session_id: Optional[str], active_session_file: Optional[str] = None
 ) -> None:
@@ -1575,11 +1621,10 @@ def _print_tui_exit_summary(
     if title:
         print(f"Title:          {title}")
     print(f"Messages:       {message_count}")
-    print(
-        "Tokens:         "
-        f"{total_tokens} (in {input_tokens}, out {output_tokens}, "
-        f"cache {cache_read_tokens + cache_write_tokens}, reasoning {reasoning_tokens})"
-    )
+    print(_format_session_token_line(
+        total_tokens, input_tokens, output_tokens, cache_read_tokens, reasoning_tokens,
+        model=session.get("model") or None,
+    ))
 
 
 _NPM_LOCK_RUNTIME_KEYS = frozenset({"ideallyInert", "peer"})
