@@ -171,6 +171,36 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
     return run
 
 
+# 本机发现别名（批次十三 C4）：localhost/127.0.0.1/::1（或空 host）→ 直接本地执行
+# 探测命令，不走 SSH、不需要凭据（WSL/单机无 sshd 场景）。
+_LOCAL_HOST_ALIASES = ("localhost", "127.0.0.1", "::1", "")
+
+
+def _build_local_runner(sudo_password_file: Optional[Path] = None) -> Callable[[str], ProbeResult]:
+    """本机 runner（WSL/单机发现）：直接 subprocess 本地执行探测命令，不经 SSH。
+
+    sudo 场景与 SSH 路径同机制：``sudo_password_file`` 存在 → ``sudo -S -p ''``
+    从本地 stdin 注入密码（askpass 读保险箱），命令串/argv 无明文。
+    """
+    def run(cmd: str) -> ProbeResult:
+        use_sudo = sudo_password_file is not None and sudo_password_file.is_file()
+        run_cmd = cmd
+        sudo_stdin = None
+        if use_sudo:
+            sudo_stdin = _askpass_output(sudo_password_file) + "\n"
+            run_cmd = f"sudo -S -p '' {cmd}"
+        try:
+            proc = subprocess.run(run_cmd, capture_output=True, text=True,
+                                  timeout=_SSH_TIMEOUT_S, shell=True, input=sudo_stdin)
+        except subprocess.TimeoutExpired as exc:
+            raise DiscoveryError(f"本地命令执行超时（{_SSH_TIMEOUT_S}s）：{cmd}") from exc
+        except OSError as exc:
+            raise DiscoveryError(f"无法执行本地命令：{exc}") from exc
+        return ProbeResult(proc.stdout, proc.returncode, proc.stderr or "")
+
+    return run
+
+
 def _make_askpass_script(vault_file: Path) -> Path:
     """写 0700 askpass 脚本：输出保险箱文件内容（密码），不进 argv/env。"""
     script = Path(tempfile.mkstemp(prefix="vigil-askpass-", suffix=".sh")[1])
@@ -480,7 +510,8 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
       env: 目标环境（local/test/dev/prod 四值；老自定义名由调用方/读取端按档位映射）。
       creds: ``{"user", "key_path", "askpass_file"}`` 等认证信息（不含密码明文）。
       cluster: 集群名（可选）；缺省显示 "default"，L3 实体文件名按 env 兜底。
-      runner: 可注入的 SSH 执行器（测试用）；默认 ``_build_ssh_runner``。
+      runner: 可注入的执行器（测试用）；默认远程 ``_build_ssh_runner``，本机
+        （localhost/127.0.0.1/::1/空）``_build_local_runner``。
       skip_unidentified: 为 True 时跳过 ss 端口扫描补出的 unidentified 服务。
 
     Returns:
@@ -489,8 +520,11 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
       （key_path → ``{type: ssh_key, ref, user, port}``，不落密码明文）。
     """
     host = str(host or "").strip()
-    if not host:
-        raise DiscoveryError("discover_host 需要 host（--host <ip>）")
+    is_local = host.lower() in _LOCAL_HOST_ALIASES
+    if is_local:
+        # 本机发现（批次十三 C4）：空 host/localhost/127.0.0.1/::1 → 本地执行，
+        # 显示名/endpoint 归一为 localhost；user/key 凭据本地不需要，忽略。
+        host = "localhost"
     if not env:
         raise DiscoveryError("discover_host 需要 env（--env <env>）")
     creds = creds or {}
@@ -498,13 +532,18 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
     cluster_display = cluster or "default"
     user = str(creds.get("user") or "root")
     if runner is None:
-        runner = _build_ssh_runner(
-            host, user=user,
-            key_path=creds.get("key_path"),
-            askpass_file=Path(creds["askpass_file"]) if creds.get("askpass_file") else None,
-            key_passphrase_file=Path(creds["key_passphrase_file"]) if creds.get("key_passphrase_file") else None,
-            sudo_password_file=Path(creds["sudo_password_file"]) if creds.get("sudo_password_file") else None,
-        )
+        if is_local:
+            runner = _build_local_runner(
+                sudo_password_file=Path(creds["sudo_password_file"]) if creds.get("sudo_password_file") else None,
+            )
+        else:
+            runner = _build_ssh_runner(
+                host, user=user,
+                key_path=creds.get("key_path"),
+                askpass_file=Path(creds["askpass_file"]) if creds.get("askpass_file") else None,
+                key_passphrase_file=Path(creds["key_passphrase_file"]) if creds.get("key_passphrase_file") else None,
+                sudo_password_file=Path(creds["sudo_password_file"]) if creds.get("sudo_password_file") else None,
+            )
 
     probes: Dict[str, str] = {}
     services: List[Dict[str, Any]] = []
@@ -693,8 +732,9 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
         "needs_review": True,
         "services_index": f"hosts/{_sanitize_name(host)}.yaml",
     }
-    if creds.get("key_path"):
+    if not is_local and creds.get("key_path"):
         # 凭据引用（OPS-DELTA #42）：只落 type/ref/user/port，密码明文永不进拓扑。
+        # 本机发现不走 SSH → 不写 ssh_key 凭据引用。
         host_row["credential"] = {
             "type": "ssh_key",
             "ref": str(creds["key_path"]),

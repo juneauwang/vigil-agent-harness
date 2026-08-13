@@ -407,6 +407,182 @@ def test_build_ssh_runner_sudo_password_uses_stdin_not_command_string(tmp_path, 
     assert sudo_secret not in blob
 
 
+def test_discover_localhost_uses_local_runner_no_ssh_argv(monkeypatch):
+    """C4：host=localhost → 探测直接本地 subprocess 执行（shell 命令串，无 ssh argv）。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(returncode=127, stdout="", stderr="")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    d = discover_host("localhost", "prod", {"user": "ops", "key_path": "/keys/x.pem"})
+
+    assert calls, "本地 runner 应执行探测命令"
+    for cmd, kwargs in calls:
+        assert isinstance(cmd, str), "本地执行用 shell 命令串，不经 ssh argv"
+        assert "ssh" not in cmd
+        assert kwargs.get("shell") is True
+    assert d["host"]["endpoint"] == "localhost"
+    assert d["host"]["name"] == "localhost"
+    # 本机发现不走 SSH → 不写 ssh_key 凭据引用。
+    assert "credential" not in d["host"]
+
+
+def test_discover_empty_host_defaults_to_localhost(monkeypatch):
+    """C4：host 省略（空）→ 同样走本地 runner，endpoint 归一为 localhost。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return SimpleNamespace(returncode=127, stdout="", stderr="")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    d = discover_host("", "local")
+    assert d["host"]["endpoint"] == "localhost"
+    assert calls and all(isinstance(c, str) and "ssh" not in c for c in calls)
+
+
+def test_discover_remote_host_still_uses_ssh(monkeypatch):
+    """C4：非 localhost（10.0.0.5）→ 仍走 SSH runner（argv[0] == ssh）。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        if argv and argv[0] == "ssh":
+            calls.append(argv)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        raise AssertionError(f"unexpected local argv: {argv}")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    d = discover_host("10.0.0.5", "prod")
+    assert calls and calls[0][0] == "ssh"
+    assert f"root@10.0.0.5" in calls[0]
+    assert d["host"]["endpoint"] == "10.0.0.5"
+
+
+def test_build_local_runner_sudo_password_uses_stdin(tmp_path, monkeypatch):
+    """C4：本地 sudo 复用 sudo_password_file → sudo -S 从 stdin 注入，命令串无明文。"""
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    sudo_secret = "sudo-secret-88"
+    vault = tmp_path / "vault"
+    vault.write_text(sudo_secret, encoding="utf-8")
+    askpass = topodisc._make_askpass_script(vault)
+    calls = {}
+
+    def fake_run(cmd, **kwargs):
+        if isinstance(cmd, list) and cmd[:2] == ["/bin/sh", str(askpass)]:
+            return SimpleNamespace(returncode=0, stdout=sudo_secret + "\n", stderr="")
+        if isinstance(cmd, str) and cmd.startswith("sudo "):
+            calls["cmd"] = cmd
+            calls["kwargs"] = kwargs
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        raise AssertionError(f"unexpected cmd: {cmd}")
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = topodisc._build_local_runner(sudo_password_file=askpass)
+    result = runner("docker ps")
+
+    assert result.ok is True
+    assert calls["cmd"] == "sudo -S -p '' docker ps"
+    assert calls["kwargs"]["input"] == sudo_secret + "\n"
+    # 密码只在 stdin 注入；命令串/env 无明文。
+    blob = json.dumps(calls["cmd"]) + json.dumps(calls["kwargs"].get("env", {}))
+    assert sudo_secret not in blob
+
+
+def test_cli_host_omitted_defaults_to_localhost(tmp_path, monkeypatch, capsys):
+    """C4：host 省略 → CLI 默认本机发现，不要求凭据、不报错。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    seen = {}
+
+    def fake_discover(host, env, creds, **kwargs):
+        seen["host"] = host
+        seen["creds"] = creds
+        return _discovery("localhost")
+
+    def fake_prompt(*a, **kw):
+        raise AssertionError("本机发现不应调用 _prompt_credentials")
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", fake_discover)
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main(["--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert seen["host"] == "localhost"
+    assert seen["creds"] == {}
+    out = capsys.readouterr().out
+    assert "localhost" in out
+
+
+def test_cli_localhost_skips_ssh_credential_prompt(tmp_path, monkeypatch):
+    """C4：--host localhost 无 --user/--key → 不报错，凭据为空，直接本机发现。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    seen = {}
+
+    def fake_discover(host, env, creds, **kwargs):
+        seen["host"] = host
+        seen["creds"] = creds
+        return _discovery("localhost")
+
+    def fake_prompt(*a, **kw):
+        raise AssertionError("localhost 不应走 SSH 凭据交互")
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", fake_discover)
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main(["--host", "localhost", "--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert seen["host"] == "localhost"
+    assert seen["creds"] == {}
+
+
+def test_cli_remote_host_still_prompts_credentials(tmp_path, monkeypatch):
+    """C4：非 localhost 仍走 _prompt_credentials（SSH 路径不变）。"""
+    import hermes_cli.topo_discover as td
+
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    seen = {}
+
+    def fake_prompt(host, user, key, **kwargs):
+        seen["host"] = host
+        return {"user": user, "key_path": key}
+
+    monkeypatch.setattr(td, "_prompt_credentials", fake_prompt)
+    monkeypatch.setattr(td, "discover_host", lambda *a, **kw: _discovery())
+    monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
+
+    rc = td.main(["--host", "10.0.0.5", "--env", "prod", "--dry-run", "--yes"])
+    assert rc == 0
+    assert seen["host"] == "10.0.0.5"
+
+
 def test_cli_short_options_parse_and_flow(tmp_path, monkeypatch):
     import hermes_cli.topo_discover as td
 
