@@ -12,9 +12,6 @@ from contextvars import ContextVar, Token
 from pathlib import Path
 
 
-_profile_fallback_warned: bool = False
-_legacy_fallback_warned: bool = False
-_legacy_skin_warned: bool = False
 _UNSET = object()
 _HERMES_HOME_OVERRIDE: ContextVar[str | object] = ContextVar(
     "_HERMES_HOME_OVERRIDE", default=_UNSET
@@ -66,106 +63,35 @@ def _vigil_native_home_dir(home: Path) -> Path:
     return home / ".vigil"
 
 
-def _legacy_hermes_home_dir(home: Path) -> Path:
-    """旧 hermes 布局数据根：POSIX ``<home>/.hermes``，Windows ``%LOCALAPPDATA%\\hermes``。"""
-    if sys.platform == "win32":
-        local_appdata = os.environ.get("LOCALAPPDATA", "").strip()
-        base = Path(local_appdata) if local_appdata else home / "AppData" / "Local"
-        return base / "hermes"
-    return home / ".hermes"
-
-
 def vigil_data_root_candidates(home: Path) -> tuple[Path, ...]:
-    """指定 home 下 Vigil 数据根的候选位置（新布局优先，旧 hermes 布局兜底）。
+    """指定 home 下 Vigil 数据根的候选位置。
 
-    返回 ``(新布局, 旧布局)`` 去重后的元组，供守护/迁移判断（auth 测试护栏、
-    gateway 服务 remap 等）使用。环境变量不参与 —— 这是纯默认位置。
-
-    旧 hermes 布局仅在含 Vigil 老数据特征（``profiles/ops``）时进入候选，
-    防止把 Hermes 本体/无关残留（personal/work profile、空目录）当 Vigil
-    数据根扫描。
+    只返回 Vigil 原生数据根 ``(新布局,)``。旧 hermes 布局兼容已删除
+    （HERMES_HOME / ~/.hermes 兜底均不再参与），供守护/迁移判断使用。
+    环境变量不参与 —— 这是纯默认位置。
     """
     primary = _vigil_native_home_dir(home)
-    legacy = _legacy_hermes_home_dir(home)
-    if legacy == primary:
-        return (primary,)
-    if _safe_exists(legacy) and _looks_like_vigil_legacy_data(legacy):
-        return (primary, legacy)
     return (primary,)
 
 
 def default_data_root_for(home: Path) -> Path:
-    """指定 home 下、无环境变量时的 Vigil 数据根（新布局优先，旧布局兜底）。
+    """指定 home 下、无环境变量时的 Vigil 数据根。
 
-    - ``<home>/.vigil`` 存在 → 返回它（新布局，Vigil 独立数据目录）
-    - 否则旧 ``<home>/.hermes`` 布局仅在含 Vigil 老数据特征（``profiles/ops``）
-      时兜底（老安装无感兼容）；空的或只有 Hermes 本体 profile 的
-      ``~/.hermes`` 不会被当作 Vigil 数据根——防止把 Hermes 本体/无关残留
-      当数据根读配置、写数据，或与正在运行的 Hermes 抢数据
-    - 两者都不存在 → 返回 ``<home>/.vigil``（首次安装落新目录）
+    恒返回 ``<home>/.vigil``（Windows ``%LOCALAPPDATA%\\vigil``）。旧 hermes
+    布局（``~/.hermes``）兜底已删除：Vigil 数据只落在 Vigil 原生目录，
+    首次安装也落新目录。
 
     不含环境变量读取和告警副作用，可供任意用户目录（sudo 用户、gateway 目标
     用户、auth 测试护栏）复用。当前进程的完整解析见 :func:`get_hermes_home`。
     """
-    primary = _vigil_native_home_dir(home)
-    if _safe_exists(primary):
-        return primary
-    legacy = _legacy_hermes_home_dir(home)
-    if _safe_exists(legacy) and _looks_like_vigil_legacy_data(legacy):
-        return legacy
-    return primary
-
-
-def _safe_exists(path: Path) -> bool:
-    """``Path.exists()`` 的容错版：无权限目录（EACCES）视为不存在。
-
-    Python 3.12 及更早的 ``exists()`` 在 stat 无权限路径时会抛
-    PermissionError（3.13 起才改为返回 False）。gateway 以 sudo 安装服务时
-    会探测目标用户（如 alice）的 home——当前用户对该目录可能无读权限，
-    探测不应因此崩溃。探测语义本来就是"能不能用这个目录"，无权限=不能用。
-    """
-    try:
-        return path.exists()
-    except OSError:
-        return False
-
-
-def _looks_like_vigil_legacy_data(hermes_dir: Path) -> bool:
-    """判断 ``~/.hermes`` 是否含 Vigil 老数据特征（``profiles/ops``）。
-
-    Vigil v0.1.5 及以前把数据放在 ``~/.hermes`` 且默认 profile 是 ``ops``
-    （``~/.hermes/profiles/ops``）；Hermes 本体/无关残留的 profile 是
-    personal/work（无 ``ops``）或根本没有 profiles。用 ``profiles/ops``
-    目录存在与否区分"Vigil 老数据"和"别人的数据根"，避免自动 fallback
-    串读/串写 Hermes 数据（OPS-DELTA #37）。
-    """
-    return _safe_exists(hermes_dir / "profiles" / "ops")
-
-
-def _warn_legacy_fallback_once(root: Path) -> None:
-    """旧 hermes 布局回退时的一次性提示（每进程一次，写 stderr）。"""
-    global _legacy_fallback_warned
-    if _legacy_fallback_warned:
-        return
-    _legacy_fallback_warned = True
-    try:
-        primary = _vigil_native_home_dir(Path.home())
-        msg = (
-            f"[VIGIL data root] 未找到 {primary}，继续使用旧 hermes 数据目录 {root}。"
-            f"创建 {primary} 或设置 VIGIL_HOME 后自动切换；"
-            f"迁移：mv {root} {primary}"
-        )
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
-    except Exception:
-        pass
+    return _vigil_native_home_dir(home)
 
 
 def get_vigil_native_home() -> Path:
     """Return the Vigil-native data root for skin assets.
 
-    Skin 是用户可见的品牌皮肤，读取路径不跟随 HERMES_HOME 残留或旧 hermes
-    数据根兜底：只有显式 VIGIL_HOME 会覆盖，否则固定平台原生 ``~/.vigil``。
+    Skin 是用户可见的品牌皮肤：只有显式 VIGIL_HOME 会覆盖，否则固定平台
+    原生 ``~/.vigil``。HERMES_HOME 不再参与（兼容已删除）。
     """
     vigil_val = os.environ.get("VIGIL_HOME", "").strip()
     if vigil_val:
@@ -173,35 +99,9 @@ def get_vigil_native_home() -> Path:
     return _vigil_native_home_dir(Path.home())
 
 
-def _warn_legacy_skin_root_once(skin_root: Path | None = None) -> None:
-    """检测到当前数据根落在旧 hermes 布局时，一次性提示 skin 已切换。"""
-    global _legacy_skin_warned
-    if _legacy_skin_warned:
-        return
-    _legacy_skin_warned = True
-    try:
-        current = get_hermes_home()
-        if not _looks_like_vigil_legacy_data(current):
-            return
-        if skin_root is not None and Path(skin_root) == current:
-            # 显式 VIGIL_HOME 指向旧目录时跟随用户配置，不需要迁移提示。
-            return
-        primary = _vigil_native_home_dir(Path.home())
-        msg = (
-            f"[VIGIL skin] 检测到旧 Hermes 数据根 {current}，"
-            f"skin 已固定从 {primary / 'skins'} 读取；"
-            f"建议迁移到 {primary} 或清理残留。"
-        )
-        sys.stderr.write(msg + "\n")
-        sys.stderr.flush()
-    except Exception:
-        pass
-
-
 def get_vigil_skin_dir() -> Path:
     """Return the skin directory bound to the Vigil-native data root."""
     root = get_vigil_native_home()
-    _warn_legacy_skin_root_once(root)
     return root / "skins"
 
 
@@ -209,21 +109,18 @@ def _get_platform_default_hermes_home() -> Path:
     """Return the platform-native default Vigil data root.
 
     （函数名保留上游叫法；Vigil fork 的默认数据根已剥离为 ``~/.vigil``，
-    旧 ``~/.hermes`` 布局仅在 ``~/.vigil`` 尚不存在时兜底，见
-    :func:`default_data_root_for`。）
+    旧 ``~/.hermes`` 布局兜底已删除，见 :func:`default_data_root_for`。）
     """
-    default = default_data_root_for(Path.home())
-    if default == _legacy_hermes_home_dir(Path.home()):
-        _warn_legacy_fallback_once(default)
-    return default
+    return default_data_root_for(Path.home())
 
 
 def _hermes_home_from_env() -> Path:
-    """Resolve HERMES_HOME from the process environment only.
+    """Resolve the Vigil data root from the process environment only.
 
-    Reads the ``VIGIL_HOME`` env var (Vigil-native), then ``HERMES_HOME``
-    (legacy), falling back to the platform-native default.  Deliberately
-    ignores the context-local override installed by
+    Reads only the ``VIGIL_HOME`` env var (Vigil-native), falling back to the
+    platform-native default (``~/.vigil``). ``HERMES_HOME`` is deliberately
+    ignored — the legacy compat was removed (不读、不兜底、不提示).
+    Deliberately ignores the context-local override installed by
     :func:`set_hermes_home_override`, so this reflects the process/launch
     scope rather than a per-task profile.  Shared by :func:`get_hermes_home`
     and :func:`get_process_hermes_home` so the two never drift.
@@ -231,75 +128,21 @@ def _hermes_home_from_env() -> Path:
     vigil_val = os.environ.get("VIGIL_HOME", "").strip()
     if vigil_val:
         return Path(vigil_val)
-    val = os.environ.get("HERMES_HOME", "").strip()
-    if val:
-        return Path(val)
     return _get_platform_default_hermes_home()
 
 
-def _warn_profile_fallback_once() -> None:
-    """Warn once when falling back to the default home while a profile is active.
-
-    Guard: if a non-default profile is sticky-active but ``HERMES_HOME`` is
-    unset, the fallback to the default profile is almost certainly wrong.
-    """
-    global _profile_fallback_warned
-    if _profile_fallback_warned:
-        return
-    try:
-        fallback_home = _get_platform_default_hermes_home()
-        active_path = fallback_home / "active_profile"
-        active = active_path.read_text(encoding="utf-8").strip() if active_path.exists() else ""
-    except (UnicodeDecodeError, OSError):
-        active = ""
-    if active and active != "default":
-        _profile_fallback_warned = True
-        # Write directly to stderr.  We intentionally do NOT route this
-        # through ``logging`` because (a) this function is called at
-        # module-import time from 30+ sites, often before logging is
-        # configured, and (b) root-logger propagation would double-emit
-        # on consoles where a StreamHandler is already attached.
-        msg = (
-            f"[HERMES_HOME fallback] HERMES_HOME is unset but active "
-            f"profile is {active!r}. Falling back to {fallback_home}, which "
-            f"is the DEFAULT profile — not {active!r}. Any data this "
-            f"process writes will land in the wrong profile. The "
-            f"subprocess spawner should pass HERMES_HOME explicitly "
-            f"(see issue #18594)."
-        )
-        try:
-            sys.stderr.write(msg + "\n")
-            sys.stderr.flush()
-        except Exception:
-            pass
-
-
 def get_hermes_home() -> Path:
-    """Return the Hermes home directory (Vigil default: platform-native path).
+    """Return the Vigil home directory (default: platform-native path).
 
     Resolution order: context-local override (see
-    :func:`set_hermes_home_override`) → ``VIGIL_HOME`` env var → ``HERMES_HOME``
-    env var → the platform-native default (``~/.vigil``, with ``~/.hermes``
-    legacy fallback).  This is the single source of truth — all other copies
-    should import this.
-
-    When ``HERMES_HOME`` is unset but an ``active_profile`` file indicates
-    a non-default profile is active, logs a loud one-shot warning to
-    ``errors.log`` so cross-profile data corruption is diagnosable instead
-    of silent.  Behavior is unchanged otherwise — we still return
-    the platform-native default — because raising here would brick 30+ module-level
-    callers that import this at load time.  Subprocess spawners are
-    expected to propagate ``HERMES_HOME`` explicitly (see the systemd
-    template in ``hermes_cli/gateway.py`` and the kanban dispatcher in
-    ``hermes_cli/kanban_db.py``).  See https://github.com/NousResearch/hermes-agent/issues/18594.
+    :func:`set_hermes_home_override`) → ``VIGIL_HOME`` env var → the
+    platform-native default (``~/.vigil`` on POSIX).  ``HERMES_HOME`` is
+    deliberately ignored (legacy compat removed).  This is the single source
+    of truth — all other copies should import this.
     """
     override = get_hermes_home_override()
     if override:
         return Path(override)
-
-    if not os.environ.get("HERMES_HOME", "").strip():
-        _warn_profile_fallback_once()
-
     return _hermes_home_from_env()
 
 
@@ -308,9 +151,9 @@ def get_process_hermes_home() -> Path:
 
     Unlike :func:`get_hermes_home`, this never follows the context-local
     override set by :func:`set_hermes_home_override`.  It resolves only the
-    process ``HERMES_HOME`` env var (falling back to the platform default),
+    process ``VIGIL_HOME`` env var (falling back to the platform default),
     so it reflects the scope the process was launched under **as long as
-    nothing mutates ``os.environ`` in-process**.
+    nothing mutates ``os.environ`` in-process**.  ``HERMES_HOME`` is ignored.
 
     Use this for machine/process-level dashboard-owned assets — theme YAML,
     dashboard plugin manifests — that live under the server's launch home and

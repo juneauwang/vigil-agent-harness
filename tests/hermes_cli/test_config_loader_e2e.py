@@ -1,6 +1,6 @@
 """E2E for the canonical-loader migration (managed-scope/env-expansion drift fix).
 
-Runs a real subprocess with a temp HERMES_HOME whose config.yaml contains a
+Runs a real subprocess with a temp VIGIL_HOME whose config.yaml contains a
 ``${ENV_VAR}`` reference, plus a managed-scope overlay dir (HERMES_MANAGED_DIR).
 
 Asserts the two halves of the contract:
@@ -103,7 +103,7 @@ def test_behavioral_read_gets_expansion_and_overlay_while_writeback_stays_raw(
     out = _run_py(
         code,
         {
-            "HERMES_HOME": str(home),
+            "VIGIL_HOME": str(home),
             "HERMES_MANAGED_DIR": str(managed_dir),
             "E2E_PROMPT_SUFFIX": "world",
         },
@@ -143,7 +143,7 @@ def test_writeback_roundtrip_byte_identical_when_unchanged(tmp_path):
         from hermes_cli.config import read_user_config_raw
         import yaml
 
-        p = Path(__import__('os').environ['HERMES_HOME']) / 'config.yaml'
+        p = Path(__import__('os').environ['VIGIL_HOME']) / 'config.yaml'
         before = p.read_text(encoding='utf-8')
         data = read_user_config_raw(p)
         # No mutation, no save — the primitive itself must be read-only.
@@ -155,6 +155,6 @@ def test_writeback_roundtrip_byte_identical_when_unchanged(tmp_path):
         }), encoding="utf-8")
         """
     )
-    out = _run_py(code, {"HERMES_HOME": str(home)}, tmp_path)
+    out = _run_py(code, {"VIGIL_HOME": str(home)}, tmp_path)
     assert out["identical"] is True
     assert out["parsed"]["custom_prompt"] == "keep ${NOT_SET_VAR}"

@@ -38,6 +38,10 @@ _STATE_FILENAME = ".runbook-state.json"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _VALID_ENVS = {"test", "uat", "prod"}
 _VALID_STATUSES = {"pass", "fail"}
+# OPS-DELTA #21：runbook commands 的 <vault:path/field> 凭据引用占位符。
+# runbook_load 永远不返回明文——占位符描述化返回，明文只在执行时由 agent 从
+# 保险箱/vault 读取并立即注入命令（命令串过 agent/redact.py 打码）。
+_VAULT_REF_RE = re.compile(r"<vault:([A-Za-z0-9_./-]+)>")
 
 _DEFAULT_LOAD_SCHEMA = {
     "name": "runbook_load",
@@ -116,11 +120,21 @@ def _runbook_path(home: Path, name: str) -> Optional[Path]:
     """Validate runbook name and resolve <home>/runbooks/<name>.yaml."""
     if not name or not isinstance(name, str) or not _NAME_RE.match(name):
         return None
-    return (home / _RUNBOOKS_DIRNAME / f"{name}.yaml").resolve()
+    return (_runbooks_dir(home) / f"{name}.yaml").resolve()
 
 
 def _state_path(home: Path) -> Path:
-    return home / _RUNBOOKS_DIRNAME / _STATE_FILENAME
+    return _runbooks_dir(home) / _STATE_FILENAME
+
+
+def _runbooks_dir(home: Path) -> Path:
+    """runbooks 数据目录：数据只挂在解析出的 home 下（home/runbooks）。
+
+    OPS-DELTA #14 的 sibling ops profile 回退已删除——不再回退
+    <root>/profiles/ops/runbooks，无数据即报"数据缺失"。
+    """
+    from tools.ops_data_home import resolve_ops_data_home
+    return resolve_ops_data_home(home, _RUNBOOKS_DIRNAME) / _RUNBOOKS_DIRNAME
 
 
 def _normalize(obj: Any) -> Any:
@@ -133,6 +147,18 @@ def _normalize(obj: Any) -> Any:
     if isinstance(obj, _dt.date):
         return obj.isoformat()
     return obj
+
+
+def _is_checklist_runbook(data: Dict[str, Any]) -> bool:
+    """runbook 是否按 L4 部署 checklist 处理。
+
+    OPS-DELTA #32：``kind: deploy`` 的 runbook 默认 ``checklist: true``
+    （部署阶段门强制，任何触发部署的路径必须过阶段门）；显式
+    ``checklist: false`` 仍可关闭。
+    """
+    if "checklist" in data:
+        return bool(data.get("checklist"))
+    return data.get("kind") == "deploy"
 
 
 def _load_runbook(home: Path, name: str) -> Optional[Dict[str, Any]]:
@@ -167,7 +193,7 @@ def _validate_runbook(data: Dict[str, Any], name: str) -> None:
         has_verify = isinstance(step.get("verify"), str)
         if not (has_commands or has_verify):
             raise ValueError(f"runbook {name} 步骤 {step.get('id')!r} 缺少 commands 或 verify")
-    if data.get("checklist"):
+    if _is_checklist_runbook(data):
         if not any(isinstance(s.get("verify"), str) and isinstance(s.get("expect"), str)
                    for s in data["steps"]):
             raise ValueError(f"checklist runbook {name} 必须含 verify+expect 的真实验证步骤")
@@ -195,7 +221,7 @@ def _ops_config() -> Dict[str, Any]:
 
 def _runbook_data_exists(home: Optional[Path] = None) -> bool:
     """runbooks/ 目录存在且含至少一个 yaml。"""
-    runbooks_dir = (home or _hermes_home()) / _RUNBOOKS_DIRNAME
+    runbooks_dir = _runbooks_dir(home or _hermes_home())
     try:
         if not runbooks_dir.is_dir():
             return False
@@ -276,8 +302,42 @@ def _summary_line(rb: Dict[str, Any]) -> Dict[str, Any]:
         "title": rb.get("title"),
         "kind": rb.get("kind"),
         "env": rb.get("env"),
-        "checklist": bool(rb.get("checklist")),
+        "checklist": _is_checklist_runbook(rb),
     }
+
+
+def _describe_vault_refs_in_commands(holder: Dict[str, Any], key: str) -> int:
+    """把 holder[key] 命令列表里的 <vault:...> 占位符描述化，返回替换次数。"""
+    count = 0
+    cmds = holder.get(key)
+    if not isinstance(cmds, list):
+        return 0
+    out: List[Any] = []
+    for cmd in cmds:
+        if isinstance(cmd, str):
+            cmd, n = _VAULT_REF_RE.subn(
+                lambda m: (
+                    f"«vault:{m.group(1)} — 凭据引用（执行时从保险箱/vault 读取，"
+                    "明文不进会话记录）»"
+                ),
+                cmd,
+            )
+            count += n
+        out.append(cmd)
+    holder[key] = out
+    return count
+
+
+def _describe_vault_refs(payload: Dict[str, Any]) -> int:
+    """遍历 runbook 的 steps/rollback 命令，描述化 <vault:...> 占位符。"""
+    count = 0
+    for step in payload.get("steps") or []:
+        if isinstance(step, dict):
+            count += _describe_vault_refs_in_commands(step, "commands")
+    for rb in payload.get("rollback") or []:
+        if isinstance(rb, dict):
+            count += _describe_vault_refs_in_commands(rb, "commands")
+    return count
 
 
 def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
@@ -287,13 +347,21 @@ def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
     if rb.get("env") and payload["session_env"] and rb["env"] != payload["session_env"]:
         payload["env_mismatch"] = True
         payload["env_warning"] = (
-            f"runbook 适用环境 {rb['env']} 与当前会话环境 {payload['session_env']} 不一致——"
-            "跨环境操作默认拒绝，确认后再执行。"
+            f"runbook 适用环境 {rb['env']} 与当前会话环境 {payload['session_env']} 不一致；"
+            "跨环境操作由命令级权限矩阵逐条判定（L2 及以上走审批），不是整体拒绝。"
         )
-    payload["checklist_state"] = _checklist_state_for(home, name) if rb.get("checklist") else None
+    payload["checklist_state"] = _checklist_state_for(home, name) if _is_checklist_runbook(rb) else None
     payload["note"] = (
         "本工具不执行任何命令；步骤命令由 agent 通过终端执行，逐条过权限矩阵。"
     )
+    vault_refs = _describe_vault_refs(payload)
+    if vault_refs:
+        payload["vault_refs"] = vault_refs
+        payload["note"] += (
+            f" 本 runbook 含 {vault_refs} 处 <vault:...> 凭据引用：明文只在执行时"
+            "由你从保险箱/vault 读取并立即注入命令（命令串过 redact），不要在"
+            "对话或命令文本里内插明文。"
+        )
     return payload
 
 
@@ -304,11 +372,11 @@ def runbook_load(
 ) -> str:
     """Load a runbook by name, fuzzy-match by trigger keywords, or list all."""
     home = home or _hermes_home()
-    runbooks_dir = home / _RUNBOOKS_DIRNAME
+    runbooks_dir = _runbooks_dir(home)
     if not runbooks_dir.is_dir():
         return tool_error(
-            f"runbooks 目录不存在: {runbooks_dir}。"
-            "运维会话需要先铺 runbook（vigil ops-init 会复制样例到 ops profile）。"
+            f"runbooks 数据不存在（{runbooks_dir}），"
+            "先跑 vigil topo-discover 或手工创建 runbooks/*.yaml。"
         )
 
     if runbook:
@@ -384,7 +452,7 @@ def runbook_checkpoint(
         return tool_error(str(exc))
     if data is None:
         return tool_error(f"runbook 不存在: {runbook}")
-    if not data.get("checklist"):
+    if not _is_checklist_runbook(data):
         return tool_error(f"runbook {runbook} 不是 checklist runbook（kind=deploy, checklist=true），无需 checkpoint")
     if status not in _VALID_STATUSES:
         return tool_error(f"status 必须是 pass/fail，收到 {status!r}")

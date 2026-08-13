@@ -14,7 +14,7 @@ def _read_config(tmp_path) -> str:
 
 
 def test_save_config_preserves_unresolved_env_refs(monkeypatch, tmp_path):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     monkeypatch.delenv("MISSING_SECRET", raising=False)
     _write_config(
         tmp_path,
@@ -36,7 +36,7 @@ def test_save_config_preserves_unresolved_env_refs(monkeypatch, tmp_path):
 
 
 def test_save_config_allows_intentional_secret_value_change(monkeypatch, tmp_path):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     monkeypatch.setenv("TU_ZI_API_KEY", "sk-old-secret")
     _write_config(
         tmp_path,

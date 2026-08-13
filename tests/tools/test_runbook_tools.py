@@ -33,7 +33,7 @@ def rb_home(tmp_path, monkeypatch):
     (home / "runbooks").mkdir(parents=True)
     for src in sorted(SAMPLE_RUNBOOKS.glob("*.yaml")):
         shutil.copy2(src, home / "runbooks" / src.name)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         yield home
@@ -123,6 +123,47 @@ def test_validation_checklist_requires_verify_and_rollback(rb_home):
     assert "verify" in result and "rollback" in result
 
 
+def test_deploy_runbook_defaults_to_checklist(rb_home):
+    """OPS-DELTA #32：kind=deploy 缺省 checklist=true（部署阶段门强制）。"""
+    _write_runbook(
+        rb_home, "deploy-implicit.yaml",
+        {
+            "name": "deploy-implicit", "title": "x", "env": "prod",
+            "kind": "deploy",  # 无 checklist 键 → 默认 checklist=true
+            "steps": [
+                {"id": "preflight", "commands": ["ls"]},
+                {"id": "verify", "commands": ["curl -sf http://x/healthz"],
+                 "verify": "curl -sf http://x/healthz", "expect": "HTTP 200"},
+            ],
+            "rollback": [{"title": "回滚", "commands": ["kubectl rollout undo deploy/x"]}],
+        },
+    )
+    loaded = _load(runbook_load(runbook="deploy-implicit", home=rb_home))
+    # kind=deploy + 无 checklist 键 → 按 checklist 处理（阶段门状态随 load 返回）
+    assert loaded["checklist_state"] is not None
+
+    # 未过前置直接推进 → 阶段门拒绝（部署路径强制过阶段门）
+    result = runbook_checkpoint(
+        runbook="deploy-implicit", step_id="verify", status="pass", home=rb_home
+    )
+    assert "前置步骤未全部通过" in result
+
+
+def test_deploy_runbook_explicit_checklist_false_stays_off(rb_home):
+    """显式 checklist: false 仍可关闭（默认不覆盖用户声明）。"""
+    _write_runbook(
+        rb_home, "deploy-explicit-off.yaml",
+        {
+            "name": "deploy-explicit-off", "title": "x", "env": "test",
+            "kind": "deploy", "checklist": False,
+            "steps": [{"id": "s1", "commands": ["ls"]}],
+        },
+    )
+    loaded = _load(runbook_load(runbook="deploy-explicit-off", home=rb_home))
+    assert loaded["checklist"] is False
+    assert loaded["checklist_state"] is None
+
+
 def test_checkpoint_enforces_phase_order(rb_home):
     # 未过前置直接推进 → 阶段门拒绝
     result = runbook_checkpoint(
@@ -182,7 +223,7 @@ def test_env_mismatch_warning(rb_home):
     result = _load(runbook_load(runbook="harbor-restart", home=rb_home))
     assert result["session_env"] == "test"
     assert result["env_mismatch"] is True
-    assert "跨环境操作默认拒绝" in result["env_warning"]
+    assert "由命令级权限矩阵逐条判定" in result["env_warning"]
 
 
 def test_check_runbook_requirements_data_existence_gating(rb_home):
@@ -221,9 +262,30 @@ def test_check_runbook_requirements_no_data(tmp_path, monkeypatch):
 
     home = tmp_path / "empty_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         assert check_runbook_requirements() is False
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+
+def test_sibling_ops_profile_no_longer_fallback(tmp_path, monkeypatch):
+    """OPS-DELTA #14 回退删除：default 无 runbooks 数据 + sibling ops profile
+    有数据 → 不回退，工具不可用且提示"数据缺失"。"""
+    import hermes_cli.config as hc
+
+    root = tmp_path / "vigil_root"
+    (root / "profiles" / "ops" / "runbooks").mkdir(parents=True)
+    (root / "profiles" / "ops" / "runbooks" / "demo.yaml").write_text(
+        "name: demo\ntitle: demo\nsteps:\n  - {id: s1, commands: [ls]}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("VIGIL_HOME", str(root))
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        assert check_runbook_requirements() is False
+        result = _load(runbook_load("demo"))
+        assert "runbooks 数据不存在" in result.get("error", "")
     finally:
         hc._LOAD_CONFIG_CACHE.clear()

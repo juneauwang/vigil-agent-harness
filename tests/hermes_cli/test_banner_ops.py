@@ -58,7 +58,7 @@ def _ops_state(**overrides):
 
 def test_load_banner_state_reads_profile_snapshot(tmp_path, monkeypatch):
     _fresh_state()
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text(yaml.safe_dump({
         "ops": {
             "topology": {"enabled": True},
@@ -88,7 +88,7 @@ def test_load_banner_state_reads_profile_snapshot(tmp_path, monkeypatch):
 
 def test_load_banner_state_returns_off_dict_when_ops_off(tmp_path, monkeypatch):
     _fresh_state()
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text(yaml.safe_dump({
         "ops": {"topology": {"enabled": False}, "permissions": {"enabled": False}},
     }), encoding="utf-8")
@@ -156,7 +156,7 @@ def test_load_banner_state_matrix_default_on_without_enabled_key(tmp_path, monke
     topology.enabled: true → ops_enabled True、矩阵默认启用。
     """
     _fresh_state()
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text(yaml.safe_dump({
         "ops": {
             "permissions": {"env": "prod", "role": "prod"},

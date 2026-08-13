@@ -68,7 +68,7 @@ def topo_home(tmp_path, monkeypatch):
     # repo's standard pattern) — never patch the function object: hermes_cli
     # config binds it at import time, and a patched binding would leak across
     # tests once config.py is first imported.
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     import hermes_cli.config as _hc
     _hc._LOAD_CONFIG_CACHE.clear()
     try:
@@ -175,7 +175,7 @@ def test_topo_update_missing_entity(topo_home):
 
 
 def test_topo_update_rejects_traversal_detail(topo_home):
-    # entity whose detail points outside HERMES_HOME
+    # entity whose detail points outside the data root
     topo_yaml = TOPO_YAML.replace(
         "  - name: order-db\n",
         "  - name: order-db\n  - name: evil\n    type: svc\n    env: test\n    detail: ../evil.yaml\n",
@@ -200,7 +200,7 @@ def test_check_topo_requirements_data_existence_gating(tmp_path, monkeypatch):
 
     home = tmp_path / "cfg"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
 
     def _check():
         hc._LOAD_CONFIG_CACHE.clear()
@@ -254,7 +254,7 @@ def test_topo_discover_handler_returns_fragment_without_writing(tmp_path, monkey
         "probes": {},
     }
     monkeypatch.setattr(topo_tools, "discover_host", lambda *a, **kw: fragment)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_home"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes_home"))
 
     result = json.loads(topo_tools._discover_handler(
         {"host": "203.0.113.20", "env": "prod", "dry_run": True}

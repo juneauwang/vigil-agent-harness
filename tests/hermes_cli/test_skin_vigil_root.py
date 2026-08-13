@@ -1,14 +1,12 @@
 """Skin asset paths must be bound to the Vigil-native data root (#40).
 
-A machine that previously ran upstream Hermes can leave ``~/.hermes`` behind.
-Skin 是用户可见的品牌表面：读错目录会让 Vigil 展示 Hermes 的皮肤残留。
-These tests pin the skin directory to the Vigil-native root unless an explicit
-``VIGIL_HOME`` is set.
+HERMES_HOME 兼容已删除（OPS-DELTA #37）：skin 目录只认显式 ``VIGIL_HOME``，
+否则固定 ``~/.vigil``。旧 ``~/.hermes`` 残留（含 profiles/ops 特征）不再参与，
+也不再有任何 legacy 告警。
 """
 
 import pytest
 
-import hermes_constants as hc
 from hermes_cli import skin_cmd, skin_engine
 
 
@@ -17,8 +15,6 @@ def _clean_data_root_env(tmp_path, monkeypatch):
     monkeypatch.delenv("VIGIL_HOME", raising=False)
     monkeypatch.delenv("HERMES_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
-    hc._legacy_skin_warned = False
-    hc._legacy_fallback_warned = False
     yield
 
 
@@ -44,7 +40,8 @@ def test_skin_dir_follows_explicit_vigil_home(tmp_path, monkeypatch):
     assert skin_engine._skins_dir() == custom / "skins"
 
 
-def test_legacy_data_root_warns_once_and_still_reads_native(tmp_path, capsys):
+def test_legacy_data_root_no_warning_no_impact(tmp_path, monkeypatch, capsys):
+    """旧 ~/.hermes（含 profiles/ops）→ 无告警、无影响，skin 仍读 ~/.vigil。"""
     legacy = tmp_path / "home" / ".hermes"
     (legacy / "profiles" / "ops").mkdir(parents=True)
     (legacy / "skins").mkdir()
@@ -54,8 +51,7 @@ def test_legacy_data_root_warns_once_and_still_reads_native(tmp_path, capsys):
     assert skin_cmd._skins_dir() == tmp_path / "home" / ".vigil" / "skins"
 
     err = capsys.readouterr().err
-    assert "检测到旧 Hermes 数据根" in err
-    assert err.count("检测到旧 Hermes 数据根") == 1
+    assert "检测到旧 Hermes 数据根" not in err
 
     names = [s["name"] for s in skin_engine.list_skins()]
     assert "old" not in names
