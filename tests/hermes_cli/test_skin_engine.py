@@ -4,9 +4,10 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def reset_skin_state():
-    """Reset skin engine state between tests."""
+def reset_skin_state(tmp_path, monkeypatch):
+    """Reset skin engine state and isolate Vigil skin storage between tests."""
     from hermes_cli import skin_engine
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     skin_engine._active_skin = None
     skin_engine._active_skin_name = "default"
     yield

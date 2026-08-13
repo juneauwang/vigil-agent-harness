@@ -8,7 +8,6 @@ that the setup wizard correctly syncs config from disk after the call.
 from __future__ import annotations
 
 from hermes_cli.config import load_config, save_config, save_env_value
-from hermes_cli.nous_subscription import NousFeatureState, NousSubscriptionFeatures
 from hermes_cli.setup import _print_setup_summary, setup_model_provider
 
 
@@ -129,41 +128,43 @@ def test_setup_copilot_acp_skips_same_provider_pool_step(tmp_path, monkeypatch):
     assert config.get("credential_pool_strategies", {}) == {}
 
 
-def test_setup_summary_local_browser_unavailable_without_chromium(
+def test_setup_summary_is_ops_focused_without_consumer_tools(
     tmp_path, monkeypatch, capsys
 ):
-    """End-to-end: agent-browser present but no Chromium in local mode must
-    render as unavailable with an install hint — not a false 'available'.
+    """The setup summary stays focused on Vigil's operational tool surface.
 
-    Unlike the mocked-feature tests above, this drives the real
-    ``get_nous_subscription_features`` so the surface stays aligned with the
-    runtime gate in ``tools.browser_tool.check_browser_requirements``.
+    Consumer tool categories remain available through ``vigil tools``, but the
+    setup summary must not enumerate Web Search / Browser / Image Gen / Video
+    Gen / TTS / STT / Skills Hub or direct users toward unrelated key setup.
     """
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _clear_provider_env(monkeypatch)
 
-    cfg = load_config()
-    browser_cfg = cfg.get("browser")
-    if not isinstance(browser_cfg, dict):
-        browser_cfg = {}
-        cfg["browser"] = browser_cfg
-    browser_cfg["cloud_provider"] = "local"
-    save_config(cfg)
-
-    # Only stub the readiness probes; the feature resolver itself is real.
-    monkeypatch.setattr("hermes_cli.nous_subscription._has_agent_browser", lambda: True)
-    monkeypatch.setattr(
-        "hermes_cli.nous_subscription.get_nous_portal_account_info",
-        lambda *a, **k: None,
-    )
-    monkeypatch.setattr("tools.browser_tool._chromium_installed", lambda: False)
-    monkeypatch.setattr("tools.browser_tool._using_lightpanda_engine", lambda: False)
     monkeypatch.setattr(
         "agent.auxiliary_client.get_available_vision_backends", lambda: []
     )
+    from unittest.mock import patch
 
-    _print_setup_summary(load_config(), tmp_path)
+    with patch("hermes_cli.auth.resolve_provider", lambda *a, **k: "openrouter"):
+        _print_setup_summary(load_config(), tmp_path)
     output = capsys.readouterr().out
 
-    assert "Browser Automation (Local browser)" not in output
-    assert "agent-browser install --with-deps" in output
+    assert "Terminal/Commands" in output
+    assert "Task Planning (todo)" in output
+    assert "Skills (view, create, edit)" in output
+
+    for label in (
+        "Web Search",
+        "Browser Automation",
+        "Image Generation",
+        "Video Generation",
+        "Text-to-Speech",
+        "Speech-to-Text",
+        "Skills Hub",
+    ):
+        assert label not in output
+
+    assert "agent-browser install --with-deps" not in output
+
+    for word in ("Nous", "Portal", "subscription"):
+        assert word not in output

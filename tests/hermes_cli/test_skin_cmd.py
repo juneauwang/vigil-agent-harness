@@ -13,8 +13,13 @@ from hermes_cli import skin_cmd
 from hermes_constants import get_hermes_home
 
 
+@pytest.fixture(autouse=True)
+def _isolate_vigil_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+
+
 def _skins():
-    d = get_hermes_home() / "skins"
+    d = skin_cmd._skins_dir()
     d.mkdir(parents=True, exist_ok=True)
     return d
 
