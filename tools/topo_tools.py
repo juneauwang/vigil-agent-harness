@@ -191,11 +191,10 @@ def _hermes_home() -> Path:
 
 
 def _topology_path(home: Optional[Path] = None) -> Path:
-    """Resolve topology.yaml with the OPS-DELTA #14 migration fallback.
+    """Resolve topology.yaml under the active home (no sibling fallback).
 
-    Active home 优先；default profile 无 topology.yaml 时回退到 sibling ops
-    profile（老用户数据铺在 <root>/profiles/ops 下，升级后直接 ``vigil`` 也
-    应能读到现有拓扑）。
+    OPS-DELTA #14 的 sibling ops profile 回退已删除：数据只挂在解析出的
+    home 下（home/topology.yaml），无数据 → 调用方报"数据缺失"。
     """
     from tools.ops_data_home import resolve_ops_data_home
     home = home or _hermes_home()
@@ -608,8 +607,8 @@ def topo_update(
     PROD entities require human approval before the write (request_tool_approval).
     """
     from tools.ops_data_home import resolve_ops_data_home
-    # 读写同一数据 home（OPS-DELTA #14）：查询回退到 ops profile 数据时，
-    # 更新也落同一处，避免"读到旧数据、写到新位置"的数据分裂。
+    # 读写同一数据 home：数据只挂在解析出的 home 下，查询与更新始终落同一处
+    # （sibling ops profile 回退已删除，不存在数据分裂）。
     home = resolve_ops_data_home(home or _hermes_home(), _TOPO_FILENAME)
     topo = load_topology(home)
     if topo is None:

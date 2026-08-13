@@ -128,8 +128,11 @@ def _state_path(home: Path) -> Path:
 
 
 def _runbooks_dir(home: Path) -> Path:
-    """runbooks 数据目录（OPS-DELTA #14 迁移回退：default profile 无数据时
-    回退 sibling ops profile，老用户数据铺在 <root>/profiles/ops/runbooks）。"""
+    """runbooks 数据目录：数据只挂在解析出的 home 下（home/runbooks）。
+
+    OPS-DELTA #14 的 sibling ops profile 回退已删除——不再回退
+    <root>/profiles/ops/runbooks，无数据即报"数据缺失"。
+    """
     from tools.ops_data_home import resolve_ops_data_home
     return resolve_ops_data_home(home, _RUNBOOKS_DIRNAME) / _RUNBOOKS_DIRNAME
 
@@ -372,8 +375,8 @@ def runbook_load(
     runbooks_dir = _runbooks_dir(home)
     if not runbooks_dir.is_dir():
         return tool_error(
-            f"runbooks 目录不存在: {runbooks_dir}。"
-            "运维会话需要先铺 runbook（vigil ops-init 会复制样例到 ops profile）。"
+            f"runbooks 数据不存在（{runbooks_dir}），"
+            "先跑 vigil topo-discover 或手工创建 runbooks/*.yaml。"
         )
 
     if runbook:
