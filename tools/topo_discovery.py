@@ -41,13 +41,14 @@ class DiscoveryError(Exception):
 
 
 class ProbeResult:
-    """一次远端命令探测的结果（stdout + exit_code）。"""
+    """一次远端命令探测的结果（stdout + exit_code + stderr）。"""
 
-    __slots__ = ("stdout", "exit_code")
+    __slots__ = ("stdout", "exit_code", "stderr")
 
-    def __init__(self, stdout: str, exit_code: int = 0):
+    def __init__(self, stdout: str, exit_code: int = 0, stderr: str = ""):
         self.stdout = stdout or ""
         self.exit_code = exit_code
+        self.stderr = stderr or ""
 
     @property
     def ok(self) -> bool:
@@ -66,10 +67,12 @@ def _sanitize_name(value: str) -> str:
 
 
 def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = None,
-                      askpass_file: Optional[Path] = None) -> Callable[[str], ProbeResult]:
+                      askpass_file: Optional[Path] = None,
+                      key_passphrase_file: Optional[Path] = None,
+                      sudo_password_file: Optional[Path] = None) -> Callable[[str], ProbeResult]:
     """默认 SSH runner：key/agent 认证（BatchMode）或 SSH_ASKPASS 密码文件。
 
-    密码走 SSH_ASKPASS（``askpass_file`` 为 0600 脚本，从保险箱文件读取），
+    密码走 SSH_ASKPASS（``askpass_file`` 为 0700 脚本，从保险箱文件读取），
     任何密码明文都不进 argv / 环境变量。
     """
     if not host or not user:
@@ -77,22 +80,39 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
 
     def run(cmd: str) -> ProbeResult:
         env = dict(os.environ)
-        use_askpass = askpass_file is not None and askpass_file.is_file()
+        use_password_askpass = askpass_file is not None and askpass_file.is_file()
+        use_key_passphrase = key_passphrase_file is not None and key_passphrase_file.is_file()
+        use_sudo = sudo_password_file is not None and sudo_password_file.is_file()
+        remote_cmd = cmd
+        sudo_stdin = None
+        if use_sudo:
+            # sudo -S 从本地 stdin 读取密码；密码经 askpass 脚本从保险箱读出后
+            # 作为 stdin 注入，远程命令串/argv 中不出现明文。
+            sudo_stdin = _askpass_output(sudo_password_file) + "\n"
+            remote_cmd = f"sudo -S -p '' {cmd}"
         argv = ["ssh", "-o", "ConnectTimeout=10"]
-        if not use_askpass:
+        if not use_password_askpass and not use_key_passphrase:
             # key/agent 认证：BatchMode 确保不交互弹密码（密码路径走 askpass）。
             argv += ["-o", "BatchMode=yes"]
+        elif use_key_passphrase:
+            # 加密私钥需要 askpass 提供 passphrase；BatchMode 会同时禁掉
+            # passphrase askpass，所以这里改用 publickey-only 并关闭 password
+            # prompt，防止交互弹窗，同时保留 askpass 注入。
+            argv += [
+                "-o", "PreferredAuthentications=publickey",
+                "-o", "NumberOfPasswordPrompts=0",
+            ]
         if key_path:
             argv += ["-i", str(key_path)]
-        argv += [f"{user}@{host}", cmd]
-        if use_askpass:
-            # 密码经 SSH_ASKPASS（0600 脚本读保险箱文件）注入，命令串/env 无明文。
-            env["SSH_ASKPASS"] = str(askpass_file)
+        argv += [f"{user}@{host}", remote_cmd]
+        if use_password_askpass or use_key_passphrase:
+            # 密码经 SSH_ASKPASS（0700 脚本读保险箱文件）注入，命令串/env 无明文。
+            env["SSH_ASKPASS"] = str(key_passphrase_file if use_key_passphrase else askpass_file)
             env["SSH_ASKPASS_REQUIRE"] = "force"
             env.setdefault("DISPLAY", ":0")
         try:
             proc = subprocess.run(argv, capture_output=True, text=True,
-                                  timeout=_SSH_TIMEOUT_S, env=env)
+                                  timeout=_SSH_TIMEOUT_S, env=env, input=sudo_stdin)
         except subprocess.TimeoutExpired as exc:
             raise DiscoveryError(f"SSH 连接 {user}@{host} 超时（{_SSH_TIMEOUT_S}s）") from exc
         except OSError as exc:
@@ -104,17 +124,40 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
                 f"SSH 连接 {user}@{host} 失败（exit 255）："
                 f"{detail[-1] if detail else '认证失败或主机不可达'}"
             )
-        return ProbeResult(proc.stdout, proc.returncode)
+        return ProbeResult(proc.stdout, proc.returncode, proc.stderr or "")
 
     return run
 
 
 def _make_askpass_script(vault_file: Path) -> Path:
-    """写 0600 askpass 脚本：输出保险箱文件内容（密码），不进 argv/env。"""
+    """写 0700 askpass 脚本：输出保险箱文件内容（密码），不进 argv/env。"""
     script = Path(tempfile.mkstemp(prefix="vigil-askpass-", suffix=".sh")[1])
     script.write_text(f"#!/bin/sh\ncat {vault_file}\n", encoding="utf-8")
-    os.chmod(script, 0o600)
+    os.chmod(script, 0o700)
     return script
+
+
+def _askpass_output(askpass_file: Path) -> str:
+    """执行 askpass 脚本并返回密码明文（仅注入 stdin，不进 argv/日志）。"""
+    try:
+        proc = subprocess.run(["/bin/sh", str(askpass_file)], capture_output=True,
+                              text=True, timeout=10)
+    except subprocess.TimeoutExpired as exc:
+        raise DiscoveryError("读取保险箱凭据超时（askpass）") from exc
+    except OSError as exc:
+        raise DiscoveryError(f"无法执行 askpass 脚本：{exc}") from exc
+    if proc.returncode != 0:
+        raise DiscoveryError("读取保险箱凭据失败（askpass 退出码非 0）")
+    return proc.stdout.rstrip("\n")
+
+
+def _is_likely_permission_denied(res: ProbeResult) -> bool:
+    """区分“命令不存在”和“权限不足/daemon 拒绝”两类探测失败。"""
+    combined = f"{res.stdout or ''}\n{res.stderr or ''}".lower()
+    if "permission" in combined or "denied" in combined or "not allowed" in combined:
+        return True
+    # 非零退出且不是缺工具时，按用户实测场景保守提示 sudo 重试。
+    return res.exit_code != 0 and "command not found" not in combined
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +256,29 @@ def _parse_ss_tlnp(output: str) -> List[Dict[str, Any]]:
     return listeners
 
 
+def _parse_systemctl_units(output: str) -> List[Dict[str, Any]]:
+    """systemctl list-units --type=service → running/active 服务名列表。"""
+    services: List[Dict[str, Any]] = []
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith("UNIT"):
+            continue
+        parts = line.split()
+        if len(parts) < 4 or not parts[0].endswith(".service"):
+            continue
+        unit = parts[0]
+        name = unit[: -len(".service")]
+        active = parts[2].lower()
+        sub = parts[3].lower()
+        if active in ("active", "running") or sub == "running":
+            services.append({
+                "name": _sanitize_name(name),
+                "unit": unit,
+                "state": sub or active,
+            })
+    return services
+
+
 def _parse_nvidia_smi(output: str) -> List[str]:
     """nvidia-smi csv → ['NVIDIA A100-SXM4-40GB, 40960 MiB', ...]。"""
     gpus = [l.strip() for l in output.splitlines() if l.strip()]
@@ -302,7 +368,8 @@ def _service_from_container(c: Dict[str, Any], host: str, env: str,
 
 
 def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
-                  *, runner: Optional[Callable[[str], ProbeResult]] = None) -> Dict[str, Any]:
+                  *, runner: Optional[Callable[[str], ProbeResult]] = None,
+                  skip_unidentified: bool = False) -> Dict[str, Any]:
     """发现一台主机的 v0.2 schema 片段。
 
     Args:
@@ -310,6 +377,7 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
       env: 目标环境（test/uat/prod/自定义）。
       creds: ``{"user", "key_path", "askpass_file"}`` 等认证信息（不含密码明文）。
       runner: 可注入的 SSH 执行器（测试用）；默认 ``_build_ssh_runner``。
+      skip_unidentified: 为 True 时跳过 ss 端口扫描补出的 unidentified 服务。
 
     Returns:
       v0.2 片段 dict：``{version, source, last_verified, needs_review, host,
@@ -327,6 +395,8 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
             host, user=user,
             key_path=creds.get("key_path"),
             askpass_file=Path(creds["askpass_file"]) if creds.get("askpass_file") else None,
+            key_passphrase_file=Path(creds["key_passphrase_file"]) if creds.get("key_passphrase_file") else None,
+            sudo_password_file=Path(creds["sudo_password_file"]) if creds.get("sudo_password_file") else None,
         )
 
     probes: Dict[str, str] = {}
@@ -355,8 +425,11 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
         else:
             probes["compose"] = compose_res.stdout.strip()[:80] or "exit!=0"
     else:
-        reason = (docker_res.stdout or "").strip().splitlines()
-        probes["docker"] = reason[-1][:120] if reason else "docker 不可用（exit!=0）"
+        if _is_likely_permission_denied(docker_res):
+            probes["docker"] = "权限不足（可加 --sudo-password 重试）"
+        else:
+            reason = (docker_res.stdout or "").strip().splitlines()
+            probes["docker"] = reason[-1][:120] if reason else "docker 不可用（exit!=0）"
 
     # 2) k8s 枚举（可选：kubectl 可用才扫）。
     k8s_res = _probe(runner, "kubectl get deploy,svc -A -o json 2>/dev/null")
@@ -393,7 +466,53 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                     "needs_review": True,
                 }
     else:
-        probes["kubectl"] = "skipped（kubectl 不可用）"
+        if _is_likely_permission_denied(k8s_res):
+            probes["kubectl"] = "权限不足（可加 --sudo-password 重试）"
+        else:
+            probes["kubectl"] = "skipped（kubectl 不可用）"
+
+    # 2.5) systemd 原生服务（排在 docker/k8s 后、ss 前）。
+    systemd_res = _probe(
+        runner, "systemctl list-units --type=service --no-pager --no-legend 2>/dev/null"
+    )
+    if systemd_res.ok:
+        probes["systemctl"] = "ok"
+        for unit in _parse_systemctl_units(systemd_res.stdout):
+            name = unit["name"]
+            if name in [s["name"] for s in services]:
+                # docker/k8s 已发现的服务优先，systemd 同名只补充不覆盖。
+                continue
+            svc = {
+                "name": name,
+                "type": "systemd-service",
+                "env": env,
+                "endpoint": None,
+                "source": "discovered",
+                "last_verified": _dt.date.today().isoformat(),
+                "needs_review": True,
+                "detail": f"entities/{name}.yaml",
+                "attrs": {
+                    "unit": unit["unit"],
+                    "state": unit["state"],
+                    "source_probe": "systemctl",
+                },
+            }
+            services.append(svc)
+            details[name] = {
+                "name": name,
+                "type": "systemd-service",
+                "env": env,
+                "attrs": {
+                    "unit": unit["unit"],
+                    "state": unit["state"],
+                    "source_probe": "systemctl",
+                },
+                "source": "discovered",
+                "last_verified": svc["last_verified"],
+                "needs_review": True,
+            }
+    else:
+        probes["systemctl"] = "skipped（systemctl 不可用）"
 
     # 3) 端口扫描补条目（非 loopback 监听端口，未映射到已知服务）。
     ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
@@ -405,6 +524,9 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                 # 22 = sshd 管理通道（主机自身，不是服务）；其余已映射端口跳过。
                 continue
             name = f"unidentified-{port}"
+            if skip_unidentified:
+                seen_ports.add(port)
+                continue
             services.append({
                 "name": name,
                 "type": "service",
@@ -414,11 +536,15 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                 "last_verified": _dt.date.today().isoformat(),
                 "needs_review": True,
                 "detail": f"entities/{name}.yaml",
-                "attrs": {"listener": listener["host"], "ports": [port]},
+                "attrs": {
+                    "listener": listener["host"],
+                    "ports": [port],
+                    "source_probe": "ss",
+                },
             })
             details[name] = {
                 "name": name, "type": "service", "env": env,
-                "attrs": {"listener": listener["host"]},
+                "attrs": {"listener": listener["host"], "source_probe": "ss"},
                 "source": "discovered",
                 "last_verified": _dt.date.today().isoformat(),
                 "needs_review": True,
