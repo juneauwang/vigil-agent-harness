@@ -14914,7 +14914,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 inp = getattr(agent, "session_input_tokens", 0) or 0
                 out = getattr(agent, "session_output_tokens", 0) or 0
                 total = getattr(agent, "session_total_tokens", 0) or 0
-                print(f"Tokens:         📊 本次会话: 输入 {inp:,} · 输出 {out:,} · 总计 {total:,} tokens")
+                cache_read = getattr(agent, "session_cache_read_tokens", 0) or 0
+                reasoning = getattr(agent, "session_reasoning_tokens", 0) or 0
+                # 口径与状态栏 token 行（E4）一致：in/out 为净值（扣除缓存），
+                # 缓存命中单独列出（毛值 total 含缓存，直接相加会误导）。
+                print(f"Tokens:         📊 本次会话: 输入 {inp:,} · 输出 {out:,} · "
+                      f"缓存 {cache_read:,} · reasoning {reasoning:,} · 总计 {total:,} tokens")
         else:
             try:
                 from hermes_cli.skin_engine import get_active_goodbye
