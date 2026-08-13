@@ -574,6 +574,32 @@ class TestOptionalEnvVarsRegistry:
         from hermes_cli.config import OPTIONAL_ENV_VARS
         assert "HERMES_MAX_ITERATIONS" not in OPTIONAL_ENV_VARS
 
+    def test_nous_gateway_residual_keys_removed(self):
+        """批次十三 D2：NOUS_BASE_URL / FIRECRAWL_GATEWAY_URL / TOOL_GATEWAY_*
+        是 Nous 订阅残留，已从 OPTIONAL_ENV_VARS 删除（不出现在 setup/dashboard）。"""
+        from hermes_cli.config import OPTIONAL_ENV_VARS
+        for key in (
+            "NOUS_BASE_URL",
+            "FIRECRAWL_GATEWAY_URL",
+            "TOOL_GATEWAY_DOMAIN",
+            "TOOL_GATEWAY_SCHEME",
+            "TOOL_GATEWAY_USER_TOKEN",
+        ):
+            assert key not in OPTIONAL_ENV_VARS, f"{key} 不应出现在 OPTIONAL_ENV_VARS"
+
+    def test_gateway_env_keys_not_routed_as_env_config_keys(self):
+        """批次十三 D2：这些残留键不再被 `hermes config set/get` 特殊路由为 .env 键。"""
+        from hermes_cli.config import _is_env_config_key
+        for key in ("FIRECRAWL_GATEWAY_URL", "TOOL_GATEWAY_DOMAIN", "TOOL_GATEWAY_SCHEME"):
+            assert _is_env_config_key(key) is False, key
+
+    def test_web_tool_metadata_no_longer_advertises_gateway_envs(self):
+        """批次十三 D2：web 工具注册元数据不再把 Nous gateway env 列为需求。"""
+        from tools.web_tools import _web_requires_env
+        for key in ("FIRECRAWL_GATEWAY_URL", "TOOL_GATEWAY_DOMAIN",
+                    "TOOL_GATEWAY_SCHEME", "TOOL_GATEWAY_USER_TOKEN"):
+            assert key not in _web_requires_env(), key
+
 
 class TestMemoryProviderEnvVarsRegistry:
     """Every memory provider that reads an API key from the environment must
