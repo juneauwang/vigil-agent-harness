@@ -82,6 +82,47 @@ For more help on a command:
 """
 
 
+# Vigil 运维命令（E1 分组）：醒目在前；其余为 hermes 继承命令，折叠显示。
+# 只是 help 展示层分组——不改变 argparse 解析，所有子命令仍可正常调用。
+_VIGIL_COMMANDS = frozenset({
+    "chat", "setup", "config", "model", "version", "status",
+    "logs", "tools", "skin",
+    "ops-init", "topo-discover", "watch", "vssh",
+})
+
+
+class _GroupedHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """顶层 help：Vigil 命令一组醒目，继承命令折叠（``vigil --help-all`` 全量）。"""
+
+    def _format_action(self, action):
+        if not isinstance(action, argparse._SubParsersAction):
+            return super()._format_action(action)
+        return self._format_grouped_subparsers(action)
+
+    def _format_grouped_subparsers(self, action) -> str:
+        action_header = self._format_action_invocation(action)
+        help_text = (self._expand_help(action) or "").strip()
+        header = f"%*s%s" % (self._current_indent, "", action_header)
+        if help_text:
+            header += f"  {help_text}"
+        parts = [header + "\n"]
+        by_name = {pa.dest: pa for pa in action._choices_actions}
+        vigil = [by_name[n] for n in action.choices if n in _VIGIL_COMMANDS]
+        inherited = [n for n in action.choices if n not in _VIGIL_COMMANDS]
+        parts.append("%*s%s\n" % (self._current_indent, "", "Vigil 命令："))
+        self._indent()
+        for pa in vigil:
+            parts.append(self._format_action(pa))
+        self._dedent()
+        parts.append("\n")
+        names_line = f"继承命令（来自 hermes，{len(inherited)} 个）：{' '.join(inherited)}"
+        for line in self._split_lines(names_line, self._width - self._current_indent):
+            parts.append("%*s%s\n" % (self._current_indent, "", line))
+        parts.append("%*s%s\n" % (self._current_indent, "",
+                                   "  完整列表与说明见：vigil --help-all"))
+        return "".join(parts)
+
+
 def build_top_level_parser():
     """Build the top-level parser, the subparsers action, and the ``chat`` subparser.
 
@@ -92,12 +133,17 @@ def build_top_level_parser():
     parser = argparse.ArgumentParser(
         prog="vigil",
         description="Vigil - 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=_GroupedHelpFormatter,
         epilog=_EPILOGUE,
     )
 
     parser.add_argument(
         "--version", "-V", action="store_true", help="Show version and exit"
+    )
+    parser.add_argument(
+        "--help-all",
+        action="store_true",
+        help="Show ALL subcommands including inherited hermes commands (grouped help folds them)",
     )
     parser.add_argument(
         "-z",
@@ -273,7 +319,8 @@ def build_top_level_parser():
         help="With --tui: run TypeScript sources via tsx (skip dist build)",
     )
 
-    subparsers = parser.add_subparsers(dest="command", help="Command to run")
+    subparsers = parser.add_subparsers(dest="command", metavar="{command}",
+                                      help="Command to run")
 
     # =========================================================================
     # chat command

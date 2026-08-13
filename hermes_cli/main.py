@@ -12553,6 +12553,12 @@ def main():
         subparsers.required = False
         args = parser.parse_args(_processed_argv)
 
+    # E1: --help-all → 未分组全量 help（继承命令也完整列出）。
+    if getattr(args, "help_all", False):
+        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        parser.print_help()
+        return
+
     # Handle --version flag
     if args.version:
         cmd_version(args)
