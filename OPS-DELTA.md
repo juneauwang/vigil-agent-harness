@@ -1698,3 +1698,68 @@
   熔断 3 次即断 + 错误含 IdentitiesOnly、sudoers.d 写入 hardline 拦截（yolo
   场景）、terminal 密码提示转 clarify、write_file 敏感内容 600+打码；行为
   探针命令在批次十九 prompt 验收段可复跑。
+
+### 42. 批次二十 审批交互体验——审批框选项按场景过滤（session/always 无效选项）+ 审批/clarify 超时策略 wait 化 — ✅ 已实施（2026-08-14，批次二十；commit hash 佐证：任务 1 选项过滤 3f4a4f5 / 任务 2 超时 wait 化 5d9252a / 任务 3 clarify 对齐 206fbad）
+- **背景（用户 8/14 上午发现 + dogfood §I）**：① prod 变更确认门（require_confirmation）
+  弹审批框仍显示 "session"/"always"——但确认门在 approval.py 的 allowlist 短路
+  **之前**判定，选了也不生效（下次照样弹），误导用户以为已授权；② 多 session
+  场景（gateway 推 Telegram/Discord + 多个 CLI 会话）下 approvals.timeout 默认
+  300s 超时静默 deny，用户根本看不见请求就被拒绝——"用户没机会决定"违反复核
+  语义。判定层本身是对的（确认门短路 + fail-closed 不变），本批只修交互层。
+- **修复（任务 1，选项过滤）**：
+  1. `tools/approval.py`：`prompt_dangerous_approval` 新增 `allow_session` 参数并
+     透传给回调（旧签名回调 TypeError 时自动去 allow_session 重试，兼容旧调用）；
+     `_run_approval_gate` 新增 `allow_permanent`/`allow_session` 参数（gateway
+     approval_data 不再写死 True）；`check_all_command_guards` Phase 3 对
+     `_ops_confirmation_required`（prod 确认门）传 `allow_permanent=False` +
+     `allow_session=False` 给 gateway 与 CLI 两条 surface——非 prod 普通审批保持
+     原作用域不变。
+  2. `hermes_cli/callbacks.py` `approval_callback` 签名加
+     `allow_permanent=True, allow_session=True`（默认值，兼容旧调用），choices 按
+     参数过滤（prod 门 → 只剩 `["once","deny"]`，+view 逻辑保留）。
+  3. `cli.py` `HermesCLI._approval_callback`/`_approval_choices`（实际注册的 CLI
+     交互框）同步加 `allow_session`，choices 过滤后编号/高亮提示自动只显示有效项。
+  4. TUI/API 展示层：`tui_gateway/server.py` `_emit_approval_request` 与
+     `gateway/platforms/api_server.py` `_approval_event_choices` 增加
+     `allow_session is False` → `["once","deny"]` 分支（choices 渲染处同步隐藏
+     session 提示）。
+- **修复（任务 2，超时 wait 化）**：`hermes_cli/config_defaults.py` approvals 段新增
+  `timeout_policy: "wait"`（默认 wait：超时后不自动 deny 也不自动批准，fail-closed
+  保持 pending，超时仅作"提醒间隔"；`"deny"` = 旧行为超时拒绝）。`_await_gateway_decision`
+  wait 模式超时后重推一次通知并继续挂起等待（interrupt 仍可中断 → deny）；CLI
+  交互框（cli.py + callbacks.py）wait 模式超时打印"审批仍在等待"并继续等；非交互
+  input() 循环 wait 模式 join 超时后继续等同一个输入线程。判定层未动：timeout
+  永远不等于批准。
+- **修复（任务 3，clarify 对齐）**：cli.py `_clarify_callback` + callbacks.py
+  `clarify_callback` 对齐同一 `approvals.timeout_policy`——wait 超时后不自动
+  "agent will decide"，打印提示继续等；deny 保持旧行为。`<=0` 无限等待语义
+  不变（wait 模式下 `timeout<=0` = null deadline，与既有 clarify 语义一致）。
+- **验收**：新增 tests/tools/test_approval_choices_filter.py（choices 过滤 5 组 +
+  view、HermesCLI._approval_choices 5 例、prod 确认门回调收到 False/False、非 prod
+  保持双作用域、旧签名回调兼容 2 例）+ tests/tools/test_approval_timeout_policy.py
+  （默认值 wait、gateway wait 重推 2 次 / deny 单次通知 timeout、CLI wait 越过
+  deadline 继续等 / deny 返回 timeout、input 循环 wait 继续等、clarify wait 继续等
+  / deny 自动跳过）；回归 test_approval*.py / test_ops_confirmation_gate.py /
+  test_command_guards.py / test_ops_permissions_guard.py / test_clarify_gateway.py /
+  test_cli_approval_ui.py / test_tui_approval_redaction.py / test_api_server_runs
+  （choices）/ test_commands.py 全部通过（基线既有 9 例环境噪音失败不变：config
+  readonly ×2 + mode_parity ×6 + slack config gate ×1，stash 基线同命令同结果）；
+  行为探针 5 条符合预期。
+- **注册点清单（重点）**：`set_approval_callback` 实际注册点为 `HermesCLI._approval_callback`
+  （cli.py:7512/14358 + cli_commands_mixin.py:1980 后台任务）——本批已同步签名；
+  `computer_use` 独立回调经 `_computer_use_approval_callback` 转发不受影响；
+  background_review / delegate_tool / acp 回调均带 **kwargs 或 **_，新 kwarg 天然
+  兼容。签名改动影响面：CLI（choices 过滤 + wait 策略生效）、TUI/desktop
+  （`approval.request` choices 载荷过滤）、gateway（approval_data 标志位传适配器，
+  wait 重推通知）；判定层（L3/L4 deny/hardline/prod 确认门优先级）零改动。
+- **已知风险（wait 挂起对 agent 循环的影响）**：wait 模式审批/clarify 长期挂起会
+  阻塞当前 agent 执行线程（与旧 deny 模式同样阻塞，只是不再自动解除）——后续
+  工具调用排队等待，用户可能误以为卡死；缓解：①每间隔打印/重推"仍在等待"提示，
+  ②gateway 有 interrupt（/stop、/new、inactivity）逃生口立即 resolve deny，
+  ③多 session 用户可在任一会话 /approve|/deny 解除。CLI 单会话场景若用户完全
+  离开，会一直挂到用户回来或 Ctrl+C——这是"不静默拒绝"的代价（fail-closed
+  保持 pending，绝不自动批准）；若后续要"挂起但不阻塞"（agent 先做别的），
+  需要把审批状态提升为全局 pending 队列（排期方案 B，本批未做）。
+- **核销方式**：测试常驻——prod 确认门回调 kwargs 双 False、choices 过滤、
+  timeout_policy 默认 wait、gateway wait 重推通知、CLI wait 越过 deadline 继续
+  等；行为探针命令在批次二十 prompt 验收段可复跑。
