@@ -1763,3 +1763,80 @@
 - **核销方式**：测试常驻——prod 确认门回调 kwargs 双 False、choices 过滤、
   timeout_policy 默认 wait、gateway wait 重推通知、CLI wait 越过 deadline 继续
   等；行为探针命令在批次二十 prompt 验收段可复跑。
+
+### 43. 批次二十一 凭据 fail-closed 硬化——认证失败停+问用户，禁止自探测（§Q/§AD/§AF 收口） — ✅ 已实施（2026-08-14，批次二十一；commit hash 佐证：任务 1 认证失败停+问 857b364 / 任务 2 凭据缺失 fail-closed 969e008 / 任务 3 force_trip dd57bcc / 任务 4 vssh 双路径 3440d75）
+- **背景（§Q/§AD/§AF 连续 3 天实测）**：批次十六熔断只约束"失败 3 次停止重试"，
+  "停之后"没约束——agent 熔断后换工具/换姿势继续试（§AF 补丁 2 实锤 heredoc→管道→
+  base64）；凭据缺失时自行翻 ~/.ssh/ 试密钥/猜 vault 字段（§Q 实锤）；用户纠正方向
+  后仍换姿势重试（§AF 补丁 2 需求 2）。根因层 = 行为层缺 fail-closed：凭据缺失/
+  认证失败/被纠正 → 停 + 问用户。
+- **修复（任务 1，认证失败 → 停 + 问用户）**：
+  1. `tools/topo_discovery.py` `_ssh_auth_breaker_error` 扩展：熔断错误信息加
+     "请勿换用户名/换 key/翻 ~/.ssh/ 继续尝试（会触发 sshd 限流锁 15 分钟）" +
+     "3) 或询问用户提供正确凭据"（既有 1) 手动 ssh 验证凭据 2) 补充拓扑表
+     credential 声明保留，全链路可操作）。
+  2. `tools/sudo_tool.py`：本地/远端 sudo 认证失败（stderr 命中 incorrect
+     password / sorry try again / password required 等信号）→ 返回"停止自动重试 +
+     询问用户提供正确密码 + 禁止连续猜 vault 字段"引导；熔断 RuntimeError 经
+     handler 原样透传（现含问用户指令）。
+  3. `agent/prompt_builder.py` `OPS_CREDENTIAL_SSH_GUIDANCE` 新增：认证失败 →
+     停止尝试并询问用户；禁止翻 ~/.ssh/ 找 key、试多个用户名、连续猜 vault 字段、
+     换工具换姿势重试同一目标（会触发 MaxAuthTries 限流锁 15 分钟）；正确做法 =
+     报告失败原因 + 请用户提供凭据或手动执行。
+- **修复（任务 2，凭据缺失 → 问用户，禁止自探测）**：
+  1. `_build_ssh_runner` fail-closed：无 SSH 认证凭据（无 key_path/askpass_file/
+     key_passphrase_file）→ 直接报"目标主机未配置 SSH 凭据（拓扑表 credential
+     缺失）"错误，**不再回退"尝试默认 key/ssh-agent"**（§Q 根因）；sudo_password_file
+     是 sudo 密码不是 SSH 认证凭据，单独提供不放行。
+  2. `tools/sudo_tool.py` 无凭据消息扩展：3) 或询问用户提供正确凭据；禁止翻
+     ~/.ssh/ 试密钥/猜 vault 字段/换用户名试登录。
+  3. prompt 常量新增：凭据缺失/未配置时询问用户，禁止自行翻 ~/.ssh/ 找 key、
+     试多个用户名、猜 vault 字段名。
+- **修复（任务 3，用户纠正 → 停止当前路径）**：`tools/topo_discovery.py` 熔断
+  计数器加 `force_trip(host, user)` 方法——外部检测到用户纠正信号后调用，该
+  host:user 立即进入熔断态（等价 3 次失败），runner/guard 入口直接停试、零 ssh
+  调用（sudo_tool 共享计数同样生效）；prompt 常量强化：用户纠正操作方向时立即
+  停止当前尝试路径，不换姿势/换工具重试同一目标，先确认正确做法（检查工具清单/
+  问用户）再继续。会话层"检测纠正信号"的接线点不在本批白名单（conversation
+  loop），以 prompt 约束 + force_trip 可供接线实现。
+- **修复（任务 4，vssh 凭据解析双路径对齐）**：`_resolve_topology_credential`
+  加 `allow_fallback: bool = True` 参数——CLI 交互路径（用户手动 `vigil vssh`，
+  默认 True）保留 None → ssh-agent/交互回退；agent 工具路径（`sudo_exec` 传
+  False）把 None 视为硬停，调用方 fail-closed 报错问用户，不自行翻 ~/.ssh/。
+- **验收**：新增 tests/tools/test_credential_fail_closed.py（无凭据零 ssh 调用、
+  discover_host 透传、key_path/askpass 正常、sudo_password 单独不放行）+ 追加
+  test_ssh_auth_breaker.py（熔断错误含禁自探测指令、force_trip 立即熔断/零调用/
+  host 隔离/sudo_tool guard 联动）+ test_sudo_exec.py（本地 sudo 认证失败问用户、
+  breaker 错误透传）+ test_batch14_e3_vssh.py（allow_fallback=False 无凭据 None、
+  有凭据正常、sudo_exec 传 False 接线）+ test_system_prompt.py（prompt 常量三
+  行为约束 + ops 工具加载时进 stable tier）。回归 test_topo_discovery.py /
+  test_topo_tools.py / test_topo_update_contract.py / test_topo_v2.py /
+  test_sudo_stdin_guard_sources.py / test_topo_slash_command.py 全部通过
+  （174 passed, 6 skipped 为 test_topo_v2 既有版本 skip）。
+- **硬约束核对**：diff 白名单 = tools/sudo_tool.py、tools/topo_discovery.py、
+  hermes_cli/subcommands/vssh.py、agent/prompt_builder.py（行为约束常量）、对应
+  新测试 + 既有测试更新、OPS-DELTA.md——共 10 文件；无新 env var；批次十六熔断
+  判定逻辑未改（3 次计数语义不变，只扩错误信息 + 加 force_trip）；sudo_exec 工具
+  本体未改（只加认证失败引导分支 + 消息）。
+- **任务 2 影响面（不再 fallback 默认 key）**：依赖无凭据 → ssh-agent/默认 key
+  回退的合法流程 = CLI 交互路径 `topo-discover`（无 --key/无密码时此前走
+  BatchMode）+ agent 工具 `topo_discover`（无 key 参数）。本批后两路径在无凭据
+  时都返回"未配置凭据"错误——CLI 用户在场，用 --key / 交互密码 / 拓扑表 credential
+  声明即可恢复（错误消息含 3 步引导）；agent 工具路径正是 §Q 自探测源头，fail-closed
+  是目标。CLI `_prompt_credentials` 的"使用 ssh-agent / 默认 key"提示行保留（非
+  白名单文件），紧随其后的 fail-closed 错误会明确覆盖其语义。
+- **已知风险（标准位置 key 误伤评估）**：fail-closed 会拒绝"agent 用 ~/.ssh/id_rsa
+  直接连"的场景（§Q 教训的正反两面）——评估结论：不放行"标准位置有 key"豁免。
+  理由：①§Q 实锤"翻 ~/.ssh/"正是自探测，豁免会重新打开探测口（agent 无法区分
+  "标准 key"与"翻找"）；②OpenSSH 默认 key 同样触发 MaxAuthTries 遍历；③逃生口
+  已存在：用户把 key 声明进拓扑表（`credential: {type: ssh_key, ref: ~/.ssh/id_rsa}`）
+  或 `--key`/vssh 显式指定，一行声明即放行，无需探测。误伤面 = 未声明凭据的既有
+  自动化流程，报错信息含完整 3 步引导可恢复。
+- **已知风险（force_trip 接线点）**：会话层"检测用户纠正信号"（新对话轮次明确
+  否定）→ 调 force_trip 的接线不在本批白名单内（需动 conversation loop），本批
+  落地为 prompt 行为约束 + 可接线 API；若后续发现纠正后仍自试，需在 run_agent/
+  cli 检测否定反馈时调 force_trip（排期）。
+- **核销方式**：测试常驻——test_credential_fail_closed.py（零 ssh 调用断言）、
+  test_ssh_auth_breaker.py（force_trip + 熔断消息指令）、test_sudo_exec.py（认证
+  失败问用户）、test_batch14_e3_vssh.py（allow_fallback 接线）；行为探针命令在
+  批次二十一 prompt 验收段可复跑。
