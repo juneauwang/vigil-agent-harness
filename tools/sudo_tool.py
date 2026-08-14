@@ -101,11 +101,22 @@ def _write_askpass_cat(vault_path: str) -> Path:
 
 
 def _scp_argv_from_ssh(ssh_argv: List[str], local: Path, dest: str) -> List[str]:
-    """ssh argv → scp argv：``-p <port>`` → ``-P <port>``，追加 <local> <user@host>:<dest>。"""
-    out = ["scp", "-P", ssh_argv[2]]
-    # ssh_argv = ["ssh", "-p", port, ("-i", key)?, "user@host"]——target 是末元素
-    for piece in ssh_argv[3:-1]:
-        out.append(piece)
+    """ssh argv → scp argv：``-p <port>`` → ``-P <port>``，追加 <local> <user@host>:<dest>。
+
+    逐段翻译而非按下标取位：ssh argv 含 ``-o IdentitiesOnly=yes``（批次十九）等
+    任意 ``-o``/``-i`` 参数时原样透传（scp 支持 ``-o``），target 恒为末元素。
+    """
+    out = ["scp"]
+    i = 1
+    n = len(ssh_argv) - 1  # 末元素是 user@host 目标，不参与翻译
+    while i < n:
+        piece = ssh_argv[i]
+        if piece == "-p" and i + 1 < n:
+            out += ["-P", ssh_argv[i + 1]]
+            i += 2
+        else:
+            out.append(piece)
+            i += 1
     out += [str(local), f"{ssh_argv[-1]}:{dest}"]
     return out
 

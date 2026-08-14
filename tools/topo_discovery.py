@@ -197,7 +197,7 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
             # 作为 stdin 注入，远程命令串/argv 中不出现明文。
             sudo_stdin = _askpass_output(sudo_password_file) + "\n"
             remote_cmd = f"sudo -S -p '' {cmd}"
-        argv = ["ssh", "-o", "ConnectTimeout=10"]
+        argv = ["ssh", "-o", "ConnectTimeout=10", "-o", "IdentitiesOnly=yes"]
         if not use_password_askpass and not use_key_passphrase:
             # key/agent 认证：BatchMode 确保不交互弹密码（密码路径走 askpass）。
             argv += ["-o", "BatchMode=yes"]

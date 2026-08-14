@@ -144,5 +144,5 @@ def test_cli_vssh_path_not_counted(monkeypatch):
 
     before = dict(topodisc._SSH_AUTH_FAILURES)
     argv, env = _build_ssh_argv("db1", user="root")
-    assert argv == ["ssh", "-p", "22", "root@db1"]
+    assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "root@db1"]
     assert topodisc._SSH_AUTH_FAILURES == before

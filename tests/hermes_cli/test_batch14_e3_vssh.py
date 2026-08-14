@@ -33,7 +33,7 @@ from hermes_cli.subcommands.vssh import (
 def test_build_argv_plain_no_credential():
     """无凭据：纯 ssh argv（key 显式给 → -i），不注入 SSH_ASKPASS。"""
     argv, env = _build_ssh_argv("h", user="root", key="/my/key")
-    assert argv == ["ssh", "-p", "22", "-i", "/my/key", "root@h"]
+    assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "-i", "/my/key", "root@h"]
     assert "SSH_ASKPASS" not in env
 
 
@@ -41,17 +41,17 @@ def test_build_argv_ssh_key_credential():
     """拓扑 ssh_key 引用 → -i 私钥路径（CLI key 优先于引用）。"""
     argv, _ = _build_ssh_argv("db1", user="root",
                               cred={"type": "ssh_key", "ref": "/keys/db.pem"})
-    assert argv == ["ssh", "-p", "22", "-i", "/keys/db.pem", "root@db1"]
+    assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "-i", "/keys/db.pem", "root@db1"]
     argv, _ = _build_ssh_argv("db1", user="root", key="/cli/key",
                               cred={"type": "ssh_key", "ref": "/keys/db.pem"})
-    assert argv == ["ssh", "-p", "22", "-i", "/cli/key", "root@db1"]
+    assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "-i", "/cli/key", "root@db1"]
 
 
 def test_build_argv_vault_credential_injects_askpass_no_plaintext():
     """vault 引用 → SSH_ASKPASS 脚本注入；凭据名/密码明文不进 argv/env。"""
     argv, env = _build_ssh_argv("db1", user="ops",
                                 cred={"type": "vault", "ref": "db-pass"})
-    assert argv == ["ssh", "-p", "22", "ops@db1"]
+    assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "ops@db1"]
     assert env["SSH_ASKPASS_REQUIRE"] == "force"
     assert env["SSH_ASKPASS"]
     joined = " ".join(argv) + " " + " ".join(env.values())
@@ -66,7 +66,7 @@ def test_build_argv_vault_failure_falls_back(monkeypatch):
     monkeypatch.setattr(vssh_mod, "_make_askpass_script", boom)
     argv, env = _build_ssh_argv("db1", user="root",
                                 cred={"type": "vault", "ref": "db-pass"})
-    assert argv == ["ssh", "-p", "22", "root@db1"]
+    assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "root@db1"]
     assert "SSH_ASKPASS" not in env
 
 
@@ -83,15 +83,35 @@ def test_build_argv_credential_port_overrides_default():
     """credential 引用带 port → 覆盖 CLI 缺省 22。"""
     argv, _ = _build_ssh_argv("h", user="root",
                               cred={"type": "ssh_key", "ref": "/k", "port": 2222})
-    assert argv[2] == "2222"
+    assert argv[4] == "2222"
 
 
 def test_build_argv_unknown_credential_type_ignored():
     """未知 credential type → 忽略（不注入、不报错）。"""
     argv, env = _build_ssh_argv("h", user="root",
                                 cred={"type": "bogus", "ref": "x"})
-    assert argv == ["ssh", "-p", "22", "root@h"]
+    assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "root@h"]
     assert "SSH_ASKPASS" not in env
+
+
+def test_build_argv_always_includes_identities_only():
+    """批次十九 §AF：ssh argv 无条件带 ``-o IdentitiesOnly=yes``。
+
+    多 key 环境 ``-i key`` 不等于"只用这个 key"——不显式声明会遍历 agent
+    所有 key → MaxAuthTries 刷爆 → sshd 锁 15 分钟。所有形态（无凭据 / key /
+    vault / askpass / credential port 覆盖）都必须带上。
+    """
+    argv, _ = _build_ssh_argv("h", user="root")
+    assert argv[1:3] == ["-o", "IdentitiesOnly=yes"]
+    argv, _ = _build_ssh_argv("h", user="root", key="/my/key")
+    assert argv[1:3] == ["-o", "IdentitiesOnly=yes"]
+    argv, _ = _build_ssh_argv("h", user="root",
+                              cred={"type": "ssh_key", "ref": "/k", "port": 2222})
+    assert argv[1:3] == ["-o", "IdentitiesOnly=yes"]
+    assert argv[4] == "2222"
+    argv, _ = _build_ssh_argv("db1", user="ops",
+                              cred={"type": "vault", "ref": "db-pass"})
+    assert argv[1:3] == ["-o", "IdentitiesOnly=yes"]
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +216,7 @@ def test_run_no_credential_falls_back_to_agent(monkeypatch, topo_home):
                            no_credential=True)
     with pytest.raises(SystemExit):
         run(args)
-    assert captured["argv"] == ["ssh", "-p", "22", "root@db1"]
+    assert captured["argv"] == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "root@db1"]
     assert "SSH_ASKPASS" not in captured["env"]
 
 

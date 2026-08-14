@@ -422,6 +422,34 @@ def test_discover_ss_entries_record_source_probe():
     assert d["details"]["unidentified-9090"]["detail"] == svc["detail"]
 
 
+def test_build_ssh_runner_includes_identities_only(monkeypatch):
+    """批次十九 §AF：探测 runner 的 ssh argv 无条件带 ``-o IdentitiesOnly=yes``。
+
+    多 key 环境不带 IdentitiesOnly 会遍历 agent 所有 key 刷爆 MaxAuthTries
+    （§AF：今天锁了 5 次 15 分钟）——探测路径与 vssh 必须同款约束。
+    """
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        if argv and argv[0] == "ssh":
+            calls.append(argv)
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = topodisc._build_ssh_runner("203.0.113.20", "root")
+    result = runner("uptime")
+
+    assert result.ok is True
+    assert calls, "runner 应调用 ssh"
+    assert "-o" in calls[0] and "IdentitiesOnly=yes" in calls[0]
+    assert calls[0].index("IdentitiesOnly=yes") > calls[0].index("ConnectTimeout=10")
+
+
 def test_build_ssh_runner_encrypted_key_uses_askpass_without_plaintext(tmp_path, monkeypatch):
     import subprocess
     from types import SimpleNamespace

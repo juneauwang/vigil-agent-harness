@@ -701,6 +701,44 @@ STEER_CHANNEL_NOTE += (
     "because it remains in the conversation history."
 )
 
+# Ops credential + SSH discipline (OPS-DELTA 批次十九，§AF/§AG/§AE 行为层强制约束)。
+#
+# 静态常量文本——不读环境/会话，随 stable tier 进入缓存前缀，字节稳定。
+# 覆盖：SSH 多 key IdentitiesOnly（§AF 锁 15 分钟 ×5）、vault 值禁复述（§AF
+# 补丁 5/6）、认证失败熔断后停止重试（§AF 主文）、sudoers.d 写入硬拒（§AF
+# 补丁 2）、ansible -bK 密码提示转 clarify（§AG）。约束靠 agent 行为执行，
+# redact 名单追不上 LLM 自由发挥。
+OPS_CREDENTIAL_SSH_GUIDANCE = (
+    "# Ops credential & SSH discipline\n"
+    "- SSH-family commands (ssh/scp/ansible/rsync) MUST include `-o "
+    "IdentitiesOnly=yes` and MUST NOT rely on bare `ssh -i <key>`: with "
+    "multiple keys in ssh-agent, ssh iterates every key until MaxAuthTries "
+    "exhausts and sshd throttles the host for ~15 minutes. Prefer the "
+    "`vssh` / `sudo_exec` tools for SSH and privilege escalation.\n"
+    "- Credential values (passwords/tokens/private-key material) may ONLY be "
+    "injected via environment variables, written to an askpass script (0700), "
+    "or fed via stdin. NEVER restate a credential value in your reply, "
+    "reasoning, or tool output; never print a vault's full data structure; "
+    "never write credential values into files or reports. After reading a "
+    "credential, report only a summary (e.g. 'sudo password acquired, length "
+    "N').\n"
+    "- After repeated SSH authentication failures, STOP retrying — do not "
+    "keep swapping approaches. Connection-layer errors (Too many "
+    "authentication failures / Permission denied) mean stop + check "
+    "`-o IdentitiesOnly=yes` + check retry count; only execution-layer errors "
+    "(escaping/remote permissions) justify changing how you run the command. "
+    "If the user redirects your direction, stop the current attempt path and "
+    "confirm the correct approach first.\n"
+    "- Never write to /etc/sudoers or /etc/sudoers.d/ to bypass password "
+    "prompts — privilege escalation goes through the `sudo_exec` tool "
+    "(ASKPASS injection).\n"
+    "- For `ansible-playbook -bK`, set `ANSIBLE_BECOME_PASS` from the vault "
+    "(never on the command line) instead of answering the interactive "
+    "password prompt. Interactive password prompts in a non-TTY terminal hang "
+    "or echo into the session — route them through clarify or environment "
+    "variables."
+)
+
 # Model name substrings that should use the 'developer' role instead of
 # 'system' for the system prompt.  OpenAI's newer models (GPT-5, Codex)
 # give stronger instruction-following weight to the 'developer' role.

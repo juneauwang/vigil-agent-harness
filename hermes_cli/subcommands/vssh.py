@@ -53,13 +53,16 @@ def _build_ssh_argv(host: str, *, user: str, port: int = 22,
       - ``vault``:   ref = 保险箱凭据名 → askpass 脚本读保险箱文件；
       - ``askpass``: ref = askpass 脚本路径 → 直接作为 SSH_ASKPASS。
     """
-    argv: List[str] = ["ssh", "-p", str(port)]
+    # IdentitiesOnly=yes：ssh-agent 多 key 时 ``-i key`` 不等于"只用这个 key"，
+    # 不显式声明会遍历 agent 所有 key → MaxAuthTries 刷爆 → sshd 锁 15 分钟
+    # （§AF 实测）。无条件加（scp 经 _scp_argv_from_ssh 派生时原样透传）。
+    argv: List[str] = ["ssh", "-o", "IdentitiesOnly=yes", "-p", str(port)]
     env = dict(os.environ)
     key_path = key
     askpass_ref: Optional[str] = None
     if cred:
         port = int(cred.get("port") or port)
-        argv[2] = str(port)
+        argv[4] = str(port)  # ["ssh", "-o", "IdentitiesOnly=yes", "-p", <port>, ...]
         cred_type = str(cred.get("type") or "")
         if cred_type == "ssh_key":
             key_path = key_path or cred.get("ref")
