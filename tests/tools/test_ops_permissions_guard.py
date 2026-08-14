@@ -281,7 +281,10 @@ def test_target_prod_approve_notes_entity(guard_env, monkeypatch):
     guard_env("test")
     monkeypatch.setenv("HERMES_EXEC_ASK", "1")
     monkeypatch.setattr(approval_module, "_get_approval_config",
-                        lambda: {"mode": "manual", "timeout": 0.05})
+                        # Pin the legacy deny policy: this test asserts the
+                        # timeout → blocked contract; with the default "wait"
+                        # policy the deadline is only a reminder interval.
+                        lambda: {"mode": "manual", "timeout": 0.05, "timeout_policy": "deny"})
 
     notified = []
     approval_module.register_gateway_notify(SESSION, lambda data: notified.append(data))

@@ -2811,14 +2811,28 @@ def prompt_dangerous_approval(command: str, description: str,
 
             thread = threading.Thread(target=get_input, daemon=True)
             thread.start()
-            thread.join(timeout=timeout_seconds)
-
-            if thread.is_alive():
-                print("\n" + t("approval.timeout"))
-                # Distinct from an explicit deny: the user never answered.
-                # Callers still block (fail-closed) but tell the agent the
-                # prompt timed out instead of claiming the user refused.
-                return "timeout"
+            # approvals.timeout_policy: "wait" (default) treats the timeout as
+            # a reminder interval — the prompt stays pending instead of being
+            # silently denied, so multi-session users who missed the request
+            # can still answer later. "deny" keeps the legacy fail-closed
+            # behavior: timeout → explicit no-response denial (never approve).
+            timeout_policy = _get_approval_timeout_policy()
+            while thread.is_alive():
+                thread.join(timeout=timeout_seconds)
+                if thread.is_alive() and timeout_policy != "deny":
+                    print(
+                        "\n      ⏱ 审批仍在等待（approval still waiting）— "
+                        "回复 once/deny 继续处理，多 session 可在任一会话回答。"
+                    )
+                    sys.stdout.flush()
+                    continue
+                if thread.is_alive():
+                    print("\n" + t("approval.timeout"))
+                    # Distinct from an explicit deny: the user never answered.
+                    # Callers still block (fail-closed) but tell the agent the
+                    # prompt timed out instead of claiming the user refused.
+                    return "timeout"
+                break
 
             choice = result["choice"]
             if smart_denied:
@@ -2959,6 +2973,25 @@ def _get_approval_timeout() -> int:
         return int(_get_approval_config().get("timeout", 300))
     except (ValueError, TypeError):
         return 300
+
+
+def _get_approval_timeout_policy() -> str:
+    """Read ``approvals.timeout_policy`` from config (default ``"wait"``).
+
+    ``wait`` (default) — the approval prompt is NOT auto-denied when
+    ``approvals.timeout`` elapses. The prompt stays pending and the timeout
+    becomes a reminder interval, so a multi-session user who missed the
+    request can still answer later (approve or deny) instead of finding the
+    command already denied. Fail-closed is preserved: timeout never
+    auto-approves — the action just stays blocked until a human decides.
+
+    ``deny`` — legacy behavior: after ``approvals.timeout`` the prompt
+    fails closed as an explicit no-response denial.
+    """
+    try:
+        return str(_get_approval_config().get("timeout_policy", "wait")).strip().lower()
+    except Exception:
+        return "wait"
 
 
 def _get_cron_approval_mode() -> str:
@@ -3664,7 +3697,18 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
     # every ~10s to the agent's inactivity tracker — otherwise the gateway
     # watchdog kills the agent while the user is still responding. Mirrors
     # _wait_for_process() cadence.
+    #
+    # approvals.timeout_policy controls what happens when the deadline hits:
+    #   "deny" — legacy behavior, resolve as no-response timeout (fail-closed).
+    #   "wait" (default) — do NOT auto-deny: re-notify the user once per
+    #       interval and keep the request pending. The agent thread stays
+    #       blocked (still fail-closed — nothing runs without a human yes),
+    #       but a multi-session user who missed the first notification can
+    #       still /approve or /deny later instead of finding it already
+    #       denied. The user-signal escape hatch below still resolves deny.
     timeout = _get_approval_timeout()
+    timeout_policy = _get_approval_timeout_policy()
+    wait_policy = timeout_policy != "deny"
 
     try:
         from tools.environments.base import touch_activity_if_due
@@ -3673,6 +3717,9 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
 
     _now = time.monotonic()
     _deadline = _now + max(timeout, 0)
+    # timeout <= 0 already means unlimited in wait mode — a null deadline
+    # that never expires (mirrors the CLI clarify null-deadline semantics).
+    unlimited = wait_policy and timeout <= 0
     _activity_state = {"last_touch": _now, "start": _now}
     resolved = False
     while True:
@@ -3693,9 +3740,27 @@ def _await_gateway_decision(session_key: str, notify_cb, approval_data: dict,
             entry.event.set()
             resolved = True
             break
+        if unlimited:
+            if entry.event.wait(timeout=1.0):
+                resolved = True
+                break
+            if touch_activity_if_due is not None:
+                touch_activity_if_due(_activity_state, "waiting for user approval")
+            continue
         _remaining = _deadline - time.monotonic()
         if _remaining <= 0:
-            break
+            if not wait_policy:
+                # Legacy deny behavior: deadline is a hard cutoff.
+                break
+            # Wait policy: the timeout is a reminder interval. Re-notify so a
+            # user who missed the first push still sees the request, then keep
+            # waiting with a fresh interval. No auto-approve, no auto-deny.
+            try:
+                notify_cb(approval_data)
+            except Exception as exc:
+                logger.warning("Gateway approval re-notify failed: %s", exc)
+            _deadline = time.monotonic() + max(timeout, 0)
+            continue
         if entry.event.wait(timeout=min(1.0, _remaining)):
             resolved = True
             break

@@ -2058,9 +2058,18 @@ DEFAULT_CONFIG = {
     # Messaging approvals arrive as a push notification the user may not see
     # immediately — 60s proved too tight on Telegram/Discord (the prompt
     # expired before the user reached their phone), so the default is 300.
+    # timeout_policy — what happens when the timeout elapses:
+    #   wait (default) — do NOT auto-deny. The prompt stays pending and the
+    #     timeout becomes a reminder interval (the gateway re-pushes the
+    #     notification; CLI prints a "still waiting" hint). Fail-closed is
+    #     preserved: timeout never auto-approves, the action simply stays
+    #     blocked until a human answers. Meant for multi-session setups where
+    #     the user may not see the request before the timer expires.
+    #   deny — legacy behavior: timeout fails closed as a no-response denial.
     "approvals": {
         "mode": "smart",
         "timeout": 300,
+        "timeout_policy": "wait",
         "cron_mode": "deny",
         # Operator-customizable policy text for smart approvals. When
         # non-empty, this is appended to the smart-approval guardian's

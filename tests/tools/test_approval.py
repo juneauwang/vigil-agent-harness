@@ -1209,7 +1209,10 @@ class TestApprovalTimeoutIsNotConsent:
         from tools import approval as mod
         monkeypatch.setattr(
             mod, "_get_approval_config",
-            lambda: {"mode": "manual", "timeout": seconds},
+            # Pin the legacy deny-on-timeout policy explicitly: the default
+            # approvals.timeout_policy is now "wait" (pending instead of
+            # auto-deny), and these tests pin the #24912 timeout contract.
+            lambda: {"mode": "manual", "timeout": seconds, "timeout_policy": "deny"},
         )
 
     def test_timeout_blocks_with_no_consent_and_timeout_hook(self, monkeypatch):
@@ -1538,7 +1541,11 @@ class TestCliApprovalTimeoutClassifiedSeparately:
             time.sleep(10)
             return ""
 
-        with _patch.object(builtins, "input", _hang):
+        # Pin the legacy deny policy: with the default "wait" policy the
+        # timeout is only a reminder interval and the prompt keeps pending
+        # (the 10s hang would resolve as a deny, not a timeout).
+        with _patch.object(builtins, "input", _hang), \
+             _patch("tools.approval._get_approval_timeout_policy", return_value="deny"):
             result = prompt_dangerous_approval(
                 "rm -rf /var/data", "recursive delete",
                 timeout_seconds=0.05,

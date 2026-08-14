@@ -209,6 +209,12 @@ def approval_callback(cli, command: str, description: str, *,
     When the command is longer than 70 characters, a "view" option is
     included so the user can reveal the full text before deciding.
 
+    ``approvals.timeout_policy``: in "wait" mode (default) the timeout is a
+    reminder interval — the prompt stays pending and prints a "still
+    waiting" hint instead of silently denying. "deny" keeps the legacy
+    timeout → "denying command" behavior. Either way fail-closed holds:
+    a timeout never auto-approves.
+
     Uses cli._approval_lock to serialize concurrent requests (e.g. from
     parallel delegation subtasks) so each prompt gets its own turn.
     """
@@ -221,6 +227,8 @@ def approval_callback(cli, command: str, description: str, *,
     with lock:
         from cli import CLI_CONFIG
         timeout = CLI_CONFIG.get("approvals", {}).get("timeout", 300)
+        timeout_policy = str(CLI_CONFIG.get("approvals", {}).get("timeout_policy", "wait"))
+        wait_policy = timeout_policy.strip().lower() != "deny"
         response_queue = queue.Queue()
         choices = ["once"]
         if allow_session:
@@ -238,7 +246,11 @@ def approval_callback(cli, command: str, description: str, *,
             "selected": 0,
             "response_queue": response_queue,
         }
-        cli._approval_deadline = _time.monotonic() + timeout
+        # In wait mode the deadline is a reminder interval; ``timeout <= 0``
+        # means unlimited (null deadline), mirroring the clarify semantics.
+        cli._approval_deadline = (
+            None if (wait_policy and timeout <= 0) else _time.monotonic() + timeout
+        )
 
         if hasattr(cli, "_app") and cli._app:
             cli._app.invalidate()
@@ -252,9 +264,21 @@ def approval_callback(cli, command: str, description: str, *,
                     cli._app.invalidate()
                 return result
             except queue.Empty:
-                remaining = cli._approval_deadline - _time.monotonic()
-                if remaining <= 0:
-                    break
+                if cli._approval_deadline is not None:
+                    remaining = cli._approval_deadline - _time.monotonic()
+                    if remaining <= 0:
+                        if not wait_policy:
+                            break
+                        # Wait policy: remind and keep waiting. The user may
+                        # be in another session and never saw the prompt —
+                        # do not silently deny; the action stays blocked
+                        # (fail-closed) until they answer once/deny.
+                        cprint(
+                            f"\n{_DIM}  ⏱ 审批仍在等待（approval still waiting）"
+                            f"——回复 once/deny 继续{_RST}"
+                        )
+                        cli._approval_deadline = _time.monotonic() + timeout
+                        continue
                 if hasattr(cli, "_app") and cli._app:
                     cli._app.invalidate()
 

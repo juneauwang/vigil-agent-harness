@@ -13689,6 +13689,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         Long commands also get a 'view' option so the full command can be
         expanded before deciding.
 
+        approvals.timeout_policy: in "wait" mode (default) the timeout is a
+        reminder interval — the prompt stays pending with a "still waiting"
+        hint instead of silently denying, so a multi-session user who missed
+        the prompt can still answer. "deny" keeps the legacy timeout behavior.
+        Either way a timeout never auto-approves (fail-closed).
+
         Uses _approval_lock to serialize concurrent requests (e.g. from
         parallel delegation subtasks) so each prompt gets its own turn
         and the shared _approval_state / _approval_deadline aren't clobbered.
@@ -13697,6 +13703,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         with self._approval_lock:
             timeout = int(CLI_CONFIG.get("approvals", {}).get("timeout", 300))
+            timeout_policy = str(CLI_CONFIG.get("approvals", {}).get("timeout_policy", "wait"))
+            wait_policy = timeout_policy.strip().lower() != "deny"
             response_queue = queue.Queue()
 
             self._approval_state = {
@@ -13705,12 +13713,17 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 "choices": self._approval_choices(
                     command,
                     allow_permanent=allow_permanent,
+                    allow_session=allow_session,
                     smart_denied=smart_denied,
                 ),
                 "selected": 0,
                 "response_queue": response_queue,
             }
-            self._approval_deadline = _time.monotonic() + timeout
+            # In wait mode the deadline is a reminder interval; ``timeout <= 0``
+            # means unlimited (null deadline), mirroring the clarify semantics.
+            self._approval_deadline = (
+                None if (wait_policy and timeout <= 0) else _time.monotonic() + timeout
+            )
 
             # Modal prompt — paint immediately, bypassing the throttle/resize
             # guard. A throttled paint here can be silently dropped (250ms
@@ -13738,9 +13751,21 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     )
                     return result
                 except queue.Empty:
-                    remaining = self._approval_deadline - _time.monotonic()
-                    if remaining <= 0:
-                        break
+                    if self._approval_deadline is not None:
+                        remaining = self._approval_deadline - _time.monotonic()
+                        if remaining <= 0:
+                            if not wait_policy:
+                                break
+                            # Wait policy: remind and keep waiting. The user
+                            # may be in another session and never saw the
+                            # prompt — do not silently deny; the action stays
+                            # blocked (fail-closed) until they answer.
+                            _cprint(
+                                f"\n{_DIM}  ⏱ 审批仍在等待（approval still waiting）"
+                                f"——回复 once/deny 继续{_RST}"
+                            )
+                            self._approval_deadline = _time.monotonic() + timeout
+                            continue
                     now = _time.monotonic()
                     if now - _last_countdown_refresh >= 1.0:
                         _last_countdown_refresh = now
