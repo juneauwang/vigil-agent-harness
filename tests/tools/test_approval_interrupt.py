@@ -128,7 +128,10 @@ class TestApprovalInterrupt:
 
         # Short timeout so the test finishes fast via the deadline, proving the
         # foreign interrupt did not short-circuit the wait.
-        mod._get_approval_config = lambda: {"timeout": 1}
+        # Pin the deny policy: the deadline (not an interrupt) is what must
+        # release this wait. With the default "wait" policy the deadline is
+        # only a reminder interval and the test would hang.
+        mod._get_approval_config = lambda: {"timeout": 1, "timeout_policy": "deny"}
 
         approval_data = {
             "command": "rm -rf /tmp/whatever",

@@ -13566,6 +13566,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Canonical clarify timeout, shared with the gateway/TUI path. `<= 0`
         # means unlimited (never auto-skip mid-think) → a null deadline.
         timeout = resolve_clarify_timeout(CLI_CONFIG)
+        # approvals.timeout_policy aligns clarify with the approval prompt: in
+        # "wait" mode (default) a timed-out clarify is NOT auto-answered by the
+        # agent — the prompt stays pending and the timeout becomes a reminder
+        # interval. "deny" keeps the legacy "agent will decide" behavior.
+        timeout_policy = str(CLI_CONFIG.get("approvals", {}).get("timeout_policy", "wait"))
+        wait_policy = timeout_policy.strip().lower() != "deny"
         response_queue = queue.Queue()
         is_open_ended = not choices
         # multi-select support: only active when multi_select is True and choices exist
@@ -13606,7 +13612,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 if self._clarify_deadline is not None:
                     remaining = self._clarify_deadline - _time.monotonic()
                     if remaining <= 0:
-                        break
+                        if not wait_policy:
+                            break
+                        # Wait policy: remind and keep waiting — the user (who
+                        # may be in another session) still gets to answer
+                        # instead of the agent guessing.
+                        _cprint(
+                            f"\n{_DIM}(clarify 仍在等待你的回答 — 超时不会自动决定){_RST}"
+                        )
+                        self._clarify_deadline = _time.monotonic() + timeout
+                        continue
                 now = _time.monotonic()
                 if now - _last_countdown_refresh >= 1.0:
                     _last_countdown_refresh = now
@@ -13674,6 +13689,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _approval_callback(self, command: str, description: str,
                            *, allow_permanent: bool = True,
+                           allow_session: bool = True,
                            smart_denied: bool = False) -> str:
         """
         Prompt for dangerous command approval through the prompt_toolkit UI.
@@ -13681,9 +13697,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         Called from the agent thread. Shows a selection UI similar to clarify
         with choices: once / session / always / deny. Smart DENY owner
         overrides show only once / deny. When allow_permanent is False for
-        another reason (for example tirith), only 'always' is hidden.
+        another reason (for example tirith), only 'always' is hidden; when
+        allow_session is False (prod change confirmation gate, where the
+        session allowlist is also skipped), 'session' is hidden too — the
+        UI only ever offers choices that actually take effect.
         Long commands also get a 'view' option so the full command can be
         expanded before deciding.
+
+        approvals.timeout_policy: in "wait" mode (default) the timeout is a
+        reminder interval — the prompt stays pending with a "still waiting"
+        hint instead of silently denying, so a multi-session user who missed
+        the prompt can still answer. "deny" keeps the legacy timeout behavior.
+        Either way a timeout never auto-approves (fail-closed).
 
         Uses _approval_lock to serialize concurrent requests (e.g. from
         parallel delegation subtasks) so each prompt gets its own turn
@@ -13693,6 +13718,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         with self._approval_lock:
             timeout = int(CLI_CONFIG.get("approvals", {}).get("timeout", 300))
+            timeout_policy = str(CLI_CONFIG.get("approvals", {}).get("timeout_policy", "wait"))
+            wait_policy = timeout_policy.strip().lower() != "deny"
             response_queue = queue.Queue()
 
             self._approval_state = {
@@ -13701,12 +13728,17 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 "choices": self._approval_choices(
                     command,
                     allow_permanent=allow_permanent,
+                    allow_session=allow_session,
                     smart_denied=smart_denied,
                 ),
                 "selected": 0,
                 "response_queue": response_queue,
             }
-            self._approval_deadline = _time.monotonic() + timeout
+            # In wait mode the deadline is a reminder interval; ``timeout <= 0``
+            # means unlimited (null deadline), mirroring the clarify semantics.
+            self._approval_deadline = (
+                None if (wait_policy and timeout <= 0) else _time.monotonic() + timeout
+            )
 
             # Modal prompt — paint immediately, bypassing the throttle/resize
             # guard. A throttled paint here can be silently dropped (250ms
@@ -13734,9 +13766,21 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     )
                     return result
                 except queue.Empty:
-                    remaining = self._approval_deadline - _time.monotonic()
-                    if remaining <= 0:
-                        break
+                    if self._approval_deadline is not None:
+                        remaining = self._approval_deadline - _time.monotonic()
+                        if remaining <= 0:
+                            if not wait_policy:
+                                break
+                            # Wait policy: remind and keep waiting. The user
+                            # may be in another session and never saw the
+                            # prompt — do not silently deny; the action stays
+                            # blocked (fail-closed) until they answer.
+                            _cprint(
+                                f"\n{_DIM}  ⏱ 审批仍在等待（approval still waiting）"
+                                f"——回复 once/deny 继续{_RST}"
+                            )
+                            self._approval_deadline = _time.monotonic() + timeout
+                            continue
                     now = _time.monotonic()
                     if now - _last_countdown_refresh >= 1.0:
                         _last_countdown_refresh = now
@@ -13752,12 +13796,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return "timeout"
 
     def _approval_choices(self, command: str, *, allow_permanent: bool = True,
+                          allow_session: bool = True,
                           smart_denied: bool = False) -> list[str]:
         """Return approval choices for a dangerous command prompt."""
         if smart_denied:
             choices = ["once", "deny"]
         else:
-            choices = ["once", "session", "always", "deny"] if allow_permanent else ["once", "session", "deny"]
+            choices = ["once"]
+            if allow_session:
+                choices.append("session")
+            if allow_permanent:
+                choices.append("always")
+            choices.append("deny")
         if len(command) > 70:
             choices.append("view")
         return choices
