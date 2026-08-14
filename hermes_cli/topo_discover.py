@@ -48,7 +48,7 @@ def _store_password(host: str, password: str, suffix: str = "") -> Path:
 
 
 def _expand_host_ranges(token: str) -> List[str]:
-    """展开 ``10.123.66.23[3-8]`` 这类单/多区间主机表示。"""
+    """展开 ``203.0.113.23[3-8]`` 这类单/多区间主机表示。"""
     match = _HOST_RANGE_RE.search(token)
     if not match:
         return [token]

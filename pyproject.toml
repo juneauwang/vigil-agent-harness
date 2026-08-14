@@ -2,7 +2,7 @@
 
 [project]
 name = "vigil-agent-harness"  # Vigil 为产品名；发行包名 vigil-agent-harness（2026-08-09 发布决策，见 OPS-DELTA.md）
-version = "0.1.13"
+version = "0.1.14"
 description = "Vigil — 运维 agent harness：记住整个平台，安全地动生产（拓扑表事实层 + runbook 程序层 + 权限矩阵纵深防御）"
 readme = "README.md"
 # Upper bound is load-bearing, not cosmetic. uv resolves the project's
