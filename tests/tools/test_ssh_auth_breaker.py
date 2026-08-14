@@ -264,3 +264,60 @@ def test_breaker_error_forbids_credential_self_probing():
         assert "询问用户提供正确凭据" in msg
     finally:
         topodisc._SSH_AUTH_FAILURES.clear()
+
+
+# ---------------------------------------------------------------------------
+# 批次二十一 — 凭据 fail-closed（任务 3：用户纠正 force_trip 联动）
+# ---------------------------------------------------------------------------
+
+def test_force_trip_immediately_breaks_with_zero_ssh_calls(monkeypatch):
+    """force_trip 后该 host:user 立即熔断——入口直接报错，不再调用底层。"""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _auth_fail()
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    topodisc.force_trip("203.0.113.60", "root")
+    try:
+        runner = _build_ssh_runner("203.0.113.60", "root", key_path="/keys/test.pem")
+        with pytest.raises(DiscoveryError, match="已停止自动重试") as ei:
+            runner("uptime")
+        assert "询问用户提供正确凭据" in str(ei.value)
+        assert calls == [], "force_trip 后不得发起任何 ssh 调用"
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
+
+
+def test_force_trip_keeps_other_hosts_untouched(monkeypatch):
+    """force_trip 只作用于目标 host:user，其他 host 计数不受影响。"""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _auth_fail()
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    topodisc.force_trip("host-ft", "root")
+    try:
+        assert topodisc._ssh_auth_breaker_tripped("host-ft", "root") is True
+        assert topodisc._ssh_auth_failures("host-other", "root") == 0
+        runner = _build_ssh_runner("host-other", "root", key_path="/keys/test.pem")
+        with pytest.raises(DiscoveryError, match="SSH 连接"):
+            runner("uptime")
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
+
+
+def test_force_trip_trips_sudo_tool_guard(monkeypatch):
+    """sudo_tool 远端路径共享同一计数——force_trip 后 guard 直接熔断。"""
+    import tools.sudo_tool as sudo_tool
+
+    topodisc.force_trip("host-sudo", "ops")
+    try:
+        from tools.sudo_tool import _ssh_auth_breaker_guard
+        with pytest.raises(RuntimeError, match="已停止自动重试"):
+            _ssh_auth_breaker_guard(["ssh", "-p", "22", "ops@host-sudo"])
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()

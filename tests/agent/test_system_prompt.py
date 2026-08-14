@@ -287,6 +287,9 @@ class TestOpsCredentialFailClosedGuidance:
         # 任务 2：凭据缺失 → 询问用户，禁止自探测。
         assert "When credentials are missing or undeclared" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "self-probe ~/.ssh/ for keys" in OPS_CREDENTIAL_SSH_GUIDANCE
+        # 任务 3：用户纠正 → 立即停止当前路径，不换姿势/换工具重试。
+        assert "If the user corrects your direction" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "do not switch postures or tools to retry the same target" in OPS_CREDENTIAL_SSH_GUIDANCE
 
     def test_guidance_lands_when_ops_tools_loaded(self):
         """ops 工具（sudo_exec/topo_discover）加载时该块进 stable tier。"""

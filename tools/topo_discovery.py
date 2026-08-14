@@ -151,6 +151,20 @@ def _ssh_auth_breaker_tripped(host: str, user: str) -> bool:
     return _ssh_auth_failures(host, user) >= _SSH_AUTH_BREAKER_LIMIT
 
 
+def force_trip(host: str, user: str) -> None:
+    """用户纠正信号 → 该 host:user 立即进入熔断态（等价已连续失败 3 次）。
+
+    批次二十一 §AF 补丁 2 需求 2：用户纠正操作方向（新对话轮次明确否定当前
+    尝试路径）＝ 停止信号。会话层检测到纠正信号后调用本函数，后续该 host:user
+    的 runner/guard 入口直接熔断，不再自动重试（与自然触发 3 次失败同语义）。
+    """
+    with _SSH_AUTH_LOCK:
+        entry = _SSH_AUTH_FAILURES.setdefault(_ssh_auth_key(host, user), {})
+        entry["count"] = _SSH_AUTH_BREAKER_LIMIT
+        entry["ts"] = _dt.datetime.now().isoformat()
+        entry["forced"] = True
+
+
 def _is_ssh_auth_failure(proc: Any) -> bool:
     """认证失败判定（批次十九扩展，不只 exit 255）。
 
