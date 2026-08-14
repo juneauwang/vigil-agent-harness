@@ -54,6 +54,23 @@ SYSTEMCTL = """\
   inactive.service      loaded inactive dead   Not discovered
 """
 
+SS_TLNP_SYSTEMD = """\
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      128    0.0.0.0:22      0.0.0.0:*    users:(("sshd",pid=1,fd=3))
+LISTEN 0      128    0.0.0.0:9100    0.0.0.0:*    users:(("node_exporter",pid=2,fd=4))
+"""
+
+SS_TLNP_FULL = """\
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      128    0.0.0.0:22      0.0.0.0:*    users:(("sshd",pid=1,fd=3))
+LISTEN 0      128    0.0.0.0:9100    0.0.0.0:*    users:(("node_exporter",pid=2,fd=4))
+LISTEN 0      128    0.0.0.0:9090    0.0.0.0:*    users:(("prometheus",pid=3,fd=5))
+LISTEN 0      128    0.0.0.0:5432    0.0.0.0:*    users:(("postgres",pid=4,fd=6))
+LISTEN 0      128    0.0.0.0:80      0.0.0.0:*    users:(("nginx",pid=5,fd=7))
+LISTEN 0      128    0.0.0.0:6379    0.0.0.0:*    users:(("redis",pid=6,fd=8))
+LISTEN 0      128    0.0.0.0:3306    0.0.0.0:*    users:(("mysql",pid=7,fd=9))
+"""
+
 
 class FakeRunner:
     """可编程 mock runner：按命令前缀返回输出；记录调用（供明文断言）。"""
@@ -237,16 +254,21 @@ def test_discover_docker_permission_denied_is_explicit():
 
 
 def test_discover_systemctl_services_merged_and_docker_priority():
-    runner = _default_runner(**{"systemctl": SYSTEMCTL})
+    runner = _default_runner(**{"systemctl": SYSTEMCTL, "ss -tlnp": SS_TLNP_SYSTEMD})
     d = discover_host("203.0.113.20", "prod", runner=runner)
     names = {s["name"]: s for s in d["services"]}
-    assert d["probes"]["systemctl"] == "ok(2 服务，过滤 0 系统服务)"
+    assert d["probes"]["systemctl"] == (
+        "ok(2 服务，过滤 0 系统服务，另 0 个无端口系统服务未入表（可确认）)"
+    )
     assert names["node-exporter"]["type"] == "systemd-service"
     assert names["node-exporter"]["attrs"]["unit"] == "node-exporter.service"
     assert names["node-exporter"]["attrs"]["source_probe"] == "systemctl"
     # systemctl 中出现 harbor 与 docker 容器同名 → docker 优先，不生成 systemd 行。
     assert names["harbor"]["type"] == "service"
     assert "inactive" not in names
+    # 有监听端口的 systemd 服务正常入表 → 无 pending，端口不重复补 unidentified。
+    assert d["pending_review"] == []
+    assert "unidentified-9100" not in names
 
 
 SYSTEMCTL_WITH_SYSTEM_SERVICES = """\
@@ -301,9 +323,14 @@ def test_parse_systemctl_units_filters_system_services():
 
 def test_discover_systemctl_probe_records_filter_stats():
     """C1：probes['systemctl'] 记录 `ok(N 服务，过滤 M 系统服务)` 过滤统计。"""
-    runner = FakeRunner(**{"systemctl": SYSTEMCTL_WITH_SYSTEM_SERVICES})
+    runner = FakeRunner(**{
+        "systemctl": SYSTEMCTL_WITH_SYSTEM_SERVICES,
+        "ss -tlnp": SS_TLNP_FULL,
+    })
     d = discover_host("203.0.113.20", "prod", runner=runner)
-    assert d["probes"]["systemctl"] == "ok(6 服务，过滤 9 系统服务)"
+    assert d["probes"]["systemctl"] == (
+        "ok(6 服务，过滤 9 系统服务，另 0 个无端口系统服务未入表（可确认）)"
+    )
     names = {s["name"]: s for s in d["services"]}
     # 只有业务服务进拓扑；系统内部服务无 services/details 条目。
     assert set(names) == {"node-exporter", "prometheus", "postgres", "nginx", "redis", "mysql"}
@@ -311,6 +338,67 @@ def test_discover_systemctl_probe_records_filter_stats():
                    for n in names)
     assert "systemd-journald" not in d["details"]
     assert "dbus" not in d["details"]
+    assert d["pending_review"] == []
+
+
+SYSTEMCTL_NOISE = """\
+  UNIT                   LOAD   ACTIVE SUB     DESCRIPTION
+  chronyd.service        loaded active running NTP client
+  prometheus.service     loaded active running Prometheus
+  networkmanager.service loaded active running Network Manager
+"""
+
+SS_TLNP_PROM = """\
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      128    0.0.0.0:9090  0.0.0.0:*    users:(("prometheus",pid=1,fd=3))
+"""
+
+
+def test_discover_systemd_no_listen_port_goes_pending_review():
+    """批次十八 B 配套：无监听端口的 systemd 服务不入 services，保留 pending_review。
+
+    有监听端口（prometheus，ss 进程名匹配）正常入表；无端口（chronyd /
+    networkmanager）不入正式拓扑但保留可见性（needs_review=true，可确认）。
+    """
+    runner = FakeRunner(**{
+        "systemctl": SYSTEMCTL_NOISE,
+        "ss -tlnp": SS_TLNP_PROM,
+    })
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    names = {s["name"]: s for s in d["services"]}
+    assert "prometheus" in names
+    assert names["prometheus"]["type"] == "systemd-service"
+    assert "chronyd" not in names
+    assert "networkmanager" not in names
+    # 无端口服务不进 details（不入落盘），只在 pending_review 可见。
+    assert "chronyd" not in d["details"]
+    pending = {s["name"]: s for s in d["pending_review"]}
+    assert set(pending) == {"chronyd", "networkmanager"}
+    assert all(s["needs_review"] is True for s in pending.values())
+    assert all(s["type"] == "systemd-service" for s in pending.values())
+    # probes 文案带无端口统计（替代 LLM 手动过滤的机制保证）。
+    assert "另 2 个无端口系统服务未入表（可确认）" in d["probes"]["systemctl"]
+    # prometheus 的监听端口 9090 已被服务覆盖，不重复补 unidentified。
+    assert "unidentified-9090" not in names
+
+
+def test_discover_systemd_all_no_port_keeps_pending_only():
+    """全部 systemd 服务无监听端口 → services 无 systemd 项，pending 列表有 N 条。"""
+    runner = FakeRunner(**{"systemctl": SYSTEMCTL_NOISE})  # 默认 ss 无匹配进程名
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert not any(s["type"] == "systemd-service" for s in d["services"])
+    pending = {s["name"] for s in d["pending_review"]}
+    assert pending == {"chronyd", "prometheus", "networkmanager"}
+    assert "另 3 个无端口系统服务未入表（可确认）" in d["probes"]["systemctl"]
+
+
+def test_discover_systemd_docker_same_name_skipped_not_pending():
+    """与 docker 已发现服务同名的 systemd unit 直接跳过（不进 pending，不重复）。"""
+    runner = _default_runner(**{"systemctl": SYSTEMCTL, "ss -tlnp": SS_TLNP_SYSTEMD})
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert not any(s["name"] == "harbor" and s["type"] == "systemd-service"
+                   for s in d["services"])
+    assert not any(s["name"] == "harbor" for s in d["pending_review"])
 
 
 def test_discover_systemctl_unavailable_is_skipped():

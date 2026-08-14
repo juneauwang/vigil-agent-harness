@@ -399,6 +399,35 @@ def _parse_ss_tlnp(output: str) -> List[Dict[str, Any]]:
     return listeners
 
 
+def _ss_proc_key(value: str) -> str:
+    """进程名/unit 名 → 匹配键（仅字母数字，容忍 node-exporter/node_exporter 差异）。"""
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _parse_ss_proc_ports(output: str) -> Dict[str, List[int]]:
+    """ss -tlnp 原始输出 → 进程名 → 监听端口列表（含 loopback，供 systemd 无端口过滤）。
+
+    ``users:(("prometheus",pid=3,fd=5))`` 这类 Process 列解析出进程名；进程名按
+    :func:`_ss_proc_key` 归一，与 systemd unit 名匹配（批次十八 B 配套：无监听端口的
+    systemd 服务不自动入表，保留 pending_review 等确认）。
+    """
+    mapping: Dict[str, List[int]] = {}
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith("State"):
+            continue
+        parts = line.split()
+        if len(parts) < 5 or parts[0] != "LISTEN":
+            continue
+        _, _, port_part = parts[3].rpartition(":")
+        if not port_part.isdigit():
+            continue
+        port = int(port_part)
+        for name in re.findall(r'"([^"]+)"\s*,\s*pid=', line):
+            mapping.setdefault(_ss_proc_key(name), []).append(port)
+    return mapping
+
+
 # systemctl 系统内部服务黑名单（批次十三 C1）：系统自身服务不进拓扑噪音，
 # 用户部署的业务服务（node-exporter/prometheus/nginx/mysql/redis/postgres 等）
 # 不得误伤。前缀在原始 unit 名上匹配（user@1000.service 前缀 user@）；精确名
@@ -587,8 +616,10 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
 
     Returns:
       v0.3 片段 dict：``{version, source, last_verified, needs_review, host,
-      services, details, probes}``。host 行带 cluster + credential 引用
-      （key_path → ``{type: ssh_key, ref, user, port}``，不落密码明文）。
+      services, details, pending_review, probes}``。host 行带 cluster +
+      credential 引用（key_path → ``{type: ssh_key, ref, user, port}``，不落
+      密码明文）。pending_review 为无监听端口的 systemd 服务（needs_review=true，
+      不入 services/details，待用户确认后才入表）。
     """
     host = str(host or "").strip()
     is_local = host.lower() in _LOCAL_HOST_ALIASES
@@ -692,14 +723,34 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
         else:
             probes["kubectl"] = "skipped（kubectl 不可用）"
 
-    # 2.5) systemd 原生服务（排在 docker/k8s 后、ss 前）。
+    # 2.5) ss 监听端口探测（先于 systemd：供无端口系统服务过滤 + 未识别端口补条目）。
+    ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
+    ss_proc_ports = _parse_ss_proc_ports(ss_res.stdout) if ss_res.ok else {}
+    unmatched_listeners: List[Dict[str, Any]] = []
+    if ss_res.ok:
+        probes["ss"] = "ok"
+        for listener in _parse_ss_tlnp(ss_res.stdout):
+            port = listener["port"]
+            if port in seen_ports or port == 22:
+                # 22 = sshd 管理通道（主机自身，不是服务）；其余已映射端口跳过。
+                continue
+            unmatched_listeners.append(listener)
+    else:
+        probes["ss"] = "skipped（ss 不可用）"
+
+    # 3) systemd 原生服务（排在 docker/k8s 后）。无监听端口的 systemd 服务不入
+    #    services/details（批次十八 B 配套：替代 LLM 手动过滤），保留在
+    #    pending_review 标 needs_review=true——神人写的 systemd 脚本服务不监听端口
+    #    也真实业务，保留可见性不误杀；有监听端口（prometheus/node-exporter 等）
+    #    正常入表。
     systemd_res = _probe(
         runner, "systemctl list-units --type=service --no-pager --no-legend 2>/dev/null"
     )
+    pending_review: List[Dict[str, Any]] = []
+    systemd_covered_ports: set = set()
     if systemd_res.ok:
         systemd_units = _parse_systemctl_units(systemd_res.stdout)
         systemd_filtered = _count_systemd_filtered_units(systemd_res.stdout)
-        probes["systemctl"] = f"ok({len(systemd_units)} 服务，过滤 {systemd_filtered} 系统服务)"
         for unit in systemd_units:
             name = unit["name"]
             if name in [s["name"] for s in services]:
@@ -722,6 +773,11 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                     "source_probe": "systemctl",
                 },
             }
+            ports = ss_proc_ports.get(_ss_proc_key(name)) or []
+            if not ports:
+                # 无监听端口 → 不入正式拓扑，保留 pending_review 待用户确认。
+                pending_review.append(svc)
+                continue
             services.append(svc)
             details[name] = {
                 "name": name,
@@ -738,53 +794,51 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                 "last_verified": svc["last_verified"],
                 "needs_review": True,
             }
+            systemd_covered_ports.update(ports)
+        probes["systemctl"] = (
+            f"ok({len(systemd_units)} 服务，过滤 {systemd_filtered} 系统服务，"
+            f"另 {len(pending_review)} 个无端口系统服务未入表（可确认）)"
+        )
     else:
         probes["systemctl"] = "skipped（systemctl 不可用）"
 
-    # 3) 端口扫描补条目（非 loopback 监听端口，未映射到已知服务）。
-    ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
-    if ss_res.ok:
-        probes["ss"] = "ok"
-        for listener in _parse_ss_tlnp(ss_res.stdout):
-            port = listener["port"]
-            if port in seen_ports or port == 22:
-                # 22 = sshd 管理通道（主机自身，不是服务）；其余已映射端口跳过。
-                continue
-            name = f"unidentified-{port}"
-            if skip_unidentified:
-                seen_ports.add(port)
-                continue
-            detail_path = _entity_filename(cluster, host, name, env)
-            services.append({
-                "name": name,
-                "type": "service",
-                "env": env,
-                "cluster": cluster_display,
-                "endpoint": f"{host}:{port}",
-                "source": "discovered",
-                "last_verified": _dt.date.today().isoformat(),
-                "needs_review": True,
-                "detail": detail_path,
-                "attrs": {
-                    "listener": listener["host"],
-                    "ports": [port],
-                    "source_probe": "ss",
-                },
-            })
-            details[name] = {
-                "name": name, "type": "service", "env": env,
-                "cluster": cluster_display,
-                "detail": detail_path,
-                "attrs": {"listener": listener["host"], "source_probe": "ss"},
-                "source": "discovered",
-                "last_verified": _dt.date.today().isoformat(),
-                "needs_review": True,
-            }
-            seen_ports.add(port)
-    else:
-        probes["ss"] = "skipped（ss 不可用）"
+    # 4) 端口扫描补条目（非 loopback 监听端口，未映射到已知服务/无端口过滤）。
+    for listener in unmatched_listeners:
+        port = listener["port"]
+        if port in systemd_covered_ports:
+            # systemd 服务已覆盖该监听端口（正常入表），不重复补 unidentified。
+            continue
+        if skip_unidentified:
+            continue
+        name = f"unidentified-{port}"
+        detail_path = _entity_filename(cluster, host, name, env)
+        services.append({
+            "name": name,
+            "type": "service",
+            "env": env,
+            "cluster": cluster_display,
+            "endpoint": f"{host}:{port}",
+            "source": "discovered",
+            "last_verified": _dt.date.today().isoformat(),
+            "needs_review": True,
+            "detail": detail_path,
+            "attrs": {
+                "listener": listener["host"],
+                "ports": [port],
+                "source_probe": "ss",
+            },
+        })
+        details[name] = {
+            "name": name, "type": "service", "env": env,
+            "cluster": cluster_display,
+            "detail": detail_path,
+            "attrs": {"listener": listener["host"], "source_probe": "ss"},
+            "source": "discovered",
+            "last_verified": _dt.date.today().isoformat(),
+            "needs_review": True,
+        }
 
-    # 4) GPU（可选）。
+    # 5) GPU（可选）。
     gpu_res = _probe(runner, "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null")
     if gpu_res.ok:
         probes["gpu"] = "ok"
@@ -826,6 +880,7 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
         "host": host_row,
         "services": services,
         "details": details,
+        "pending_review": pending_review,
         "probes": probes,
     }
 
