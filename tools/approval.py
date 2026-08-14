@@ -536,12 +536,14 @@ HARDLINE_PATTERNS = [
     # (cat / visudo -c / ls / grep) stay legal; only write operations trip.
     # 1) Redirection into the path: echo '…' > /etc/sudoers.d/x, cat >
     #    /etc/sudoers.d/x <<EOF, printf … >> /etc/sudoers(.d)/…
-    (r'(?:>>|>)\s*["\']?/etc/sudoers(?:\.d)?(?:/|["\']?(?:\s|$))',
+    #    /private/etc is the macOS mirror (comment at :303) — must match both.
+    (r'(?:>>|>)\s*["\']?(?:/etc/|/private/etc/)sudoers(?:\.d)?(?:/|["\']?(?:\s|$))',
      "禁止通过修改 sudoers 实现免密/传密码——提权走 sudo_exec 工具（ASKPASS 注入）"),
     # 2) tee/install/cp/mv writing into the path (command-position anchored so
     #    quoted prose like '--title "tee /etc/sudoers.d/x"' stays data; the
-    #    path must be the write command's final argument).
-    (_CMDPOS + r'(?:tee|install|cp|mv)\b[^\n]*?\s+["\']?/etc/sudoers(?:\.d)?(?:/["\']?[^\s;&|\n]*)?(?=\s*(?:&&|;|\||\n|$))',
+    #    path must be the write command's final argument). Input redirection
+    #    (< file) after the path is still a write — allow it in the lookahead.
+    (_CMDPOS + r'(?:tee|install|cp|mv)\b[^\n]*?\s+["\']?(?:/etc/|/private/etc/)sudoers(?:\.d)?(?:/["\']?[^\s;&|\n]*)?(?=\s*(?:<\s*\S+\s*)?(?:&&|;|\||\n|$))',
      "禁止通过修改 sudoers 实现免密/传密码——提权走 sudo_exec 工具（ASKPASS 注入）"),
 ]
 

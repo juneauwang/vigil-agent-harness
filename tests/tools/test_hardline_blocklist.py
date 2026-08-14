@@ -733,3 +733,12 @@ def test_sudoers_write_cannot_bypass_hardline_under_yolo(clean_session, monkeypa
         assert r["approved"] is False, f"yolo 漏过 hardline: {cmd!r}"
         assert r.get("hardline") is True
         assert "sudo_exec" in r["message"]
+
+    # 验收补漏（2026-08-14）：tee 带输入重定向 + macOS /private 镜像形态
+    for cmd in (
+        "tee /etc/sudoers.d/y < /tmp/passwd",
+        'echo "y ALL=(ALL) NOPASSWD:ALL" >> /private/etc/sudoers',
+    ):
+        r = check_dangerous_command(cmd, "local")
+        assert r["approved"] is False, f"yolo 漏过 hardline 变体: {cmd!r}"
+        assert "sudo_exec" in r["message"]
