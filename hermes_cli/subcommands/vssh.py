@@ -98,13 +98,49 @@ def _split_hostspec(hostspec: str, user: Optional[str] = None) -> Tuple[str, str
     return (user or "root"), spec
 
 
+def _credential_status(cred: Optional[Dict]) -> str:
+    """凭据状态标签：✓ssh_key / ✓vault / ✓askpass / ✗无凭据（只显示类型不显示值）。"""
+    if isinstance(cred, dict):
+        cred_type = str(cred.get("type") or "").strip()
+        if cred_type in ("ssh_key", "vault", "askpass"):
+            return f"✓{cred_type}"
+    return "✗无凭据"
+
+
+def _list_topology_hosts() -> int:
+    """无参：列出拓扑表 hosts 段所有主机（name env 凭据状态）+ 用法提示。
+
+    凭据状态复用 :func:`_resolve_topology_credential`（不新写凭据解析）；
+    env 仅为展示字段，缺失显示 ``-``。凭据只显示类型，值（ref/密码）不进输出。
+    """
+    from hermes_constants import get_hermes_home
+    from tools.topo_tools import load_topology
+
+    try:
+        topo = load_topology(Path(get_hermes_home()))
+        hosts = (topo or {}).get("hosts") or []
+    except Exception:
+        hosts = []
+    if not hosts:
+        print("拓扑表为空，先运行 vigil topo-discover 发现主机")
+        return 0
+    for row in hosts:
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        env = str(row.get("env") or "-").strip()
+        status = _credential_status(_resolve_topology_credential(name))
+        print(f"{name:<24} {env:<6} {status}")
+    print("用法: vigil vssh <host> [user@host]")
+    return 0
+
+
 def run(args) -> int:
-    """执行 vssh：解析凭据 → 构造 ssh argv/env → exec（密码不回显）。"""
+    """执行 vssh：无参 → 列拓扑主机；有参 → 解析凭据 → ssh argv/env → exec。"""
     user, host = _split_hostspec(getattr(args, "hostspec", None),
                                  getattr(args, "user", None))
     if not host:
-        print("✗ vssh 需要目标主机（<host> 或 <user>@<host>）", file=sys.stderr)
-        return 2
+        return _list_topology_hosts()
     port = int(getattr(args, "port", None) or 22)
     cred = None
     if not getattr(args, "no_credential", False):
@@ -128,8 +164,10 @@ def build_vssh_parser(subparsers, *, cmd_vssh: Callable) -> None:
             "保险箱注入），无凭据回退 ssh-agent/交互。"
         ),
     )
-    vssh_parser.add_argument("hostspec",
-                             help="目标主机：<host> 或 <user>@<host>（IP/主机名）")
+    vssh_parser.add_argument(
+        "hostspec", nargs="?",
+        help="目标主机：<host> 或 <user>@<host>（IP/主机名）；无参数时列出拓扑表主机",
+    )
     vssh_parser.add_argument("-p", "--port", type=int, default=22,
                              help="SSH 端口（默认 22；拓扑 credential 引用有 port 时优先）")
     vssh_parser.add_argument("-i", "--key", default=None,

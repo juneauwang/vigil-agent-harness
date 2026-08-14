@@ -220,11 +220,57 @@ def test_run_no_credential_falls_back_to_agent(monkeypatch, topo_home):
     assert "SSH_ASKPASS" not in captured["env"]
 
 
-def test_run_missing_hostspec_returns_2(capsys):
-    """缺 hostspec → 明确错误（exit 2），不执行 ssh。"""
-    assert run(SimpleNamespace(hostspec=None, user=None, port=None, key=None,
-                               no_credential=False)) == 2
-    assert "vssh 需要目标主机" in capsys.readouterr().err
+def test_run_no_hostspec_lists_topology_hosts(monkeypatch, topo_home, capsys):
+    """无参 → 列出拓扑表所有主机（name env 凭据状态）+ 用法提示，不执行 ssh。"""
+    args = SimpleNamespace(hostspec=None, user=None, port=None, key=None,
+                           no_credential=False)
+    assert run(args) == 0
+    out = capsys.readouterr().out
+    # 三台主机都在，凭据状态只显示类型（不显示 ref/值）。
+    assert "db1" in out and "✓vault" in out
+    assert "web1" in out and "✓ssh_key" in out
+    assert "plain" in out and "✗无凭据" in out
+    assert "用法: vigil vssh <host> [user@host]" in out
+    # fixture 无 env 字段 → 显示 "-"；凭据值（db-pass / 私钥路径）不进输出。
+    assert "-" in out
+    assert "db-pass" not in out
+    assert "/keys/web.pem" not in out
+
+
+def test_run_no_hostspec_empty_topology(tmp_path, monkeypatch, capsys):
+    """无参 + 无拓扑数据 → 提示先 topo-discover，不执行 ssh。"""
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+    args = SimpleNamespace(hostspec=None, user=None, port=None, key=None,
+                           no_credential=False)
+    assert run(args) == 0
+    assert "拓扑表为空，先运行 vigil topo-discover 发现主机" in capsys.readouterr().out
+
+
+def test_run_no_hostspec_never_execs_ssh(monkeypatch, topo_home):
+    """无参列主机路径不碰 execvpe（不会被当成主机名执行 ssh）。"""
+    def boom(*_a, **_kw):
+        raise AssertionError("no-hostspec path must not exec ssh")
+    monkeypatch.setattr(os, "execvpe", boom)
+    args = SimpleNamespace(hostspec=None, user=None, port=None, key=None,
+                           no_credential=False)
+    assert run(args) == 0
+
+
+def test_run_with_hostspec_behavior_unchanged(monkeypatch, topo_home):
+    """有参（node1）→ 原行为：execvpe ssh，不列主机。"""
+    captured = {}
+
+    def fake_execvpe(name, argv, env):
+        captured["argv"] = argv
+        raise SystemExit(0)
+
+    monkeypatch.setattr(os, "execvpe", fake_execvpe)
+    args = SimpleNamespace(hostspec="web1", user=None, port=None, key=None,
+                           no_credential=False)
+    with pytest.raises(SystemExit):
+        run(args)
+    assert captured["argv"][-1] == "root@web1"
+    assert captured["argv"][:3] == ["ssh", "-o", "IdentitiesOnly=yes"]
 
 
 def test_vssh_subcommand_registered():
