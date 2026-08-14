@@ -772,6 +772,33 @@ OPS_TOPOLOGY_SYNC_GUIDANCE = (
 )
 
 
+# Runbook first-class-mechanism binding + feedback-loop proposal (OPS-DELTA
+# 批次二十五，§AH 补丁 4 需求 4/5 + TencentDB 反馈闭环借鉴)。
+#
+# 静态常量文本——不读环境/会话，随 stable tier 进入缓存前缀，字节稳定。
+# 工具存在 ≠ 行为改变（§AF 教训）：口头"runbook"必须映射到 runbook_create，
+# 跑通任务后主动提议沉淀（不自动创建，避免噪音）。
+OPS_RUNBOOK_GUIDANCE = (
+    "# Runbook is a first-class Vigil mechanism, not a Markdown doc\n"
+    "- When the user says '沉淀/记录/保存为 runbook' (or otherwise asks to "
+    "create a runbook), call **runbook_create** to write structured YAML at "
+    "runbooks/<name>.yaml — 不是写 Markdown 文档. A runbook is a "
+    "program-layer mechanism: triggers + steps + commands + rollback, loadable "
+    "via runbook_load and gateable via runbook_checkpoint.\n"
+    "- If the user's intent is a behavior rule ('next time I change X, run Y'), "
+    "encode it in the runbook's triggers + steps, then tell the user: "
+    "'已创建 runbook，触发词为 …'.\n"
+    "- After completing a reusable ops flow (incident fixed / deployment done / "
+    "troubleshooting path proven), proactively offer: '这次流程可以沉淀为 "
+    "runbook，要我创建吗？' — create only after the user confirms; never "
+    "auto-create (noise) and never skip offering (wasted experience). Judge "
+    "by: will this flow likely recur (restart a service / same-class incident "
+    "/ same app deployment)?\n"
+    "- When executing an existing runbook, if this run surfaces a new pitfall "
+    "or command, offer to update it (runbook_create overwrite=true)."
+)
+
+
 # Model name substrings that should use the 'developer' role instead of
 # 'system' for the system prompt.  OpenAI's newer models (GPT-5, Codex)
 # give stronger instruction-following weight to the 'developer' role.

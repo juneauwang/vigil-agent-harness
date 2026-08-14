@@ -37,6 +37,7 @@ from agent.prompt_builder import (
     KANBAN_GUIDANCE,
     MEMORY_GUIDANCE,
     OPS_CREDENTIAL_SSH_GUIDANCE,
+    OPS_RUNBOOK_GUIDANCE,
     OPS_TOPOLOGY_SYNC_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
@@ -60,13 +61,19 @@ logger = logging.getLogger(__name__)
 # the ops credential/SSH discipline block joins the stable tier.
 _OPS_SECURITY_TOOLS = frozenset({
     "terminal", "sudo_exec", "topo_discover", "topo_update", "topo_query",
-    "topo_status_sync", "runbook_load", "runbook_checkpoint",
+    "topo_status_sync", "runbook_load", "runbook_checkpoint", "runbook_create",
 })
 
 # Topo tools — when any is loaded (topology data exists), the status sync
 # discipline joins the stable tier (OPS-DELTA 批次二十四 §R).
 _TOPOLOGY_SYNC_TOOLS = frozenset({
     "topo_query", "topo_update", "topo_discover", "topo_status_sync",
+})
+
+# Runbook tools — when any is loaded, the runbook first-class-mechanism +
+# feedback-loop proposal guidance joins the stable tier (OPS-DELTA 批次二十五).
+_RUNBOOK_TOOLS = frozenset({
+    "runbook_load", "runbook_checkpoint", "runbook_create",
 })
 
 
@@ -275,6 +282,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # Static text, gated on topo tool presence → byte-stable prompt.
     if set(agent.valid_tool_names or []) & _TOPOLOGY_SYNC_TOOLS:
         stable_parts.append(OPS_TOPOLOGY_SYNC_GUIDANCE)
+
+    # Runbook discipline (OPS-DELTA 批次二十五): runbook is a first-class
+    # mechanism, and completed flows get a proactive "sink into a runbook?"
+    # offer. Static text, gated on runbook tool presence → byte-stable prompt.
+    if set(agent.valid_tool_names or []) & _RUNBOOK_TOOLS:
+        stable_parts.append(OPS_RUNBOOK_GUIDANCE)
 
     # Computer-use — goes in as its own block rather than being merged into
     # tool_guidance because the content is multi-paragraph. The guidance is
