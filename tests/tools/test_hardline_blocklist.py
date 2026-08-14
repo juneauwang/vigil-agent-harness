@@ -670,3 +670,66 @@ def test_sudo_stdin_guard_container_bypass(clean_session):
         for cmd in _SUDO_STDIN_BLOCK:
             result = check_all_command_guards(cmd, env)
             assert result["approved"] is True, f"container {env} should bypass sudo guard on {cmd!r}"
+
+
+# -------------------------------------------------------------------------
+# 批次十九 §AF 补丁 2 — sudoers.d 写入 hardline 硬拒
+# -------------------------------------------------------------------------
+
+# sudoers/sudoers.d 写入形态：写 NOPASSWD 条目 / 传密码开后门 → hardline deny
+# （yolo 也绕不过）。提权走 sudo_exec 工具（ASKPASS 注入）。
+_SUDOERS_WRITE_BLOCK = [
+    "echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/x",
+    'echo "user ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/x',
+    "printf 'user ALL=(ALL) NOPASSWD:ALL\\n' > /etc/sudoers.d/x",
+    "echo 'user ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers",
+    "tee /etc/sudoers.d/x",
+    "sudo tee /etc/sudoers.d/x",
+    "sudo tee -a /etc/sudoers.d/x",
+    "echo hi | sudo tee /etc/sudoers.d/x",
+    "cp /tmp/sudoers.new /etc/sudoers.d/",
+    "cp /tmp/sudoers.new /etc/sudoers.d/99-vigil",
+    "mv /tmp/sudoers.new /etc/sudoers.d/x",
+    "install -m 440 /tmp/sudoers.new /etc/sudoers.d/x",
+    "cat > /etc/sudoers.d/x <<'EOF'\nuser ALL=(ALL) NOPASSWD:ALL\nEOF",
+    "echo 'x' > /etc/sudoers",
+    # bash -c 嵌套形态：payload 变体同样命中
+    "bash -c \"echo 'user ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/x\"",
+]
+
+# 读/查 sudoers 合法形态：不写内容 → 不硬拒
+_SUDOERS_READ_ALLOW = [
+    "cat /etc/sudoers",
+    "cat /etc/sudoers.d/99-vigil",
+    "visudo -cf /etc/sudoers.d/x",
+    "ls /etc/sudoers.d",
+    "grep -H NOPASSWD /etc/sudoers /etc/sudoers.d/*",
+    "sudo visudo -c",
+    "echo 'tee /etc/sudoers.d/x'",
+    'git commit -m "tee /etc/sudoers.d/x"',
+    "cp /etc/sudoers.d/x /tmp/backup",        # 从 sudoers.d 备份走，不是写入
+    "mv /etc/sudoers.d/old /tmp/archive",      # 移出 sudoers.d，不是写入
+]
+
+
+@pytest.mark.parametrize("command", _SUDOERS_WRITE_BLOCK)
+def test_sudoers_write_is_hardline_blocked(command):
+    is_hl, desc = detect_hardline_command(command)
+    assert is_hl, f"sudoers.d 写入应 hardline 拦截: {command!r}"
+    assert desc and "sudo_exec" in desc, f"描述应引导提权走 sudo_exec: {desc!r}"
+
+
+@pytest.mark.parametrize("command", _SUDOERS_READ_ALLOW)
+def test_sudoers_read_is_not_hardline_blocked(command):
+    is_hl, desc = detect_hardline_command(command)
+    assert not is_hl, f"sudoers 读取不应 hardline 拦截: {command!r} (got: {desc})"
+
+
+def test_sudoers_write_cannot_bypass_hardline_under_yolo(clean_session, monkeypatch):
+    """HERMES_YOLO_MODE=1 也不能绕过 sudoers.d 写入硬拒（§AF 补丁 2）。"""
+    monkeypatch.setenv("HERMES_YOLO_MODE", "1")
+    for cmd in _SUDOERS_WRITE_BLOCK[:6]:
+        r = check_dangerous_command(cmd, "local")
+        assert r["approved"] is False, f"yolo 漏过 hardline: {cmd!r}"
+        assert r.get("hardline") is True
+        assert "sudo_exec" in r["message"]

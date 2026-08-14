@@ -530,6 +530,19 @@ HARDLINE_PATTERNS = [
     (_CMDPOS + r'init\s+[06]\b', "init 0/6 (shutdown/reboot)"),
     (_CMDPOS + r'systemctl\s+(poweroff|reboot|halt|kexec)\b', "systemctl poweroff/reboot"),
     (_CMDPOS + r'telinit\s+[06]\b', "telinit 0/6 (shutdown/reboot)"),
+    # sudoers / sudoers.d writes — privilege-escalation backdoor (§AF 补丁 2).
+    # The agent tried to smuggle sudo passwords past the approval layer by
+    # writing a NOPASSWD entry; a typo locks sudo for the whole host. Reads
+    # (cat / visudo -c / ls / grep) stay legal; only write operations trip.
+    # 1) Redirection into the path: echo '…' > /etc/sudoers.d/x, cat >
+    #    /etc/sudoers.d/x <<EOF, printf … >> /etc/sudoers(.d)/…
+    (r'(?:>>|>)\s*["\']?/etc/sudoers(?:\.d)?(?:/|["\']?(?:\s|$))',
+     "禁止通过修改 sudoers 实现免密/传密码——提权走 sudo_exec 工具（ASKPASS 注入）"),
+    # 2) tee/install/cp/mv writing into the path (command-position anchored so
+    #    quoted prose like '--title "tee /etc/sudoers.d/x"' stays data; the
+    #    path must be the write command's final argument).
+    (_CMDPOS + r'(?:tee|install|cp|mv)\b[^\n]*?\s+["\']?/etc/sudoers(?:\.d)?(?:/["\']?[^\s;&|\n]*)?(?=\s*(?:&&|;|\||\n|$))',
+     "禁止通过修改 sudoers 实现免密/传密码——提权走 sudo_exec 工具（ASKPASS 注入）"),
 ]
 
 # Pre-compiled variant used by the hot-path matcher. Building these at module
