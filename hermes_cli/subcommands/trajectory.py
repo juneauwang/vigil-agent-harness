@@ -143,6 +143,35 @@ def _print_events(events: List[Dict]) -> None:
         print(line)
 
 
+def _print_replay(events: List[Dict]) -> None:
+    """紧凑时间线：时间 + 事件间间隔 + 单行摘要，一眼看完整决策链。"""
+    color = _use_color()
+    prev_ts: Optional[datetime] = None
+    for e in events:
+        ts_raw = e.get("ts", "")
+        ts = _parse_iso(ts_raw)
+        clock = ts.strftime("%H:%M:%S") if ts else ts_raw
+        delta = ""
+        if ts and prev_ts is not None:
+            seconds = (ts - prev_ts).total_seconds()
+            if seconds >= 0.05:
+                delta = f" +{seconds:.1f}s"
+        if ts:
+            prev_ts = ts
+        type_ = e.get("type", "?")
+        tool = e.get("tool", "")
+        action = _trunc(e.get("action"), _ACTION_MAX)
+        result = _trunc(e.get("result"), _RESULT_MAX)
+        head = f"[{clock}]{delta} {_type_label(type_, color)}"
+        if tool:
+            head += f" {tool}"
+        line = head
+        if action:
+            line += f": {action}"
+        if result:
+            line += f" → {result}"
+        print(line)
+
 
 def _cmd_show(args) -> int:
     sid = args.session_id
@@ -152,17 +181,22 @@ def _cmd_show(args) -> int:
         print(f"No trajectory found for session {sid!r}", file=sys.stderr)
         return 1
     events = _load_events(path)
-    if args.event_type:
+    if args.approval:
+        events = [e for e in events if e.get("type") == "approval"]
+    elif args.event_type:
         want = args.event_type
         events = [
             e for e in events
             if e.get("type") == want or e.get("tool") == want
         ]
     if not events:
-        kind = args.event_type or "matching"
+        kind = "approval" if args.approval else (args.event_type or "matching")
         print(f"No {kind} events for session {sid}")
         return 0
-    _print_events(events)
+    if args.replay:
+        _print_replay(events)
+    else:
+        _print_events(events)
     return 0
 
 
@@ -251,6 +285,10 @@ def build_trajectory_parser(subparsers, *, cmd_trajectory: Callable) -> None:
     p_show.add_argument("session_id", help="会话 ID（trajectory list 的 SESSION 列）")
     p_show.add_argument("--type", dest="event_type", default=None,
                         help="只显示指定类型事件（terminal/approval/interrupt/error/...）")
+    p_show.add_argument("--replay", action="store_true",
+                        help="紧凑时间线模式：时间 + 事件间间隔 + 单行摘要")
+    p_show.add_argument("--approval", action="store_true",
+                        help="只看审批事件（等价 --type approval，replay 复核友好）")
     p_show.set_defaults(trajectory_command="show")
 
     p_search = sub.add_parser(
@@ -297,6 +335,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     p_show = sub.add_parser("show", help="按 seq 打印事件流")
     p_show.add_argument("session_id")
     p_show.add_argument("--type", dest="event_type", default=None)
+    p_show.add_argument("--replay", action="store_true")
+    p_show.add_argument("--approval", action="store_true")
     p_show.set_defaults(trajectory_command="show")
 
     p_search = sub.add_parser("search", help="跨 session 搜索")

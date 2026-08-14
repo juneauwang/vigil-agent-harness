@@ -146,3 +146,32 @@ def test_prune_keeps_recent_sessions(tmp_path, capsys):
     assert (tmp_path / "trajectory" / "sess-prod-1.jsonl").exists()
 
 
+# ---------------------------------------------------------------------------
+# --replay 时间线（任务 3）
+# ---------------------------------------------------------------------------
+
+def test_replay_compact_timeline_with_deltas(tmp_path, capsys):
+    _write_fixture(tmp_path)
+    assert _run("show", session_id="sess-prod-1", event_type=None,
+                replay=True, approval=False) == 0
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert len(lines) == 4
+    # 单行紧凑：时间 + 间隔 + 类型 + action/result
+    assert lines[0].startswith("[")
+    assert "+2.5s" in lines[1]
+    assert "+3.0s" in lines[2]
+    assert "+1.0s" in lines[3]
+    assert "kubectl get pods -n prod" in lines[1]
+    assert "→ exit=0 ready" in lines[1]
+
+
+def test_replay_approval_filter(tmp_path, capsys):
+    _write_fixture(tmp_path)
+    assert _run("show", session_id="sess-prod-1", event_type=None,
+                replay=True, approval=True) == 0
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.splitlines() if ln.strip()]
+    assert len(lines) == 2
+    assert all("[approval]" in ln for ln in lines)
+    assert "sudo systemctl restart hermes-gateway" in lines[1]
