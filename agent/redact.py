@@ -70,6 +70,7 @@ _REDACT_ENABLED = os.getenv("HERMES_REDACT_SECRETS", "true").lower() in {"1", "t
 
 # Known API key prefixes -- match the prefix + contiguous token chars
 _PREFIX_PATTERNS = [
+    r"s\.[A-Za-z0-9]{20,}",             # OpenBao / Hashicorp Vault tokens (s. + 24 base62)
     r"sk-[A-Za-z0-9_-]{10,}",           # OpenAI / OpenRouter / Anthropic (sk-ant-*)
     r"ghp_[A-Za-z0-9]{10,}",            # GitHub PAT (classic)
     r"github_pat_[A-Za-z0-9_]{10,}",    # GitHub PAT (fine-grained)
@@ -370,6 +371,14 @@ _JSON_FIELD_RE = re.compile(
     re.IGNORECASE,
 )
 
+# OPS-DELTA #35：值形态检测兜底——任意键名的 JSON 值兜底 pass。键名无法穷举
+# （组合字段名 ssh_key_0811/sudo_0811 形态），只要值本身像凭据就打码。值组
+# 要求 ≥16 字符（与 _looks_like_inline_secret 的长度门槛一致，短值不匹配，
+# 也避免在普通 JSON 上无谓扫描）。
+_JSON_VALUE_SHAPE_RE = re.compile(
+    r'("(?:\\.|[^"\\])*")\s*:\s*"((?:\\.|[^"\\]){16,})"'
+)
+
 # Authorization headers — any scheme (Bearer, Basic, Token, Digest, …) plus the
 # bare-credential form, and Proxy-Authorization. The credential token is masked
 # while the header name and scheme word are preserved for debuggability. The
@@ -392,10 +401,14 @@ _AUTH_HEADER_RE = re.compile(
 # a known vendor prefix (custom/local backends) would otherwise leak when a
 # request or curl command is logged or echoed into tool output / transcripts.
 _SECRET_HEADER_NAMES = (
-    r"(?:x-api-key|x-goog-api-key|api-key|apikey|x-api-token|x-auth-token|x-access-token)"
+    r"(?:x-api-key|x-goog-api-key|api-key|apikey|x-api-token|x-auth-token|x-access-token|"
+    r"x-vault-token|x-vault-request|x-vault-namespace)"
 )
 _SECRET_HEADER_RE = re.compile(
-    rf"({_SECRET_HEADER_NAMES}\s*:\s*)(\S+)",
+    # 值类排除引号：``curl -H "X-Vault-Token: s.xxx"`` 的收尾引号是结构字符，
+    # 不该被吞进打码值（同 _AUTH_HEADER_RE 的引号排除原则）——吞掉会破坏
+    # 命令/字符串语法（未闭合引号），真凭据从不含引号（OPS-DELTA 批次十六 §V）。
+    rf"({_SECRET_HEADER_NAMES}\s*:\s*)([^\s\"']+)",
     re.IGNORECASE,
 )
 
@@ -513,6 +526,175 @@ _HTTP_REQUEST_TARGET_QUERY_RE = re.compile(
 _FORM_BODY_RE = re.compile(
     r"^[A-Za-z_][A-Za-z0-9_.-]*=[^&\s]*(?:&[A-Za-z_][A-Za-z0-9_.-]*=[^&\s]*)+$"
 )
+
+# ── Command-text inline credentials (OPS-DELTA #21) ────────────────────────
+# agent 把 vault/保险箱密码 f-string 内插进命令串（--from-literal=password=…、
+# -u user:pass、--password …）时，明文随命令文本显示/落盘（#21 两次实测：
+# PUT datasource JSON、patch ConfigMap）。这里做两层兜底：
+#   1. 已知凭据 flag 后的值一律打码（长 flag 无脑打码）；
+#   2. 命令上下文里的高熵裸 token（≥16 字符、混合字符类、香农熵高）兜底打码，
+#      覆盖未知 flag/内插位置——纯 hex/UUID/路径/URL 形态排除，避免误伤
+#      git sha、pod 名、长 URL。
+_CMD_CRED_FLAG_RE = re.compile(
+    r"(?i)"
+    r"(--from-literal[=:]\s*)([A-Za-z0-9_.-]+=)([^\s'\"&|;]+)"
+    r"|(--(?:password|passwd|token|secret|api[-_]?key|client[-_]?secret|"
+    r"access[-_]?token)(?:[=:]\s*|\s+))([^\s'\"&|;]+)"
+)
+# sudo -S 上下文 stdin 密码注入（OPS-DELTA 批次十六 §V）：sudo -S 从 stdin 读密码，
+# herestring ``<<< '…'`` 是唯一注入方式——出现即密码（确定性上下文匹配，不做值形态
+# 判断；无 sudo -S 的普通 ``<<<`` 不碰）。``-p ''`` 是 sudo 关闭提示符的常见形态。
+_CMD_SUDO_STDIN_PASS_RE = re.compile(
+    r"(?i)(sudo\s+-S(?:\s+-p\s+(?:''|\"\"))?[^|&;\n]*<<<\s*['\"]?)([^'\"\n]+)"
+)
+# heredoc 形态 ``sudo -S <<'EOF'\n<密码行>\nEOF``：密码是 heredoc 首内容行，
+# terminator 行是确定性锚点（无 sudo -S 上下文的普通 heredoc 不碰）。
+# terminator 名字两侧的引号各自可选（``<<EOF`` / ``<<'EOF'`` / ``<<-EOF``
+# 都覆盖），lookahead 允许 terminator 位于文本末尾（``$``）。
+_CMD_SUDO_HEREDOC_PASS_RE = re.compile(
+    r"(?i)(sudo\s+-S[^|&;\n]*<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_.-]*)['\"]?\n)([^\n]*\n)"
+    r"(?=[ \t]*\2(?:\s*[\n;]|$))"
+)
+# 凭据获取赋值形态：``SUDO_PASS=$(curl … | jq …)`` / ``SUDO_PASS="$(curl …)"``——
+# 命令替换即凭据获取，整个 ``$(…)`` 值打码、赋值骨架保留（OPS-DELTA 批次十六 §V）。
+# 值前的可选引号（``"``/``'``）是结构字符，单独捕获并保留（``SUDO_PASS="****"``）。
+# ``$(…)`` 用平衡括号匹配（``[^()]|\([^()]*\)`` 两层嵌套足够覆盖 §AD 实测形态
+# ``$(curl … "$(cat /root/.bao_token)" …)``；更深嵌套罕见，超出一层时不匹配——
+# 由 _CMD_CONTEXT_RE 的高熵兜底或 header 规则补位，宁可残留结构不打码错位）。
+_CMD_CRED_ASSIGN_RE = re.compile(
+    r"(?i)(^|[;&|\s])([A-Za-z_][A-Za-z0-9_]*(?:_PASS|_PASSWORD|_TOKEN|_KEY|_SECRET)"
+    r"\s*=\s*)(['\"]?)(\$?\((?:[^()]|\([^()]*\))*\))"
+)
+# 凭据赋值键名（_CMD_CRED_ASSIGN_RE 的键名部分）与命令替换值形态。
+# ENV pass 对 ``$(…)`` 值只打第一个空白 token（``SUDO_PASS=$(curl``），会把
+# 命令替换结构打成残片、尾部原样漏出；此类键名 + 命令替换值的赋值整体交给
+# 命令文本 pass（_CMD_CRED_ASSIGN_RE）整段打码，ENV pass 跳过不碰。
+# 其余键名（裸 PASSWORD=…、dotted config 键）维持原行为——它们不在
+# _CMD_CRED_ASSIGN_RE 覆盖范围，跳过会造成真实回归。
+_CRED_ASSIGN_KEY_RE = re.compile(
+    r"(?i)^[A-Za-z_][A-Za-z0-9_]*(?:_PASS|_PASSWORD|_TOKEN|_KEY|_SECRET)$"
+)
+_CRED_ASSIGN_VALUE_RE = re.compile(r"^[\"']?\$?\(")
+_CMD_USERPASS_RE = re.compile(
+    r"(?i)"
+    r"((?:^|[\s&|;])(?:-u|--user)\s+[^\s:='\"&|;]+:)([^\s'\"&|;]+)"
+    r"|((?:^|[\s&|;])-p\s+)([^\s'\"&|;]+)"
+)
+_CMD_CONTEXT_RE = re.compile(
+    r"(?im)^[ \t]*(?:ansible-playbook|kubectl|docker|helm|systemctl|service|"
+    r"ssh|scp|curl|wget|git|pip3?|apt(?:-get)?|yum|dnf|npm|python3?|bash|sh|"
+    r"sudo|aws|gcloud|vault)\b",
+)
+_CMD_HIGH_ENTROPY_TOKEN_RE = re.compile(r"(?<![\w@#])([^\s'\"&|;<>()\[\]{}]{16,})(?![\w@#])")
+# 凭据特征符号集（- _ . = 是结构性字符，不参与"含符号"判定——pod 名、
+# kebab-case、k=v 形态不该因横线/下划线被当成高熵凭据）。
+_SECRET_SYMBOLS = set("!@#$%^*+=:,?~`")
+
+
+def _token_entropy(token: str) -> float:
+    """Shannon entropy (bits/char) of a token."""
+    from math import log2
+    if not token:
+        return 0.0
+    counts: dict = {}
+    for ch in token:
+        counts[ch] = counts.get(ch, 0) + 1
+    n = len(token)
+    return -sum((c / n) * log2(c / n) for c in counts.values())
+
+
+def _looks_like_inline_secret(token: str) -> bool:
+    """High-entropy inline credential heuristic (length ≥ 16, mixed classes).
+
+    Paths/URLs/hosts (contain ``/ \\ : .``) are excluded — the flag-based pass
+    covers credential positions; the bare-token pass is only a fallback for
+    standalone secrets. Pure-hex/UUID shapes (lowercase+digits, no symbols,
+    no mixed case) are excluded so git shas and pod ids survive.
+    """
+    if not token or len(token) < 16:
+        return False
+    # 含空格 = 句子/短语形态，不是凭据（API key/password/token 无空格）。
+    # 首字母大写的英文句子（lower+upper 混合）会被下面字符类判定误伤，
+    # 这里先排除（OPS-DELTA #35 验收发现）。
+    if " " in token:
+        return False
+    # shell flag（--from-literal=… / -p …）不是凭据本身——flag 通道已覆盖其值。
+    if token.startswith("-"):
+        return False
+    if any(ch in token for ch in "/\\:."):
+        return False
+    lower = upper = digit = symbol = False
+    for ch in token:
+        if ch.islower():
+            lower = True
+        elif ch.isupper():
+            upper = True
+        elif ch.isdigit():
+            digit = True
+        elif ch in _SECRET_SYMBOLS:
+            symbol = True
+    classes = sum((lower, upper, digit, symbol))
+    if classes < 2:
+        return False
+    # 纯 hex / UUID（小写+数字）排除：要求有符号，或大小写混合。
+    if not (symbol or (lower and upper)):
+        return False
+    return _token_entropy(token) >= 3.2
+
+
+def _redact_command_inline_credentials(text: str) -> str:
+    """Mask inline credentials inside shell command text (#21)."""
+    if not text:
+        return text
+
+    # 1. 已知凭据 flag（--from-literal=KEY=VAL / --password …）
+    if ("from-literal" in text or "--pass" in text or "--token" in text
+            or "--secret" in text or "--api-" in text or "--client-" in text):
+        def _sub_flag(m):
+            if m.group(1):
+                return m.group(1) + m.group(2) + _mask_token(m.group(3))
+            return m.group(4) + _mask_token(m.group(5))
+        text = _CMD_CRED_FLAG_RE.sub(_sub_flag, text)
+
+    # 1.5 sudo -S stdin 注入（herestring / heredoc）——确定性上下文匹配，无预筛。
+    # 只在整个文本含 "sudo" 时跑（sudo -S 是必需上下文，其余文本直接跳过）。
+    if "sudo" in text.lower():
+        if "<<<" in text:
+            text = _CMD_SUDO_STDIN_PASS_RE.sub(
+                lambda m: m.group(1) + _mask_token(m.group(2)), text)
+        if "<<" in text:
+            text = _CMD_SUDO_HEREDOC_PASS_RE.sub(
+                lambda m: m.group(1) + _mask_token(m.group(3).rstrip("\n")) + "\n", text)
+    # 1.6 凭据获取赋值（SUDO_PASS=$(…) / *_PASSWORD=$(…)）——命令替换整段打码。
+    # 独立于 sudo 上下文：赋值名以 *_PASS/_PASSWORD/_TOKEN/_KEY/_SECRET 结尾且
+    # 值取命令替换，即凭据获取形态（§V 实测形态 ``SUDO_PASS=$(curl vault | jq)``
+    # 可单独成行，不含 sudo 字样）。不做通用 ``$(...)`` 值检测——普通赋值
+    # （``COUNT=$(wc -l)``）不匹配后缀名单，不误伤。
+    if "$(" in text:
+        text = _CMD_CRED_ASSIGN_RE.sub(
+            lambda m: m.group(1) + m.group(2) + m.group(3) + "****", text)
+
+    # 2. -u user:pass / -p pass（-p 仅打疑似凭据值，避免 -p 8080 端口误伤）
+    if " -u " in text or " -p " in text:
+        def _sub_userpass(m):
+            if m.group(1):
+                return m.group(1) + _mask_token(m.group(2))
+            value = m.group(4)
+            if len(value) >= 8 and not value.isdigit() and _looks_like_inline_secret(value):
+                return m.group(3) + _mask_token(value)
+            return m.group(0)
+        text = _CMD_USERPASS_RE.sub(_sub_userpass, text)
+
+    # 3. 高熵裸 token 兜底（仅命令上下文，防误伤普通文本）
+    if _CMD_CONTEXT_RE.search(text):
+        def _sub_entropy(m):
+            token = m.group(1)
+            if _looks_like_inline_secret(token):
+                return _mask_token(token)
+            return token
+        text = _CMD_HIGH_ENTROPY_TOKEN_RE.sub(_sub_entropy, text)
+
+    return text
 
 # Compile known prefix patterns into one alternation
 _PREFIX_RE = re.compile(
@@ -834,6 +1016,14 @@ def redact_sensitive_text(
             # prose/log contexts (issue #2852): ``KEY=os.getenv('X')``.
             if _ENV_LOOKUP_VALUE_RE.match(value):
                 return m.group(0)
+            # Credential-assignment command substitutions (``SUDO_PASS=$(curl
+            # vault | jq …)``): the value is a programmatic retrieval, not a
+            # literal secret — leave it intact so the command-text pass masks
+            # the whole ``$(…)`` (OPS-DELTA 批次十六 §V). Only keys the
+            # command-text pass actually covers are skipped (see
+            # _CRED_ASSIGN_KEY_RE); everything else keeps legacy behavior.
+            if _CRED_ASSIGN_KEY_RE.match(name) and _CRED_ASSIGN_VALUE_RE.match(value):
+                return m.group(0)
             # Keyword must sit at a word boundary within the key —
             # ``author=Smith`` / ``press.secretary=…`` are prose, not
             # credentials (ported from nearai/ironclaw#6129). All-caps
@@ -882,6 +1072,24 @@ def redact_sensitive_text(
             return f'{key}: "{_mask_token(value)}"'
         text = _JSON_FIELD_RE.sub(_redact_json, text)
 
+        # OPS-DELTA #35：值形态检测兜底（精确键名 pass 之后，只处理它漏掉的）。
+        # 严格模式（工具输出等）不要求键名含秘密词——这正是值形态检测存在的
+        # 意义（任意键名无法穷举）。防误伤：URL/路径/base64（含 / \ : .）
+        # 与纯小写长文本（字符类单一）被 _looks_like_inline_secret 天然排除；
+        # 已打码值（含 "."）不会二次匹配。
+        def _redact_json_value_shape(m):
+            key, value = m.group(1), m.group(2)
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            if _strict and _is_non_secret_constant_key(key.strip('"')):
+                return m.group(0)
+            if _strict and _prefix_present and _already_masked_value(value):
+                return m.group(0)
+            if _looks_like_inline_secret(value):
+                return f'{key}: "{_mask_token(value)}"'
+            return m.group(0)
+        text = _JSON_VALUE_SHAPE_RE.sub(_redact_json_value_shape, text)
+
     # Unquoted YAML / colon config: password: ***  (after JSON so quoted
     # values are handled there; the lookahead in _YAML_ASSIGN_RE skips
     # quotes). Skip URLs — web-URL query params pass through by design.
@@ -916,11 +1124,17 @@ def redact_sensitive_text(
 
     # API-key style headers (x-api-key, api-key, …). Header values are
     # colon-separated, so gate on ":" — the regex itself is the precise filter.
+    # Skip values starting with a command substitution (``X-Vault-Token:
+    # $(cat …)``) — masking the ``$(cat`` fragment breaks the ``$(…)``
+    # structure and makes the command-text pass (_CMD_CRED_ASSIGN_RE) truncate
+    # at the inner paren (OPS-DELTA 批次十六 §V 嵌套形态实测). The command
+    # pass masks the whole assignment/herestring instead.
     if ":" in text:
-        text = _SECRET_HEADER_RE.sub(
-            lambda m: m.group(1) + _mask_token(m.group(2)),
-            text,
-        )
+        def _sub_header(m):
+            if m.group(2).lstrip().startswith("$("):
+                return m.group(0)
+            return m.group(1) + _mask_token(m.group(2))
+        text = _SECRET_HEADER_RE.sub(_sub_header, text)
 
     # Telegram bot tokens — pattern requires ":<token>" with digits prefix
     if ":" in text:
@@ -994,6 +1208,9 @@ def redact_sensitive_text(
                 return phone[:2] + "****" + phone[-2:]
             return phone[:4] + "****" + phone[-4:]
         text = _SIGNAL_PHONE_RE.sub(_redact_phone, text)
+
+    # Command-text inline credentials (#21): agent 内插进命令串的凭据明文。
+    text = _redact_command_inline_credentials(text)
 
     return text
 
@@ -1083,12 +1300,29 @@ def _extract_literal_prefix(pattern: str) -> str:
     ``?``, ``*``, ``+``, ``|``, ``{``, ``^``, ``$``).  Returns the literal
     that any match of the pattern MUST contain as a substring, so the
     pre-screen never produces false negatives.
+
+    Escaped metacharacters (``\\.``, ``\\-``, ...) are part of the literal
+    prefix — a match must contain them verbatim, so they are included
+    (``s\\.[A-Za-z0-9]{20,}`` → ``s.``).  Without this, the ``s.`` Vault
+    prefix would degrade the pre-screen to "any text containing an s" and
+    run the full prefix regex on nearly every log line (OPS-DELTA 批次十六).
     """
     meta = "[(\\.?*+|{^$"
-    for i, ch in enumerate(pattern):
+    out = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            if i + 1 < len(pattern) and pattern[i + 1] in meta:
+                out.append(pattern[i + 1])
+                i += 2
+                continue
+            break  # non-literal escape (e.g. \d) — treat as a boundary
         if ch in meta:
-            return pattern[:i]
-    return pattern
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 _PREFIX_SUBSTRINGS = tuple(

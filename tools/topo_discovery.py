@@ -26,6 +26,7 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -34,6 +35,18 @@ import yaml
 logger = logging.getLogger(__name__)
 
 _SSH_TIMEOUT_S = 60
+# SSH 认证失败熔断（OPS-DELTA 批次十六 §AD）：agent 连续尝试多种认证方式会耗尽
+# OpenSSH MaxAuthTries（默认 6）→ "Too many authentication failures" → 接下来
+# 几分钟 ssh 全部被拒（生产环境自伤）。会话级计数（进程内存 dict），host:user
+# 独立；失败 3 次熔断，返回可操作错误，不再自动重试。
+_SSH_AUTH_BREAKER_LIMIT = 3
+_SSH_AUTH_FAILURES: Dict[str, Dict[str, Any]] = {}
+_SSH_AUTH_LOCK = threading.Lock()
+_SSH_AUTH_FAILURE_HINTS = (
+    "permission denied",
+    "too many authentication failures",
+    "authentication failed",
+)
 # 容器名/服务名白名单（防路径穿越 + 防把不可打印字符写进文件名）。
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -108,6 +121,53 @@ def _entity_filename(cluster: str, host: str, name: str, fallback_env: str = "")
     return f"entities/{'__'.join(parts)}.yaml"
 
 
+# ---------------------------------------------------------------------------
+# SSH 认证失败熔断（OPS-DELTA 批次十六 §AD）
+# ---------------------------------------------------------------------------
+
+def _ssh_auth_key(host: str, user: str) -> str:
+    return f"{user}@{host}"
+
+
+def _ssh_auth_failures(host: str, user: str) -> int:
+    with _SSH_AUTH_LOCK:
+        return int(_SSH_AUTH_FAILURES.get(_ssh_auth_key(host, user), {}).get("count", 0))
+
+
+def _record_ssh_auth_failure(host: str, user: str) -> None:
+    with _SSH_AUTH_LOCK:
+        entry = _SSH_AUTH_FAILURES.setdefault(_ssh_auth_key(host, user), {})
+        entry["count"] = int(entry.get("count", 0)) + 1
+        entry["ts"] = _dt.datetime.now().isoformat()
+
+
+def _reset_ssh_auth_failures(host: str, user: str) -> None:
+    """认证成功后清零——凭据 OK，计数重新开始（§AD 细节 5）。"""
+    with _SSH_AUTH_LOCK:
+        _SSH_AUTH_FAILURES.pop(_ssh_auth_key(host, user), None)
+
+
+def _ssh_auth_breaker_tripped(host: str, user: str) -> bool:
+    return _ssh_auth_failures(host, user) >= _SSH_AUTH_BREAKER_LIMIT
+
+
+def _is_ssh_auth_failure(proc: Any) -> bool:
+    """认证失败判定：exit 255 + stderr 含 Permission denied / MaxAuthTries 等。"""
+    if getattr(proc, "returncode", None) != 255:
+        return False
+    stderr = (getattr(proc, "stderr", None) or "").lower()
+    return any(hint in stderr for hint in _SSH_AUTH_FAILURE_HINTS)
+
+
+def _ssh_auth_breaker_error(host: str, user: str) -> str:
+    n = _ssh_auth_failures(host, user)
+    return (
+        f"⚠️ SSH 认证失败 {n}/{_SSH_AUTH_BREAKER_LIMIT}——为避免 sshd 限流"
+        f"（MaxAuthTries=6）把自己锁出主机（{user}@{host}），已停止自动重试。"
+        "请：1) 手动 ssh 验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
+    )
+
+
 def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = None,
                       askpass_file: Optional[Path] = None,
                       key_passphrase_file: Optional[Path] = None,
@@ -121,6 +181,11 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
         raise DiscoveryError("SSH 需要 host 与 user（--host / --user）")
 
     def run(cmd: str) -> ProbeResult:
+        # 熔断检查在 runner 调用前（agent 工具/自动探测路径）——该 host:user 已
+        # 连续认证失败达到上限，不再自动重试（§AD 细节 4：CLI 交互路径 vssh 不
+        # 经过本 runner，不计数不受影响）。
+        if _ssh_auth_breaker_tripped(host, user):
+            raise DiscoveryError(_ssh_auth_breaker_error(host, user))
         env = dict(os.environ)
         use_password_askpass = askpass_file is not None and askpass_file.is_file()
         use_key_passphrase = key_passphrase_file is not None and key_passphrase_file.is_file()
@@ -160,12 +225,18 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
         except OSError as exc:
             raise DiscoveryError(f"无法执行 ssh：{exc}") from exc
         if proc.returncode == 255:
+            if _is_ssh_auth_failure(proc):
+                _record_ssh_auth_failure(host, user)
+                if _ssh_auth_breaker_tripped(host, user):
+                    raise DiscoveryError(_ssh_auth_breaker_error(host, user))
             # ssh 自身失败（连接拒绝/认证失败）→ 中止发现，无半截数据。
             detail = (proc.stderr or proc.stdout or "").strip().splitlines()
             raise DiscoveryError(
                 f"SSH 连接 {user}@{host} 失败（exit 255）："
                 f"{detail[-1] if detail else '认证失败或主机不可达'}"
             )
+        # 非 255 = ssh 连接成功（远端命令自身的退出码）——凭据 OK，计数清零。
+        _reset_ssh_auth_failures(host, user)
         return ProbeResult(proc.stdout, proc.returncode, proc.stderr or "")
 
     return run
