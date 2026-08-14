@@ -648,7 +648,11 @@ class TestSmartDeniedPrompt:
         )
 
         assert result == "deny"
-        assert captured == {"allow_permanent": False, "smart_denied": True}
+        assert captured == {
+            "allow_permanent": False,
+            "allow_session": True,
+            "smart_denied": True,
+        }
 
     def test_short_prompt_smart_deny_rejects_session_input(self):
         with mock_patch("builtins.input", return_value="session"):

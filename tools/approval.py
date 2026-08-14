@@ -2680,6 +2680,7 @@ def save_permanent_allowlist(patterns: set):
 def prompt_dangerous_approval(command: str, description: str,
                               timeout_seconds: int | None = None,
                               allow_permanent: bool = True,
+                              allow_session: bool = True,
                               approval_callback=None,
                               *, smart_denied: bool = False) -> str:
     """Prompt the user to approve a dangerous command (CLI only).
@@ -2688,13 +2689,16 @@ def prompt_dangerous_approval(command: str, description: str,
         allow_permanent: When False, hide the [a]lways option (used when
             tirith warnings are present, since broad permanent allowlisting
             is inappropriate for content-level security findings).
+        allow_session: When False, hide the [s]ession option (used by the
+            prod change confirmation gate where a session allowlist would
+            also be ignored — only once/deny are meaningful there).
         smart_denied: When True, this is an owner override of a Smart DENY.
             Offer only one-operation approval or denial.
         approval_callback: Optional callback registered by the CLI for
             prompt_toolkit integration. Signature:
             (command, description, *, allow_permanent=True,
-            smart_denied=False) -> str. Legacy callback signatures remain
-            supported when ``smart_denied`` is false.
+            allow_session=True, smart_denied=False) -> str. Legacy callback
+            signatures remain supported when ``smart_denied`` is false.
 
     Returns: 'once', 'session', 'always', 'deny', or 'timeout'.
         'timeout' means the prompt expired without a user response — the
@@ -2714,12 +2718,27 @@ def prompt_dangerous_approval(command: str, description: str,
 
     if approval_callback is not None:
         try:
-            callback_kwargs = {"allow_permanent": allow_permanent}
+            callback_kwargs = {
+                "allow_permanent": allow_permanent,
+                "allow_session": allow_session,
+            }
             if smart_denied:
                 callback_kwargs["smart_denied"] = True
-            return approval_callback(
-                display_command, display_description, **callback_kwargs
-            )
+            try:
+                return approval_callback(
+                    display_command, display_description, **callback_kwargs
+                )
+            except TypeError:
+                # Legacy callback registered before the allow_session contract
+                # existed: retry once without the new keyword so old callbacks
+                # keep working (documented "legacy signatures remain
+                # supported"). Any other TypeError still fails closed below.
+                if "allow_session" in callback_kwargs:
+                    callback_kwargs.pop("allow_session")
+                    return approval_callback(
+                        display_command, display_description, **callback_kwargs
+                    )
+                raise
         except Exception as e:
             logger.error("Approval callback failed: %s", e, exc_info=True)
             return "deny"
@@ -2763,21 +2782,29 @@ def prompt_dangerous_approval(command: str, description: str,
             print()
             if smart_denied:
                 print(t("approval.choose_smart_deny"))
-            elif allow_permanent:
+            elif allow_permanent and allow_session:
                 print(t("approval.choose_long"))
-            else:
+            elif allow_session:
                 print(t("approval.choose_short"))
+            else:
+                # prod confirmation gate / session+always both ineffective:
+                # only once/deny are meaningful (same shape as smart deny).
+                print(t("approval.choose_smart_deny"))
             print()
             sys.stdout.flush()
 
             result = {"choice": ""}
+            if smart_denied:
+                prompt = t("approval.prompt_smart_deny")
+            elif allow_permanent and allow_session:
+                prompt = t("approval.prompt_long")
+            elif allow_session:
+                prompt = t("approval.prompt_short")
+            else:
+                prompt = t("approval.prompt_smart_deny")
 
             def get_input():
                 try:
-                    if smart_denied:
-                        prompt = t("approval.prompt_smart_deny")
-                    else:
-                        prompt = t("approval.prompt_long") if allow_permanent else t("approval.prompt_short")
                     result["choice"] = input(prompt).strip().lower()
                 except (EOFError, OSError):
                     result["choice"] = ""
@@ -2813,10 +2840,16 @@ def prompt_dangerous_approval(command: str, description: str,
                 print(t("approval.allowed_once"))
                 return "once"
             elif choice in {'s', 'session'}:
+                if not allow_session:
+                    print(t("approval.denied"))
+                    return "deny"
                 print(t("approval.allowed_session"))
                 return "session"
             elif choice in {'a', 'always'}:
                 if not allow_permanent:
+                    if not allow_session:
+                        print(t("approval.denied"))
+                        return "deny"
                     print(t("approval.allowed_session"))
                     return "session"
                 print(t("approval.allowed_always"))
@@ -3101,6 +3134,8 @@ def _run_approval_gate(
     description: str,
     display_target: str,
     approval_callback=None,
+    allow_permanent: bool = True,
+    allow_session: bool = True,
     cron_deny_message: str,
     autoapprove_log_prefix: str,
     fail_closed_when_no_human: bool = False,
@@ -3129,6 +3164,11 @@ def _run_approval_gate(
         approval_callback: Optional CLI prompt callback. When ``None`` the
             per-thread callback registered via
             ``tools.terminal_tool.set_approval_callback`` is used.
+        allow_permanent: When False, the [a]lways option is hidden on every
+            surface (tirith-only prompts, prod confirmation gate).
+        allow_session: When False, the [s]ession option is hidden as well —
+            used by the prod change confirmation gate where a session
+            allowlist would also be ignored (only once/deny are meaningful).
         cron_deny_message: Message returned when a cron job hits this gate
             under ``cron_mode: deny``.
         autoapprove_log_prefix: Log line prefix for the non-interactive
@@ -3222,8 +3262,8 @@ def _run_approval_gate(
                 "pattern_key": pattern_key,
                 "pattern_keys": [pattern_key],
                 "description": redact_sensitive_text(description),
-                "allow_permanent": True,
-                "allow_session": True,
+                "allow_permanent": allow_permanent,
+                "allow_session": allow_session,
             }
             decision = _await_gateway_decision(
                 session_key, notify_cb, approval_data, surface="gateway"
@@ -3298,8 +3338,13 @@ def _run_approval_gate(
         session_key=session_key,
         surface="cli",
     )
-    choice = prompt_dangerous_approval(display_target, description,
-                                       approval_callback=approval_callback)
+    choice = prompt_dangerous_approval(
+        display_target,
+        description,
+        allow_permanent=allow_permanent,
+        allow_session=allow_session,
+        approval_callback=approval_callback,
+    )
     _fire_approval_hook(
         "post_approval_response",
         command=display_target,
@@ -4065,12 +4110,20 @@ def check_all_command_guards(command: str, env_type: str,
                 # must not offer a permanent scope.  Otherwise offer Always
                 # whenever any dangerous-pattern warning can actually be
                 # persisted (pure-tirith prompts stay session-max).
-                "allow_permanent": has_permanent_capable and not smart_denied_for_owner,
+                "allow_permanent": (
+                    has_permanent_capable
+                    and not smart_denied_for_owner
+                    and not _ops_confirmation_required
+                ),
                 # Session approval is safe for every non-Smart-DENY prompt —
                 # including pure-tirith ones, where the persistence layer
                 # already caps scope at session. Adapters use this to render
-                # a session tier independently of the permanent tier.
-                "allow_session": not smart_denied_for_owner,
+                # a session tier independently of the permanent tier. The
+                # prod confirmation gate offers neither: a session allowlist
+                # is skipped there too, so showing it would mislead the user.
+                "allow_session": (
+                    not smart_denied_for_owner and not _ops_confirmation_required
+                ),
             }
             if smart_denied_for_owner:
                 approval_data["smart_denied"] = True
@@ -4197,6 +4250,7 @@ def check_all_command_guards(command: str, env_type: str,
         command,
         combined_desc,
         allow_permanent=has_permanent_capable and not smart_denied_for_owner,
+        allow_session=not smart_denied_for_owner and not _ops_confirmation_required,
         smart_denied=smart_denied_for_owner,
         approval_callback=approval_callback,
     )

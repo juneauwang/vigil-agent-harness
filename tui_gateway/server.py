@@ -1800,6 +1800,11 @@ def _emit_approval_request(sid: str, data: dict | None) -> None:
     if "choices" not in payload:
         if payload.get("smart_denied"):
             payload["choices"] = ["once", "deny"]
+        elif payload.get("allow_session") is False:
+            # Session allowlist skipped (prod confirmation gate): session is
+            # just as ineffective as always — offer only once/deny so the UI
+            # never shows a choice that would silently not take effect.
+            payload["choices"] = ["once", "deny"]
         elif payload.get("allow_permanent") is False:
             payload["choices"] = ["once", "session", "deny"]
         elif "allow_permanent" in payload:
