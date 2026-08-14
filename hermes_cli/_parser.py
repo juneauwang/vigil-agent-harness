@@ -39,43 +39,12 @@ def _inherited_flag(parser, *args, **kwargs):
 
 _EPILOGUE = """
 Examples:
-    vigil                        Start interactive chat
-    vigil chat -q "Hello"        Single query mode
-    vigil --tui                  Launch the modern TUI (or set display.interface: tui)
-    vigil --cli                  Force the classic REPL (overrides display.interface: tui)
-    vigil -c                     Resume the most recent session
-    vigil -c "my project"        Resume a session by name (latest in lineage)
-    vigil --resume <session_id>  Resume a specific session by ID
-    vigil setup                  Run setup wizard
-    vigil logout                 Clear stored authentication
-    vigil auth add <provider>    Add a pooled credential
-    vigil auth list              List pooled credentials
-    vigil auth remove <p> <t>    Remove pooled credential by index, id, or label
-    vigil auth reset <provider>  Clear exhaustion status for a provider
-    vigil model                  Select default model
-    vigil fallback [list]        Show fallback provider chain
-    vigil fallback add           Add a fallback provider (same picker as `vigil model`)
-    vigil fallback remove        Remove a fallback provider from the chain
-    vigil config                 View configuration
-    vigil config edit            Edit config in $EDITOR
-    vigil config set model gpt-4 Set a config value
-    vigil gateway                Run messaging gateway
-    vigil -s hermes-agent-dev,github-auth
-    vigil -w                     Start in isolated git worktree
-    vigil gateway install        Install gateway background service
-    vigil sessions list          List past sessions
-    vigil sessions browse        Interactive session picker
-    vigil sessions rename ID T   Rename/title a session
-    vigil logs                   View agent.log (last 50 lines)
-    vigil logs -f                Follow agent.log in real time
-    vigil logs errors            View errors.log
-    vigil logs --since 1h        Lines from the last hour
-    vigil debug share             Upload debug report for support
-    vigil console                Open the safe Vigil command console
-    vigil update                 Update to latest version
-    vigil dashboard              Start web UI dashboard (port 9119)
-    vigil dashboard --stop       Stop running dashboard processes
-    vigil dashboard --status     List running dashboard processes
+    vigil chat                       启动会话（默认即完整 ops harness）
+    vigil topo-discover -e prod -H 10.0.1.29   自动发现主机拓扑（SSH 扫描）
+    vigil watch status               查看值守巡检状态
+    vigil vssh node1                 带凭据注入的 SSH（密码不进命令行）
+    vigil config set model.default deepseek-v4-flash   配置模型
+    vigil setup                      首次配置向导
 
 For more help on a command:
     vigil <command> --help
