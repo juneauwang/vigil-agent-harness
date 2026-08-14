@@ -1469,3 +1469,54 @@
   ops→.hermes、personal→.vigil、都不存在→.vigil、.vigil+ops→.vigil 且 candidates 含 legacy）。
 - **核销方式**：fallback 语义从"目录存在即兜底"改为"含 Vigil 老数据特征才兜底"；
   老安装（profiles/ops 在）仍无感兼容，新用户/Hermes 本体用户不再被串。
+
+### 38. 批次十六 安全三连：redact 三盲区（§V）+ sudo_exec 提权工具（§W）+ SSH 认证熔断（§AD） — ✅ 已实施（2026-08-14，批次十六；commit hash 佐证：§V 1deb38d / §W 104af2e / §AD 0ab8e47）
+- **发现**（2026-08-14 凌晨 dogfooding 日志 §V/§W/§AD，prod 环境多次复现）：
+  1. §V 凭据泄露三盲区：`curl -H "X-Vault-Token: s.xxx"` 的 OpenBao 认证 header 不在
+     `_SECRET_HEADER_NAMES`；`s.` 前缀不在 `_PREFIX_PATTERNS`；`sudo -S <<< '密码'` /
+     heredoc / `SUDO_PASS=$(curl vault | jq)` 不在命令文本 redact 名单——token/密码
+     明文显示在工具调用展示行（用户原话"sudo -S 暴露了密码"）。
+  2. §W 无正规提权工具：agent 每次上 prod 都拼 `sudo -S <<< '密码'` 管道，展示层
+     必然带密码；审批匹配 shell 字符串形态，内联 token 可绕过。
+  3. §AD 认证自伤：agent 连续尝试多种认证方式耗尽 OpenSSH MaxAuthTries（默认 6）
+     → "Too many authentication failures" → 几分钟内 ssh 全部被拒（生产自伤）。
+- **修复（批次十六，三提交）**：
+  1. redact 三盲区（agent/redact.py，1deb38d）：`_SECRET_HEADER_NAMES` 追加
+     x-vault-token/x-vault-request/x-vault-namespace（header 名命中即打码，值形态
+     不重要），值类排除引号（curl -H 收尾引号是结构字符，吞掉破坏语法）；
+     `_PREFIX_PATTERNS` 追加 `s\.[A-Za-z0-9]{20,}`（≥20 防误伤句点文本），
+     `_extract_literal_prefix` 支持转义元字符（预筛保持 `s.` 精确，不退化）；
+     `_CMD_CRED_FLAG_RE` 旁追加确定性上下文匹配：sudo -S herestring/heredoc stdin
+     密码注入（出现即密码，无值形态启发式）、`*_PASS/_PASSWORD/_TOKEN/_KEY/_SECRET=$(…)`
+     赋值形态整段打码（含带引号形态）；ENV pass 对命令替换值跳过（交给命令文本
+     pass 整段打码，避免打残结构尾部漏出）；无 sudo 上下文的普通 `<<<` 不碰。
+  2. sudo_exec 提权工具（tools/sudo_tool.py 新增，104af2e）：toolset=topo 新工具，
+     凭据从拓扑表 credential 引用解析（vssh 三通道复用），注入一律 ASKPASS——
+     本地 `sudo -A` + SUDO_ASKPASS env；远端 scp 0700 askpass + 保险箱文件到 /tmp、
+     用完即删；**禁止任何 `sudo -S` / `echo 密码 | sudo -S` / `<<< '密码'` 形态**
+     （§V 泄露根源，工具自身不得使用）；命令校验 fail-closed（bash -c / `>` / `&` /
+     `;` / `$()` / 内嵌 sudo 拒绝，只读管道放行）；权限矩阵联动（`sudo <command>`
+     过 ops_permissions：prod 变更类 → require_confirmation 人工确认门、deny 拒绝、
+     只读诊断直行）；凭据缺失/认证失败 → 停下来问用户（fail-closed）。
+  3. SSH 认证熔断（tools/topo_discovery.py，0ab8e47）：`_build_ssh_runner` 会话级
+     host:user 失败计数（模块级 dict + 锁，进程内存）；exit 255 + stderr 含
+     Permission denied/MaxAuthTries/Authentication failed 判定认证失败；3 次熔断
+     返回可操作错误（MaxAuthTries=6 提示 + 手动 ssh / 拓扑 credential 声明）不再
+     自动重试；成功一次清零；CLI vssh 路径不经此 runner，不计数不受影响。
+- **验收**：三新套件全绿（test_redact_vault_forms 16 + test_sudo_exec 16 +
+  test_ssh_auth_breaker 6）+ 回归不破（test_redact 三件套 114 + topo_tools/
+  topo_discovery/vssh 90）；行为探针三条符合预期（§V 7 形态逐条打码 + §W 只读直行/
+  prod 变更需确认 + §AD 第 4 次调用直接熔断）。
+- **硬约束**：未碰 conversation_loop / prompt 缓存 / 压缩逻辑；无新 env var
+  （SUDO_ASKPASS 是 sudo 程序 env，非 HERMES_*/VIGIL_*）；凭据值不进 argv/命令串/
+  日志（askpass 脚本 0700 只 cat 保险箱文件）；git diff 只含白名单文件
+  （agent/redact.py、tools/sudo_tool.py、tools/topo_discovery.py（任务 3 方案 A 指定
+  挂载点）、tests/ 对应新测试）。
+- **已知风险/误伤面**：redact `s.` 前缀要求 ≥20 字符，短 `s.xxx` 只在 header 上下文
+  打码；赋值形态只匹配 *_PASS/_PASSWORD/_TOKEN/_KEY/_SECRET 后缀 + 命令替换，普通
+  赋值（COUNT=$(wc -l) 等）不误伤；sudo_exec 对含 `>`/`&`/`;` 的命令 fail-closed
+  （含 2>&1），诊断命令请用纯只读形态；远端 sudo 的 pty 注入时序（RHEL requiretty）
+  标注为待实测项，当前实现走 scp 远端 askpass。
+- **核销方式**：redact 名单追加式，季度体检 grep 新增形态仍生效；sudo_exec 可用性
+  由 check_topo_requirements 数据门控（无 topology.yaml 零 footprint）；熔断计数
+  进程内存、重启清零（会话级语义）。
