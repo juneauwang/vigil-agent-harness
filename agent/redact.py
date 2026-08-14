@@ -70,6 +70,7 @@ _REDACT_ENABLED = os.getenv("HERMES_REDACT_SECRETS", "true").lower() in {"1", "t
 
 # Known API key prefixes -- match the prefix + contiguous token chars
 _PREFIX_PATTERNS = [
+    r"s\.[A-Za-z0-9]{20,}",             # OpenBao / Hashicorp Vault tokens (s. + 24 base62)
     r"sk-[A-Za-z0-9_-]{10,}",           # OpenAI / OpenRouter / Anthropic (sk-ant-*)
     r"ghp_[A-Za-z0-9]{10,}",            # GitHub PAT (classic)
     r"github_pat_[A-Za-z0-9_]{10,}",    # GitHub PAT (fine-grained)
@@ -400,10 +401,14 @@ _AUTH_HEADER_RE = re.compile(
 # a known vendor prefix (custom/local backends) would otherwise leak when a
 # request or curl command is logged or echoed into tool output / transcripts.
 _SECRET_HEADER_NAMES = (
-    r"(?:x-api-key|x-goog-api-key|api-key|apikey|x-api-token|x-auth-token|x-access-token)"
+    r"(?:x-api-key|x-goog-api-key|api-key|apikey|x-api-token|x-auth-token|x-access-token|"
+    r"x-vault-token|x-vault-request|x-vault-namespace)"
 )
 _SECRET_HEADER_RE = re.compile(
-    rf"({_SECRET_HEADER_NAMES}\s*:\s*)(\S+)",
+    # 值类排除引号：``curl -H "X-Vault-Token: s.xxx"`` 的收尾引号是结构字符，
+    # 不该被吞进打码值（同 _AUTH_HEADER_RE 的引号排除原则）——吞掉会破坏
+    # 命令/字符串语法（未闭合引号），真凭据从不含引号（OPS-DELTA 批次十六 §V）。
+    rf"({_SECRET_HEADER_NAMES}\s*:\s*)([^\s\"']+)",
     re.IGNORECASE,
 )
 
@@ -536,6 +541,37 @@ _CMD_CRED_FLAG_RE = re.compile(
     r"|(--(?:password|passwd|token|secret|api[-_]?key|client[-_]?secret|"
     r"access[-_]?token)(?:[=:]\s*|\s+))([^\s'\"&|;]+)"
 )
+# sudo -S 上下文 stdin 密码注入（OPS-DELTA 批次十六 §V）：sudo -S 从 stdin 读密码，
+# herestring ``<<< '…'`` 是唯一注入方式——出现即密码（确定性上下文匹配，不做值形态
+# 判断；无 sudo -S 的普通 ``<<<`` 不碰）。``-p ''`` 是 sudo 关闭提示符的常见形态。
+_CMD_SUDO_STDIN_PASS_RE = re.compile(
+    r"(?i)(sudo\s+-S(?:\s+-p\s+(?:''|\"\"))?[^|&;\n]*<<<\s*['\"]?)([^'\"\n]+)"
+)
+# heredoc 形态 ``sudo -S <<'EOF'\n<密码行>\nEOF``：密码是 heredoc 首内容行，
+# terminator 行是确定性锚点（无 sudo -S 上下文的普通 heredoc 不碰）。
+# terminator 名字两侧的引号各自可选（``<<EOF`` / ``<<'EOF'`` / ``<<-EOF``
+# 都覆盖），lookahead 允许 terminator 位于文本末尾（``$``）。
+_CMD_SUDO_HEREDOC_PASS_RE = re.compile(
+    r"(?i)(sudo\s+-S[^|&;\n]*<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_.-]*)['\"]?\n)([^\n]*\n)"
+    r"(?=[ \t]*\2(?:\s*[\n;]|$))"
+)
+# 凭据获取赋值形态：``SUDO_PASS=$(curl … | jq …)`` / ``SUDO_PASS="$(curl …)"``——
+# 命令替换即凭据获取，整个 ``$(…)`` 值打码、赋值骨架保留（OPS-DELTA 批次十六 §V）。
+# 值前的可选引号（``"``/``'``）是结构字符，单独捕获并保留（``SUDO_PASS="****"``）。
+_CMD_CRED_ASSIGN_RE = re.compile(
+    r"(?i)(^|[;&|\s])([A-Za-z_][A-Za-z0-9_]*(?:_PASS|_PASSWORD|_TOKEN|_KEY|_SECRET)"
+    r"\s*=\s*)(['\"]?)(\$?\([^)\n]*\))"
+)
+# 凭据赋值键名（_CMD_CRED_ASSIGN_RE 的键名部分）与命令替换值形态。
+# ENV pass 对 ``$(…)`` 值只打第一个空白 token（``SUDO_PASS=$(curl``），会把
+# 命令替换结构打成残片、尾部原样漏出；此类键名 + 命令替换值的赋值整体交给
+# 命令文本 pass（_CMD_CRED_ASSIGN_RE）整段打码，ENV pass 跳过不碰。
+# 其余键名（裸 PASSWORD=…、dotted config 键）维持原行为——它们不在
+# _CMD_CRED_ASSIGN_RE 覆盖范围，跳过会造成真实回归。
+_CRED_ASSIGN_KEY_RE = re.compile(
+    r"(?i)^[A-Za-z_][A-Za-z0-9_]*(?:_PASS|_PASSWORD|_TOKEN|_KEY|_SECRET)$"
+)
+_CRED_ASSIGN_VALUE_RE = re.compile(r"^[\"']?\$?\(")
 _CMD_USERPASS_RE = re.compile(
     r"(?i)"
     r"((?:^|[\s&|;])(?:-u|--user)\s+[^\s:='\"&|;]+:)([^\s'\"&|;]+)"
@@ -616,6 +652,24 @@ def _redact_command_inline_credentials(text: str) -> str:
                 return m.group(1) + m.group(2) + _mask_token(m.group(3))
             return m.group(4) + _mask_token(m.group(5))
         text = _CMD_CRED_FLAG_RE.sub(_sub_flag, text)
+
+    # 1.5 sudo -S stdin 注入（herestring / heredoc）——确定性上下文匹配，无预筛。
+    # 只在整个文本含 "sudo" 时跑（sudo -S 是必需上下文，其余文本直接跳过）。
+    if "sudo" in text.lower():
+        if "<<<" in text:
+            text = _CMD_SUDO_STDIN_PASS_RE.sub(
+                lambda m: m.group(1) + _mask_token(m.group(2)), text)
+        if "<<" in text:
+            text = _CMD_SUDO_HEREDOC_PASS_RE.sub(
+                lambda m: m.group(1) + _mask_token(m.group(3).rstrip("\n")) + "\n", text)
+    # 1.6 凭据获取赋值（SUDO_PASS=$(…) / *_PASSWORD=$(…)）——命令替换整段打码。
+    # 独立于 sudo 上下文：赋值名以 *_PASS/_PASSWORD/_TOKEN/_KEY/_SECRET 结尾且
+    # 值取命令替换，即凭据获取形态（§V 实测形态 ``SUDO_PASS=$(curl vault | jq)``
+    # 可单独成行，不含 sudo 字样）。不做通用 ``$(...)`` 值检测——普通赋值
+    # （``COUNT=$(wc -l)``）不匹配后缀名单，不误伤。
+    if "$(" in text:
+        text = _CMD_CRED_ASSIGN_RE.sub(
+            lambda m: m.group(1) + m.group(2) + m.group(3) + "****", text)
 
     # 2. -u user:pass / -p pass（-p 仅打疑似凭据值，避免 -p 8080 端口误伤）
     if " -u " in text or " -p " in text:
@@ -959,6 +1013,14 @@ def redact_sensitive_text(
             # prose/log contexts (issue #2852): ``KEY=os.getenv('X')``.
             if _ENV_LOOKUP_VALUE_RE.match(value):
                 return m.group(0)
+            # Credential-assignment command substitutions (``SUDO_PASS=$(curl
+            # vault | jq …)``): the value is a programmatic retrieval, not a
+            # literal secret — leave it intact so the command-text pass masks
+            # the whole ``$(…)`` (OPS-DELTA 批次十六 §V). Only keys the
+            # command-text pass actually covers are skipped (see
+            # _CRED_ASSIGN_KEY_RE); everything else keeps legacy behavior.
+            if _CRED_ASSIGN_KEY_RE.match(name) and _CRED_ASSIGN_VALUE_RE.match(value):
+                return m.group(0)
             # Keyword must sit at a word boundary within the key —
             # ``author=Smith`` / ``press.secretary=…`` are prose, not
             # credentials (ported from nearai/ironclaw#6129). All-caps
@@ -1229,12 +1291,29 @@ def _extract_literal_prefix(pattern: str) -> str:
     ``?``, ``*``, ``+``, ``|``, ``{``, ``^``, ``$``).  Returns the literal
     that any match of the pattern MUST contain as a substring, so the
     pre-screen never produces false negatives.
+
+    Escaped metacharacters (``\\.``, ``\\-``, ...) are part of the literal
+    prefix — a match must contain them verbatim, so they are included
+    (``s\\.[A-Za-z0-9]{20,}`` → ``s.``).  Without this, the ``s.`` Vault
+    prefix would degrade the pre-screen to "any text containing an s" and
+    run the full prefix regex on nearly every log line (OPS-DELTA 批次十六).
     """
     meta = "[(\\.?*+|{^$"
-    for i, ch in enumerate(pattern):
+    out = []
+    i = 0
+    while i < len(pattern):
+        ch = pattern[i]
+        if ch == "\\":
+            if i + 1 < len(pattern) and pattern[i + 1] in meta:
+                out.append(pattern[i + 1])
+                i += 2
+                continue
+            break  # non-literal escape (e.g. \d) — treat as a boundary
         if ch in meta:
-            return pattern[:i]
-    return pattern
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 _PREFIX_SUBSTRINGS = tuple(
