@@ -42,6 +42,21 @@ _VALID_STATUSES = {"pass", "fail"}
 # runbook_load 永远不返回明文——占位符描述化返回，明文只在执行时由 agent 从
 # 保险箱/vault 读取并立即注入命令（命令串过 agent/redact.py 打码）。
 _VAULT_REF_RE = re.compile(r"<vault:([A-Za-z0-9_./-]+)>")
+# runbook_create 专有：名称严格 kebab-case（小写字母/数字 + 连字符），
+# 防路径穿越（".." / 隐藏文件/点号下划线）与非法文件名写盘。
+_CREATE_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+_VALID_KINDS = {"deploy", "incident", "checklist"}
+# 疑似明文凭据模式（runbook_create 校验用）：赋值式（password= / token: ...）
+# 与 flag 式（--password / -p value）。命中即拒绝（fail-closed），提示改用
+# <vault:path/field> 占位符；只判"疑似"，不漏明文，宁误报也提示。
+_PLAINTEXT_SECRET_ASSIGN_RE = re.compile(
+    r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*(\S+)"
+)
+_PLAINTEXT_SECRET_FLAG_RE = re.compile(
+    r"(?i)(--password|--passwd|--token|--api-key|-p)\s+(\S+)"
+)
+# curl/scp 类 `-u user:password`（§AH 同源明文凭据形态）。
+_PLAINTEXT_CRED_FLAG_RE = re.compile(r"(?i)(-u|--user)\s+([^\s<]+:[^\s]+)")
 
 _DEFAULT_LOAD_SCHEMA = {
     "name": "runbook_load",
@@ -103,6 +118,65 @@ _DEFAULT_CHECKPOINT_SCHEMA = {
             },
         },
         "required": ["runbook", "step_id", "status"],
+    },
+}
+
+_DEFAULT_CREATE_SCHEMA = {
+    "name": "runbook_create",
+    "description": (
+        "创建/更新运维 runbook（程序层：结构化 YAML，runbooks/<name>.yaml，schema v0.1）。"
+        "runbook 是 Vigil 程序层机制（触发条件 + 步骤 + 命令 + 回滚），不是 Markdown 文档："
+        "runbook_load 可按名/触发词加载，runbook_checkpoint 可门控部署阶段。"
+        "用户说'沉淀/记录/保存为 runbook'时应调用本工具。命令一律拒绝明文密码/token——"
+        "用 <vault:path/field> 占位符（执行时从保险箱读取注入）。同名已存在需 "
+        "overwrite=true 才覆盖。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "runbook": {
+                "type": "string",
+                "description": "runbook 名（kebab-case，如 ansible-syntax-check）。",
+            },
+            "title": {
+                "type": "string",
+                "description": "标题。",
+            },
+            "triggers": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "触发关键字/症状（模糊匹配用，如 [\"修改 ansible\", \"syntax check\"]）。",
+            },
+            "summary": {
+                "type": "string",
+                "description": "一句话摘要（可选）。",
+            },
+            "steps": {
+                "type": "array",
+                "description": (
+                    "步骤列表，每步 {id, title, commands: [命令]}；checklist 步骤"
+                    "可带 verify+expect（真实验证）。"
+                ),
+            },
+            "rollback": {
+                "type": "array",
+                "description": "回滚步骤（可选），[{title, commands}]。",
+            },
+            "env": {
+                "type": "string",
+                "description": "适用环境 test/uat/prod（可选，默认不限制；与 runbook schema v0.1 一致）。",
+            },
+            "kind": {
+                "type": "string",
+                "enum": ["deploy", "incident", "checklist"],
+                "description": "deploy/incident/checklist（默认 incident）。",
+            },
+            "overwrite": {
+                "type": "boolean",
+                "description": "同名已存在时需 true 才覆盖（默认 false）。",
+            },
+        },
+        "required": ["runbook", "title", "steps"],
     },
 }
 
@@ -491,6 +565,178 @@ def runbook_checkpoint(
 
 
 # ---------------------------------------------------------------------------
+# runbook_create（正规创建入口）
+# ---------------------------------------------------------------------------
+
+def _find_plaintext_secret(cmd: str) -> Optional[str]:
+    """返回命令中疑似明文凭据的键名（password/--password/-p 等），无则 None。
+
+    <vault:path/field> 占位符放行（既有机制）；``-p`` 后接数字开头的值（如
+    docker/ssh 端口发布 ``-p 8080:80``）不算凭据。只报键名不报值——凭据值
+    绝不出现在错误消息/日志里。
+    """
+    if not cmd or not isinstance(cmd, str):
+        return None
+    m = _PLAINTEXT_SECRET_ASSIGN_RE.search(cmd)
+    if m:
+        if m.group(2).startswith("<vault:"):
+            return None
+        return m.group(1)
+    for m in _PLAINTEXT_SECRET_FLAG_RE.finditer(cmd):
+        flag, value = m.group(1), m.group(2)
+        if flag == "-p" and value and value[0].isdigit():
+            continue
+        if value.startswith("<vault:"):
+            continue
+        return flag
+    m = _PLAINTEXT_CRED_FLAG_RE.search(cmd)
+    if m and "<vault:" not in m.group(2):
+        return m.group(1)
+    return None
+
+
+def _scan_commands_for_secrets(steps: List[Dict[str, Any]], rollback: Optional[List[Any]]) -> Optional[str]:
+    """扫描 steps/rollback 的 commands，命中明文凭据返回可读错误，无则 None。"""
+    for step in steps or []:
+        if not isinstance(step, dict):
+            continue
+        for cmd in step.get("commands") or []:
+            key = _find_plaintext_secret(cmd)
+            if key:
+                return (
+                    f"步骤 {step.get('id')!r} 的命令疑似含明文凭据（{key}），"
+                    "runbook 拒绝明文密码/token——请改用 <vault:path/field> 占位符"
+                    "（执行时由你从保险箱/vault 读取并立即注入）。"
+                )
+    for rb in rollback or []:
+        if not isinstance(rb, dict):
+            continue
+        for cmd in rb.get("commands") or []:
+            key = _find_plaintext_secret(cmd)
+            if key:
+                return (
+                    f"rollback 命令疑似含明文凭据（{key}），请改用 <vault:path/field>"
+                    "占位符（执行时从保险箱读取注入）。"
+                )
+    return None
+
+
+def runbook_create(
+    runbook: str,
+    title: str,
+    triggers: Optional[List[Any]] = None,
+    summary: str = "",
+    steps: Optional[List[Any]] = None,
+    rollback: Optional[List[Any]] = None,
+    env: Optional[str] = None,
+    kind: str = "incident",
+    overwrite: bool = False,
+    home: Optional[Path] = None,
+) -> str:
+    """Create/overwrite a structured runbook (runbooks/<name>.yaml, schema v0.1).
+
+    Fail-closed: 严格 kebab-case 名称（防路径穿越）、非空 steps/commands、
+    commands 拒绝疑似明文凭据（用 <vault:path/field> 占位符）、同名已存在需
+    overwrite=True。写盘前复用 ``_validate_runbook`` 校验，保证 runbook_load
+    能原样加载回来（checklist/deploy 规则一并生效）。
+    """
+    home = home or _hermes_home()
+    name = str(runbook or "").strip()
+    if not _CREATE_NAME_RE.match(name):
+        return tool_error(
+            f"runbook 名称非法: {name!r}——必须 kebab-case（小写字母/数字，"
+            "连字符分隔，如 ansible-syntax-check）。"
+        )
+    if not isinstance(title, str) or not title.strip():
+        return tool_error("title 必填且不能为空。")
+    if kind not in _VALID_KINDS:
+        return tool_error(f"kind 必须是 {sorted(_VALID_KINDS)} 之一（默认 incident）。")
+    if env is not None and str(env) not in _VALID_ENVS:
+        return tool_error(
+            f"env 非法: {env!r}（可选 {sorted(_VALID_ENVS)}，与 runbook schema v0.1 一致）。"
+        )
+    if not isinstance(steps, list) or not steps:
+        return tool_error("steps 必填且不能为空（[{id, title, commands: [...]}]）。")
+    for step in steps:
+        if not isinstance(step, dict):
+            return tool_error("steps 每项必须是对象 {id, title, commands}。")
+        if not isinstance(step.get("id"), str) or not step["id"].strip():
+            return tool_error("steps 每项必须含非空字符串 id。")
+        cmds = step.get("commands")
+        if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
+            return tool_error(f"步骤 {step.get('id')!r} 的 commands 必须是非空字符串列表。")
+    if rollback is not None:
+        if not isinstance(rollback, list):
+            return tool_error("rollback 必须是列表（[{title, commands}]）。")
+        for rb in rollback:
+            if not isinstance(rb, dict):
+                return tool_error("rollback 每项必须是对象 {title, commands}。")
+            cmds = rb.get("commands")
+            if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
+                return tool_error("rollback 每项必须含非空 commands 字符串列表。")
+
+    secret_err = _scan_commands_for_secrets(steps, rollback)
+    if secret_err:
+        return tool_error(secret_err)
+
+    runbooks_dir = _runbooks_dir(home)
+    path = runbooks_dir / f"{name}.yaml"
+    exists = path.is_file()
+
+    data: Dict[str, Any] = {
+        "name": name,
+        "title": title.strip(),
+        "version": 1,
+        "kind": kind,
+    }
+    if env:
+        data["env"] = str(env)
+    if triggers:
+        cleaned = [str(t).strip() for t in triggers if isinstance(t, str) and t.strip()]
+        if cleaned:
+            data["triggers"] = cleaned
+    if isinstance(summary, str) and summary.strip():
+        data["summary"] = summary.strip()
+    data["steps"] = steps
+    if rollback:
+        data["rollback"] = rollback
+
+    # 复用既有校验器：保证 runbook_load 能原样加载回来（checklist 规则一并生效）。
+    try:
+        _validate_runbook(data, name)
+    except ValueError as exc:
+        return tool_error(f"runbook 校验失败: {exc}")
+
+    if exists and not overwrite:
+        return tool_error(
+            f"runbook 已存在: {name}（{path}）。需要覆盖请 overwrite=true。"
+        )
+
+    try:
+        runbooks_dir.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        return tool_error(f"写入 runbook 失败: {exc}")
+
+    return json.dumps(
+        {
+            "status": "updated" if exists else "created",
+            "name": name,
+            "path": str(path),
+            "steps": len(steps),
+            "note": (
+                "已创建/更新 runbook（schema v0.1）。runbook_load 可加载；"
+                "若意图是行为约束，触发词已写入 triggers。"
+            ),
+        },
+        ensure_ascii=False, indent=2,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Registry
 # ---------------------------------------------------------------------------
 
@@ -511,6 +757,20 @@ def _checkpoint_handler(args: Dict[str, Any], **kwargs) -> str:
     )
 
 
+def _create_handler(args: Dict[str, Any], **kwargs) -> str:
+    return runbook_create(
+        runbook=args.get("runbook", ""),
+        title=args.get("title", ""),
+        triggers=args.get("triggers") or [],
+        summary=args.get("summary") or "",
+        steps=args.get("steps") or [],
+        rollback=args.get("rollback"),
+        env=args.get("env"),
+        kind=args.get("kind") or "incident",
+        overwrite=bool(args.get("overwrite", False)),
+    )
+
+
 registry.register(
     name="runbook_load",
     toolset="runbook",
@@ -528,5 +788,15 @@ registry.register(
     handler=_checkpoint_handler,
     check_fn=check_runbook_requirements,
     emoji="✅",
+    max_result_size_chars=30_000,
+)
+
+registry.register(
+    name="runbook_create",
+    toolset="runbook",
+    schema=_DEFAULT_CREATE_SCHEMA,
+    handler=_create_handler,
+    check_fn=check_runbook_requirements,
+    emoji="📝",
     max_result_size_chars=30_000,
 )
