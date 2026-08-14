@@ -39,43 +39,12 @@ def _inherited_flag(parser, *args, **kwargs):
 
 _EPILOGUE = """
 Examples:
-    vigil                        Start interactive chat
-    vigil chat -q "Hello"        Single query mode
-    vigil --tui                  Launch the modern TUI (or set display.interface: tui)
-    vigil --cli                  Force the classic REPL (overrides display.interface: tui)
-    vigil -c                     Resume the most recent session
-    vigil -c "my project"        Resume a session by name (latest in lineage)
-    vigil --resume <session_id>  Resume a specific session by ID
-    vigil setup                  Run setup wizard
-    vigil logout                 Clear stored authentication
-    vigil auth add <provider>    Add a pooled credential
-    vigil auth list              List pooled credentials
-    vigil auth remove <p> <t>    Remove pooled credential by index, id, or label
-    vigil auth reset <provider>  Clear exhaustion status for a provider
-    vigil model                  Select default model
-    vigil fallback [list]        Show fallback provider chain
-    vigil fallback add           Add a fallback provider (same picker as `vigil model`)
-    vigil fallback remove        Remove a fallback provider from the chain
-    vigil config                 View configuration
-    vigil config edit            Edit config in $EDITOR
-    vigil config set model gpt-4 Set a config value
-    vigil gateway                Run messaging gateway
-    vigil -s hermes-agent-dev,github-auth
-    vigil -w                     Start in isolated git worktree
-    vigil gateway install        Install gateway background service
-    vigil sessions list          List past sessions
-    vigil sessions browse        Interactive session picker
-    vigil sessions rename ID T   Rename/title a session
-    vigil logs                   View agent.log (last 50 lines)
-    vigil logs -f                Follow agent.log in real time
-    vigil logs errors            View errors.log
-    vigil logs --since 1h        Lines from the last hour
-    vigil debug share             Upload debug report for support
-    vigil console                Open the safe Vigil command console
-    vigil update                 Update to latest version
-    vigil dashboard              Start web UI dashboard (port 9119)
-    vigil dashboard --stop       Stop running dashboard processes
-    vigil dashboard --status     List running dashboard processes
+    vigil chat                       启动会话（默认即完整 ops harness）
+    vigil topo-discover -e prod -H 10.0.1.29   自动发现主机拓扑（SSH 扫描）
+    vigil watch status               查看值守巡检状态
+    vigil vssh node1                 带凭据注入的 SSH（密码不进命令行）
+    vigil config set model.default deepseek-v4-flash   配置模型
+    vigil setup                      首次配置向导
 
 For more help on a command:
     vigil <command> --help
@@ -88,11 +57,14 @@ _VIGIL_COMMANDS = frozenset({
     "chat", "setup", "config", "model", "version", "status",
     "logs", "tools", "skin",
     "ops-init", "topo-discover", "watch", "vssh",
+    "doctor", "sessions",
 })
 
 
 class _GroupedHelpFormatter(argparse.RawDescriptionHelpFormatter):
     """顶层 help：Vigil 命令一组醒目，继承命令折叠（``vigil --help-all`` 全量）。"""
+
+    expand_inherited = False
 
     def _format_action(self, action):
         if not isinstance(action, argparse._SubParsersAction):
@@ -115,12 +87,58 @@ class _GroupedHelpFormatter(argparse.RawDescriptionHelpFormatter):
             parts.append(self._format_action(pa))
         self._dedent()
         parts.append("\n")
-        names_line = f"继承命令（来自 hermes，{len(inherited)} 个）：{' '.join(inherited)}"
-        for line in self._split_lines(names_line, self._width - self._current_indent):
-            parts.append("%*s%s\n" % (self._current_indent, "", line))
-        parts.append("%*s%s\n" % (self._current_indent, "",
-                                   "  完整列表与说明见：vigil --help-all"))
+        if self.expand_inherited:
+            # --help-all：继承命令同样逐条完整展开（分组可读，不折叠）。
+            rows = self._inherited_rows(action, by_name, inherited)
+            parts.append("%*s%s\n" % (self._current_indent, "",
+                                      f"继承命令（来自 hermes，{len(rows)} 个）："))
+            self._indent()
+            for pa in rows:
+                parts.append(self._format_action(pa))
+            self._dedent()
+        else:
+            names_line = f"继承命令（来自 hermes，{len(inherited)} 个）：{' '.join(inherited)}"
+            for line in self._split_lines(names_line, self._width - self._current_indent):
+                parts.append("%*s%s\n" % (self._current_indent, "", line))
+            parts.append("%*s%s\n" % (self._current_indent, "",
+                                      "  完整列表与说明见：vigil --help-all"))
+            parts.append("%*s%s\n" % (self._current_indent, "",
+                                      "  运维常用继承命令：doctor / sessions / cron / skills"
+                                      "（用法：vigil <命令> --help）"))
         return "".join(parts)
+
+    @staticmethod
+    def _inherited_rows(action, by_name, inherited):
+        """--help-all 的继承命令行：每个可调用名字一行，保证"全量"名副其实。
+
+        argparse 只为带 ``help=`` 的子命令生成伪 action：别名
+        （learning/memory-graph/gui）与无 help 的弃用命令（login）不在
+        ``by_name`` 里。别名复用其正名的 help；无 help 的子命令用其
+        ``description`` 兜底（login 的弃用指引因此也能在 --help-all 看到）。
+        """
+        rows = []
+        for n in inherited:
+            pa = by_name.get(n)
+            if pa is not None:
+                rows.append(pa)
+                continue
+            parser = action.choices[n]
+            help_text = next(
+                (p.help for p in action._choices_actions
+                 if action.choices.get(p.dest) is parser and p.help),
+                getattr(parser, "description", None),
+            )
+            if help_text:
+                rows.append(argparse.Action(
+                    option_strings=[], dest=n, help=help_text, metavar=n,
+                ))
+        return rows
+
+
+class _ExpandedGroupedHelpFormatter(_GroupedHelpFormatter):
+    """--help-all：同分组渲染，继承命令逐条完整展开（不折叠）。"""
+
+    expand_inherited = True
 
 
 def build_top_level_parser():
@@ -280,7 +298,7 @@ def build_top_level_parser():
         "--ignore-user-config",
         action="store_true",
         default=False,
-        help="Ignore ~/.hermes/config.yaml and fall back to built-in defaults (credentials in .env are still loaded)",
+        help="Ignore ~/.vigil/config.yaml and fall back to built-in defaults (credentials in .env are still loaded)",
     )
     _inherited_flag(
         parser,
@@ -473,7 +491,7 @@ def build_top_level_parser():
         "--ignore-user-config",
         action="store_true",
         default=argparse.SUPPRESS,
-        help="Ignore ~/.hermes/config.yaml and fall back to built-in defaults (credentials in .env are still loaded). Useful for isolated CI runs, reproduction, and third-party integrations.",
+        help="Ignore ~/.vigil/config.yaml and fall back to built-in defaults (credentials in .env are still loaded). Useful for isolated CI runs, reproduction, and third-party integrations.",
     )
     _inherited_flag(
         chat_parser,

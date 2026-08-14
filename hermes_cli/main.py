@@ -11400,7 +11400,7 @@ def main():
         help="Manage external secret sources (Bitwarden, 1Password)",
         description=(
             "Pull API keys from an external secret manager at process startup "
-            "instead of storing them in ~/.hermes/.env.  Supports Bitwarden "
+            "instead of storing them in ~/.vigil/.env.  Supports Bitwarden "
             "Secrets Manager and 1Password.  See: "
             "https://hermes-agent.nousresearch.com/docs/user-guide/secrets/"
         ),
@@ -11660,7 +11660,7 @@ def main():
     # =========================================================================
     checkpoints_parser = subparsers.add_parser(
         "checkpoints",
-        help="Inspect / prune / clear ~/.hermes/checkpoints/",
+        help="Inspect / prune / clear ~/.vigil/checkpoints/",
         description="Manage the filesystem checkpoint store — the shadow git "
         "repo vigil uses to snapshot working directories before "
         "write_file/patch/terminal calls. Lets you see how much "
@@ -12632,9 +12632,10 @@ def main():
         subparsers.required = False
         args = parser.parse_args(_processed_argv)
 
-    # E1: --help-all → 未分组全量 help（继承命令也完整列出）。
+    # 批次二十二：--help-all → 同分组全量 help（Vigil 一组 + 继承命令一组逐条展开）。
     if getattr(args, "help_all", False):
-        parser.formatter_class = argparse.RawDescriptionHelpFormatter
+        from hermes_cli._parser import _ExpandedGroupedHelpFormatter
+        parser.formatter_class = _ExpandedGroupedHelpFormatter
         parser.print_help()
         return
 

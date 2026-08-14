@@ -805,7 +805,7 @@ def register_cli(parent: argparse.ArgumentParser) -> None:
 
     p_backup = subs.add_parser(
         "backup",
-        help="Take a manual tar.gz snapshot of ~/.hermes/skills/ "
+        help="Take a manual tar.gz snapshot of ~/.vigil/skills/ "
              "(curator also does this automatically before every real run)",
     )
     p_backup.add_argument(
@@ -816,7 +816,7 @@ def register_cli(parent: argparse.ArgumentParser) -> None:
 
     p_rollback = subs.add_parser(
         "rollback",
-        help="Restore ~/.hermes/skills/ from a curator snapshot "
+        help="Restore ~/.vigil/skills/ from a curator snapshot "
              "(defaults to the newest)",
     )
     p_rollback.add_argument(
