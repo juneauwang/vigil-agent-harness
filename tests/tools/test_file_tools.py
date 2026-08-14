@@ -1061,3 +1061,88 @@ class TestNotFoundCache:
         assert _check_not_found_cache("read", "/tmp/never-exists-notify", tid) is None, (
             "notify_other_tool_call must clear cached misses"
         )
+
+
+class TestWriteFileCredentialLockdown:
+    """批次十九 §AE — write_file 内容过 redact + 敏感文件 600。
+
+    §AE 实测：inventory 同步报告把凭据明文写进 644 权限 MD——write_file
+    路径不过 redact（或过了但形态漏）。挂载点：write_file_tool 写入前内容
+    过 redact_sensitive_text（与工具输出展示同一条通道），疑似凭据 →
+    写打码内容 + chmod 600 + 警告；普通内容（README）原样、权限不变。
+    """
+
+    SECRET = "MsVYqPz8Kx2LmN7RbT4UcH6WdJf0AaE3"
+
+    def _mock_ops(self, monkeypatch, tmp_path):
+        from unittest.mock import MagicMock
+        from tools import file_tools
+        ops = MagicMock()
+        result_obj = MagicMock()
+        result_obj.to_dict.return_value = {"status": "ok", "path": str(tmp_path / "f"), "bytes": 10}
+        ops.write_file.return_value = result_obj
+        monkeypatch.setattr(file_tools, "_get_file_ops", lambda task_id="default": ops)
+        chmod_calls = []
+        monkeypatch.setattr(file_tools.os, "chmod", lambda path, mode: chmod_calls.append((str(path), mode)))
+        return ops, chmod_calls
+
+    def test_sensitive_content_masked_and_0600(self, monkeypatch, tmp_path):
+        """含 monitor_auth_token: "MsVY…" 的内容 → 值打码 + chmod 600 + 警告。"""
+        from tools import file_tools
+        ops, chmod_calls = self._mock_ops(monkeypatch, tmp_path)
+        content = f'monitor_auth_token: "{self.SECRET}"'
+        result = json.loads(file_tools.write_file_tool("/tmp/report.md", content))
+
+        assert result["status"] == "ok"
+        written = ops.write_file.call_args[0][1]
+        written_path = ops.write_file.call_args[0][0]
+        assert self.SECRET not in written
+        assert "monitor_auth_token" in written
+        lockdown = [(p, m) for p, m in chmod_calls
+                    if p == written_path and m == 0o600]
+        assert lockdown, "疑似凭据文件应 chmod 600"
+        assert "600" in result.get("_warning", "")
+
+    def test_plain_content_unchanged_perms(self, monkeypatch, tmp_path):
+        """普通内容（README）→ 原样写入、不打码、不 chmod、无警告。"""
+        from tools import file_tools
+        ops, chmod_calls = self._mock_ops(monkeypatch, tmp_path)
+        content = "# Usage\n\nRun `vigil vssh host` to connect.\n"
+        result = json.loads(file_tools.write_file_tool("/tmp/README.md", content))
+
+        assert result["status"] == "ok"
+        written = ops.write_file.call_args[0][1]
+        assert written == content
+        written_path = ops.write_file.call_args[0][0]
+        assert not any(p == written_path and m == 0o600
+                       for p, m in chmod_calls)
+        assert "_warning" not in result
+
+    def test_json_credential_value_masked(self, monkeypatch, tmp_path):
+        """JSON 形态（vault dump 写盘）→ 值打码 + 600。"""
+        from tools import file_tools
+        ops, chmod_calls = self._mock_ops(monkeypatch, tmp_path)
+        content = f'{{"root_passwd": "LPn9exQ7v2Xk4k=w5rT"}}'
+        result = json.loads(file_tools.write_file_tool("/tmp/creds.json", content))
+
+        assert result["status"] == "ok"
+        written = ops.write_file.call_args[0][1]
+        written_path = ops.write_file.call_args[0][0]
+        assert "LPn9exQ7v2Xk4k=w5rT" not in written
+        assert "root_passwd" in written
+        assert any(p == written_path and m == 0o600
+                   for p, m in chmod_calls)
+
+    def test_short_placeholder_token_also_locked_down(self, monkeypatch, tmp_path):
+        """短占位 token（key 命中）也触发 600 收紧 + 打码（与展示通道一致）。"""
+        from tools import file_tools
+        ops, chmod_calls = self._mock_ops(monkeypatch, tmp_path)
+        content = 'apiKey: "test"'
+        result = json.loads(file_tools.write_file_tool("/tmp/config.yaml", content))
+
+        assert result["status"] == "ok"
+        written = ops.write_file.call_args[0][1]
+        written_path = ops.write_file.call_args[0][0]
+        assert "test" not in written
+        assert any(p == written_path and m == 0o600
+                   for p, m in chmod_calls)
