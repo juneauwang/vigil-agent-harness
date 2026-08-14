@@ -254,3 +254,67 @@ def test_defined_environments_maps_legacy_config_names(perm_env):
     envs = defined_environments()
     assert [d["name"] for d in envs] == ["prod"]
     assert envs[0]["isolation"] == "strict"
+
+# ---------------------------------------------------------------------------
+# OPS-DELTA 批次十七（B'）：prod 档未分级命令默认 approve + 强制人工确认门
+# ---------------------------------------------------------------------------
+
+def test_b_prime_prod_ungraded_approve_requires_confirmation(perm_env):
+    """prod 档未分级命令（mv/cp/tar，不在 L1-L4 模式内）→ approve + 确认门。"""
+    perm_env("prod")
+    for cmd in ("mv a.txt b.txt", "cp x y", "tar czf x.tar.gz dir"):
+        assert classify_command(cmd) is None, cmd
+        decision = check_ops_command_permission(cmd)
+        assert decision is not None and decision["action"] == "approve", cmd
+        assert decision["require_confirmation"] is True, cmd
+        assert "未分级命令在 prod 需人工确认" in decision["description"], cmd
+
+
+def test_b_prime_prod_l1_queries_unaffected(perm_env):
+    """prod 档 L1 查询命令 grade=L1（非 None）→ 不被 B' 误伤，仍 execute。"""
+    perm_env("prod")
+    for cmd in ("ls -la", "cat /etc/hosts", "grep -i swap /proc/meminfo"):
+        assert classify_command(cmd) == "L1", cmd
+        assert check_ops_command_permission(cmd) is None, cmd
+
+
+def test_b_prime_non_prod_ungraded_unchanged(perm_env):
+    """非 prod 档（test）未分级命令 → 行为不变（放行，返回 None）。"""
+    perm_env("test")
+    for cmd in ("mv a.txt b.txt", "cp x y", "tar czf x.tar.gz dir"):
+        assert check_ops_command_permission(cmd) is None, cmd
+
+
+def test_b_prime_prod_l3_l4_still_deny(perm_env):
+    """prod 档 L3/L4 危险命令 → 仍 deny（B' 不放松硬拒，deny > approve）。"""
+    perm_env("prod")
+    assert check_ops_command_permission("iptables -F")["action"] == "deny"
+    assert check_ops_command_permission("kubectl delete ns prod")["action"] == "deny"
+    assert check_ops_command_permission("mkfs.ext4 /dev/sdb1")["action"] == "deny"
+
+
+def test_b_prime_prod_change_class_unchanged(perm_env):
+    """prod 档变更类命令（kubectl apply / systemctl restart）→ 仍确认门。"""
+    perm_env("prod")
+    for cmd in ("kubectl apply -f deploy.yaml", "systemctl restart nginx",
+                "docker compose up -d", "helm upgrade release chart"):
+        decision = check_ops_command_permission(cmd)
+        assert decision is not None, cmd
+        assert decision["require_confirmation"] is True, cmd
+
+
+def test_b_prime_ungraded_change_class_ansible_playbook(perm_env):
+    """ansible-playbook 未分级但变更类 → approve + 确认门（B' 描述含变更门字样）。"""
+    perm_env("prod")
+    decision = check_ops_command_permission("ansible-playbook site.yml")
+    assert decision is not None and decision["action"] == "approve"
+    assert decision["require_confirmation"] is True
+    assert "prod 变更确认门" in decision["description"]
+
+
+def test_b_prime_prod_ungraded_uat_maps_to_prod(perm_env):
+    """老 env=uat 映射 prod 档 → 未分级命令同样进确认门（更严不更松）。"""
+    perm_env("uat")
+    decision = check_ops_command_permission("mv a.txt b.txt")
+    assert decision is not None and decision["action"] == "approve"
+    assert decision["require_confirmation"] is True

@@ -143,6 +143,31 @@ def test_prod_change_command_yolo_does_not_bypass_confirmation(guard_env, monkey
     assert "prod 变更确认门" in result.get("description", "")
 
 
+def test_b_prime_prod_ungraded_yolo_requires_confirmation(guard_env, monkeypatch):
+    """B'（批次十七）：prod 未分级命令（mv a.txt b.txt）即使 yolo 也强制人工
+    确认——与 #32 变更门同通道（approval.py `_ops_confirmation_required`），
+    yolo / smart-approval / 永久 allowlist 都不能绕过。"""
+    guard_env("prod")
+    approval_module._YOLO_MODE_FROZEN = True
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    result = approval_module.check_all_command_guards("mv a.txt b.txt", "local")
+    assert result["approved"] is False
+    # ask 路径的拒绝结果不带 ops_matrix 键——确认门证据在 description（含 B' 文案）
+    assert "prod 变更确认门" in result.get("description", "")
+    assert "未分级命令在 prod 需人工确认" in result.get("description", "")
+
+
+def test_b_prime_prod_ungraded_smart_approval_still_confirms(guard_env, monkeypatch):
+    """B'：prod 未分级命令 smart-approval 判 approve 也不能自动放行。"""
+    guard_env("prod")
+    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
+    monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
+    result = approval_module.check_all_command_guards("cp x y", "local")
+    assert result["approved"] is False
+    assert "未分级命令在 prod 需人工确认" in result.get("description", "")
+
+
 def test_prod_change_command_deny_still_hard_blocks(guard_env):
     """OPS-DELTA #32：L3/L4 deny 仍硬拒，优先级不变（deny > 确认门）。"""
     guard_env("prod")
@@ -217,12 +242,23 @@ def test_target_test_l3_executes_in_test_session(guard_env, monkeypatch):
     assert result["approved"] is True
 
 
-def test_target_prod_l1_executes_in_test_session(guard_env, monkeypatch):
-    """test 会话 + ssh root@203.0.113.10 'df -h' → 目标 prod L1 直接执行"""
+def test_target_prod_ungraded_ssh_requires_confirmation_in_test_session(guard_env, monkeypatch):
+    """B'（批次十七）：test 会话 + ssh root@203.0.113.10 'df -h' → ssh 包装命令
+    整体未分级（grade=None，L1 模式匹配不到带包装的串）→ 目标 prod 档默认
+    approve + 强制确认门，无人在场 fail-closed。
+
+    旧行为（B' 前的洞）：未分级命令在 prod 档直接放行——正是 2026-08-13
+    k3s-prod 改名事故（mv 单文件）同款漏洞面，本测试随 B' 改写为确认门语义。
+    """
     guard_env("test")
     result = approval_module.check_all_command_guards(
         "ssh root@203.0.113.10 'df -h'", "local")
-    assert result["approved"] is True
+    assert result["approved"] is False
+    assert result["ops_matrix"]["action"] == "approve"
+    assert result["ops_matrix"]["require_confirmation"] is True
+    assert result["ops_matrix"]["env"] == "prod"
+    assert "未分级命令在 prod 需人工确认" in result["ops_matrix"]["description"]
+    assert "no interactive user" in result["message"]
 
 
 def test_no_target_keeps_session_env_behavior(guard_env, monkeypatch):
