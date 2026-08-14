@@ -382,7 +382,10 @@ def _parse_docker_ps(output: str) -> List[Dict[str, Any]]:
                 k, _, v = part.partition("=")
                 labels_map[k.strip()] = v.strip()
         containers.append({
-            "name": str(row.get("Names") or "").strip(),
+            # docker --format '{{json .}}' 的 Names 是 JSON 数组（["/app"]）——
+            # 取第一个元素并去前导 "/"（2026-08-14 验收实锤：str() 会把数组
+            # 转成 "['/app']" 导致实体名匹配永远失败，topo_status_sync 全落 ask）。
+            "name": _docker_first_name(row.get("Names")),
             "image": str(row.get("Image") or "").strip(),
             "ports": str(row.get("Ports") or "").strip(),
             "state": str(row.get("State") or "").strip(),
@@ -390,6 +393,22 @@ def _parse_docker_ps(output: str) -> List[Dict[str, Any]]:
             "compose_service": labels_map.get("com.docker.compose.service", ""),
         })
     return [c for c in containers if c["name"]]
+
+
+def _docker_first_name(names) -> str:
+    """docker JSON 的 Names 字段 → 容器名（去前导 '/'）。
+
+    docker --format '{{json .}}' 输出 Names 是 JSON 数组（["/app"]），
+    但也可能因版本/格式差异是字符串（"/app"）或 None——统一归一。
+    """
+    if isinstance(names, list):
+        raw = names[0] if names else ""
+    elif isinstance(names, str):
+        raw = names.strip().lstrip("[").rstrip("]").strip()
+        raw = raw.strip("'\"").strip()
+    else:
+        raw = ""
+    return str(raw).strip().lstrip("/")
 
 
 def _parse_published_ports(ports_str: str) -> List[int]:
