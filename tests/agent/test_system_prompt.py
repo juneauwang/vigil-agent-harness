@@ -284,6 +284,9 @@ class TestOpsCredentialFailClosedGuidance:
         assert "swap tools/postures to retry the same target" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "MaxAuthTries" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "ask the user" in OPS_CREDENTIAL_SSH_GUIDANCE
+        # 任务 2：凭据缺失 → 询问用户，禁止自探测。
+        assert "When credentials are missing or undeclared" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "self-probe ~/.ssh/ for keys" in OPS_CREDENTIAL_SSH_GUIDANCE
 
     def test_guidance_lands_when_ops_tools_loaded(self):
         """ops 工具（sudo_exec/topo_discover）加载时该块进 stable tier。"""

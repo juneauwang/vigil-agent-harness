@@ -35,7 +35,7 @@ def test_trips_after_three_failures_and_stops_calling_underlying(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.20", "root")
+    runner = _build_ssh_runner("203.0.113.20", "root", key_path="/keys/test.pem")
 
     with pytest.raises(DiscoveryError, match="SSH 连接"):   # 第 1 次：普通认证失败
         runner("uptime")
@@ -56,7 +56,7 @@ def test_breaker_message_is_actionable(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.20", "root")
+    runner = _build_ssh_runner("203.0.113.20", "root", key_path="/keys/test.pem")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
         runner("uptime")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
@@ -78,8 +78,8 @@ def test_hosts_independent_counters(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner_a = _build_ssh_runner("host-a", "root")
-    runner_b = _build_ssh_runner("host-b", "root")
+    runner_a = _build_ssh_runner("host-a", "root", key_path="/keys/test.pem")
+    runner_b = _build_ssh_runner("host-b", "root", key_path="/keys/test.pem")
 
     for _ in range(3):
         with pytest.raises(DiscoveryError):
@@ -103,7 +103,7 @@ def test_success_resets_counter(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.21", "root")
+    runner = _build_ssh_runner("203.0.113.21", "root", key_path="/keys/test.pem")
 
     with pytest.raises(DiscoveryError):  # 失败 1
         runner("uptime")
@@ -129,7 +129,7 @@ def test_non_auth_255_not_counted(monkeypatch):
         return SimpleNamespace(returncode=255, stdout="", stderr="Connection refused")
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.22", "root")
+    runner = _build_ssh_runner("203.0.113.22", "root", key_path="/keys/test.pem")
 
     for _ in range(5):
         with pytest.raises(DiscoveryError, match="SSH 连接"):
@@ -163,7 +163,7 @@ def test_too_many_auth_failures_signal_counts_even_without_255(monkeypatch):
         lambda argv, **kwargs: SimpleNamespace(
             returncode=1, stdout="", stderr="Too many authentication failures for root"),
     )
-    runner = _build_ssh_runner("203.0.113.30", "root")
+    runner = _build_ssh_runner("203.0.113.30", "root", key_path="/keys/test.pem")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
         runner("uptime")
     assert topodisc._ssh_auth_failures("203.0.113.30", "root") == 1
@@ -180,7 +180,7 @@ def test_permission_denied_twice_in_one_attempt_counts(monkeypatch):
             stderr=("Permission denied (publickey).\n"
                     "Permission denied (publickey,password).")),
     )
-    runner = _build_ssh_runner("203.0.113.31", "root")
+    runner = _build_ssh_runner("203.0.113.31", "root", key_path="/keys/test.pem")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
         runner("uptime")
     assert topodisc._ssh_auth_failures("203.0.113.31", "root") == 1

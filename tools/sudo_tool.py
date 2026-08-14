@@ -304,7 +304,9 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
         return tool_error(
             f"sudo_exec 缺少 sudo 凭据：拓扑表中 host {host or '(未指定)'} 无 credential 引用。"
             "请停止自动重试：1) 手动执行该命令 2) 或在拓扑表补充 credential 声明"
-            "（vault 类型，见 vssh / topo credential）"
+            "（vault 类型，见 vssh / topo credential）3) 或询问用户提供正确凭据；"
+            "禁止翻 ~/.ssh/ 试密钥/猜 vault 字段/换用户名试登录（§Q/§AD 教训，"
+            "会触发限流）"
         )
     user = str(cred.get("user") or "root")
     port = int(cred.get("port") or 22)

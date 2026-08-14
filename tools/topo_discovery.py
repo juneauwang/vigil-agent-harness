@@ -195,9 +195,24 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
 
     密码走 SSH_ASKPASS（``askpass_file`` 为 0700 脚本，从保险箱文件读取），
     任何密码明文都不进 argv / 环境变量。
+
+    fail-closed（批次二十一 §Q 收口）：SSH 认证凭据（key_path / askpass_file /
+    key_passphrase_file 任一）未提供时直接报错——不再回退到"尝试默认 key / 
+    ssh-agent"自探测（§Q 实锤：agent 凭据缺失时翻 ~/.ssh/ 试密钥/猜 vault 字段，
+    触发 sshd MaxAuthTries 限流）。CLI 交互路径（topo-discover 交互收集凭据 /
+    vssh）在调用方提供凭据，不受影响；sudo_password_file 是 sudo 密码不是 SSH
+    认证凭据，不构成放行条件。
     """
     if not host or not user:
         raise DiscoveryError("SSH 需要 host 与 user（--host / --user）")
+    if not (key_path or askpass_file is not None or key_passphrase_file is not None):
+        raise DiscoveryError(
+            f"目标主机 {user}@{host} 未配置 SSH 凭据（拓扑表 credential 缺失或无 "
+            "key/password）——禁止自行翻 ~/.ssh/ 找 key / 试多个用户名 / 猜 vault "
+            "字段（§Q/§AD 教训，会触发 sshd MaxAuthTries 限流把主机锁 15 分钟）。"
+            "请停止自动尝试：1) 手动 ssh 验证凭据 2) 或通过 topo_update 补充拓扑表 "
+            "credential 声明 3) 或询问用户提供正确凭据"
+        )
 
     def run(cmd: str) -> ProbeResult:
         # 熔断检查在 runner 调用前（agent 工具/自动探测路径）——该 host:user 已

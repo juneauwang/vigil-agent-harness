@@ -441,7 +441,7 @@ def test_build_ssh_runner_includes_identities_only(monkeypatch):
         raise AssertionError(argv)
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = topodisc._build_ssh_runner("203.0.113.20", "root")
+    runner = topodisc._build_ssh_runner("203.0.113.20", "root", key_path="/keys/test.pem")
     result = runner("uptime")
 
     assert result.ok is True
@@ -512,7 +512,7 @@ def test_build_ssh_runner_sudo_password_uses_stdin_not_command_string(tmp_path, 
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
     runner = topodisc._build_ssh_runner(
-        "203.0.113.20", "root", sudo_password_file=askpass
+        "203.0.113.20", "root", key_path="/keys/test.pem", sudo_password_file=askpass
     )
     result = runner("docker ps")
 
@@ -582,7 +582,7 @@ def test_discover_remote_host_still_uses_ssh(monkeypatch):
         raise AssertionError(f"unexpected local argv: {argv}")
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    d = discover_host("10.0.0.5", "prod")
+    d = discover_host("10.0.0.5", "prod", {"user": "root", "key_path": "/keys/x.pem"})
     assert calls and calls[0][0] == "ssh"
     assert f"root@10.0.0.5" in calls[0]
     assert d["host"]["endpoint"] == "10.0.0.5"
