@@ -17,10 +17,15 @@ from typing import Callable, Dict, List, Optional, Tuple
 from tools.topo_discovery import _make_askpass_script
 
 
-def _resolve_topology_credential(host: str) -> Optional[Dict]:
+def _resolve_topology_credential(host: str, allow_fallback: bool = True) -> Optional[Dict]:
     """读取拓扑表 host 行的 credential 引用（ssh_key/vault/askpass）。
 
     无拓扑数据 / host 无凭据引用 / 读取异常 → None（回退 ssh-agent/交互）。
+
+    ``allow_fallback``（批次二十一 fail-closed 对齐）：CLI 交互路径（用户手动
+    跑 ``vigil vssh``，默认 True）允许 None → 回退 ssh-agent/交互（用户在场可
+    交互）；agent 工具路径（``sudo_exec`` 等传 False）把 None 视为硬停——调用方
+    必须 fail-closed（报错问用户），禁止自行翻 ~/.ssh/ 自探测凭据。
     """
     try:
         from hermes_constants import get_hermes_home

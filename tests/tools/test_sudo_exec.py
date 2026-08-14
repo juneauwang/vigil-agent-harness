@@ -169,7 +169,7 @@ class TestHandlerPermissionMatrix:
         _vault_cred(tmp_path, monkeypatch)
         monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
         monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
-                            lambda host: {"type": "vault", "ref": "srv-pass"})
+                            lambda host, **kw: {"type": "vault", "ref": "srv-pass"})
 
         def fake_run(argv, **kwargs):
             return SimpleNamespace(returncode=0, stdout="Active: active", stderr="")
@@ -184,7 +184,7 @@ class TestHandlerPermissionMatrix:
     def test_missing_credential_fail_closed(self, monkeypatch):
         """凭据缺失 → 停下来问用户（fail-closed，不猜测不重试）。"""
         monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
-        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential", lambda host: None)
+        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential", lambda host, **kw: None)
         out = _sudo_exec_handler({"host": "prod1", "command": "ss -tlnp", "env": "prod"})
         assert "缺少 sudo 凭据" in out
         assert "停止自动重试" in out
@@ -226,7 +226,7 @@ class TestHandlerSecurityBoundary:
         _vault_cred(tmp_path, monkeypatch)
         monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
         monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
-                            lambda host: {"type": "vault", "ref": "srv-pass"})
+                            lambda host, **kw: {"type": "vault", "ref": "srv-pass"})
 
         def fake_run(argv, **kwargs):
             return SimpleNamespace(returncode=0, stdout="sshd", stderr="")
@@ -245,7 +245,7 @@ def test_local_sudo_auth_failure_returns_ask_user_guidance(tmp_path, monkeypatch
     """本地 sudo 密码错误 → 返回问用户引导，不继续猜/重试。"""
     cred = _vault_cred(tmp_path, monkeypatch)
     monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
-    monkeypatch.setattr(sudo_tool, "_resolve_topology_credential", lambda host: cred)
+    monkeypatch.setattr(sudo_tool, "_resolve_topology_credential", lambda host, **kw: cred)
     monkeypatch.setattr(
         sudo_tool.subprocess, "run",
         lambda argv, **kw: SimpleNamespace(
@@ -268,7 +268,7 @@ def test_remote_sudo_breaker_error_flows_ask_user_guidance(monkeypatch):
     monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
     monkeypatch.setattr(
         sudo_tool, "_resolve_topology_credential",
-        lambda host: {"type": "vault", "ref": "srv-pass", "user": "ops", "port": 22},
+        lambda host, **kw: {"type": "vault", "ref": "srv-pass", "user": "ops", "port": 22},
     )
     topodisc._SSH_AUTH_FAILURES.clear()
 

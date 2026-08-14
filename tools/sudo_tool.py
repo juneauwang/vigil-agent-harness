@@ -299,7 +299,7 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
             }, ensure_ascii=False)
 
     # 凭据解析：拓扑表 host 行 credential 引用（ssh_key/vault/askpass 三通道）。
-    cred = _resolve_topology_credential(host)
+    cred = _resolve_topology_credential(host, allow_fallback=False)
     if not cred:
         return tool_error(
             f"sudo_exec 缺少 sudo 凭据：拓扑表中 host {host or '(未指定)'} 无 credential 引用。"

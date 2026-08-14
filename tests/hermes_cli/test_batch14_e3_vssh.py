@@ -242,3 +242,41 @@ def test_vssh_subcommand_registered():
     assert "凭据引用" in proc.stdout and "无凭据回退 ssh-agent/交互" in proc.stdout
     for flag in ("-p", "--port", "-i", "--key", "-u", "--user", "--no-credential"):
         assert flag in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# 批次二十一 — vssh 凭据解析 fail-closed 对齐（任务 4：allow_fallback 双路径）
+# ---------------------------------------------------------------------------
+
+def test_resolve_topology_credential_allow_fallback_false_no_cred(topo_home):
+    """allow_fallback=False 且无凭据 → None（调用方须 fail-closed，不 fallback）。"""
+    assert _resolve_topology_credential("plain", allow_fallback=False) is None
+    assert _resolve_topology_credential("nope", allow_fallback=False) is None
+    # 默认（CLI 交互路径）语义不变。
+    assert _resolve_topology_credential("plain") is None
+
+
+def test_resolve_topology_credential_allow_fallback_false_with_cred(topo_home):
+    """allow_fallback=False 且拓扑表有凭据引用 → 正常返回（凭据优先于 fallback）。"""
+    assert _resolve_topology_credential("db1", allow_fallback=False) == {
+        "type": "vault", "ref": "db-pass"}
+
+
+def test_sudo_tool_resolves_with_allow_fallback_false(monkeypatch):
+    """agent 工具路径（sudo_exec）解析凭据时传 allow_fallback=False。"""
+    import tools.sudo_tool as sudo_tool
+
+    seen = {}
+    monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
+
+    def fake_resolve(host, **kw):
+        seen["kwargs"] = kw
+        return None
+
+    monkeypatch.setattr(sudo_tool, "_resolve_topology_credential", fake_resolve)
+    # 实际调用：凭据缺失 → fail-closed 报错，且 kwargs 带 allow_fallback=False。
+    from tools.sudo_tool import _sudo_exec_handler as handler
+    result = handler({"host": "prod1", "command": "ss -tlnp", "env": "prod"})
+    assert seen["kwargs"] == {"allow_fallback": False}
+    assert "缺少 sudo 凭据" in result
+    assert "禁止翻 ~/.ssh/" in result
