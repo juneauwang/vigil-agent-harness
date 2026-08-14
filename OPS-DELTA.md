@@ -1615,3 +1615,86 @@
 - **核销方式**：/topo 走 process_command 路由 → 本地直调 discover_host/write_discovery
   （与 agent 工具同引擎）；合并/过滤统计在 write_discovery 返回值与 probes 文案
   常驻可测；测试钉住 merge/force 语义与 pending_review 边界。
+
+### 41. 批次十九 行为层安全加固——SSH 多 key IdentitiesOnly + vault 值打码 + 熔断扩展 + sudoers.d 硬拒（§AF/§AG/§AE） — ✅ 已实施（2026-08-14，批次十九；commit hash 佐证：IdentitiesOnly 2ce48a8 / vault 打码 76c9a85 / 熔断扩展 6e947db / sudoers.d 5c86b75 / -K clarify 1fafe60 / write_file 46299b3）
+- **背景（dogfood 实测，8/14 下午 NetBox 迁移实验）**：批次十六的熔断只挂
+  topo_discovery runner，agent 自由拼的 ssh/scp/ansible 路径全在外 → 当天锁
+  15 分钟 ×5 次；vault 密码明文复述（改密码 30 秒内再泄露）；agent 想写
+  /etc/sudoers.d/ 传密码；ansible -K 密码提示挂死 terminal；inventory 同步
+  报告把凭据写进 644 MD。本批 = 行为层强制约束（不再加 redact 名单——名单
+  追不上 LLM 自由发挥）。
+- **修复**：
+  1. IdentitiesOnly 全线（2ce48a8）：vssh `_build_ssh_argv` 与 topo_discovery
+     `_build_ssh_runner` 无条件加 `-o IdentitiesOnly=yes`（多 key 环境 `-i key`
+     不等于只用这个 key，会遍历 agent 所有 key 刷爆 MaxAuthTries）；sudo_tool
+     `_scp_argv_from_ssh` 改逐段翻译（`-p`→`-P`、其余 `-o`/`-i` 原样透传，
+     scp 支持 `-o`），不再按下标取位（防 argv 加参数即碎）。
+  2. vault 值打码（76c9a85）：redact 补三个盲区——①引号 YAML 值
+     （`monitor_auth_token: "MsVY…"`，`_YAML_ASSIGN_RE` lookahead 与 JSON 引号
+     key 要求之间的空档，新增 `_YAML_QUOTED_ASSIGN_RE` 同款 key 门控）；②任意
+     键名高熵值（`{"cipher": "bW9u…"}`，严格模式值形态 pass 不再挂
+     `_CFG_SECRET_WORD_RE` 门控——文本无秘密词时也运行，只靠
+     `_looks_like_inline_secret` 过滤）；③`_JSON_KEY_NAMES` 补 `passwd`（精确
+     短值）。值打码、key 名保留；UUID/版本号/hex/散文引号值不误伤。
+  3. 熔断扩展（6e947db）：信号不只 exit 255——`Too many authentication
+     failures`（sshd 限流信号）与单次 stderr 内 `Permission denied` ×2（多 key
+     遍历典型输出）都计数；runner 计数逻辑重构（认证失败判定移出 returncode
+     255 分支）；sudo_tool 远端 `_scp`/`_ssh_run` 接入共享计数（guard 预检 +
+     note 记录/清零，模块级 dict 与 topo 探测同会话共用）；熔断错误分层归因：
+     连接层错误（Too many/Permission denied）→ 停止 + 检查 IdentitiesOnly +
+     重试次数；执行层错误（转义/权限）→ 才换传递方式，不换姿势掩盖真凶。
+  4. sudoers.d 硬拒（5c86b75）：HARDLINE_PATTERNS 追加两类——重定向写入
+     （`> / >>` 目标为 /etc/sudoers(.d)/，含 heredoc 形态）与 tee/install/cp/mv
+     写入（`_CMDPOS` 锚定命令位、路径须为末参，防 `cp /etc/sudoers.d/x
+     /tmp/backup` 备份误杀）；描述引导"禁止通过修改 sudoers 实现免密/传密码
+     ——提权走 sudo_exec 工具（ASKPASS 注入）"；yolo 也绕不过。
+  5. -K 转 clarify（1fafe60）：terminal_tool 前景执行输出后处理——输出以交互
+     密码提示收尾（BECOME password / Password for / Enter passphrase / sudo
+     password / password:，先剥 `_wait_for_process` 超时后缀）→ 不透传挂起，
+     返回明确错误引导 clarify / `ANSIBLE_BECOME_PASS` 环境变量（值从
+     vault 取，不进命令行）/ vssh/sudo_exec；长输出中间提密码、裸词 password
+     不误伤。
+  6. write_file 过 redact + 0600（46299b3）：write_file_tool 写入前内容过
+     redact_sensitive_text（code_file=True + credential_values=True，与工具
+     输出展示同一条通道）；疑似凭据 → 写打码内容 + chmod 600 + 警告；普通
+     内容原样、权限不变。
+  7. system prompt 行为约束（2ce48a8）：stable tier 新增静态常量
+     `OPS_CREDENTIAL_SSH_GUIDANCE`（ops/terminal 工具就位即注入，字节稳定不
+     破 prompt 缓存）——SSH 系命令必须带 IdentitiesOnly、优先 vssh/sudo_exec、
+     凭据值只许 env/askpass/stdin 注入禁止复述/落盘、熔断后停止重试 + 用户
+     纠正即停、sudoers.d 禁写、-bK 优先 ANSIBLE_BECOME_PASS。
+- **验收**：新增/扩展测试全绿——test_batch14_e3_vssh.py（argv 各形态 +
+  IdentitiesOnly 专项）、test_topo_discovery.py（runner 探测路径）、
+  test_redact_vault_forms.py（三形态 + 误伤反向）、test_ssh_auth_breaker.py
+  （信号扩展 2 + 归因 1 + sudo_tool 共享计数 1）、test_hardline_blocklist.py
+  （sudoers.d 写入 14 + 读取 11 + yolo 场景）、test_terminal_password_prompt.py
+  （19 例）、test_file_tools.py（4 例）；回归 test_sudo_exec.py / test_topo_tools.py /
+  test_system_prompt.py / 全部 redact 套件不破；行为探针 6 条符合预期。
+- **硬约束**：diff 只含白名单文件（vssh.py、sudo_tool.py、topo_discovery.py、
+  approval.py、redact.py、file_tools.py、terminal_tool.py【任务 5 正文点名挂载
+  点】、prompt_builder.py/system_prompt.py 仅常量文本、对应新测试、OPS-DELTA）；
+  无新 env var；凭据值不进 argv/命令串/日志；不碰 conversation_loop/prompt
+  缓存/压缩；批次十六 sudo_exec/redact 三盲区未破坏（测试回归佐证）。
+- **任务 2 影响评估（值打码对正常 vault 读取）**：三形态（精确键名、引号 YAML、
+  任意键名高熵值）值打码、key 名保留——agent 仍能看到"哪些凭据存在"，只是
+  值不可复述，可读性损失小；误伤面被 `_looks_like_inline_secret` 收窄
+  （≥16 字符、混合字符类、熵 ≥3.2、无空格、无 `/ \ : .`）——UUID/hex/版本号/
+  短占位值/散文引号值全部豁免；短精确键值（`"passwd": "shortpw"`）按 key 名
+  打码，与既有 `"password"` 语义一致。
+- **任务 3 共享状态说明**：计数器保持 topo_discovery 模块级 dict（进程内存，
+  host:user 独立，线程锁保护）；sudo_tool 通过函数 import 接入同一 dict——同一
+  进程内 vssh（exec 不计数）/sudo_exec/topo 探测路径共用；成功一次清零；
+  vssh 是 os.execvpe 无返回值，不计数不受影响（既有测试钉住）。
+- **已知风险**：①write_file redact 误伤面——高熵非凭据值（如 32 字符随机
+  标识符、`{"nonce": "AbCdEfGhIjKlMnOpQrStUvWxYz012345"}`）可能被打码；短
+  占位值（`apiKey: "test"`）按 key 名打码（与展示通道一致）——写真实配置
+  时若含占位凭据会被打码，需用户手动修正；②熔断按 host:user 计数，agent
+  对同一 host 换 user 试登录会另起计数（凭据缺失 fail-closed 已在 sudo_exec
+  挡）；③`_is_ssh_auth_failure` 对 exit 255 + 单次 Permission denied 的远端
+  命令退出码与 ssh 认证失败无法 100% 区分（批次十六既有语义，非本批引入）；
+  ④terminal -K 识别是输出后置（挂起到超时才报错）——前置识别需改
+  environments/base.py（白名单外），本批不落地。
+- **核销方式**：测试常驻——vssh argv 含 IdentitiesOnly、redact 三形态值打码、
+  熔断 3 次即断 + 错误含 IdentitiesOnly、sudoers.d 写入 hardline 拦截（yolo
+  场景）、terminal 密码提示转 clarify、write_file 敏感内容 600+打码；行为
+  探针命令在批次十九 prompt 验收段可复跑。
