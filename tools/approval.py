@@ -34,6 +34,27 @@ logger = logging.getLogger(__name__)
 # instantly bypass all approval checks — a prompt-injection escalation path.
 _YOLO_MODE_FROZEN: bool = is_truthy_value(os.getenv("HERMES_YOLO_MODE", ""))
 
+
+def _record_approval_trajectory(status, *, command, description,
+                                session_key=None, **extra) -> None:
+    """Best-effort approval trajectory event（批次二十三 挂载点）。
+
+    status ∈ requested / approved / denied / timeout。action 用 command 或
+    description，record_event 内部强制 redact（凭据值不落轨迹）。任何失败只
+    记日志，绝不干扰审批路径。
+    """
+    try:
+        from agent.trajectory import record_event
+        record_event(
+            type="approval",
+            approval=status,
+            action=command or description,
+            session_id=session_key or get_current_session_key(),
+            meta=extra or None,
+        )
+    except Exception:
+        logger.debug("approval trajectory event failed", exc_info=True)
+
 # Per-thread/per-task gateway session identity.
 # Gateway runs agent turns concurrently in executor threads, so reading a
 # process-global env var for session identity is racy. Keep env fallback for
@@ -3298,6 +3319,10 @@ def _run_approval_gate(
                 "allow_permanent": allow_permanent,
                 "allow_session": allow_session,
             }
+            _record_approval_trajectory(
+                "requested", command=display_target, description=description,
+                session_key=session_key,
+            )
             decision = _await_gateway_decision(
                 session_key, notify_cb, approval_data, surface="gateway"
             )
@@ -3322,6 +3347,12 @@ def _run_approval_gate(
                 reason_addendum = ""
                 if resolved and deny_reason:
                     reason_addendum = f' Reason given by the user: "{deny_reason}".'
+                _record_approval_trajectory(
+                    "timeout" if not resolved else "denied",
+                    command=display_target, description=description,
+                    session_key=session_key,
+                    reason=deny_reason,
+                )
                 return {
                     "approved": False,
                     "message": (
@@ -3341,10 +3372,18 @@ def _run_approval_gate(
                 approve_session(session_key, pattern_key)
                 approve_permanent(pattern_key)
                 save_permanent_allowlist(_permanent_approved)
+            _record_approval_trajectory(
+                "approved", command=display_target, description=description,
+                session_key=session_key, scope=choice,
+            )
             return {"approved": True, "message": None}
 
         # No notify callback (e.g. API server without an attached chat):
         # queue for /approve /deny review, agent sees approval_required.
+        _record_approval_trajectory(
+            "requested", command=display_target, description=description,
+            session_key=session_key, status="pending_approval",
+        )
         submit_pending(session_key, {
             "command": display_target,
             "pattern_key": pattern_key,
@@ -3371,6 +3410,10 @@ def _run_approval_gate(
         session_key=session_key,
         surface="cli",
     )
+    _record_approval_trajectory(
+        "requested", command=display_target, description=description,
+        session_key=session_key,
+    )
     choice = prompt_dangerous_approval(
         display_target,
         description,
@@ -3390,6 +3433,10 @@ def _run_approval_gate(
     )
 
     if choice == "timeout":
+        _record_approval_trajectory(
+            "timeout", command=display_target, description=description,
+            session_key=session_key,
+        )
         return {
             "approved": False,
             "message": (
@@ -3405,6 +3452,10 @@ def _run_approval_gate(
         }
 
     if choice == "deny":
+        _record_approval_trajectory(
+            "denied", command=display_target, description=description,
+            session_key=session_key,
+        )
         return {
             "approved": False,
             "message": (
@@ -3425,6 +3476,10 @@ def _run_approval_gate(
         approve_permanent(pattern_key)
         save_permanent_allowlist(_permanent_approved)
 
+    _record_approval_trajectory(
+        "approved", command=display_target, description=description,
+        session_key=session_key, scope=choice,
+    )
     return {"approved": True, "message": None}
 
 
@@ -4192,6 +4247,10 @@ def check_all_command_guards(command: str, env_type: str,
             }
             if smart_denied_for_owner:
                 approval_data["smart_denied"] = True
+            _record_approval_trajectory(
+                "requested", command=command, description=combined_desc,
+                session_key=session_key,
+            )
             decision = _await_gateway_decision(
                 session_key, notify_cb, approval_data, surface="gateway"
             )
@@ -4227,6 +4286,10 @@ def check_all_command_guards(command: str, env_type: str,
                 if outcome == "denied" and deny_reason:
                     reason_addendum = f' Reason given by the user: "{deny_reason}".'
                 breaker_addendum = _denial_breaker_addendum(session_key)
+                _record_approval_trajectory(
+                    outcome, command=command, description=combined_desc,
+                    session_key=session_key, reason=deny_reason,
+                )
                 return {
                     "approved": False,
                     "message": (
@@ -4260,6 +4323,10 @@ def check_all_command_guards(command: str, env_type: str,
             # A human approval (including an ESCALATE-then-approve or a
             # smart-DENY owner override) resets the consecutive-denial tally.
             _reset_denials(session_key)
+            _record_approval_trajectory(
+                "approved", command=command, description=combined_desc,
+                session_key=session_key, scope=choice,
+            )
             # OPS-DELTA #25：用户确认即授权登记（sudo -S 分级放行的 user 来源）。
             try:
                 from tools.credential_vault import mark_user_authorized
@@ -4284,6 +4351,10 @@ def check_all_command_guards(command: str, env_type: str,
         }
         if smart_denied_for_owner:
             pending_data.update(smart_denied=True, allow_permanent=False)
+        _record_approval_trajectory(
+            "requested", command=command, description=combined_desc,
+            session_key=session_key, status="pending_approval",
+        )
         submit_pending(session_key, pending_data)
         result = {
             "approved": False,
@@ -4311,6 +4382,10 @@ def check_all_command_guards(command: str, env_type: str,
         session_key=session_key,
         surface="cli",
     )
+    _record_approval_trajectory(
+        "requested", command=command, description=combined_desc,
+        session_key=session_key,
+    )
     choice = prompt_dangerous_approval(
         command,
         combined_desc,
@@ -4332,6 +4407,10 @@ def check_all_command_guards(command: str, env_type: str,
 
     if choice == "timeout":
         breaker_addendum = _denial_breaker_addendum(session_key)
+        _record_approval_trajectory(
+            "timeout", command=command, description=combined_desc,
+            session_key=session_key,
+        )
         return {
             "approved": False,
             "message": (
@@ -4351,6 +4430,10 @@ def check_all_command_guards(command: str, env_type: str,
 
     if choice == "deny":
         breaker_addendum = _denial_breaker_addendum(session_key)
+        _record_approval_trajectory(
+            "denied", command=command, description=combined_desc,
+            session_key=session_key,
+        )
         return {
             "approved": False,
             "message": (
@@ -4382,6 +4465,10 @@ def check_all_command_guards(command: str, env_type: str,
 
     # A human approval resets the consecutive-denial tally.
     _reset_denials(session_key)
+    _record_approval_trajectory(
+        "approved", command=command, description=combined_desc,
+        session_key=session_key, scope=choice,
+    )
     # OPS-DELTA #25：用户确认即授权登记（sudo -S 分级放行的 user 来源）。
     try:
         from tools.credential_vault import mark_user_authorized
