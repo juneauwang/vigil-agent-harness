@@ -1559,3 +1559,59 @@
 - **核销方式**：approval.py `_ops_confirmation_required` 通道复检（require_confirmation
   的 approve 决策 yolo/allowlist 不绕过，批次十七 guard 测试钉住）；变更清单
   test_change_command_coverage.py 常驻，新增变更类命令需同步加样本。
+
+### 40. 批次十八 /topo 斜杠命令 + 合并式补齐 + systemd 无端口过滤（A+B 方案落地） — ✅ 已实施（2026-08-14，批次十八；commit hash 佐证：/topo 命令 2963602 / 合并补齐 d7c22aa / systemd 过滤 68f1d8a / 落盘联动 d2a4e27）
+- **背景（dogfood 实测）**：
+  1. 手打 topo discover 走 LLM 路由（agent 初始化 + API 调用 3-8s/次 + 可能被打断
+     "Interrupted during API call" + clarify 12s+）——用户拍板要**不依赖 LLM、本地
+     直调发现引擎**的会话内入口（方案 A）。
+  2. 现状 write_discovery 对已存在 host 非 force 直接拒绝（--force 整体替换会冲掉
+     手动维护实体，dogfood §M 教训）——用户拍板重扫已有 host 时**新服务自动追加、
+     旧手动实体保留**（方案 B，不是覆盖）。
+  3. 8/14 §H：扫真实 prod 主机 117 条 services，systemd 70+ 全是系统噪音
+     （aegis/chronyd/cloud-*/plymouth/networkmanager），业务只有 app/db 2 个；C1
+     黑名单只挡 systemd 内部服务，其余靠 LLM 在 topo_update 手动过滤——**LLM 判断
+     不是机制保证**。用户拍板：systemd-service 且无监听端口 → 不自动落盘，保留
+     发现结果里标 needs_review（不误杀脚本服务，用户确认后才入表）。
+- **修复（批次十八，A+B 方案落地）**：
+  1. /topo 斜杠命令（2963602）：commands.py 注册（Session 组、cli_only，照 /env
+     先例）+ cli.py 路由 + `_handle_topo_command`——`/topo [host...] [--env E]
+     [--user U] [--key K] [--cluster C] [--force] [--yes]`，无 host 交互收集
+     （host/env/凭据优先从拓扑表 credential 自动读，缺省再问 user/key）；凭据复用
+     vssh 同套 askpass/vault 机制，密码明文不进 argv/命令串/日志；展示服务列表
+     （needs_review=true）+ 三步 review 引导。agent 工具 topo_discover 与 CLI 子
+     命令 vigil topo-discover 均保留（新增入口不替代）。
+  2. 合并式补齐（d7c22aa）：write_discovery 新增 merge=True（默认）：已有 host 非
+     force 时读 hosts/<host>.yaml 现有索引，发现服务同名跳过（保留现有行含手动
+     endpoint/owner），新名字追加进索引 + entities/；host 行保留原内容只刷新
+     last_verified；merge=False 显式关闭时维持旧拒绝语义；--force 整体替换不变；
+     结果新增 appended/kept/merged 统计。
+  3. systemd 无端口过滤（68f1d8a）：新增 _parse_ss_proc_ports（ss -tlnp 进程名→
+     端口，含 loopback，进程名按字母数字归一容忍 node-exporter/node_exporter
+     差异）；discover_host 重构 ss 探测提前到 systemd 之前——systemd 实体无监听
+     端口 → 进 pending_review（不入 services/details/落盘），有端口
+     （prometheus/node-exporter 等）正常入表且端口不再补 unidentified；docker/k8s
+     与同名跳过逻辑不变；probes['systemctl'] 补"另 N 个无端口系统服务未入表（可
+     确认）"。
+  4. 落盘联动（d2a4e27）：/topo 落盘路径调 write_discovery(merge=not force)；落盘
+     前打印将写入清单（host + 新增实体名）y/N 确认（默认 N，--yes 跳过；
+     --dry-run 只展示）；落盘后打印"追加 N / 保留 M / 系统服务 P 未入表"。
+- **验收**：tests/hermes_cli/test_topo_slash_command.py（8）+ tests/tools/
+  test_topo_discovery.py（43，其中批次十八新增 8：合并 3 + systemd 过滤 3 + 更新
+  2）全绿；回归 test_commands.py / test_topo_tools.py 不破（test_commands 与
+  test_env_command 各 1-3 例既有失败为 HERMES_HOME/VIGIL_HOME 环境 fixture 问题，
+  基线同样失败，与本批无关）；行为探针四条符合预期（/topo 参数解析+引擎被调+
+  引导；write_discovery 合并语义；systemd 无端口过滤；落盘联动 merge 传递与计数）。
+- **硬约束**：ops_permissions.py 未动；无新 env var（SUDO_ASKPASS 等均为既有
+  机制）；不碰 conversation_loop / prompt 缓存 / 压缩；diff 只含白名单文件
+  （hermes_cli/commands.py、cli.py、tools/topo_discovery.py、两个测试文件）。
+- **合并补齐边界**：追加时按 name 同名跳过（现有行含手动 endpoint/owner 保留，
+  不覆盖）；新 host 走正常追加；force=True 语义不变（整体替换供主动重建）。
+- **已知风险**：/topo 交互式收集在 TUI（_app 非空且非主线程）下 _prompt_text_input
+  会干净取消（None），交互模式主要服务经典 CLI；合并追加按 name 判重，同 host
+  不同 cluster 的同名服务会视为已存在（v0.3 索引按 host 分文件，cluster 维度在
+  行内）；systemd 无端口过滤依赖 ss -tlnp 有权限读到 Process 列（无权限时全部
+  systemd 服务进 pending_review，是安全方向）。
+- **核销方式**：/topo 走 process_command 路由 → 本地直调 discover_host/write_discovery
+  （与 agent 工具同引擎）；合并/过滤统计在 write_discovery 返回值与 probes 文案
+  常驻可测；测试钉住 merge/force 语义与 pending_review 边界。
