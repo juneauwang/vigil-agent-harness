@@ -426,6 +426,7 @@ from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
 from hermes_cli.subcommands.vssh import build_vssh_parser
+from hermes_cli.subcommands.trajectory import build_trajectory_parser
 from hermes_cli.subcommands.watch import build_watch_parser
 from hermes_cli.subcommands.gateway import build_gateway_parser
 from hermes_cli.subcommands.profile import build_profile_parser
@@ -4652,6 +4653,13 @@ def cmd_vssh(args):
     from hermes_cli.subcommands.vssh import run as vssh_run
 
     return vssh_run(args)
+
+
+def cmd_trajectory(args):
+    """运行轨迹审计：list/show/search/prune 事件级 session 日志。"""
+    from hermes_cli.subcommands.trajectory import run as trajectory_run
+
+    return trajectory_run(args)
 
 
 def cmd_cron(args):
@@ -12518,6 +12526,7 @@ def main():
     # =========================================================================
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
     build_vssh_parser(subparsers, cmd_vssh=cmd_vssh)
+    build_trajectory_parser(subparsers, cmd_trajectory=cmd_trajectory)
     build_watch_parser(subparsers, cmd_watch=cmd_watch)
 
     # =========================================================================

@@ -287,6 +287,28 @@ def set_approval_callback(cb):
     _callback_tls.approval = cb
 
 
+def _record_trajectory_event(**kwargs) -> None:
+    """Best-effort trajectory event（terminal 挂载点，批次二十三）。
+
+    审计日志落盘失败绝不干扰命令执行路径：任何异常只记 debug 日志。
+    redact 在 agent.trajectory.record_event 内部强制执行（凭据值不落轨迹）。
+    """
+    try:
+        from agent.trajectory import record_event
+        record_event(**kwargs)
+    except Exception:
+        logger.debug("trajectory event failed", exc_info=True)
+
+
+def _trajectory_result_summary(returncode: int, output: str) -> str:
+    """工具结果摘要：exit_code + 输出前 200 字符（record_event 内部再 redact）。"""
+    summary = f"exit={returncode}"
+    tail = (output or "").strip()[:200]
+    if tail:
+        summary += " " + tail.replace("\n", " ")
+    return summary
+
+
 def _get_sudo_password_cache_scope() -> str:
     """Return the cache scope for interactive sudo passwords."""
     try:
@@ -2710,6 +2732,13 @@ def terminal_tool(
             # For non-local backends: runs inside the sandbox via env.execute().
             from tools.process_registry import process_registry
 
+            _record_trajectory_event(
+                type="tool_call",
+                tool="terminal",
+                action=command,
+                session_id=session_id or task_id or effective_task_id or "default",
+                meta={"env_type": env_type, "background": True},
+            )
             effective_cwd = _resolve_command_cwd(
                 workdir=workdir,
                 default_cwd=cwd,
@@ -2944,6 +2973,14 @@ def terminal_tool(
                     proc_session.watch_patterns = list(watch_patterns)
                     result_data["watch_patterns"] = proc_session.watch_patterns
 
+                _record_trajectory_event(
+                    type="tool_result",
+                    tool="terminal",
+                    action=command,
+                    result=f"background started (pid {proc_session.pid})",
+                    session_id=session_id or task_id or effective_task_id or "default",
+                    meta={"env_type": env_type, "background": True},
+                )
                 return json.dumps(result_data, ensure_ascii=False)
             except Exception as e:
                 return json.dumps({
@@ -2957,6 +2994,14 @@ def terminal_tool(
             retry_count = 0
             result = None
             command_cwd = None
+
+            _record_trajectory_event(
+                type="tool_call",
+                tool="terminal",
+                action=command,
+                session_id=session_id or task_id or effective_task_id or "default",
+                meta={"env_type": env_type, "background": False},
+            )
 
             # Clean interrupt slate for an approved command, ONCE before the
             # retry loop: drop a stale bit that landed on this thread during the
@@ -3222,12 +3267,42 @@ def terminal_tool(
             if sudo_cache_cleared:
                 result_dict["sudo_cache_cleared"] = True
 
+            # 轨迹：工具结果 + 中断事件（审计"命令被用户中断"）。
+            _record_trajectory_event(
+                type="tool_result",
+                tool="terminal",
+                action=command,
+                result=_trajectory_result_summary(returncode, output),
+                session_id=session_id or task_id or effective_task_id or "default",
+                meta={"env_type": env_type, "background": False},
+            )
+            if returncode == 130 and "[Command interrupted]" in output:
+                _record_trajectory_event(
+                    type="interrupt",
+                    tool="terminal",
+                    action=command,
+                    result="command interrupted by user signal",
+                    session_id=session_id or task_id or effective_task_id or "default",
+                    meta={"env_type": env_type, "background": False},
+                )
+
             return json.dumps(result_dict, ensure_ascii=False)
 
     except Exception as e:
         import traceback
         tb_str = traceback.format_exc()
         logger.error("terminal_tool exception:\n%s", tb_str)
+        _record_trajectory_event(
+            type="error",
+            tool="terminal",
+            action=command,
+            result=f"terminal_tool exception: {str(e)[:300]}",
+            session_id=session_id or task_id or effective_task_id or "default",
+            meta=(
+                {"env_type": env_type}
+                if "env_type" in locals() else None
+            ),
+        )
         return json.dumps({
             "output": "",
             "exit_code": -1,
