@@ -212,7 +212,7 @@ class TestTopoStatusSync:
 
     def test_registered_in_topo_toolset_and_schema(self):
         from tools.registry import registry
-        from tools.topo_tools import _TOPO_STATUS_SYNC_SCHEMA
+        from tools.topo_tools import _DEFAULT_TOPO_UPDATE_SCHEMA, _TOPO_STATUS_SYNC_SCHEMA
 
         entry = registry.get_entry("topo_status_sync")
         assert entry is not None
@@ -221,3 +221,6 @@ class TestTopoStatusSync:
         props = _TOPO_STATUS_SYNC_SCHEMA["parameters"]["properties"]
         assert "host" in props
         assert "confirm" in props
+        # 任务 3：topo_update 描述引导走 topo_status_sync 正规链路。
+        assert "topo_status_sync" in _DEFAULT_TOPO_UPDATE_SCHEMA["description"]
+        assert "检测差异" in _DEFAULT_TOPO_UPDATE_SCHEMA["description"]

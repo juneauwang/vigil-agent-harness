@@ -109,6 +109,8 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
     "description": (
         "更新拓扑表实体档案（状态/版本/属性）。自动携带 source=agent 与 last_verified=今天；"
         "修改 PROD 环境实体前需要人工审批确认。"
+        "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认同步；"
+        "手动 topo_update 写 status 仅用于 topo_status_sync 无法确定的状态。"
     ),
     "parameters": {
         "type": "object",
