@@ -304,3 +304,37 @@ class TestOpsCredentialFailClosedGuidance:
         from agent.prompt_builder import OPS_CREDENTIAL_SSH_GUIDANCE
 
         assert OPS_CREDENTIAL_SSH_GUIDANCE in parts["stable"]
+
+
+# ---------------------------------------------------------------------------
+# 批次二十四 — 拓扑状态自动同步（§R）：状态变更后主动 topo_status_sync 行为约束
+# ---------------------------------------------------------------------------
+
+class TestOpsTopologySyncGuidance:
+    def test_guidance_requires_sync_after_state_changes(self):
+        """常量段含 topo_status_sync 引用 + 状态变更命令清单关键词。"""
+        from agent.prompt_builder import OPS_TOPOLOGY_SYNC_GUIDANCE
+
+        assert "topo_status_sync" in OPS_TOPOLOGY_SYNC_GUIDANCE
+        assert "docker stop/start/restart/rm" in OPS_TOPOLOGY_SYNC_GUIDANCE
+        assert "systemctl stop/start/restart" in OPS_TOPOLOGY_SYNC_GUIDANCE
+        assert "kubectl scale/delete/restart" in OPS_TOPOLOGY_SYNC_GUIDANCE
+        assert "docker compose down/up" in OPS_TOPOLOGY_SYNC_GUIDANCE
+        # 主动询问 + 确认后落盘 + 不假设拓扑自动更新。
+        assert "是否同步拓扑状态？" in OPS_TOPOLOGY_SYNC_GUIDANCE
+        assert "confirm=true" in OPS_TOPOLOGY_SYNC_GUIDANCE
+        assert "authoritative fact layer" in OPS_TOPOLOGY_SYNC_GUIDANCE
+
+    def test_guidance_lands_when_topo_tools_loaded(self):
+        """topo 工具加载时该块进 stable tier（字节稳定静态文本）。"""
+        agent = _make_agent(valid_tool_names=["topo_status_sync"])
+        from agent.prompt_builder import OPS_TOPOLOGY_SYNC_GUIDANCE
+
+        assert OPS_TOPOLOGY_SYNC_GUIDANCE in _stable_prompt(agent)
+
+    def test_guidance_absent_without_topo_tools(self):
+        """无 topo 工具时不注入（工具存在才谈行为约束）。"""
+        agent = _make_agent(valid_tool_names=["read_file"])
+        from agent.prompt_builder import OPS_TOPOLOGY_SYNC_GUIDANCE
+
+        assert OPS_TOPOLOGY_SYNC_GUIDANCE not in _stable_prompt(agent)

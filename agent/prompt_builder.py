@@ -753,6 +753,25 @@ OPS_CREDENTIAL_SSH_GUIDANCE = (
     "variables."
 )
 
+# Topology status sync discipline (OPS-DELTA 批次二十四，§R 行为层约束)。
+#
+# 静态常量文本——不读环境/会话，随 stable tier 进入缓存前缀，字节稳定。
+# 工具存在 ≠ 行为改变（§AF 教训）：容器/服务状态变更后必须主动检查拓扑差异
+# 并向用户询问，消除"停了容器拓扑还显示 running"的信息失真。
+OPS_TOPOLOGY_SYNC_GUIDANCE = (
+    "# Topology status sync discipline\n"
+    "- After running commands that change container/service state (docker "
+    "stop/start/restart/rm, systemctl stop/start/restart, kubectl "
+    "scale/delete/restart, docker compose down/up), run `topo_status_sync` "
+    "to compare topology entity status against the actual container state.\n"
+    "- When differences are found, report them to the user and ask "
+    "`是否同步拓扑状态？`; write only after the user confirms "
+    "(topo_status_sync confirm=true).\n"
+    "- Never assume the topology updates itself — the topology table is the "
+    "authoritative fact layer and needs an explicit sync."
+)
+
+
 # Model name substrings that should use the 'developer' role instead of
 # 'system' for the system prompt.  OpenAI's newer models (GPT-5, Codex)
 # give stronger instruction-following weight to the 'developer' role.

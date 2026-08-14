@@ -37,6 +37,7 @@ from agent.prompt_builder import (
     KANBAN_GUIDANCE,
     MEMORY_GUIDANCE,
     OPS_CREDENTIAL_SSH_GUIDANCE,
+    OPS_TOPOLOGY_SYNC_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
     PLATFORM_HINTS,
@@ -59,7 +60,13 @@ logger = logging.getLogger(__name__)
 # the ops credential/SSH discipline block joins the stable tier.
 _OPS_SECURITY_TOOLS = frozenset({
     "terminal", "sudo_exec", "topo_discover", "topo_update", "topo_query",
-    "runbook_load", "runbook_checkpoint",
+    "topo_status_sync", "runbook_load", "runbook_checkpoint",
+})
+
+# Topo tools — when any is loaded (topology data exists), the status sync
+# discipline joins the stable tier (OPS-DELTA 批次二十四 §R).
+_TOPOLOGY_SYNC_TOOLS = frozenset({
+    "topo_query", "topo_update", "topo_discover", "topo_status_sync",
 })
 
 
@@ -262,6 +269,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # gated only on stable toolset membership → byte-stable prompt.
     if set(agent.valid_tool_names or []) & _OPS_SECURITY_TOOLS:
         stable_parts.append(OPS_CREDENTIAL_SSH_GUIDANCE)
+
+    # Topology status sync (OPS-DELTA 批次二十四，§R): after container/service
+    # state changes, actively diff topology vs actual and ask before writing.
+    # Static text, gated on topo tool presence → byte-stable prompt.
+    if set(agent.valid_tool_names or []) & _TOPOLOGY_SYNC_TOOLS:
+        stable_parts.append(OPS_TOPOLOGY_SYNC_GUIDANCE)
 
     # Computer-use — goes in as its own block rather than being merged into
     # tool_guidance because the content is multi-paragraph. The guidance is
