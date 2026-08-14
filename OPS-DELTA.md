@@ -1921,3 +1921,90 @@
 - **核销方式**：测试常驻——test_help_text_cleanup.py（7 用例全自动断言）；行为
   探针命令可复跑：`vigil -h | grep -c '~/.hermes'` = 0、`vigil -h` Examples 段含
   topo-discover、`vigil --help-all` 分组逐条可读。
+
+### 45. 批次二十三 Trajectory 运行轨迹——事件级记录 + 审计查询/回放（DSH/TencentDB 借鉴，Vigil 独缺补上） — ✅ 已实施（2026-08-14，批次二十三；commit hash 佐证：任务 1 事件记录 77a992c / 任务 2 查询命令 40c8b60 / 任务 3 复盘回放 237dad3）
+- **背景**：运行轨迹/使用记录三家对比中 Vigil 独缺（DSH 有 append-only
+  SessionEvent log + 可回放；TencentDB 控制层有使用记录；Vigil 只有审批审计）。
+  运维审计合规是硬需求——出事时要知道"agent 当时看到了什么、为什么这么决策、
+  执行了什么"。本批落地轻量版：审计合规（谁在什么时间执行了什么命令、结果
+  如何）+ 事故复盘（当时的决策链）。不做 DSH 的 projection 折叠架构。
+- **任务 1（事件级记录，agent/trajectory.py 扩展 + 挂载点注入）**：
+  1. `record_event(**kwargs)`：append-only JSONL 落盘 <数据根>/trajectory/
+     <session_id>.jsonl；事件字段 ts/session_id/seq/type/tool/action/result/
+     approval/meta；seq 会话内递增（启动时读一次文件行数作基数，跨进程续号）。
+  2. **强制 redact**：action/result 过 redact_sensitive_text(credential_values=
+     True, force=True)——凭据值绝不落轨迹（`sudo -S <<< 'hunter2secret'` →
+     `sudo -S <<< '***'`，`ghp_xxx` → `ghp_ab...3456`，`curl -u admin:pass` →
+     `admin:***`）。
+  3. **容量控制**：单 session 上限 5000 条（MAX_EVENTS_PER_SESSION），超限记
+     一条 trajectory_truncated 后该 session 停止记录（防 runaway 会话撑爆磁盘）。
+  4. **best-effort**：任何失败只记 debug 日志，绝不干扰执行路径（挂载点用
+     try/except 包裹）。
+  5. 现有 save_trajectory（ShareGPT conversation dump）保留，事件通道为新增
+     并行通道，互不替代。
+- **任务 2（`vigil trajectory` 查询命令，hermes_cli/subcommands/trajectory.py
+  新增 + main.py 注册）**：
+  - `trajectory list`：列出所有轨迹文件（session + 事件数 + 首末事件时间跨度）。
+  - `trajectory show <session_id>`：按 seq 时间正序打印事件流；`--type
+    terminal` 只看命令事件（type 或 tool 命中，审计核心）；`--type approval`
+    只看审批事件。
+  - `trajectory search <query>`：跨 session 子串搜 action/result。
+  - `trajectory prune --before <ISO>`：删最后活动早于指定时间的轨迹文件
+    （保留期管理，默认不自动删）；naive 输入按本地时区解释。
+  - 单行可 grep 输出；show 的 session_id 做路径安全净化（防穿越）。
+- **任务 3（复盘回放，--replay）**：紧凑时间线模式——`[HH:MM:SS] +2.5s
+  [tool_result] terminal: <action> → <result>`，事件间间隔标注（识别审批 300s
+  等待/熔断锁 15 分钟等待等卡顿点）；`--replay --approval` 只看审批时间线
+  （复核"哪些命令被批准了"）。
+- **挂载点清单（最小侵入，全部 best-effort 单行调用）**：
+  1. terminal 工具调用：`tools/terminal_tool.py`——前台分支 `env.execute` 前记
+     tool_call、result_dict 构建后 return 前记 tool_result（result=exit_code +
+     输出前 200 字符）；后台分支 spawn 前记 tool_call、启动成功 return 前记
+     tool_result（"background started (pid N)"）；命令被用户中断（rc=130 +
+     [Command interrupted] marker）追加记 interrupt 事件；顶层异常记 error
+     事件。共 6 处挂载点，均不改变返回路径。
+  2. 审批事件：`tools/approval.py`——`_run_approval_gate`（check_dangerous_
+     command / request_tool_approval 的汇聚核心）与 `check_all_command_guards`
+     （terminal 命令守卫）的 gateway/CLI 两条请求路径：prompt/notify 前记
+     requested，各结果 return 前记 approved/denied/timeout；无 notify callback
+     的排队路径记 requested(pending_approval)。共 14 处挂载点（每处 1 行）。
+  3. interrupt/error：**未改 run_agent.py**（不在本批白名单）——interrupt 事件
+     由 terminal 挂载点检测 rc=130 + 中断 marker 记录（命令级中断即审计关注点）；
+     error 事件由 terminal 顶层异常路径记录。会话级 interrupt 需动 conversation
+     loop，属后续排期（prompt 任务 1.3 的 run_agent.py 挂点因白名单冲突下沉，
+     语义等价：审计可见"命令被中断"）。
+- **验收测试**：tests/agent/test_trajectory_events.py（11 用例：落盘/seq/append-
+  only、sudo 密码与 URL userinfo 打码、5000 截断+停止、写入失败不抛、save_
+  trajectory 回归、真实 terminal 执行产生 call/result 事件、真实执行命令含密钥
+  打码、两次执行两对事件、审批 deny/timeout/approved 各记 requested+结果）+
+  tests/hermes_cli/test_trajectory_cmd.py（8 用例：list 两 session、show 排序与
+  --type 过滤、缺失 session 报错、search 命中/不命中、prune 删旧留新、
+  --replay 时间线 +2.5s/+3.0s 间隔、--approval 过滤）。回归：test_terminal_tool* 4
+  套件 + test_approval* 3 套件 + test_subparser_routing_fallback.py +
+  test_batch14_e1_help_grouping.py + test_help_text_cleanup.py 全绿
+  （181 passed；既有基线噪音不在本批套件内）。
+- **硬约束核对**：diff 白名单 = agent/trajectory.py、tools/terminal_tool.py、
+  tools/approval.py、hermes_cli/subcommands/trajectory.py、hermes_cli/main.py、
+  对应新测试、OPS-DELTA.md——共 8 文件；无新 env var；**conversation_loop 未碰**
+  （run_agent.py 零改动，验证方式：git diff 无 run_agent.py/model_tools.py/
+  cli.py；挂载点全部在工具执行层 best-effort 单行调用，不改变返回路径）；
+  现有 trajectory JSONL 兼容（save_trajectory 原样保留）。
+- **行为探针（实测）**：python3 -c 模拟 terminal（含密码）+ 审批 → JSONL 4 条
+  seq 1-4、`secret leaked: False`、action 打码 `sudo -S <<< '***' ...`；
+  `vigil trajectory list` 显示 2 个 session 及事件数；`show --type approval`
+  只出审批；`--replay` 输出 `[HH:MM:SS] [tool_call] terminal: ...` 紧凑时间线。
+- **事件量性能影响评估**：record_event 单事件约 52µs（2000 事件 104ms 实测，
+  含 redact + JSONL append）；每次 terminal 执行 2 条事件约 0.1ms，相对命令
+  执行时间（秒级）可忽略；审批事件仅在有人工审批发生时产生（低频）。写入为
+  单行 append（O(1)），不读不重写文件（仅跨进程启动时读一次行数）。
+- **已知风险**：①磁盘长期占用——每条事件 ~200-400 字节，5000 条上限下单
+  session 最大 ~2MB；建议保留期（如 90 天）用 `vigil trajectory prune --before`
+  定期清理（命令已提供，默认不自动删）。②redact 截断策略——result 只存输出
+  前 200 字符（事故复盘看的是"执行了什么/结果如何"，完整输出在会话内仍可
+  复现；命令输出已在 terminal 工具层 redact 过，事件层二次 redact 兜底）。
+  ③审批 action 用 command 或 description——tirith 描述可能含长文本，事件层
+  只存摘要字段不存完整描述。④seq 跨进程续号依赖文件行数，若事件文件被外部
+  截断/损坏则续号回退（append-only 语义下正常使用不会发生）。
+- **核销方式**：测试常驻——test_trajectory_events.py（事件记录/redact/截断/
+  挂载点）+ test_trajectory_cmd.py（查询/回放）；行为探针命令在批次二十三
+  prompt 验收段可复跑。
