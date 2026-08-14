@@ -2079,3 +2079,72 @@
   部分成功部分失败时 write_errors 可见。
 - **核销方式**：测试常驻——test_topo_status_sync.py（差异检测/落盘/ask 语义）+
   test_system_prompt.py 常量断言；行为探针命令在批次二十四 prompt 验收段可复跑。
+
+### 47. 批次二十五 反馈闭环——runbook_create 工具 + 专有名词绑定 + 跑通任务主动提议沉淀（§AH 补丁 4 + TencentDB 借鉴） — ✅ 已实施（2026-08-14，批次二十五；commit hash 佐证：任务 1 工具 9e0ca98 / 任务 2 名词绑定 774eaa3 / 任务 3 主动提议 6427596）
+
+- **为什么**：§AH 补丁 4 实测——用户说"沉淀为 runbook 下次修改 ansible 之后进行
+  syntax-check"，agent 写了 Markdown 文档（/opt/ansible/runbooks/*.md）而非结构化
+  YAML，且 runbook 体系只有 load/checkpoint 没有创建工具，无自动触发。TencentDB
+  反馈闭环借鉴：跑通任务 → runbook 草稿自动沉淀。本批 = 反馈闭环第一步。
+- **怎么改**（3 文件 + 3 测试文件，均在白名单内）：
+  1. **任务 1（runbook_create 工具）** `tools/runbook_tools.py` 新增 `runbook_create`
+     agent 工具（注册进 `runbook` toolset，check_fn=check_runbook_requirements 同
+     runbook_load/checkpoint）：
+     - 参数：runbook（kebab-case 必填）/ title / triggers / summary / steps /
+       rollback / env / kind（deploy|incident|checklist，默认 incident）/
+       overwrite（默认 False）。
+     - **fail-closed 校验**：名称严格 `^[a-z0-9]+(-[a-z0-9]+)*$`（防路径穿越
+       ".."/隐藏文件）；steps/commands 非空；commands 疑似明文凭据（赋值式
+       password=/token:、flag 式 --password/-p、curl `-u user:pass`）→ 拒绝并
+       提示改用 `<vault:path/field>` 占位符（复用 _VAULT_REF_RE 机制），错误消息
+       **只报键名不报值**（凭据值绝不回显）；`-p 8080:80` 端口发布不误判。
+     - 写盘前复用 `_validate_runbook` 校验 → 保证 runbook_load 原样加载回来
+       （kind=deploy 的 checklist/rollback 规则一并生效）；同名已存在未
+       overwrite → 报错。写 `<home>/runbooks/<name>.yaml`（复用 _runbooks_dir）。
+     - 返回 {status: created/updated, name, path, steps}。
+  2. **任务 2（专有名词绑定）** `agent/prompt_builder.py` 静态常量
+     `OPS_RUNBOOK_GUIDANCE`（任务 3 扩展前的名词绑定段）："用户说'沉淀/记录/保存为
+     runbook' = 调 **runbook_create** 创建结构化 YAML（runbooks/<name>.yaml），
+     **不是写 Markdown 文档**；runbook 是程序层机制（triggers+steps+commands+
+     rollback，runbook_load 加载、runbook_checkpoint 门控）；意图是行为约束时把
+     约束写进 triggers+steps，创建后告知'已创建 runbook，触发词为 …'"。
+     `agent/system_prompt.py`：`runbook_create` 加入 `_OPS_SECURITY_TOOLS`，新增
+     `_RUNBOOK_TOOLS` 门控——runbook 工具加载时注入 stable tier（字节稳定静态文本）。
+  3. **任务 3（主动提议 + 尾部引导）** 同常量追加反馈闭环段："完成可复用运维流程
+     （故障修复/部署/排查跑通）后主动提议'这次流程可以沉淀为 runbook，要我创建
+     吗？'——用户确认才创建，不自动创建（噪音）也不从不提议（浪费经验）；判断
+     标准 = 是否可能再次发生（重启服务/同类故障/同一应用部署）。执行既有 runbook
+     有新坑/新命令时提议更新（overwrite=true）"。`tools/runbook_tools.py`
+     `_full_payload` 的 note 尾部追加"若本次执行有改进（新坑/新命令），可向用户
+     提议更新本 runbook（runbook_create overwrite=true）"。
+- **验收测试**：tests/tools/test_runbook_create.py（新，14 用例：创建→runbook_load
+  回读 / triggers 模糊匹配 / 明文密码拒绝且值不回显 / vault 占位符放行 /
+  `-p 8080:80` 不误判 / overwrite 保护与更新 / 非法名称（含 ".."）拒绝 / 空 steps
+  拒绝 / deploy checklist 规则复用 / handler 透传 / registry 注册 + schema /
+  load 尾部引导）。tests/agent/test_system_prompt.py 增量 4 用例（名词绑定 + 提议
+  语义 + 注入/不注入门控）。回归：tests/tools/test_runbook_tools.py +
+  test_runbook_vault_refs.py 全绿（52 passed）。
+- **行为探针（实测）**：runbook_create 创建 ansible-syntax-check → runbook_load
+  回读 triggers/commands；明文 `curl -u admin:secret123` 拒绝且错误消息不含值、
+  `<vault:ansible/pass>` 放行；prompt 常量含 runbook_create + "不是写 Markdown
+  文档" + "沉淀为 runbook"；runbook_load 返回尾部含"提议更新…overwrite=true"；
+  resolve_toolset("runbook") 含 runbook_create。
+- **runbook_create schema 与现有样例一致性**：落盘结构对齐 schema v0.1 样例
+  （name/title/version:1/env/kind/triggers/summary/steps/rollback 字段序一致）；
+  写盘前复用 `_validate_runbook`（load 同一校验器）保证可回读。env 沿用 runbook
+  schema 既有枚举 test/uat/prod（批次 prompt 写 local/test/dev/prod 系与 topo
+  枚举混写；硬约束"不改 runbook_load/checkpoint 既有语义"优先，若放开 _VALID_ENVS
+  会改 load 校验行为——已按 schema v0.1 收敛，工具描述已注明）。
+- **硬约束核对**：diff 白名单 = tools/runbook_tools.py、agent/prompt_builder.py、
+  agent/system_prompt.py、tests/tools/test_runbook_create.py、
+  tests/agent/test_system_prompt.py、OPS-DELTA.md——共 6 文件；无新
+  HERMES_*/VIGIL_* env var；**conversation_loop / prompt 缓存 / 压缩逻辑未碰**；
+  runbook_load / runbook_checkpoint 语义未动（create 为纯增量，load 仅尾部追加
+  一行引导文本）。
+- **已知风险**：①主动提议噪音控制——判断标准（是否可能再次发生）在 prompt 常量
+  里约束，靠 LLM 遵循；不自动创建，用户确认才落盘。②overwrite 误覆盖风险——
+  同名需显式 overwrite=true，默认拒绝；覆盖前无二次确认，靠工具参数显式化兜底。
+  ③明文凭据识别是"疑似"启发式（宁误报提示改占位符），非加密检测；复杂形态
+  （base64/拼接）不在本批覆盖。④env 枚举与批次 prompt 文案差异（见一致性说明）。
+- **核销方式**：测试常驻——test_runbook_create.py（创建/回读/凭据拒绝/覆盖）+
+  test_system_prompt.py 常量断言；行为探针命令在批次二十五 prompt 验收段可复跑。
