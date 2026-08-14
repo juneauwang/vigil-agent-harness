@@ -1045,3 +1045,28 @@ def test_cli_write_prompt_contains_three_step_review_guidance(tmp_path, monkeypa
     assert "1. 查看" in out and "2. 确认" in out and "3. 效果" in out
     assert "topo_update" in out and "needs_review=false" in out
     assert "未经确认不参与权限判定" in out
+
+
+def test_parse_docker_ps_names_array_form():
+    """docker --format '{{json .}}' 的 Names 是 JSON 数组（["/app"]）——必须取首元素。
+
+    回归：2026-08-14 批次二十四验收实锤——fixture 用字符串形态（"Names":"harbor"）
+    掩盖了数组形态 bug（str() 把数组转成 "['/app']"），导致容器名匹配失败、
+    topo_status_sync 全落 ask。真实 docker 输出是数组。
+    """
+    from tools.topo_discovery import _parse_docker_ps
+
+    # 数组形态（真实 docker 输出）
+    out = '{"Names":["/app"],"State":"exited"}\n'
+    containers = _parse_docker_ps(out)
+    assert containers and containers[0]["name"] == "app", containers
+    assert containers[0]["state"] == "exited"
+
+    # 字符串形态（兼容既有 fixture）
+    out2 = '{"Names":"/db","State":"running"}\n'
+    containers2 = _parse_docker_ps(out2)
+    assert containers2 and containers2[0]["name"] == "db", containers2
+
+    # 空 Names
+    out3 = '{"Names":[],"State":"running"}\n'
+    assert _parse_docker_ps(out3) == []
