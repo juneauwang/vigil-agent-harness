@@ -2008,3 +2008,74 @@
 - **核销方式**：测试常驻——test_trajectory_events.py（事件记录/redact/截断/
   挂载点）+ test_trajectory_cmd.py（查询/回放）；行为探针命令在批次二十三
   prompt 验收段可复跑。
+
+### 46. 批次二十四 拓扑状态自动同步——topo_status_sync 差异检测/确认落盘 + 状态变更主动询问（§R） — ✅ 已实施（2026-08-14，批次二十四；commit hash 佐证：任务 1 工具 6a744c9 / 任务 2 行为约束 1743d98 / 任务 3 描述引导 3c1c117）
+
+- **为什么**：§R 实测（2026-08-13 停 snipe-it）——容器 stop 后拓扑实体状态不
+  自动同步，用户需专门补"同步为 stopped"才改 entities/hosts 文件。期望：状态
+  变更后实体状态自动跟进或主动询问。现状 topo_query（查）/topo_update（改）
+  都没有"对比拓扑状态 vs 实际容器状态"的差异检测能力。
+- **怎么改**（3 文件 + 2 测试文件，均在白名单内）：
+  1. **任务 1（工具）** `tools/topo_tools.py` 新增 `topo_status_sync` agent 工具
+     （注册进 `topo` toolset，check_fn=check_topo_requirements 同 topo_query）：
+     - 参数 `host`（可选，默认全部；也接受实体名）+ `confirm`（bool，默认 False）。
+     - 读拓扑表（复用 load_topology / _all_core_entities / _entity_env），对
+       docker 容器实体（`attrs.container` / `type=docker-container` /
+       `attrs.runtime=docker`）执行 `docker ps -a --format '{{json .}}'` 检查
+       实际状态；**复用发现引擎 `topo_discovery._parse_docker_ps`**（模块级函数
+       直接 import，未新写探测，topo_discovery.py 零改动）。
+     - **L3 合并**：容器实体的 attrs.container/status 存第三层 detail 档案
+       （topo_update 写 status 的目标文件），L2 索引行只有引用——`topo_status_sync`
+       先 `_enrich_entity_detail` 合并 L3 再判断，避免误判"无容器实体"。
+     - 差异判定：实际状态可确定（docker ps 明确 running/exited）且与拓扑 status
+       不一致 → `action=update`；不确定（容器缺失/主机不可达/无 docker 权限）→
+       `action=ask`；实体未声明 status 时**不自动覆盖手动值**（容器实际 stopped
+       且未声明 → ask，避免覆盖手工维护）。
+     - `confirm=False`（默认）dry-run 只报告差异不落盘；`confirm=True` 对
+       action=update 实体复用 `topo_update` 写 status（PROD 实体仍走审批矩阵，
+       action=ask 不动）。docker 原始 State → 既有 status 语义映射（exited/
+       created/dead/removing/paused → stopped，restarting → running），**不引入
+       新枚举**。返回 `{checked, changed, confirm, differences, needs_user,
+       write_errors}`。
+     - 探测 runner 复用发现引擎 `_build_ssh_runner`/`_build_local_runner`：
+       SSH 凭据走拓扑表 credential 引用（ssh_key → key_path 引用，密码类凭据
+       runner 内部 askpass 注入），凭据值不进 argv/日志。
+  2. **任务 2（行为约束）** `agent/prompt_builder.py` 新增静态常量
+     `OPS_TOPOLOGY_SYNC_GUIDANCE`（不读环境/会话，随 stable tier 进入缓存前缀，
+     字节稳定）；`agent/system_prompt.py` 在 topo 工具加载时注入 stable tier——
+     "执行改变容器/服务状态的命令（docker stop/start/restart/rm、systemctl、
+     kubectl scale/delete/restart、docker compose down/up）后主动跑
+     topo_status_sync 检查差异，不一致时向用户报告并询问'是否同步拓扑状态？'，
+     用户确认后 confirm=True；不要假设拓扑自动更新"。`topo_status_sync` 加入
+     `_OPS_SECURITY_TOOLS`（该工具会 SSH 探测，SSH 纪律块同步生效）。
+  3. **任务 3（描述引导）** `topo_tools.py` topo_update schema 描述补一句：
+     "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认
+     同步；手动 topo_update 写 status 仅用于 topo_status_sync 无法确定的状态"
+     ——引导 agent 走正规链路，不绕过工具直接 patch 文件（§P/§R 问题 2）。
+- **验收测试**：tests/tools/test_topo_status_sync.py（新，10 用例：dry-run 检测
+  差异不落盘 / confirm 落盘 status=stopped / docker 不可用 → ask 不落盘 / 无差异
+  checked>0 changed=0 / host 过滤 / 未声明 status 不覆盖 → ask / handler 透传 /
+  registry 注册 + toolset 成员 + schema 引导）；tests/agent/test_system_prompt.py
+  增量 3 用例（常量含 topo_status_sync + 命令清单关键词、topo 工具加载时进
+  stable tier、无 topo 工具不注入）。回归：tests/tools/test_topo_tools.py +
+  test_topo_discovery.py + test_system_prompt.py 全绿（91 passed）。
+- **行为探针（实测）**：mock docker ps（exited）+ 实体 running → 差异 detected
+  （action=update/write_status=stopped），dry-run 文件不变；confirm=True → 实体
+  status 变 stopped（落盘断言）；无差异 → checked=1 changed=0；system prompt
+  常量含 topo_status_sync 约束；resolve_toolset("topo") 含 topo_status_sync。
+- **docker ps State 解析复用方式**：import 已有模块级函数
+  `topo_discovery._parse_docker_ps`（不提取不改写；topo_discovery.py 零改动），
+  探测命令 `docker ps -a` 与发现引擎的 `docker ps` 同一 JSON 格式，解析共用。
+- **硬约束核对**：diff 白名单 = tools/topo_tools.py、agent/prompt_builder.py、
+  agent/system_prompt.py、tests/tools/test_topo_status_sync.py、
+  tests/agent/test_system_prompt.py、OPS-DELTA.md——共 6 文件；无新
+  HERMES_*/VIGIL_* env var；**conversation_loop / prompt 缓存 / 压缩逻辑未碰**；
+  权限矩阵/审批判定未动（topo_update PROD 审批原样复用）。
+- **已知风险**：①无 docker 权限/主机不可达 → 全部 action=ask，不自动写（宁可
+  问也不误写）；②手动维护实体（status 手工填/未声明 status）不会被自动覆盖——
+  未声明 status 且实际 stopped → ask 由用户决定；③SSH 探测仅支持拓扑表
+  credential ssh_key 引用，vault/askpass 类凭据的 host 探测会走 ask 分支
+  （交给用户/未来 vssh 凭据链路）；④confirm=True 逐实体写（PROD 逐个审批），
+  部分成功部分失败时 write_errors 可见。
+- **核销方式**：测试常驻——test_topo_status_sync.py（差异检测/落盘/ask 语义）+
+  test_system_prompt.py 常量断言；行为探针命令在批次二十四 prompt 验收段可复跑。
