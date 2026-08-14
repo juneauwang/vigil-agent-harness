@@ -73,6 +73,72 @@ class TestOpenBaoPrefixBlindSpot:
         assert redact_sensitive_text("token s.abc") == "token s.abc"
 
 
+class TestVaultValueMasking:
+    """批次十九 §AF 补丁 5/6 — vault 读取值输出打码：值打码、key 名保留。
+
+    验收三形态（vault 返回 key-value 结构）：
+      1. ``{"root_passwd": "LPn9ex…4k="}`` —— 任意键名 + 高熵值（值形态兜底）；
+      2. ``monitor_auth_token: "MsVY…"`` —— 引号 YAML 值（_YAML_ASSIGN_RE 的
+         lookahead 与 JSON 引号 key 要求之间的空档）；
+      3. base64 密码（``{"cipher": "bW9u…"}``）—— 文本无秘密词时值形态 pass
+         仍须运行（严格模式不挂 _CFG_SECRET_WORD_RE 门控）。
+    误伤反向：短值 / UUID / 版本号 / 散文保持原样。
+    """
+
+    def test_json_root_passwd_value_masked_key_kept(self):
+        text = '{"root_passwd": "LPn9exQ7v2Xk4k=w5rT"}'
+        for kwargs in (dict(credential_values=True),
+                       dict(code_file=True, credential_values=True)):
+            out = redact_sensitive_text(text, **kwargs)
+            assert "LPn9exQ7v2Xk4k=w5rT" not in out
+            assert "root_passwd" in out
+
+    def test_quoted_yaml_token_value_masked_key_kept(self):
+        text = 'monitor_auth_token: "MsVYqPz8Kx2LmN7RbT4UcH6WdJf0AaE3"'
+        for kwargs in (dict(credential_values=True),
+                       dict(code_file=True, credential_values=True)):
+            out = redact_sensitive_text(text, **kwargs)
+            assert "MsVYqPz8Kx2LmN7RbT4UcH6WdJf0AaE3" not in out
+            assert "monitor_auth_token" in out
+
+    def test_quoted_yaml_single_quote_value_masked(self):
+        text = "monitor_auth_token: 'MsVYqPz8Kx2LmN7RbT4UcH6WdJf0AaE3'"
+        out = redact_sensitive_text(text, code_file=True, credential_values=True)
+        assert "MsVYqPz8Kx2LmN7RbT4UcH6WdJf0AaE3" not in out
+        assert "monitor_auth_token" in out
+
+    def test_base64_password_arbitrary_key_masked(self):
+        """任意键名（cipher）+ base64 密码——文本无秘密词，值形态兜底仍打码。"""
+        text = '{"cipher": "bW9uZXlwZW5ueWJhc2U2NGVuY29kZWQ="}'
+        for kwargs in (dict(credential_values=True),
+                       dict(code_file=True, credential_values=True)):
+            out = redact_sensitive_text(text, **kwargs)
+            assert "bW9uZXlwZW5ueWJhc2U2NGVuY29kZWQ=" not in out
+            assert "cipher" in out
+
+    def test_short_exact_password_key_masked(self):
+        """``"passwd"`` 精确 JSON key 短值也打码（_JSON_KEY_NAMES 补 passwd）。"""
+        out = redact_sensitive_text('{"passwd": "shortpw"}',
+                                    code_file=True, credential_values=True)
+        assert "shortpw" not in out
+        assert "passwd" in out
+
+    def test_benign_shapes_not_masked(self):
+        """误伤反向：UUID / 版本号 / hex commit / 散文引号值保持原样。"""
+        benign = [
+            '{"id": "9f8b7c6d-5e4a-4b3c-2d1e-0f9e8d7c6b5a"}',
+            '{"version": "1.0.0-build-20260814"}',
+            '{"commit": "abcdef0123456789abcdef0123456789abcdef0123456789"}',
+            'title: "The Secret Garden"',
+            'comment: "tokenizer: cl100k_base"',
+            "api_key: os.getenv('X')",
+            '''{"apiKey": "os.getenv('X')"}''',
+            'author: "J.R.R. Tolkien"',
+        ]
+        for text in benign:
+            assert redact_sensitive_text(text, code_file=True, credential_values=True) == text, text
+
+
 class TestSudoStdinInjectionBlindSpot:
     """盲区 3：sudo -S 上下文 stdin 密码注入（herestring / heredoc / 赋值形态）。"""
 

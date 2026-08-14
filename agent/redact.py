@@ -234,6 +234,18 @@ _YAML_ASSIGN_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
+# Quoted YAML value (``monitor_auth_token: "MsVY…"``). _YAML_ASSIGN_RE's
+# lookahead deliberately skips quoted values (they were expected to defer to
+# the JSON pass), but the JSON passes require a QUOTED KEY — vault dumps /
+# YAML configs with unquoted keys + quoted values fell through both
+# (OPS-DELTA 批次十九 §AF：vault 读取后 32 字符无前缀 token 明文复述）。
+# 与裸值同款 key 名单门控（_key_has_secret_keyword），值长度不限——key 名
+# 命中即凭据位，与 _YAML_ASSIGN_RE 语义一致。
+_YAML_QUOTED_ASSIGN_RE = re.compile(
+    rf"(^[ \t]*+[A-Za-z0-9_.\-]*{_YAML_CFG_NAMES}[A-Za-z0-9_.\-]*+)(:[ \t]*+)(['\"])([^'\"]+)(['\"])",
+    re.IGNORECASE | re.MULTILINE,
+)
+
 # Word-boundary validation for the mixed/lowercase key patterns above
 # (_CFG_DOTTED_RE, _CFG_ANCHORED_RE, _YAML_ASSIGN_RE).
 #
@@ -365,7 +377,7 @@ def _already_masked_value(value: str) -> bool:
 # client_secret / id_rsa / credential / auth …) were missing — OpenBao returns
 # ``{"ssh_key": "…"}`` and it passed through verbatim while ``{"password":
 # "…"}`` was masked (OPS-DELTA #5).
-_JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material|ssh_key|private_key|passphrase|client_secret|id_rsa|credential|credentials|authorization|auth)"
+_JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|passwd|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material|ssh_key|private_key|passphrase|client_secret|id_rsa|credential|credentials|authorization|auth)"
 _JSON_FIELD_RE = re.compile(
     rf'("{_JSON_KEY_NAMES}")\s*:\s*"([^"]+)"',
     re.IGNORECASE,
@@ -1072,11 +1084,15 @@ def redact_sensitive_text(
             return f'{key}: "{_mask_token(value)}"'
         text = _JSON_FIELD_RE.sub(_redact_json, text)
 
-        # OPS-DELTA #35：值形态检测兜底（精确键名 pass 之后，只处理它漏掉的）。
-        # 严格模式（工具输出等）不要求键名含秘密词——这正是值形态检测存在的
-        # 意义（任意键名无法穷举）。防误伤：URL/路径/base64（含 / \ : .）
-        # 与纯小写长文本（字符类单一）被 _looks_like_inline_secret 天然排除；
-        # 已打码值（含 "."）不会二次匹配。
+    # OPS-DELTA #35：值形态检测兜底（精确键名 pass 之后，只处理它漏掉的）。
+    # 严格模式（工具输出等）不要求键名含秘密词——这正是值形态检测存在的
+    # 意义（任意键名无法穷举）。批次十九 §AF：vault 返回 ``{"cipher":
+    # "bW9u…"}`` 这类任意键名 + 高熵值时整段文本不含秘密词，若挂在
+    # _CFG_SECRET_WORD_RE 门控下会被跳过——值形态 pass 独立于键名门控，
+    # 只靠 _looks_like_inline_secret 值形态做误伤过滤。防误伤：URL/路径/
+    # base64（含 / \ : .）与纯小写长文本（字符类单一）被天然排除；已打码
+    # 值（含 "."）不会二次匹配。
+    if ":" in text and '"' in text:
         def _redact_json_value_shape(m):
             key, value = m.group(1), m.group(2)
             if _ENV_LOOKUP_VALUE_RE.match(value):
@@ -1112,6 +1128,23 @@ def redact_sensitive_text(
                 return m.group(0)
             return f"{key}{sep}{_mask_token(value)}"
         text = _YAML_ASSIGN_RE.sub(_redact_yaml, text)
+
+        # 引号 YAML 值（``monitor_auth_token: "MsVY…"``）：_YAML_ASSIGN_RE
+        # 的 lookahead 跳过引号值，而 JSON pass 要求引号 key——两通道之间的
+        # 空档（OPS-DELTA 批次十九 §AF）。与裸值同款守卫（env 查找例外 /
+        # key 词边界 / 非秘密常量 / 已打码值）。
+        def _redact_yaml_quoted(m):
+            key, sep, quote, value = m.group(1), m.group(2), m.group(3), m.group(4)
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            if not _key_has_secret_keyword(key):
+                return m.group(0)
+            if _strict and _is_non_secret_constant_key(key):
+                return m.group(0)
+            if _strict and _prefix_present and _already_masked_value(value):
+                return m.group(0)
+            return f"{key}{sep}{quote}{_mask_token(value)}{quote}"
+        text = _YAML_QUOTED_ASSIGN_RE.sub(_redact_yaml_quoted, text)
 
     # Authorization headers — _AUTH_HEADER_RE matches any scheme after
     # "[Proxy-]Authorization:" case-insensitively, so "uthorization" is the

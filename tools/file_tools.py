@@ -1824,6 +1824,32 @@ def _mark_verification_stale(
         logger.debug("verification stale marker failed", exc_info=True)
 
 
+def _redact_write_content(content: str):
+    """write_file 内容过 redact（与工具输出展示同一条通道，OPS-DELTA 批次十九 §AE）。
+
+    ``code_file=True, credential_values=True`` 与 redact_terminal_output 的
+    一般路径一致（同一条通道）：key 名命中（token/password/…）+ 值形态兜底
+    （任意键名高熵值）都会打码值、保留 key。返回 (写入内容, 是否疑似凭据)——
+    疑似凭据时调用方写打码内容 + chmod 600 + 警告（报告类文件不再成为凭据
+    泄露出口：§AE inventory 同步报告把凭据明文写进 644 权限 MD）。
+    """
+    masked = redact_sensitive_text(content, code_file=True, credential_values=True)
+    if masked == content:
+        return content, False
+    return masked, True
+
+
+def _lockdown_credential_file(path: str, result_dict: dict) -> None:
+    """疑似凭据文件收紧为 0600 + 合并警告（§AE：644 报告文件泄露出口）。"""
+    try:
+        os.chmod(path, 0o600)
+    except OSError as exc:
+        logger.warning("write_file: chmod 600 failed for %s: %s", path, exc)
+    warning = "检测到疑似凭据内容，文件权限已设为 600（值已打码）"
+    existing = result_dict.get("_warning")
+    result_dict["_warning"] = f"{existing}；{warning}" if existing else warning
+
+
 def write_file_tool(path: str, content: str, task_id: str = "default",
                     cross_profile: bool = False,
                     session_id: str | None = None) -> str:
@@ -1848,6 +1874,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             "Strip read_file line-number prefixes or reconstruct the intended "
             "file contents before writing."
         )
+    write_content, credential_sensitive = _redact_write_content(content)
     try:
         # Resolve once for the registry lock + stale check.  Failures here
         # fall back to the legacy path — write proceeds, per-task staleness
@@ -1860,10 +1887,12 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
         if _resolved is None:
             stale_warning = _check_file_staleness(path, task_id)
             file_ops = _get_file_ops(task_id)
-            result = file_ops.write_file(path, content)
+            result = file_ops.write_file(path, write_content)
             result_dict = result.to_dict()
             if stale_warning:
                 result_dict["_warning"] = stale_warning
+            if credential_sensitive and not result_dict.get("error"):
+                _lockdown_credential_file(path, result_dict)
             if not result_dict.get("error"):
                 _mark_verification_stale(task_id, [path], session_id=session_id)
             _update_read_timestamp(path, task_id)
@@ -1881,11 +1910,13 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             # terminal's cwd (the worktree-cwd bug). Lowest priority of the three.
             cwd_warning = _path_resolution_warning(path, Path(_resolved), task_id)
             file_ops = _get_file_ops(task_id)
-            result = file_ops.write_file(_resolved, content)
+            result = file_ops.write_file(_resolved, write_content)
             result_dict = result.to_dict()
             effective_warning = cross_warning or stale_warning or cwd_warning
             if effective_warning:
                 result_dict["_warning"] = effective_warning
+            if credential_sensitive and not result_dict.get("error"):
+                _lockdown_credential_file(_resolved, result_dict)
             # Always report the ABSOLUTE path actually written, so a wrong-cwd
             # mismatch is visible in the response instead of silently routing
             # the edit to the wrong checkout.

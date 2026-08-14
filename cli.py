@@ -5295,6 +5295,223 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         except Exception:
             pass
 
+    def _handle_topo_command(self, cmd_original: str) -> None:
+        """/topo [host...] [--env E] [--user U] [--key K] [--cluster C] [--force] [--yes]
+
+        会话内拓扑发现（方案 A：本地直调发现引擎，零 LLM 依赖）。无 host → 交互
+        收集（host/IP → env → 凭据优先从拓扑表 host 的 credential 自动读，缺省再
+        问 user/key）；有 host → 直接跑。落盘走合并语义（批次十八 B：已有 host
+        追加新服务、保留手动实体；systemd 无端口服务留在 pending_review 不入表），
+        落盘前打印将要写入的清单并 y/N 确认（默认 N；--yes 跳过）。凭据复用
+        askpass/vault 机制，密码明文不进 argv/命令串/日志。
+        """
+        from hermes_constants import get_hermes_home
+        from tools.topo_discovery import (
+            DiscoveryError,
+            _read_host_index,
+            _sanitize_name,
+            discover_host,
+            write_discovery,
+        )
+
+        tokens = (cmd_original or "").strip().split()[1:]
+        hosts: List[str] = []
+        opts: Dict[str, str] = {}
+        i = 0
+        while i < len(tokens):
+            tok = tokens[i]
+            if tok.startswith("--"):
+                name = tok[2:]
+                if name in ("force", "yes", "dry-run"):
+                    opts[name] = "1"
+                elif name in ("env", "user", "key", "cluster"):
+                    if i + 1 >= len(tokens):
+                        self._console_print(f"  ✗ --{name} 缺少参数值")
+                        return
+                    opts[name] = tokens[i + 1]
+                    i += 1
+                else:
+                    self._console_print(f"  ✗ 未知参数 --{name}")
+                    return
+            else:
+                hosts.append(tok)
+            i += 1
+
+        interactive_mode = not hosts
+        env = opts.get("env", "")
+        cluster = opts.get("cluster", "")
+        force = "force" in opts
+        yes = "yes" in opts
+        dry_run = "dry-run" in opts
+
+        if interactive_mode:
+            host = self._prompt_text_input("  目标 host/IP（回车取消）: ")
+            if not host:
+                self._console_print("  已取消。")
+                return
+            hosts = [host]
+            if not env:
+                env = self._prompt_text_input(
+                    "  环境（test/dev/prod；回车默认 dev）: "
+                ) or "dev"
+        elif not env:
+            self._console_print(
+                "  ✗ /topo <host> 需要 --env <env>（省略 host 可交互收集 host/env/凭据）"
+            )
+            return
+
+        home = Path(get_hermes_home())
+        successes: List[Dict[str, Any]] = []
+        failures: List[Dict[str, Any]] = []
+        for host in hosts:
+            try:
+                creds = self._topo_creds_for_host(
+                    host,
+                    user_arg=opts.get("user", ""),
+                    key_arg=opts.get("key", ""),
+                    interactive=interactive_mode,
+                )
+                discovery = discover_host(host, env, creds, cluster=cluster)
+                successes.append({"host": host, "discovery": discovery})
+                self._print_topo_discovery(discovery)
+            except DiscoveryError as exc:
+                failures.append({"host": host, "reason": str(exc)})
+                self._console_print(f"  ✗ {host} 发现失败：{exc}")
+
+        if not successes:
+            self._console_print("  ✗ 全部主机发现失败，未写入任何文件。")
+            return
+
+        if dry_run:
+            self._print_topo_review_guide()
+            self._console_print("  · --dry-run：只展示不落盘。")
+            return
+
+        # 落盘清单 + 确认（合并语义：列出将新增的实体名；已有同名实体保留）。
+        manifest: List[str] = []
+        for item in successes:
+            hostname = _sanitize_name(item["host"])
+            existing = _read_host_index(home, hostname)
+            existing_names = {
+                str(s.get("name"))
+                for s in (existing.get("services") or [])
+                if isinstance(s, dict) and s.get("name")
+            }
+            new_names = [
+                str(s.get("name"))
+                for s in (item["discovery"].get("services") or [])
+                if isinstance(s, dict) and str(s.get("name")) not in existing_names
+            ]
+            manifest.append(
+                f"    - {hostname}：{'、'.join(new_names) if new_names else '（无新增）'}"
+            )
+        self._console_print("  将写入（合并：同名实体保留）：")
+        self._console_print("\n".join(manifest))
+        if not yes:
+            answer = self._prompt_text_input("  写入拓扑？[y/N]: ") or "n"
+            if str(answer).strip().lower() not in ("y", "yes"):
+                self._console_print("  已取消，未写入任何文件。")
+                return
+
+        written_paths: List[str] = []
+        for item in successes:
+            try:
+                result = write_discovery(
+                    home, item["discovery"], force=force, merge=not force
+                )
+                for path in result.get("written") or []:
+                    if path not in written_paths:
+                        written_paths.append(path)
+                pending = len(item["discovery"].get("pending_review") or [])
+                self._console_print(
+                    f"  ✓ {item['host']}：追加 {result.get('appended', 0)} 个 / "
+                    f"保留 {result.get('kept', 0)} 个 / "
+                    f"系统服务 {pending} 个未入表（needs_review）"
+                )
+            except DiscoveryError as exc:
+                self._console_print(f"  ✗ {item['host']} 落盘失败：{exc}")
+        for path in written_paths:
+            self._console_print(f"    写入 {home / path}")
+        self._print_topo_review_guide()
+
+    def _topo_creds_for_host(self, host: str, *, user_arg: str = "",
+                             key_arg: str = "", interactive: bool = False) -> Dict[str, Any]:
+        """解析 /topo 的 SSH 凭据：拓扑表 credential 优先，缺省交互问 user/key。
+
+        凭据复用 vssh 同套 askpass/vault 机制（ssh_key → -i；vault/askpass →
+        askpass 脚本注入），密码明文不进 argv/命令串/日志。本机发现（localhost）
+        不走 SSH，返回空凭据。
+        """
+        from tools.topo_discovery import _LOCAL_HOST_ALIASES, _make_askpass_script
+        from hermes_cli.subcommands.vssh import _resolve_topology_credential
+
+        if str(host or "").strip().lower() in _LOCAL_HOST_ALIASES:
+            return {}
+        cred = None
+        try:
+            cred = _resolve_topology_credential(host)
+        except Exception:
+            cred = None
+        creds: Dict[str, Any] = {"user": user_arg or (cred or {}).get("user") or "root"}
+        if cred:
+            ctype = str(cred.get("type") or "")
+            if ctype == "ssh_key":
+                creds["key_path"] = key_arg or cred.get("ref")
+            elif ctype == "vault":
+                try:
+                    from tools.credential_vault import path_for
+                    creds["askpass_file"] = str(
+                        _make_askpass_script(path_for(str(cred["ref"])))
+                    )
+                except Exception:
+                    pass
+            elif ctype == "askpass":
+                creds["askpass_file"] = str(cred.get("ref") or "")
+        if key_arg and not creds.get("key_path"):
+            creds["key_path"] = key_arg
+        if interactive and not cred:
+            user = self._prompt_text_input(f"  SSH 用户 [{creds['user']}]: ") or creds["user"]
+            creds["user"] = user
+            key = self._prompt_text_input("  SSH 私钥路径（空走 ssh-agent/key）: ")
+            if key:
+                creds["key_path"] = key
+        return creds
+
+    def _print_topo_discovery(self, discovery: Dict[str, Any]) -> None:
+        """打印单台主机发现结果（/topo 展示；无端口系统服务单独列 pending_review）。"""
+        host = discovery.get("host") or {}
+        probes = discovery.get("probes") or {}
+        services = discovery.get("services") or []
+        pending = discovery.get("pending_review") or []
+        lines = [
+            f"  ==== {host.get('name')}  env={host.get('env')}  "
+            f"runtime={host.get('runtime')}  endpoint={host.get('endpoint')}",
+            f"  services: {len(services)}（全部 needs_review=true）",
+        ]
+        for svc in services:
+            lines.append(
+                f"    - {svc.get('name')}  type={svc.get('type')}  "
+                f"endpoint={svc.get('endpoint') or '-'}"
+            )
+        if pending:
+            names = "、".join(str(s.get("name")) for s in pending)
+            lines.append(
+                f"  ⚠ {len(pending)} 个系统服务未入表（无监听端口，needs_review，"
+                f"如需确认说一声）：{names}"
+            )
+        lines.append(
+            "  probes: " + ", ".join(f"{k}={v}" for k, v in sorted(probes.items()))
+        )
+        self._console_print("\n".join(lines))
+
+    def _print_topo_review_guide(self) -> None:
+        """三步 review 引导（同 topo-discover CLI；needs_review 草案不参与权限判定）。"""
+        self._console_print(
+            "  · 提示：发现结果只是草案（全部 needs_review=true），未经确认不参与权限判定。"
+            "下一步：1) topo_query 查看待审实体；2) topo_update 逐条确认（修正名称/类型/"
+            "endpoint，置 needs_review=false）；3) 全部确认后实体进入权威拓扑，runbook 可按其绑定。"
+        )
+
     @staticmethod
     def _compression_count_style(count: int) -> str:
         """Return a style class reflecting context compression pressure."""
@@ -10178,6 +10395,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 _cprint(f"  {format_session_db_unavailable()}")
         elif canonical == "env":
             self._handle_env_command(cmd_original)
+        elif canonical == "topo":
+            self._handle_topo_command(cmd_original)
         elif canonical == "handoff":
             if not self._handle_handoff_command(cmd_original):
                 return False

@@ -456,6 +456,47 @@ def _sudo_wrong_password_failure(output: str) -> bool:
     return any(marker in lowered for marker in _SUDO_WRONG_PASSWORD_MARKERS)
 
 
+# Interactive password prompts (ansible -bK "BECOME password", ssh
+# "Enter passphrase", sudo "Password for …") must never pass through as
+# ordinary terminal output: in the non-TTY path the process hangs until
+# timeout waiting for input that never arrives, and getpass may echo the
+# password into the session transcript (§AG). Detection is tail-anchored —
+# a waiting process prints the prompt LAST — so a long log that merely
+# mentions a password earlier stays untouched. The specific phrases
+# (become password / password for / enter passphrase / sudo password) fire
+# with or without a trailing colon; the generic ``password:`` form requires
+# the colon so a bare trailing word "password" is not a prompt.
+_INTERACTIVE_PASSWORD_PROMPT_RE = re.compile(
+    r"(?:become\s+password|password\s+for\b|enter\s+passphrase|"
+    r"passphrase\s+for\b|sudo\s+password)[^:\n]*\s*[:：]?\s*$"
+    r"|password\s*[:：]\s*$",
+    re.IGNORECASE,
+)
+# _wait_for_process 超时会把 "[Command timed out after Ns]" 追加到输出尾——
+# 检测前先剥掉，才能看到挂起前最后的密码提示。
+_TIMEOUT_SUFFIX_RE = re.compile(r"\n?\[Command timed out after \d+s\]\s*$")
+
+
+def _interactive_password_prompt_hint(output: str) -> str | None:
+    """Output 以交互密码提示收尾（进程在等输入）→ 返回 clarify 引导，否则 None。"""
+    if not output:
+        return None
+    tail = _TIMEOUT_SUFFIX_RE.sub("", output.rstrip("\n"))
+    if not tail:
+        return None
+    tail = tail[-500:]
+    if not _INTERACTIVE_PASSWORD_PROMPT_RE.search(tail):
+        return None
+    return (
+        "⚠️ 检测到交互式密码提示（BECOME password / Password for / "
+        "Enter passphrase / sudo password）——terminal 工具在非 TTY 环境无法"
+        "安全输入密码：进程会挂起直到超时，getpass 还可能把密码回显进会话"
+        "记录。请改用：1) clarify 让用户提供密码或选择来源 2) ansible -bK "
+        "优先设置 ANSIBLE_BECOME_PASS 环境变量（值从 vault/保险箱取，不进"
+        "命令行）3) SSH 系操作走 vssh/sudo_exec 工具"
+    )
+
+
 def _invalidate_cached_sudo_on_auth_failure(
     command: str | None, output: str
 ) -> bool:
@@ -2995,6 +3036,19 @@ def terminal_tool(
             # output overflowed the capture window (see _wait_for_process).
             spill_total_chars = result.get("output_total_chars")
             spill_file_path = result.get("full_output_path")
+
+            # Interactive password prompts (ansible -bK / ssh passphrase /
+            # sudo) — the process was waiting for input: in the non-TTY path
+            # it hangs until timeout, and getpass may echo the password into
+            # the transcript (§AG). Do NOT pass the prompt through as ordinary
+            # output; return an explicit error routing to clarify / env vars.
+            pw_hint = _interactive_password_prompt_hint(output)
+            if pw_hint:
+                return json.dumps({
+                    "output": (output or "")[:2000],
+                    "exit_code": returncode,
+                    "error": pw_hint,
+                }, ensure_ascii=False)
 
             # Add helpful message for sudo failures in messaging context
             output = _handle_sudo_failure(output, env_type)

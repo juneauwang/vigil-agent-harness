@@ -36,6 +36,7 @@ from agent.prompt_builder import (
     HERMES_AGENT_HELP_GUIDANCE,
     KANBAN_GUIDANCE,
     MEMORY_GUIDANCE,
+    OPS_CREDENTIAL_SSH_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
     PLATFORM_HINTS,
@@ -53,6 +54,13 @@ from hermes_constants import get_hermes_home
 from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
+
+# Ops/terminal tools that can touch SSH, sudo, or vault — when any is loaded,
+# the ops credential/SSH discipline block joins the stable tier.
+_OPS_SECURITY_TOOLS = frozenset({
+    "terminal", "sudo_exec", "topo_discover", "topo_update", "topo_query",
+    "runbook_load", "runbook_checkpoint",
+})
 
 
 def _ra():
@@ -248,6 +256,12 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # agent has tools. Static text → byte-stable prompt (no cache hit).
     if agent.valid_tool_names:
         stable_parts.append(STEER_CHANNEL_NOTE)
+
+    # Ops credential + SSH discipline (OPS-DELTA 批次十九): behavioral
+    # constraints for the surfaces that can touch SSH/sudo/vault. Static text,
+    # gated only on stable toolset membership → byte-stable prompt.
+    if set(agent.valid_tool_names or []) & _OPS_SECURITY_TOOLS:
+        stable_parts.append(OPS_CREDENTIAL_SSH_GUIDANCE)
 
     # Computer-use — goes in as its own block rather than being merged into
     # tool_guidance because the content is multi-paragraph. The guidance is

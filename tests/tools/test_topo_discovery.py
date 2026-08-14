@@ -54,6 +54,23 @@ SYSTEMCTL = """\
   inactive.service      loaded inactive dead   Not discovered
 """
 
+SS_TLNP_SYSTEMD = """\
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      128    0.0.0.0:22      0.0.0.0:*    users:(("sshd",pid=1,fd=3))
+LISTEN 0      128    0.0.0.0:9100    0.0.0.0:*    users:(("node_exporter",pid=2,fd=4))
+"""
+
+SS_TLNP_FULL = """\
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      128    0.0.0.0:22      0.0.0.0:*    users:(("sshd",pid=1,fd=3))
+LISTEN 0      128    0.0.0.0:9100    0.0.0.0:*    users:(("node_exporter",pid=2,fd=4))
+LISTEN 0      128    0.0.0.0:9090    0.0.0.0:*    users:(("prometheus",pid=3,fd=5))
+LISTEN 0      128    0.0.0.0:5432    0.0.0.0:*    users:(("postgres",pid=4,fd=6))
+LISTEN 0      128    0.0.0.0:80      0.0.0.0:*    users:(("nginx",pid=5,fd=7))
+LISTEN 0      128    0.0.0.0:6379    0.0.0.0:*    users:(("redis",pid=6,fd=8))
+LISTEN 0      128    0.0.0.0:3306    0.0.0.0:*    users:(("mysql",pid=7,fd=9))
+"""
+
 
 class FakeRunner:
     """可编程 mock runner：按命令前缀返回输出；记录调用（供明文断言）。"""
@@ -237,16 +254,21 @@ def test_discover_docker_permission_denied_is_explicit():
 
 
 def test_discover_systemctl_services_merged_and_docker_priority():
-    runner = _default_runner(**{"systemctl": SYSTEMCTL})
+    runner = _default_runner(**{"systemctl": SYSTEMCTL, "ss -tlnp": SS_TLNP_SYSTEMD})
     d = discover_host("203.0.113.20", "prod", runner=runner)
     names = {s["name"]: s for s in d["services"]}
-    assert d["probes"]["systemctl"] == "ok(2 服务，过滤 0 系统服务)"
+    assert d["probes"]["systemctl"] == (
+        "ok(2 服务，过滤 0 系统服务，另 0 个无端口系统服务未入表（可确认）)"
+    )
     assert names["node-exporter"]["type"] == "systemd-service"
     assert names["node-exporter"]["attrs"]["unit"] == "node-exporter.service"
     assert names["node-exporter"]["attrs"]["source_probe"] == "systemctl"
     # systemctl 中出现 harbor 与 docker 容器同名 → docker 优先，不生成 systemd 行。
     assert names["harbor"]["type"] == "service"
     assert "inactive" not in names
+    # 有监听端口的 systemd 服务正常入表 → 无 pending，端口不重复补 unidentified。
+    assert d["pending_review"] == []
+    assert "unidentified-9100" not in names
 
 
 SYSTEMCTL_WITH_SYSTEM_SERVICES = """\
@@ -301,9 +323,14 @@ def test_parse_systemctl_units_filters_system_services():
 
 def test_discover_systemctl_probe_records_filter_stats():
     """C1：probes['systemctl'] 记录 `ok(N 服务，过滤 M 系统服务)` 过滤统计。"""
-    runner = FakeRunner(**{"systemctl": SYSTEMCTL_WITH_SYSTEM_SERVICES})
+    runner = FakeRunner(**{
+        "systemctl": SYSTEMCTL_WITH_SYSTEM_SERVICES,
+        "ss -tlnp": SS_TLNP_FULL,
+    })
     d = discover_host("203.0.113.20", "prod", runner=runner)
-    assert d["probes"]["systemctl"] == "ok(6 服务，过滤 9 系统服务)"
+    assert d["probes"]["systemctl"] == (
+        "ok(6 服务，过滤 9 系统服务，另 0 个无端口系统服务未入表（可确认）)"
+    )
     names = {s["name"]: s for s in d["services"]}
     # 只有业务服务进拓扑；系统内部服务无 services/details 条目。
     assert set(names) == {"node-exporter", "prometheus", "postgres", "nginx", "redis", "mysql"}
@@ -311,6 +338,67 @@ def test_discover_systemctl_probe_records_filter_stats():
                    for n in names)
     assert "systemd-journald" not in d["details"]
     assert "dbus" not in d["details"]
+    assert d["pending_review"] == []
+
+
+SYSTEMCTL_NOISE = """\
+  UNIT                   LOAD   ACTIVE SUB     DESCRIPTION
+  chronyd.service        loaded active running NTP client
+  prometheus.service     loaded active running Prometheus
+  networkmanager.service loaded active running Network Manager
+"""
+
+SS_TLNP_PROM = """\
+State Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      128    0.0.0.0:9090  0.0.0.0:*    users:(("prometheus",pid=1,fd=3))
+"""
+
+
+def test_discover_systemd_no_listen_port_goes_pending_review():
+    """批次十八 B 配套：无监听端口的 systemd 服务不入 services，保留 pending_review。
+
+    有监听端口（prometheus，ss 进程名匹配）正常入表；无端口（chronyd /
+    networkmanager）不入正式拓扑但保留可见性（needs_review=true，可确认）。
+    """
+    runner = FakeRunner(**{
+        "systemctl": SYSTEMCTL_NOISE,
+        "ss -tlnp": SS_TLNP_PROM,
+    })
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    names = {s["name"]: s for s in d["services"]}
+    assert "prometheus" in names
+    assert names["prometheus"]["type"] == "systemd-service"
+    assert "chronyd" not in names
+    assert "networkmanager" not in names
+    # 无端口服务不进 details（不入落盘），只在 pending_review 可见。
+    assert "chronyd" not in d["details"]
+    pending = {s["name"]: s for s in d["pending_review"]}
+    assert set(pending) == {"chronyd", "networkmanager"}
+    assert all(s["needs_review"] is True for s in pending.values())
+    assert all(s["type"] == "systemd-service" for s in pending.values())
+    # probes 文案带无端口统计（替代 LLM 手动过滤的机制保证）。
+    assert "另 2 个无端口系统服务未入表（可确认）" in d["probes"]["systemctl"]
+    # prometheus 的监听端口 9090 已被服务覆盖，不重复补 unidentified。
+    assert "unidentified-9090" not in names
+
+
+def test_discover_systemd_all_no_port_keeps_pending_only():
+    """全部 systemd 服务无监听端口 → services 无 systemd 项，pending 列表有 N 条。"""
+    runner = FakeRunner(**{"systemctl": SYSTEMCTL_NOISE})  # 默认 ss 无匹配进程名
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert not any(s["type"] == "systemd-service" for s in d["services"])
+    pending = {s["name"] for s in d["pending_review"]}
+    assert pending == {"chronyd", "prometheus", "networkmanager"}
+    assert "另 3 个无端口系统服务未入表（可确认）" in d["probes"]["systemctl"]
+
+
+def test_discover_systemd_docker_same_name_skipped_not_pending():
+    """与 docker 已发现服务同名的 systemd unit 直接跳过（不进 pending，不重复）。"""
+    runner = _default_runner(**{"systemctl": SYSTEMCTL, "ss -tlnp": SS_TLNP_SYSTEMD})
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert not any(s["name"] == "harbor" and s["type"] == "systemd-service"
+                   for s in d["services"])
+    assert not any(s["name"] == "harbor" for s in d["pending_review"])
 
 
 def test_discover_systemctl_unavailable_is_skipped():
@@ -332,6 +420,34 @@ def test_discover_ss_entries_record_source_probe():
     assert svc["attrs"]["source_probe"] == "ss"
     assert d["details"]["unidentified-9090"]["attrs"]["source_probe"] == "ss"
     assert d["details"]["unidentified-9090"]["detail"] == svc["detail"]
+
+
+def test_build_ssh_runner_includes_identities_only(monkeypatch):
+    """批次十九 §AF：探测 runner 的 ssh argv 无条件带 ``-o IdentitiesOnly=yes``。
+
+    多 key 环境不带 IdentitiesOnly 会遍历 agent 所有 key 刷爆 MaxAuthTries
+    （§AF：今天锁了 5 次 15 分钟）——探测路径与 vssh 必须同款约束。
+    """
+    from types import SimpleNamespace
+
+    import tools.topo_discovery as topodisc
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        if argv and argv[0] == "ssh":
+            calls.append(argv)
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        raise AssertionError(argv)
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = topodisc._build_ssh_runner("203.0.113.20", "root")
+    result = runner("uptime")
+
+    assert result.ok is True
+    assert calls, "runner 应调用 ssh"
+    assert "-o" in calls[0] and "IdentitiesOnly=yes" in calls[0]
+    assert calls[0].index("IdentitiesOnly=yes") > calls[0].index("ConnectTimeout=10")
 
 
 def test_build_ssh_runner_encrypted_key_uses_askpass_without_plaintext(tmp_path, monkeypatch):
@@ -777,17 +893,95 @@ def test_write_discovery_refuses_v1_topology(tmp_path):
     assert "version: 1" in (home / "topology.yaml").read_text(encoding="utf-8")
 
 
-def test_write_discovery_refuses_existing_host_unless_force(tmp_path):
+def test_write_discovery_existing_host_merges_unless_force(tmp_path):
+    """批次十八 B：已存在 host 重扫默认合并（不拒绝）；--force 整体替换。"""
     home = tmp_path / "hermes_home"
     home.mkdir()
     d = _discovery()
     write_discovery(home, d)
+
+    # 默认 merge=True：重扫同一结果 → 全部同名跳过，不报错，行数不变。
+    result = write_discovery(home, d)
+    assert result["merged"] is True
+    assert result["appended"] == 0
+    assert result["kept"] == 4
+
+    # merge=False（显式关闭合并）→ 维持旧语义：拒绝，提示 --force。
     with pytest.raises(DiscoveryError) as exc:
-        write_discovery(home, d)  # 已存在 → 拒绝
+        write_discovery(home, d, merge=False)
     assert "--force" in str(exc.value)
 
-    result = write_discovery(home, d, force=True)  # --force → 覆盖
+    # --force → 整体替换（appended 全量、merged=False）。
+    result = write_discovery(home, d, force=True)
     assert result["written"]
+    assert result["merged"] is False
+    assert result["appended"] == 4
+    assert result["kept"] == 0
+
+
+def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path):
+    """批次十八 B：已有 host 重扫 → 新服务追加进索引+entities，手动实体保留。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    d = _discovery()
+    r1 = write_discovery(home, d)
+    assert r1["appended"] == 4 and r1["kept"] == 0 and r1["merged"] is False
+
+    # 手动维护：往索引加一条 app 手动实体（手动 endpoint + source=manual）。
+    index_path = home / "hosts" / "203.0.113.20.yaml"
+    data = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    data["services"].append({
+        "name": "app", "type": "service", "env": "prod", "cluster": "default",
+        "endpoint": "203.0.113.20:8080", "source": "manual", "needs_review": False,
+        "detail": "entities/prod__203.0.113.20__app.yaml",
+    })
+    index_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+
+    # 重扫：发现结果比现有索引多一个 db 服务 → 只追加 db。
+    d2 = dict(d)
+    d2["services"] = list(d["services"]) + [{
+        "name": "db", "type": "service", "env": "prod", "cluster": "default",
+        "endpoint": "203.0.113.20:5433", "source": "discovered",
+        "last_verified": "2026-08-14", "needs_review": True,
+        "detail": "entities/prod__203.0.113.20__db.yaml",
+        "attrs": {"image": "postgres:16"},
+    }]
+    d2["details"] = dict(d["details"])
+    d2["details"]["db"] = {
+        "name": "db", "type": "service", "env": "prod", "cluster": "default",
+        "detail": "entities/prod__203.0.113.20__db.yaml",
+        "attrs": {"image": "postgres:16"},
+        "source": "discovered", "last_verified": "2026-08-14", "needs_review": True,
+    }
+    r2 = write_discovery(home, d2)
+    assert r2["merged"] is True
+    assert r2["appended"] == 1
+    assert r2["kept"] == 5
+
+    data2 = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    names = {s["name"]: s for s in data2["services"]}
+    assert names["app"]["endpoint"] == "203.0.113.20:8080"   # 手动行保留
+    assert names["app"]["source"] == "manual"                # 手动行不被覆盖
+    assert names["app"]["needs_review"] is False
+    assert names["db"]["endpoint"] == "203.0.113.20:5433"    # 新服务追加
+    assert names["harbor"]["endpoint"] == "203.0.113.20:30443"  # 原自动行保留
+    # db 实体文件新写入；app 手动实体文件不被创建/覆盖。
+    assert (home / "entities" / "prod__203.0.113.20__db.yaml").is_file()
+    assert not (home / "entities" / "prod__203.0.113.20__app.yaml").exists()
+
+
+def test_write_discovery_new_host_append_unchanged(tmp_path):
+    """新 host 追加（现状行为不变）：互不干扰、topology hosts 段逐条追加。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    r1 = write_discovery(home, _discovery("node-a"))
+    r2 = write_discovery(home, _discovery("node-b"))
+    assert r1["merged"] is False and r2["merged"] is False
+    assert r1["appended"] == 4 and r2["appended"] == 4
+    topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
+    assert [h["name"] for h in topo["hosts"]] == ["node-a", "node-b"]
 
 
 def test_write_discovery_dry_run_not_applied_by_cli(tmp_path, monkeypatch):

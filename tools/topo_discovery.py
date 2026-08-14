@@ -152,10 +152,23 @@ def _ssh_auth_breaker_tripped(host: str, user: str) -> bool:
 
 
 def _is_ssh_auth_failure(proc: Any) -> bool:
-    """认证失败判定：exit 255 + stderr 含 Permission denied / MaxAuthTries 等。"""
+    """认证失败判定（批次十九扩展，不只 exit 255）。
+
+    - ``too many authentication failures``：sshd 限流信号，stderr 出现即算——
+      个别 ssh 包装/ansible/scp 返回码不一定是 255，但该提示出现意味着
+      MaxAuthTries 已被刷爆，再试只会继续自伤；
+    - ``permission denied`` 出现两次：ssh 多 key 逐个尝试的典型输出（agent
+      自由拼的 ssh/scp 路径），单次尝试内两次拒绝即认证失败信号；
+    - 其余保持批次十六语义：exit 255 + stderr 含认证提示才计数（连接拒绝等
+      非认证 255 不计数）。
+    """
+    stderr = (getattr(proc, "stderr", None) or "").lower()
+    if "too many authentication failures" in stderr:
+        return True
+    if stderr.count("permission denied") >= 2:
+        return True
     if getattr(proc, "returncode", None) != 255:
         return False
-    stderr = (getattr(proc, "stderr", None) or "").lower()
     return any(hint in stderr for hint in _SSH_AUTH_FAILURE_HINTS)
 
 
@@ -164,7 +177,11 @@ def _ssh_auth_breaker_error(host: str, user: str) -> str:
     return (
         f"⚠️ SSH 认证失败 {n}/{_SSH_AUTH_BREAKER_LIMIT}——为避免 sshd 限流"
         f"（MaxAuthTries=6）把自己锁出主机（{user}@{host}），已停止自动重试。"
-        "请：1) 手动 ssh 验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
+        "分层定位：连接层错误（Too many authentication failures / Permission "
+        "denied）→ 停止重试 + 检查 -o IdentitiesOnly=yes（ssh-agent 多 key 会"
+        "遍历所有 key 刷爆 MaxAuthTries）+ 检查重试次数；执行层错误（转义/远端"
+        "权限）→ 才换传递方式，不要用换姿势掩盖连接层真凶。请：1) 手动 ssh "
+        "验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
     )
 
 
@@ -197,7 +214,7 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
             # 作为 stdin 注入，远程命令串/argv 中不出现明文。
             sudo_stdin = _askpass_output(sudo_password_file) + "\n"
             remote_cmd = f"sudo -S -p '' {cmd}"
-        argv = ["ssh", "-o", "ConnectTimeout=10"]
+        argv = ["ssh", "-o", "ConnectTimeout=10", "-o", "IdentitiesOnly=yes"]
         if not use_password_askpass and not use_key_passphrase:
             # key/agent 认证：BatchMode 确保不交互弹密码（密码路径走 askpass）。
             argv += ["-o", "BatchMode=yes"]
@@ -224,12 +241,19 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
             raise DiscoveryError(f"SSH 连接 {user}@{host} 超时（{_SSH_TIMEOUT_S}s）") from exc
         except OSError as exc:
             raise DiscoveryError(f"无法执行 ssh：{exc}") from exc
+        # 认证失败判定（批次十九：不只 exit 255——Too many / Permission denied ×2
+        # 即限流或多 key 遍历信号）→ 计数，达上限熔断；任一认证失败都中止发现。
+        if _is_ssh_auth_failure(proc):
+            _record_ssh_auth_failure(host, user)
+            if _ssh_auth_breaker_tripped(host, user):
+                raise DiscoveryError(_ssh_auth_breaker_error(host, user))
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            raise DiscoveryError(
+                f"SSH 连接 {user}@{host} 失败（exit {proc.returncode}）："
+                f"{detail[-1] if detail else '认证失败或主机不可达'}"
+            )
         if proc.returncode == 255:
-            if _is_ssh_auth_failure(proc):
-                _record_ssh_auth_failure(host, user)
-                if _ssh_auth_breaker_tripped(host, user):
-                    raise DiscoveryError(_ssh_auth_breaker_error(host, user))
-            # ssh 自身失败（连接拒绝/认证失败）→ 中止发现，无半截数据。
+            # exit 255 但非认证失败（连接拒绝/握手失败）→ 中止发现，不计数。
             detail = (proc.stderr or proc.stdout or "").strip().splitlines()
             raise DiscoveryError(
                 f"SSH 连接 {user}@{host} 失败（exit 255）："
@@ -397,6 +421,35 @@ def _parse_ss_tlnp(output: str) -> List[Dict[str, Any]]:
             continue
         listeners.append({"host": host, "port": int(port_part)})
     return listeners
+
+
+def _ss_proc_key(value: str) -> str:
+    """进程名/unit 名 → 匹配键（仅字母数字，容忍 node-exporter/node_exporter 差异）。"""
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _parse_ss_proc_ports(output: str) -> Dict[str, List[int]]:
+    """ss -tlnp 原始输出 → 进程名 → 监听端口列表（含 loopback，供 systemd 无端口过滤）。
+
+    ``users:(("prometheus",pid=3,fd=5))`` 这类 Process 列解析出进程名；进程名按
+    :func:`_ss_proc_key` 归一，与 systemd unit 名匹配（批次十八 B 配套：无监听端口的
+    systemd 服务不自动入表，保留 pending_review 等确认）。
+    """
+    mapping: Dict[str, List[int]] = {}
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith("State"):
+            continue
+        parts = line.split()
+        if len(parts) < 5 or parts[0] != "LISTEN":
+            continue
+        _, _, port_part = parts[3].rpartition(":")
+        if not port_part.isdigit():
+            continue
+        port = int(port_part)
+        for name in re.findall(r'"([^"]+)"\s*,\s*pid=', line):
+            mapping.setdefault(_ss_proc_key(name), []).append(port)
+    return mapping
 
 
 # systemctl 系统内部服务黑名单（批次十三 C1）：系统自身服务不进拓扑噪音，
@@ -587,8 +640,10 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
 
     Returns:
       v0.3 片段 dict：``{version, source, last_verified, needs_review, host,
-      services, details, probes}``。host 行带 cluster + credential 引用
-      （key_path → ``{type: ssh_key, ref, user, port}``，不落密码明文）。
+      services, details, pending_review, probes}``。host 行带 cluster +
+      credential 引用（key_path → ``{type: ssh_key, ref, user, port}``，不落
+      密码明文）。pending_review 为无监听端口的 systemd 服务（needs_review=true，
+      不入 services/details，待用户确认后才入表）。
     """
     host = str(host or "").strip()
     is_local = host.lower() in _LOCAL_HOST_ALIASES
@@ -692,14 +747,34 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
         else:
             probes["kubectl"] = "skipped（kubectl 不可用）"
 
-    # 2.5) systemd 原生服务（排在 docker/k8s 后、ss 前）。
+    # 2.5) ss 监听端口探测（先于 systemd：供无端口系统服务过滤 + 未识别端口补条目）。
+    ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
+    ss_proc_ports = _parse_ss_proc_ports(ss_res.stdout) if ss_res.ok else {}
+    unmatched_listeners: List[Dict[str, Any]] = []
+    if ss_res.ok:
+        probes["ss"] = "ok"
+        for listener in _parse_ss_tlnp(ss_res.stdout):
+            port = listener["port"]
+            if port in seen_ports or port == 22:
+                # 22 = sshd 管理通道（主机自身，不是服务）；其余已映射端口跳过。
+                continue
+            unmatched_listeners.append(listener)
+    else:
+        probes["ss"] = "skipped（ss 不可用）"
+
+    # 3) systemd 原生服务（排在 docker/k8s 后）。无监听端口的 systemd 服务不入
+    #    services/details（批次十八 B 配套：替代 LLM 手动过滤），保留在
+    #    pending_review 标 needs_review=true——神人写的 systemd 脚本服务不监听端口
+    #    也真实业务，保留可见性不误杀；有监听端口（prometheus/node-exporter 等）
+    #    正常入表。
     systemd_res = _probe(
         runner, "systemctl list-units --type=service --no-pager --no-legend 2>/dev/null"
     )
+    pending_review: List[Dict[str, Any]] = []
+    systemd_covered_ports: set = set()
     if systemd_res.ok:
         systemd_units = _parse_systemctl_units(systemd_res.stdout)
         systemd_filtered = _count_systemd_filtered_units(systemd_res.stdout)
-        probes["systemctl"] = f"ok({len(systemd_units)} 服务，过滤 {systemd_filtered} 系统服务)"
         for unit in systemd_units:
             name = unit["name"]
             if name in [s["name"] for s in services]:
@@ -722,6 +797,11 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                     "source_probe": "systemctl",
                 },
             }
+            ports = ss_proc_ports.get(_ss_proc_key(name)) or []
+            if not ports:
+                # 无监听端口 → 不入正式拓扑，保留 pending_review 待用户确认。
+                pending_review.append(svc)
+                continue
             services.append(svc)
             details[name] = {
                 "name": name,
@@ -738,53 +818,51 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                 "last_verified": svc["last_verified"],
                 "needs_review": True,
             }
+            systemd_covered_ports.update(ports)
+        probes["systemctl"] = (
+            f"ok({len(systemd_units)} 服务，过滤 {systemd_filtered} 系统服务，"
+            f"另 {len(pending_review)} 个无端口系统服务未入表（可确认）)"
+        )
     else:
         probes["systemctl"] = "skipped（systemctl 不可用）"
 
-    # 3) 端口扫描补条目（非 loopback 监听端口，未映射到已知服务）。
-    ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
-    if ss_res.ok:
-        probes["ss"] = "ok"
-        for listener in _parse_ss_tlnp(ss_res.stdout):
-            port = listener["port"]
-            if port in seen_ports or port == 22:
-                # 22 = sshd 管理通道（主机自身，不是服务）；其余已映射端口跳过。
-                continue
-            name = f"unidentified-{port}"
-            if skip_unidentified:
-                seen_ports.add(port)
-                continue
-            detail_path = _entity_filename(cluster, host, name, env)
-            services.append({
-                "name": name,
-                "type": "service",
-                "env": env,
-                "cluster": cluster_display,
-                "endpoint": f"{host}:{port}",
-                "source": "discovered",
-                "last_verified": _dt.date.today().isoformat(),
-                "needs_review": True,
-                "detail": detail_path,
-                "attrs": {
-                    "listener": listener["host"],
-                    "ports": [port],
-                    "source_probe": "ss",
-                },
-            })
-            details[name] = {
-                "name": name, "type": "service", "env": env,
-                "cluster": cluster_display,
-                "detail": detail_path,
-                "attrs": {"listener": listener["host"], "source_probe": "ss"},
-                "source": "discovered",
-                "last_verified": _dt.date.today().isoformat(),
-                "needs_review": True,
-            }
-            seen_ports.add(port)
-    else:
-        probes["ss"] = "skipped（ss 不可用）"
+    # 4) 端口扫描补条目（非 loopback 监听端口，未映射到已知服务/无端口过滤）。
+    for listener in unmatched_listeners:
+        port = listener["port"]
+        if port in systemd_covered_ports:
+            # systemd 服务已覆盖该监听端口（正常入表），不重复补 unidentified。
+            continue
+        if skip_unidentified:
+            continue
+        name = f"unidentified-{port}"
+        detail_path = _entity_filename(cluster, host, name, env)
+        services.append({
+            "name": name,
+            "type": "service",
+            "env": env,
+            "cluster": cluster_display,
+            "endpoint": f"{host}:{port}",
+            "source": "discovered",
+            "last_verified": _dt.date.today().isoformat(),
+            "needs_review": True,
+            "detail": detail_path,
+            "attrs": {
+                "listener": listener["host"],
+                "ports": [port],
+                "source_probe": "ss",
+            },
+        })
+        details[name] = {
+            "name": name, "type": "service", "env": env,
+            "cluster": cluster_display,
+            "detail": detail_path,
+            "attrs": {"listener": listener["host"], "source_probe": "ss"},
+            "source": "discovered",
+            "last_verified": _dt.date.today().isoformat(),
+            "needs_review": True,
+        }
 
-    # 4) GPU（可选）。
+    # 5) GPU（可选）。
     gpu_res = _probe(runner, "nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null")
     if gpu_res.ok:
         probes["gpu"] = "ok"
@@ -826,6 +904,7 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
         "host": host_row,
         "services": services,
         "details": details,
+        "pending_review": pending_review,
         "probes": probes,
     }
 
@@ -846,16 +925,37 @@ def _topo_layered(topo: Dict[str, Any]) -> bool:
     return bool(topo.get("hosts") or topo.get("cross_host") or topo.get("clusters"))
 
 
-def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+def _read_host_index(home: Path, hostname: str) -> Dict[str, Any]:
+    """读取 hosts/<hostname>.yaml 服务索引（合并语义用；缺失/解析失败 → {}）。"""
+    path = Path(home) / "hosts" / f"{_sanitize_name(hostname)}.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
+                    merge: bool = True) -> Dict[str, Any]:
     """把发现结果落盘为 v0.3 结构（hosts/<host>.yaml + topology.yaml + entities/）。
 
     - 现有 topology.yaml 为 v0.1（扁平 core_entities）时拒绝写入（不自动改写用户数据）；
-    - host 已存在且未 ``force`` → 拒绝覆盖；
+    - host 已存在且未 ``force`` → 合并语义（批次十八 B）：发现的新服务自动追加进
+      hosts/<host>.yaml + entities/，已有同名服务/实体保留（含手动 endpoint/owner），
+      host 行保留原内容只刷新 last_verified；``merge=False`` 显式关闭合并时维持旧
+      的拒绝语义（需 ``--force`` 整体替换）；
     - 写路径：hosts/<hostname>.yaml（第二层服务索引）、
       entities/{cluster}__{host}__{name}.yaml（第三层详情草案，OPS-DELTA #42
       L3 命名）、topology.yaml 的 hosts 段追加；
     - 只产 v0.3：``version: 3``、hosts 行带 cluster、environments 只写四值档位
       （老自定义 env 按档位映射）。
+
+    Returns:
+      ``{"written", "topology", "index", "appended", "kept", "merged"}``——
+      appended = 本次新增服务数，kept = 合并时保留的现有索引行数（新 host/force
+      为 0），merged = 是否走了合并路径。
     """
     home = Path(home)
     host_row = dict(discovery.get("host") or {})
@@ -882,11 +982,19 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
                 "重铺样例，或手动添加 version: 2/3 + hosts: 段）后再发现。"
             )
         hosts = [h for h in topo.get("hosts") or [] if isinstance(h, dict)]
-        if any(h.get("name") == hostname for h in hosts) and not force:
+        host_exists = any(h.get("name") == hostname for h in hosts)
+        if host_exists and not force and not merge:
             raise DiscoveryError(
                 f"host {hostname} 已存在于 topology.yaml（--force 覆盖）。"
             )
-        topo["hosts"] = [h for h in hosts if h.get("name") != hostname] + [host_row]
+        if host_exists and not force:
+            # 合并：保留手动维护的 host 行，只刷新校验时间（不冲掉手动编辑）。
+            old_row = next(h for h in hosts if h.get("name") == hostname)
+            merged_row = dict(old_row)
+            merged_row["last_verified"] = _dt.date.today().isoformat()
+            topo["hosts"] = [h for h in hosts if h.get("name") != hostname] + [merged_row]
+        else:
+            topo["hosts"] = [h for h in hosts if h.get("name") != hostname] + [host_row]
         envs = [e.get("name") for e in (topo.get("environments") or []) if isinstance(e, dict)]
         if env_tier and env_tier not in envs:
             topo.setdefault("environments", []).append(
@@ -897,6 +1005,7 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
         topo["version"] = 3
         topo["updated_at"] = _dt.date.today().isoformat()
     else:
+        host_exists = False
         topo = {
             "version": 3,
             "updated_at": _dt.date.today().isoformat(),
@@ -912,26 +1021,52 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
             "key_paths": [],
         }
 
-    # 第二层：hosts/<hostname>.yaml 服务索引。
-    index_rows = []
+    # 第二层：hosts/<hostname>.yaml 服务索引（合并：同名跳过、新服务追加）。
+    existing_index: Dict[str, Any] = {}
+    if host_exists and not force:
+        existing_index = _read_host_index(home, hostname)
+    existing_rows = existing_index.get("services") or []
+    if not isinstance(existing_rows, list):
+        existing_rows = []
+    existing_names = {
+        str(s.get("name"))
+        for s in existing_rows
+        if isinstance(s, dict) and s.get("name")
+    }
+
+    merged_rows: List[Dict[str, Any]] = (
+        list(existing_rows) if (host_exists and not force) else []
+    )
+    appended = 0
     for svc in discovery.get("services") or []:
         if not isinstance(svc, dict):
             continue
         row = dict(svc)
         row.pop("_host", None)
-        index_rows.append(row)
+        if str(row.get("name")) in existing_names:
+            # 同名跳过：保留现有行（含手动 endpoint/owner/类型），不覆盖。
+            continue
+        merged_rows.append(row)
+        appended += 1
+    kept = len(existing_rows) if (host_exists and not force) else 0
+
     index_data = {
         "host": hostname,
-        "env": env,
-        "cluster": host_row["cluster"],
-        "services": index_rows,
+        "env": str(existing_index.get("env") or env) if (host_exists and not force) else env,
+        "cluster": (str(existing_index.get("cluster") or host_row["cluster"])
+                    if (host_exists and not force) else host_row["cluster"]),
+        "services": merged_rows,
     }
 
-    # 第三层：entities/{cluster}__{host}__{name}.yaml 详情草案（detail 字段是显式路径）。
+    # 第三层：entities/{cluster}__{host}__{name}.yaml 详情草案（合并：已有同名
+    # 实体保留不重写）。
     entities_dir = home / "entities"
     entity_paths = []
     for name, detail in (discovery.get("details") or {}).items():
         if not isinstance(detail, dict) or not _NAME_RE.fullmatch(str(name)):
+            continue
+        if name in existing_names and not force:
+            # 合并：索引里已存在的实体（含手动维护）不重写详情文件。
             continue
         rel = str(detail.get("detail") or f"entities/{name}.yaml")
         fname = rel[len("entities/"):] if rel.startswith("entities/") else rel
@@ -959,4 +1094,11 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
     )
     written = [str(index_path.relative_to(home)), str(topo_path.relative_to(home))]
     written.extend(entity_paths)
-    return {"written": written, "topology": topo_path, "index": index_path}
+    return {
+        "written": written,
+        "topology": topo_path,
+        "index": index_path,
+        "appended": appended,
+        "kept": kept,
+        "merged": bool(host_exists and not force),
+    }

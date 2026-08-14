@@ -379,7 +379,15 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     强制走人工确认门（yolo / smart-approval / 永久 allowlist 都不能绕过）。
     L3/L4 的 deny 仍硬拒，优先级不变（deny > require_confirmation）；未分级的
     变更类命令在 prod 档合成审批级判定（否则 ansible-playbook 这类未列入分级
-    的命令会漏网）。非 prod 档及非变更类命令行为与现状一致。
+    的命令会漏网）。
+
+    OPS-DELTA 批次十七（B'）：prod 档**未分级命令**（grade=None，不在 L1-L4
+    任何模式内，如 ``mv 单文件`` / ``cp`` / ``tar`` / 自定义脚本）默认
+    approve + require_confirmation=True（强制人工确认门，同 #32 变更门通道，
+    yolo 也绕不过）——堵"批量危险操作拆成单条无害命令全绕过"（2026-08-13
+    k3s-prod 改名事故：mv 跨 20+ 文件全部放行）。L1 查询命令匹配 L1 模式
+    （grade 非 None）不受影响，prod 仍 execute；L3/L4 deny 优先级不变；
+    非 prod 档（local/test/dev）未分级命令维持现状放行。
 
     Returns:
       None                         — gate disabled / env unknown / grade execute
@@ -403,6 +411,7 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         return None
 
     grade = classify_command(command)
+    was_ungraded = grade is None
     ops_config = _load_ops_config()
     row = _matrix_row(config, env, ops_config) if grade is not None else None
 
@@ -420,19 +429,35 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
                 return None
             action = "approve"
     else:
-        # 未分级（ansible-playbook 等未列入 _DEFAULT_GRADES）或未声明环境：
-        # 仅 prod 变更类命令合成审批级判定（确认门）；其余交回原有检查。
-        if not require_confirmation:
-            return None
-        action = "approve"
+        # 未分级（grade=None）或未声明环境：
+        # B'（OPS-DELTA 批次十七）：prod 档未分级命令默认 approve + 强制人工
+        # 确认门——堵"批量危险操作拆成单条 mv/cp/tar 绕过"（2026-08-13
+        # k3s-prod 改名事故，mv 单文件不在任何分级模式被全放行）。L1 查询命令
+        # 匹配 L1 模式（grade 非 None）不受影响；L3/L4 deny 优先级不变。
+        # 非 prod 档（local/test/dev）维持现状：未分级命令交回原检查放行。
+        if not is_prod:
+            if not require_confirmation:
+                return None
+            action = "approve"
+        else:
+            action = "approve"
+            require_confirmation = True  # prod 未分级 = 强制人工确认门（同变更类）
         grade = grade or "L2"
 
-    description = (
-        f"命令分级 {grade}（{_grade_examples(grade)}）在 {env} 环境的权限矩阵"
-        f"判定为 {'需要审批' if action == 'approve' else '拒绝'}"
-    )
-    if require_confirmation:
-        description = f"⚠ prod 变更确认门：{description}"
+    if was_ungraded and is_prod and action == "approve":
+        # B' 文案（要点 4）：未分级 + prod 明示"未分级命令在 prod 需人工确认"。
+        # 保留 "prod 变更确认门" 字样——approval 侧测试与用户提示都依赖它。
+        description = (
+            f"⚠ prod 变更确认门（未分级命令在 prod 需人工确认，B'）：{command} "
+            "不在 L1-L4 分级模式内，按 prod 档默认审批"
+        )
+    else:
+        description = (
+            f"命令分级 {grade}（{_grade_examples(grade)}）在 {env} 环境的权限矩阵"
+            f"判定为 {'需要审批' if action == 'approve' else '拒绝'}"
+        )
+        if require_confirmation:
+            description = f"⚠ prod 变更确认门：{description}"
     return {
         "action": action,
         "grade": grade,

@@ -101,11 +101,22 @@ def _write_askpass_cat(vault_path: str) -> Path:
 
 
 def _scp_argv_from_ssh(ssh_argv: List[str], local: Path, dest: str) -> List[str]:
-    """ssh argv → scp argv：``-p <port>`` → ``-P <port>``，追加 <local> <user@host>:<dest>。"""
-    out = ["scp", "-P", ssh_argv[2]]
-    # ssh_argv = ["ssh", "-p", port, ("-i", key)?, "user@host"]——target 是末元素
-    for piece in ssh_argv[3:-1]:
-        out.append(piece)
+    """ssh argv → scp argv：``-p <port>`` → ``-P <port>``，追加 <local> <user@host>:<dest>。
+
+    逐段翻译而非按下标取位：ssh argv 含 ``-o IdentitiesOnly=yes``（批次十九）等
+    任意 ``-o``/``-i`` 参数时原样透传（scp 支持 ``-o``），target 恒为末元素。
+    """
+    out = ["scp"]
+    i = 1
+    n = len(ssh_argv) - 1  # 末元素是 user@host 目标，不参与翻译
+    while i < n:
+        piece = ssh_argv[i]
+        if piece == "-p" and i + 1 < n:
+            out += ["-P", ssh_argv[i + 1]]
+            i += 2
+        else:
+            out.append(piece)
+            i += 1
     out += [str(local), f"{ssh_argv[-1]}:{dest}"]
     return out
 
@@ -140,11 +151,58 @@ def _run_local_sudo(command: str, cred: Dict[str, Any]) -> subprocess.CompletedP
                 pass
 
 
+def _breaker_key_from_argv(ssh_argv: List[str]) -> Tuple[str, str]:
+    """从 ssh argv 末元素（``user@host``）取 (host, user) 作熔断计数键。"""
+    target = ssh_argv[-1] if ssh_argv else ""
+    if "@" in target:
+        user, _, host = target.rpartition("@")
+        return host, user
+    return target, "root"
+
+
+def _ssh_auth_breaker_guard(ssh_argv: List[str]) -> None:
+    """远端 ssh/scp 前熔断预检：该 host:user 已连续认证失败达上限 → 直接熔断。"""
+    from tools.topo_discovery import (
+        _ssh_auth_breaker_error,
+        _ssh_auth_breaker_tripped,
+    )
+    host, user = _breaker_key_from_argv(ssh_argv)
+    if _ssh_auth_breaker_tripped(host, user):
+        raise RuntimeError(_ssh_auth_breaker_error(host, user))
+
+
+def _ssh_auth_breaker_note(ssh_argv: List[str], proc: subprocess.CompletedProcess) -> None:
+    """远端 ssh/scp 结果计入共享熔断计数（OPS-DELTA 批次十九 §AF）。
+
+    与 topo_discovery runner 同款判定（_is_ssh_auth_failure，不只 exit 255）：
+    认证失败 → 计数，达上限抛可操作熔断错误；非认证失败（连接成功/远端命令
+    自身退出码）→ 凭据 OK，计数清零。共享模块级 dict → vssh/sudo_exec/topo
+    探测路径同一会话内共用同一计数。
+    """
+    from tools.topo_discovery import (
+        _is_ssh_auth_failure,
+        _record_ssh_auth_failure,
+        _reset_ssh_auth_failures,
+        _ssh_auth_breaker_error,
+        _ssh_auth_breaker_tripped,
+    )
+    host, user = _breaker_key_from_argv(ssh_argv)
+    if getattr(proc, "returncode", None) == 255 and _is_ssh_auth_failure(proc):
+        _record_ssh_auth_failure(host, user)
+        if _ssh_auth_breaker_tripped(host, user):
+            raise RuntimeError(_ssh_auth_breaker_error(host, user))
+    else:
+        _reset_ssh_auth_failures(host, user)
+
+
 def _ssh_run(ssh_argv: List[str], ssh_env: Dict[str, str], remote_cmd: str,
              timeout: int = _EXEC_TIMEOUT_S) -> subprocess.CompletedProcess:
     """``ssh <argv> "<remote_cmd>"``（argv 已含 user@host 目标）。"""
-    return subprocess.run(ssh_argv + [remote_cmd], capture_output=True, text=True,
+    _ssh_auth_breaker_guard(ssh_argv)
+    proc = subprocess.run(ssh_argv + [remote_cmd], capture_output=True, text=True,
                           timeout=timeout, env=ssh_env)
+    _ssh_auth_breaker_note(ssh_argv, proc)
+    return proc
 
 
 def _run_remote_sudo(host: str, user: str, port: int, command: str,
@@ -188,10 +246,12 @@ def _run_remote_sudo(host: str, user: str, port: int, command: str,
 
 
 def _scp(ssh_argv: List[str], ssh_env: Dict[str, str], local: Path, dest: str) -> None:
-    """scp 上传（复用 ssh 的 key/askpass 认证 env）。"""
+    """scp 上传（复用 ssh 的 key/askpass 认证 env；经共享熔断计数）。"""
+    _ssh_auth_breaker_guard(ssh_argv)
     proc = subprocess.run(_scp_argv_from_ssh(ssh_argv, local, dest),
                           capture_output=True, text=True,
                           timeout=_PROVISION_TIMEOUT_S, env=ssh_env)
+    _ssh_auth_breaker_note(ssh_argv, proc)
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()
         raise RuntimeError(f"scp 上传失败：{detail[-1] if detail else '未知错误'}")
