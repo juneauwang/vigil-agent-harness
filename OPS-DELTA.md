@@ -1520,3 +1520,42 @@
 - **核销方式**：redact 名单追加式，季度体检 grep 新增形态仍生效；sudo_exec 可用性
   由 check_topo_requirements 数据门控（无 topology.yaml 零 footprint）；熔断计数
   进程内存、重启清零（会话级语义）。
+
+### 39. 批次十七 权限矩阵 B'：未分级命令 prod 档默认审批 + 变更类覆盖测试（§AA 联动） — ✅ 已实施（2026-08-14，批次十七；commit hash 佐证：B' dc59dde / 变更覆盖 98f7b70）
+- **发现**（2026-08-13 晚 + 2026-08-14 §AA 源码核验）：
+  1. 实测洞：agent 把 k3s-prod 集群改名成 k8s-prod，跨 20+ 文件 `mv` + patch 全部
+     放行——`mv 单文件` 不在任何分级模式里（classify_command → grade=None），
+     prod 档对未分级命令直接放行（批量危险操作拆成单条无害命令即全绕过）。
+  2. §AA 风险点 1：prod 变更确认门依赖 `_CHANGE_COMMAND_RE` 识别变更类，漏识别的
+     变更命令会退回普通审批 → yolo 放行；现有测试没有覆盖变更清单完整性。
+- **修复（批次十七，B' 方案拍板"毕竟是 Prod"）**：
+  1. B'（tools/ops_permissions.py，dc59dde）：`check_ops_command_permission`
+     else 分支（grade=None 或未声明环境）——prod 档未分级命令默认
+     approve + require_confirmation=True（强制人工确认门，同 #32 变更门通道，
+     yolo / smart-approval / 永久 allowlist 都绕不过）；L1 查询命令匹配 L1 模式
+     （grade 非 None）不受影响，prod 仍 execute；L3/L4 deny 优先级不变；非 prod
+     档（local/test/dev）未分级命令维持现状放行。description 文案：未分级+prod
+     明示"未分级命令在 prod 需人工确认（B'）"，保留"prod 变更确认门"字样。
+  2. 变更类覆盖测试（tests/tools/test_change_command_coverage.py，98f7b70）：
+     20 条变更样本（ansible-playbook/kubectl apply/delete/edit/scale/rollout/drain/
+     cordon、docker compose up/restart/rm/down、docker restart/rm/stop、
+     systemctl restart/stop、helm upgrade/install/uninstall）逐条断言命中
+     `_CHANGE_COMMAND_RE` + prod 档 require_confirmation=True；反向断言
+     （ls/cat/kubectl get/docker ps/systemctl status/helm list）不命中。
+     全部命中，无需补正则（变更清单无漏项）。
+- **验收**：tests/tools/test_ops_permissions.py（30）+ test_ops_permissions_guard.py
+  （23）+ test_change_command_coverage.py（4）全绿；审批侧回归
+  （test_ops_confirmation_gate / test_approval / test_command_guards /
+  test_sudo_stdin_guard_sources / test_yolo_mode / test_denial_circuit_breaker /
+  test_sudo_exec，221 例）不破；行为探针三条符合预期（prod 未分级 mv →
+  approve+confirm；同命令 test 档 → None 不变；classify ls -la → L1）。
+- **硬约束**：_DEFAULT_GRADES / L1 排除名单未动；非 prod 行为不变（探针对比确认）；
+  无新 env var；diff 只含白名单文件（tools/ops_permissions.py + 三个测试文件）。
+- **已知风险（B' 噪音面）**：prod 上原本"直接跑"的未分级命令开始要审批——典型
+  噪音：`helm list`（未分级查询，不在 L1 模式）、`ssh host 'df -h'` 类包装命令
+  （整体未分级）、自定义脚本/单文件 mv/cp/tar。这些是 B' 的预期代价（宁可多确认
+  不漏放）；若某类查询高频且确属只读，后续应补进 L1 模式（需另立批次，本批不改
+  分级模式）。
+- **核销方式**：approval.py `_ops_confirmation_required` 通道复检（require_confirmation
+  的 approve 决策 yolo/allowlist 不绕过，批次十七 guard 测试钉住）；变更清单
+  test_change_command_coverage.py 常驻，新增变更类命令需同步加样本。
