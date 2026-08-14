@@ -59,7 +59,7 @@ class TestGatewayWaitPolicy:
         mod._session_approved.clear()
         mod._permanent_approved.clear()
         mod._pending.clear()
-        mod.set_current_session_key(self.SESSION)
+        self._session_token = mod.set_current_session_key(self.SESSION)
 
     def teardown_method(self):
         from tools import approval as mod
@@ -67,6 +67,7 @@ class TestGatewayWaitPolicy:
         mod._gateway_queues.clear()
         mod._gateway_notify_cbs.clear()
         mod.clear_session(self.SESSION)
+        mod.reset_current_session_key(self._session_token)
 
     def test_wait_policy_renotifies_and_stays_pending(self, monkeypatch):
         from tools import approval as mod
