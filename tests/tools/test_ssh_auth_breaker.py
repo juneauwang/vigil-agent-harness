@@ -146,3 +146,98 @@ def test_cli_vssh_path_not_counted(monkeypatch):
     argv, env = _build_ssh_argv("db1", user="root")
     assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "root@db1"]
     assert topodisc._SSH_AUTH_FAILURES == before
+
+# ---------------------------------------------------------------------------
+# 批次十九 §AF — 熔断信号扩展 + 共享计数（sudo_tool 远端路径接入）
+# ---------------------------------------------------------------------------
+
+def test_too_many_auth_failures_signal_counts_even_without_255(monkeypatch):
+    """MaxAuthTries 耗尽信号（stderr 含 Too many）不再要求 exit 255。
+
+    个别 ssh 包装/ansible 返回码不是 255，但提示出现即 sshd 限流信号。
+    """
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        topodisc.subprocess, "run",
+        lambda argv, **kwargs: SimpleNamespace(
+            returncode=1, stdout="", stderr="Too many authentication failures for root"),
+    )
+    runner = _build_ssh_runner("203.0.113.30", "root")
+    with pytest.raises(DiscoveryError, match="SSH 连接"):
+        runner("uptime")
+    assert topodisc._ssh_auth_failures("203.0.113.30", "root") == 1
+
+
+def test_permission_denied_twice_in_one_attempt_counts(monkeypatch):
+    """单次尝试内 Permission denied 出现两次 = 多 key 遍历的认证失败信号。"""
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(
+        topodisc.subprocess, "run",
+        lambda argv, **kwargs: SimpleNamespace(
+            returncode=0, stdout="",
+            stderr=("Permission denied (publickey).\n"
+                    "Permission denied (publickey,password).")),
+    )
+    runner = _build_ssh_runner("203.0.113.31", "root")
+    with pytest.raises(DiscoveryError, match="SSH 连接"):
+        runner("uptime")
+    assert topodisc._ssh_auth_failures("203.0.113.31", "root") == 1
+
+
+def test_breaker_error_includes_identities_only_and_layering():
+    """熔断错误信息带分层归因：连接层 → 检查 IdentitiesOnly；执行层才换姿势。"""
+    msg = topodisc._ssh_auth_breaker_error("203.0.113.32", "root")
+    assert "IdentitiesOnly=yes" in msg
+    assert "Too many authentication failures" in msg
+    assert "连接层错误" in msg and "执行层错误" in msg
+    assert "MaxAuthTries=6" in msg and "已停止自动重试" in msg
+
+
+def test_sudo_tool_scp_ssh_paths_share_breaker_counter(monkeypatch):
+    """sudo_exec 远端 scp/ssh 路径（§AF 三兄弟的 scp/ssh）接入共享熔断计数。
+
+    mock ansible/scp 族路径：连续认证失败 3 次（scp 2 次 + ssh 1 次）→ 熔断
+    错误（含 IdentitiesOnly 提示）；成功后计数清零——与 topo_discovery runner
+    共用同一模块级计数（跨工具共享状态）。
+    """
+    import tools.sudo_tool as sudo_tool
+
+    ssh_argv = ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "ops@host"]
+    auth_fail = SimpleNamespace(returncode=255, stdout="",
+                                stderr="Permission denied (publickey,password).")
+    ok = SimpleNamespace(returncode=0, stdout="ok", stderr="")
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        # 前 3 次底层调用模拟认证失败（scp/ssh 任意），之后成功
+        return auth_fail if len(calls) <= 3 else ok
+
+    monkeypatch.setattr(sudo_tool.subprocess, "run", fake_run)
+
+    from pathlib import Path
+    # 第 1 次：scp 失败（计数 1）→ 抛 scp 上传失败
+    with pytest.raises(RuntimeError, match="scp 上传失败"):
+        sudo_tool._scp(ssh_argv, {}, Path("/local/f"), "ops@host:/tmp/x")
+    assert topodisc._ssh_auth_failures("host", "ops") == 1
+    # 第 2 次：scp 失败（计数 2）
+    with pytest.raises(RuntimeError, match="scp 上传失败"):
+        sudo_tool._scp(ssh_argv, {}, Path("/local/f"), "ops@host:/tmp/x")
+    assert topodisc._ssh_auth_failures("host", "ops") == 2
+    # 第 3 次：ssh 失败（计数 3 → 熔断），错误可操作
+    with pytest.raises(RuntimeError, match="认证失败 3/3"):
+        sudo_tool._ssh_run(ssh_argv, {}, "sudo -A uptime")
+    # 第 4 次：入口直接熔断（不再调用底层），错误含 IdentitiesOnly 归因
+    with pytest.raises(RuntimeError) as ei:
+        sudo_tool._ssh_run(ssh_argv, {}, "sudo -A uptime")
+    breaker_msg = str(ei.value)
+    assert "已停止自动重试" in breaker_msg and "IdentitiesOnly=yes" in breaker_msg
+    assert "连接层错误" in breaker_msg
+    assert len(calls) == 3  # 底层只被调用 3 次
+    # 成功后计数清零：凭据修复（清计数）后一次成功 ssh → 不再累积
+    topodisc._SSH_AUTH_FAILURES.clear()
+    monkeypatch.setattr(sudo_tool.subprocess, "run", lambda argv, **kw: ok)
+    sudo_tool._ssh_run(ssh_argv, {}, "sudo -A uptime")
+    assert topodisc._ssh_auth_failures("host", "ops") == 0

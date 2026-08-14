@@ -152,10 +152,23 @@ def _ssh_auth_breaker_tripped(host: str, user: str) -> bool:
 
 
 def _is_ssh_auth_failure(proc: Any) -> bool:
-    """认证失败判定：exit 255 + stderr 含 Permission denied / MaxAuthTries 等。"""
+    """认证失败判定（批次十九扩展，不只 exit 255）。
+
+    - ``too many authentication failures``：sshd 限流信号，stderr 出现即算——
+      个别 ssh 包装/ansible/scp 返回码不一定是 255，但该提示出现意味着
+      MaxAuthTries 已被刷爆，再试只会继续自伤；
+    - ``permission denied`` 出现两次：ssh 多 key 逐个尝试的典型输出（agent
+      自由拼的 ssh/scp 路径），单次尝试内两次拒绝即认证失败信号；
+    - 其余保持批次十六语义：exit 255 + stderr 含认证提示才计数（连接拒绝等
+      非认证 255 不计数）。
+    """
+    stderr = (getattr(proc, "stderr", None) or "").lower()
+    if "too many authentication failures" in stderr:
+        return True
+    if stderr.count("permission denied") >= 2:
+        return True
     if getattr(proc, "returncode", None) != 255:
         return False
-    stderr = (getattr(proc, "stderr", None) or "").lower()
     return any(hint in stderr for hint in _SSH_AUTH_FAILURE_HINTS)
 
 
@@ -164,7 +177,11 @@ def _ssh_auth_breaker_error(host: str, user: str) -> str:
     return (
         f"⚠️ SSH 认证失败 {n}/{_SSH_AUTH_BREAKER_LIMIT}——为避免 sshd 限流"
         f"（MaxAuthTries=6）把自己锁出主机（{user}@{host}），已停止自动重试。"
-        "请：1) 手动 ssh 验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
+        "分层定位：连接层错误（Too many authentication failures / Permission "
+        "denied）→ 停止重试 + 检查 -o IdentitiesOnly=yes（ssh-agent 多 key 会"
+        "遍历所有 key 刷爆 MaxAuthTries）+ 检查重试次数；执行层错误（转义/远端"
+        "权限）→ 才换传递方式，不要用换姿势掩盖连接层真凶。请：1) 手动 ssh "
+        "验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
     )
 
 
@@ -224,12 +241,19 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
             raise DiscoveryError(f"SSH 连接 {user}@{host} 超时（{_SSH_TIMEOUT_S}s）") from exc
         except OSError as exc:
             raise DiscoveryError(f"无法执行 ssh：{exc}") from exc
+        # 认证失败判定（批次十九：不只 exit 255——Too many / Permission denied ×2
+        # 即限流或多 key 遍历信号）→ 计数，达上限熔断；任一认证失败都中止发现。
+        if _is_ssh_auth_failure(proc):
+            _record_ssh_auth_failure(host, user)
+            if _ssh_auth_breaker_tripped(host, user):
+                raise DiscoveryError(_ssh_auth_breaker_error(host, user))
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            raise DiscoveryError(
+                f"SSH 连接 {user}@{host} 失败（exit {proc.returncode}）："
+                f"{detail[-1] if detail else '认证失败或主机不可达'}"
+            )
         if proc.returncode == 255:
-            if _is_ssh_auth_failure(proc):
-                _record_ssh_auth_failure(host, user)
-                if _ssh_auth_breaker_tripped(host, user):
-                    raise DiscoveryError(_ssh_auth_breaker_error(host, user))
-            # ssh 自身失败（连接拒绝/认证失败）→ 中止发现，无半截数据。
+            # exit 255 但非认证失败（连接拒绝/握手失败）→ 中止发现，不计数。
             detail = (proc.stderr or proc.stdout or "").strip().splitlines()
             raise DiscoveryError(
                 f"SSH 连接 {user}@{host} 失败（exit 255）："
