@@ -57,11 +57,14 @@ _VIGIL_COMMANDS = frozenset({
     "chat", "setup", "config", "model", "version", "status",
     "logs", "tools", "skin",
     "ops-init", "topo-discover", "watch", "vssh",
+    "doctor", "sessions",
 })
 
 
 class _GroupedHelpFormatter(argparse.RawDescriptionHelpFormatter):
     """顶层 help：Vigil 命令一组醒目，继承命令折叠（``vigil --help-all`` 全量）。"""
+
+    expand_inherited = False
 
     def _format_action(self, action):
         if not isinstance(action, argparse._SubParsersAction):
@@ -84,12 +87,58 @@ class _GroupedHelpFormatter(argparse.RawDescriptionHelpFormatter):
             parts.append(self._format_action(pa))
         self._dedent()
         parts.append("\n")
-        names_line = f"继承命令（来自 hermes，{len(inherited)} 个）：{' '.join(inherited)}"
-        for line in self._split_lines(names_line, self._width - self._current_indent):
-            parts.append("%*s%s\n" % (self._current_indent, "", line))
-        parts.append("%*s%s\n" % (self._current_indent, "",
-                                   "  完整列表与说明见：vigil --help-all"))
+        if self.expand_inherited:
+            # --help-all：继承命令同样逐条完整展开（分组可读，不折叠）。
+            rows = self._inherited_rows(action, by_name, inherited)
+            parts.append("%*s%s\n" % (self._current_indent, "",
+                                      f"继承命令（来自 hermes，{len(rows)} 个）："))
+            self._indent()
+            for pa in rows:
+                parts.append(self._format_action(pa))
+            self._dedent()
+        else:
+            names_line = f"继承命令（来自 hermes，{len(inherited)} 个）：{' '.join(inherited)}"
+            for line in self._split_lines(names_line, self._width - self._current_indent):
+                parts.append("%*s%s\n" % (self._current_indent, "", line))
+            parts.append("%*s%s\n" % (self._current_indent, "",
+                                      "  完整列表与说明见：vigil --help-all"))
+            parts.append("%*s%s\n" % (self._current_indent, "",
+                                      "  运维常用继承命令：doctor / sessions / cron / skills"
+                                      "（用法：vigil <命令> --help）"))
         return "".join(parts)
+
+    @staticmethod
+    def _inherited_rows(action, by_name, inherited):
+        """--help-all 的继承命令行：每个可调用名字一行，保证"全量"名副其实。
+
+        argparse 只为带 ``help=`` 的子命令生成伪 action：别名
+        （learning/memory-graph/gui）与无 help 的弃用命令（login）不在
+        ``by_name`` 里。别名复用其正名的 help；无 help 的子命令用其
+        ``description`` 兜底（login 的弃用指引因此也能在 --help-all 看到）。
+        """
+        rows = []
+        for n in inherited:
+            pa = by_name.get(n)
+            if pa is not None:
+                rows.append(pa)
+                continue
+            parser = action.choices[n]
+            help_text = next(
+                (p.help for p in action._choices_actions
+                 if action.choices.get(p.dest) is parser and p.help),
+                getattr(parser, "description", None),
+            )
+            if help_text:
+                rows.append(argparse.Action(
+                    option_strings=[], dest=n, help=help_text, metavar=n,
+                ))
+        return rows
+
+
+class _ExpandedGroupedHelpFormatter(_GroupedHelpFormatter):
+    """--help-all：同分组渲染，继承命令逐条完整展开（不折叠）。"""
+
+    expand_inherited = True
 
 
 def build_top_level_parser():

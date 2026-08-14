@@ -60,12 +60,13 @@ def test_help_folds_inherited_descriptions():
 
 
 def test_help_all_lists_inherited_commands():
-    """``--help-all`` 全量列出（含继承命令的逐条说明）。"""
+    """``--help-all`` 同分组全量列出（Vigil 一组 + 继承命令一组逐条说明）。"""
     proc = _run_cli("--help-all")
     assert proc.returncode == 0, proc.stderr
     out = proc.stdout
     assert "Messaging gateway management" in out
-    assert "继承命令（来自 hermes" not in out
+    # 批次二十二：--help-all 与 -h 同用分组渲染，继承命令有分组标题且逐条展开。
+    assert re.search(r"继承命令（来自 hermes，\d+ 个）：", out)
     for name in ("moa", "gateway", "secrets", "egress", "cron"):
         assert re.search(rf"^\s+{re.escape(name)}\s", out, re.M), name
 
