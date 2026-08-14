@@ -151,6 +151,20 @@ def _ssh_auth_breaker_tripped(host: str, user: str) -> bool:
     return _ssh_auth_failures(host, user) >= _SSH_AUTH_BREAKER_LIMIT
 
 
+def force_trip(host: str, user: str) -> None:
+    """用户纠正信号 → 该 host:user 立即进入熔断态（等价已连续失败 3 次）。
+
+    批次二十一 §AF 补丁 2 需求 2：用户纠正操作方向（新对话轮次明确否定当前
+    尝试路径）＝ 停止信号。会话层检测到纠正信号后调用本函数，后续该 host:user
+    的 runner/guard 入口直接熔断，不再自动重试（与自然触发 3 次失败同语义）。
+    """
+    with _SSH_AUTH_LOCK:
+        entry = _SSH_AUTH_FAILURES.setdefault(_ssh_auth_key(host, user), {})
+        entry["count"] = _SSH_AUTH_BREAKER_LIMIT
+        entry["ts"] = _dt.datetime.now().isoformat()
+        entry["forced"] = True
+
+
 def _is_ssh_auth_failure(proc: Any) -> bool:
     """认证失败判定（批次十九扩展，不只 exit 255）。
 
@@ -182,6 +196,8 @@ def _ssh_auth_breaker_error(host: str, user: str) -> str:
         "遍历所有 key 刷爆 MaxAuthTries）+ 检查重试次数；执行层错误（转义/远端"
         "权限）→ 才换传递方式，不要用换姿势掩盖连接层真凶。请：1) 手动 ssh "
         "验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
+        "。请勿换用户名/换 key/翻 ~/.ssh/ 继续尝试（§Q/§AD/§AF 教训——这些行为"
+        "会触发 sshd 限流锁 15 分钟）。3) 或询问用户提供正确凭据"
     )
 
 
@@ -193,9 +209,24 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
 
     密码走 SSH_ASKPASS（``askpass_file`` 为 0700 脚本，从保险箱文件读取），
     任何密码明文都不进 argv / 环境变量。
+
+    fail-closed（批次二十一 §Q 收口）：SSH 认证凭据（key_path / askpass_file /
+    key_passphrase_file 任一）未提供时直接报错——不再回退到"尝试默认 key / 
+    ssh-agent"自探测（§Q 实锤：agent 凭据缺失时翻 ~/.ssh/ 试密钥/猜 vault 字段，
+    触发 sshd MaxAuthTries 限流）。CLI 交互路径（topo-discover 交互收集凭据 /
+    vssh）在调用方提供凭据，不受影响；sudo_password_file 是 sudo 密码不是 SSH
+    认证凭据，不构成放行条件。
     """
     if not host or not user:
         raise DiscoveryError("SSH 需要 host 与 user（--host / --user）")
+    if not (key_path or askpass_file is not None or key_passphrase_file is not None):
+        raise DiscoveryError(
+            f"目标主机 {user}@{host} 未配置 SSH 凭据（拓扑表 credential 缺失或无 "
+            "key/password）——禁止自行翻 ~/.ssh/ 找 key / 试多个用户名 / 猜 vault "
+            "字段（§Q/§AD 教训，会触发 sshd MaxAuthTries 限流把主机锁 15 分钟）。"
+            "请停止自动尝试：1) 手动 ssh 验证凭据 2) 或通过 topo_update 补充拓扑表 "
+            "credential 声明 3) 或询问用户提供正确凭据"
+        )
 
     def run(cmd: str) -> ProbeResult:
         # 熔断检查在 runner 调用前（agent 工具/自动探测路径）——该 host:user 已

@@ -35,7 +35,7 @@ def test_trips_after_three_failures_and_stops_calling_underlying(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.20", "root")
+    runner = _build_ssh_runner("203.0.113.20", "root", key_path="/keys/test.pem")
 
     with pytest.raises(DiscoveryError, match="SSH 连接"):   # 第 1 次：普通认证失败
         runner("uptime")
@@ -56,7 +56,7 @@ def test_breaker_message_is_actionable(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.20", "root")
+    runner = _build_ssh_runner("203.0.113.20", "root", key_path="/keys/test.pem")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
         runner("uptime")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
@@ -78,8 +78,8 @@ def test_hosts_independent_counters(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner_a = _build_ssh_runner("host-a", "root")
-    runner_b = _build_ssh_runner("host-b", "root")
+    runner_a = _build_ssh_runner("host-a", "root", key_path="/keys/test.pem")
+    runner_b = _build_ssh_runner("host-b", "root", key_path="/keys/test.pem")
 
     for _ in range(3):
         with pytest.raises(DiscoveryError):
@@ -103,7 +103,7 @@ def test_success_resets_counter(monkeypatch):
         return _auth_fail()
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.21", "root")
+    runner = _build_ssh_runner("203.0.113.21", "root", key_path="/keys/test.pem")
 
     with pytest.raises(DiscoveryError):  # 失败 1
         runner("uptime")
@@ -129,7 +129,7 @@ def test_non_auth_255_not_counted(monkeypatch):
         return SimpleNamespace(returncode=255, stdout="", stderr="Connection refused")
 
     monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
-    runner = _build_ssh_runner("203.0.113.22", "root")
+    runner = _build_ssh_runner("203.0.113.22", "root", key_path="/keys/test.pem")
 
     for _ in range(5):
         with pytest.raises(DiscoveryError, match="SSH 连接"):
@@ -163,7 +163,7 @@ def test_too_many_auth_failures_signal_counts_even_without_255(monkeypatch):
         lambda argv, **kwargs: SimpleNamespace(
             returncode=1, stdout="", stderr="Too many authentication failures for root"),
     )
-    runner = _build_ssh_runner("203.0.113.30", "root")
+    runner = _build_ssh_runner("203.0.113.30", "root", key_path="/keys/test.pem")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
         runner("uptime")
     assert topodisc._ssh_auth_failures("203.0.113.30", "root") == 1
@@ -180,7 +180,7 @@ def test_permission_denied_twice_in_one_attempt_counts(monkeypatch):
             stderr=("Permission denied (publickey).\n"
                     "Permission denied (publickey,password).")),
     )
-    runner = _build_ssh_runner("203.0.113.31", "root")
+    runner = _build_ssh_runner("203.0.113.31", "root", key_path="/keys/test.pem")
     with pytest.raises(DiscoveryError, match="SSH 连接"):
         runner("uptime")
     assert topodisc._ssh_auth_failures("203.0.113.31", "root") == 1
@@ -241,3 +241,83 @@ def test_sudo_tool_scp_ssh_paths_share_breaker_counter(monkeypatch):
     monkeypatch.setattr(sudo_tool.subprocess, "run", lambda argv, **kw: ok)
     sudo_tool._ssh_run(ssh_argv, {}, "sudo -A uptime")
     assert topodisc._ssh_auth_failures("host", "ops") == 0
+
+
+# ---------------------------------------------------------------------------
+# 批次二十一 — 凭据 fail-closed 硬化（任务 1：熔断错误信息扩展）
+# ---------------------------------------------------------------------------
+
+def test_breaker_error_forbids_credential_self_probing():
+    """熔断错误信息带 fail-closed 指令：禁止换用户名/换 key/翻 ~/.ssh/ 继续。
+
+    §Q/§AD/§AF 实锤：agent 在熔断后换姿势/换凭据来源继续试，把主机锁 15
+    分钟——错误信息必须显式禁止自探测并引导问用户。
+    """
+    topodisc._SSH_AUTH_FAILURES.clear()
+    topodisc._record_ssh_auth_failure("203.0.113.40", "root")
+    topodisc._record_ssh_auth_failure("203.0.113.40", "root")
+    topodisc._record_ssh_auth_failure("203.0.113.40", "root")
+    try:
+        msg = topodisc._ssh_auth_breaker_error("203.0.113.40", "root")
+        assert "请勿换用户名/换 key/翻 ~/.ssh/ 继续尝试" in msg
+        assert "限流锁 15 分钟" in msg
+        assert "询问用户提供正确凭据" in msg
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
+
+
+# ---------------------------------------------------------------------------
+# 批次二十一 — 凭据 fail-closed（任务 3：用户纠正 force_trip 联动）
+# ---------------------------------------------------------------------------
+
+def test_force_trip_immediately_breaks_with_zero_ssh_calls(monkeypatch):
+    """force_trip 后该 host:user 立即熔断——入口直接报错，不再调用底层。"""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _auth_fail()
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    topodisc.force_trip("203.0.113.60", "root")
+    try:
+        runner = _build_ssh_runner("203.0.113.60", "root", key_path="/keys/test.pem")
+        with pytest.raises(DiscoveryError, match="已停止自动重试") as ei:
+            runner("uptime")
+        assert "询问用户提供正确凭据" in str(ei.value)
+        assert calls == [], "force_trip 后不得发起任何 ssh 调用"
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
+
+
+def test_force_trip_keeps_other_hosts_untouched(monkeypatch):
+    """force_trip 只作用于目标 host:user，其他 host 计数不受影响。"""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _auth_fail()
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    topodisc.force_trip("host-ft", "root")
+    try:
+        assert topodisc._ssh_auth_breaker_tripped("host-ft", "root") is True
+        assert topodisc._ssh_auth_failures("host-other", "root") == 0
+        runner = _build_ssh_runner("host-other", "root", key_path="/keys/test.pem")
+        with pytest.raises(DiscoveryError, match="SSH 连接"):
+            runner("uptime")
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
+
+
+def test_force_trip_trips_sudo_tool_guard(monkeypatch):
+    """sudo_tool 远端路径共享同一计数——force_trip 后 guard 直接熔断。"""
+    import tools.sudo_tool as sudo_tool
+
+    topodisc.force_trip("host-sudo", "ops")
+    try:
+        from tools.sudo_tool import _ssh_auth_breaker_guard
+        with pytest.raises(RuntimeError, match="已停止自动重试"):
+            _ssh_auth_breaker_guard(["ssh", "-p", "22", "ops@host-sudo"])
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
