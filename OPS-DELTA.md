@@ -1840,3 +1840,84 @@
   test_ssh_auth_breaker.py（force_trip + 熔断消息指令）、test_sudo_exec.py（认证
   失败问用户）、test_batch14_e3_vssh.py（allow_fallback 接线）；行为探针命令在
   批次二十一 prompt 验收段可复跑。
+
+### 44. 批次二十二 /help 清理——~/.hermes→~/.vigil 文案残留 + Examples 运维化 + 折叠命令可查性（§G 收尾） — ✅ 已实施（2026-08-14，批次二十二；commit hash 佐证：任务 1 文案清理 599ec50 / 任务 2 Examples b366672 / 任务 3 可查性 0b5aff6）
+- **背景（§G 需求 3/4/5）**：①用户机器数据根是 ~/.vigil，help 文案仍写
+  ~/.hermes/... 会误导排查（dogfood 2026-08-13 实测 9 处）；②`vigil -h` 底部
+  Examples 是上游模板（hermes-agent-dev,github-auth / gateway install），对运维
+  用户无用且误导；③58 个继承命令折叠成一行，用户不知道里面有什么、怎么查。
+- **任务 1（~/.hermes → ~/.vigil 用户可见文案清理，13 处 help/description）**：
+  1. `hermes_cli/main.py:11663` checkpoints help（`Inspect / prune / clear ~/.hermes/checkpoints/`）。
+  2. `hermes_cli/main.py:11403` secrets description（`~/.hermes/.env` → `~/.vigil/.env`）。
+  3. `hermes_cli/_parser.py:283` 顶层 `--ignore-user-config` help。
+  4. `hermes_cli/_parser.py:476` chat 版 `--ignore-user-config` help。
+  5. `hermes_cli/subcommands/acp.py:41` `--setup-browser` help（node/）。
+  6. `hermes_cli/subcommands/approvals.py:74` `--db` help（state.db）。
+  7. `hermes_cli/subcommands/claw.py:57-58` `--no-backup` help（zip snapshot + backups/）。
+  8. `hermes_cli/subcommands/webhook.py:61` `--script` help（scripts/）。
+  9. `hermes_cli/subcommands/hooks.py:19-21` description（config.yaml + shell-hooks-allowlist.json）。
+  10. `hermes_cli/subcommands/security.py:21` description（plugins/）。
+  11. `hermes_cli/subcommands/skills.py:164` reset description（skills/.bundled_manifest）。
+  12. `hermes_cli/subcommands/cron.py:51,123` `--script` help（scripts/，两处）。
+  13. `hermes_cli/subcommands/dashboard.py:185` register description（.env）。
+  14. `hermes_cli/subcommands/gateway.py:264,303` relay description（.env，两处）。
+  15. `hermes_cli/curator.py:808,819` backup/rollback help（skills/，两处）——继承命令
+      help，`--help-all` 逐条展示，任务 1 全仓 grep 漏网收编（curator.py 在白名单
+      边缘：hermes_cli/ 下但非 main/_parser/subcommands，属"继承命令 description 由
+      Vigil 展示，改它不违反"的明示类别）。
+- **任务 2（Examples 换运维场景）**：`hermes_cli/_parser.py` `_EPILOGUE` 上游模板
+  全删，换 6 条运维用例——`vigil chat`（完整 ops harness）/ `topo-discover -e prod
+  -H 10.0.1.29`（SSH 扫描）/ `watch status` / `vssh node1`（凭据注入，密码不进命令行）/
+  `config set model.default deepseek-v4-flash` / `setup`。命令名/参数形态按当前真实
+  parser 核对（topo-discover/vssh/watch 均存在）。
+- **任务 3（折叠命令可查性）**：
+  1. 折叠行提示补全：`完整列表与说明见：vigil --help-all` + 新增
+     `运维常用继承命令：doctor / sessions / cron / skills（用法：vigil <命令> --help）`。
+  2. `--help-all` 改用 `_ExpandedGroupedHelpFormatter`（继承 `_GroupedHelpFormatter`，
+     仅 `expand_inherited=True`）：Vigil 命令一组 + 继承命令一组逐条完整展开，
+     与 `-h` 同分组渲染（原来平铺）。
+  3. 展开行覆盖所有可调用名字：argparse 只为带 `help=` 的子命令生成伪 action，
+     别名（learning/memory-graph/gui）与无 help 的弃用命令（login）需专门处理——
+     别名复用正名 help、login 用子 parser description 兜底（弃用指引在 --help-all
+     可见），保证"全量"名副其实、`-h`/`--help-all` 数量一致（56 个）。
+  4. 运维高频白名单：`_VIGIL_COMMANDS` 15 个——config/logs/status 原有已覆盖，
+     新补 `doctor`/`sessions`；`resume` 未提（sessions 已覆盖会话管理，折叠行提示
+     点 doctor/sessions/cron/skills 四个即可，不过度膨胀 Vigil 组）。
+- **验收**：新增 tests/hermes_cli/test_help_text_cleanup.py——7 用例：18 条
+  help/description 旧串消失+新串就位（读源码断言）、`-h`/`--help-all` 输出无
+  ~/.hermes 且含 ~/.vigil（行为探针）、_EPILOGUE 含 6 运维示例不含上游模板、
+  `-h` Examples 段含 topo-discover/vssh、_VIGIL_COMMANDS 覆盖 config/logs/status/
+  doctor/sessions、折叠行含 --help-all 提示+运维常用提示、`--help-all` 分组标题+
+  逐条展开（moa/gateway/secrets/egress/cron 行 + gui/learning/memory-graph/login
+  别名与弃用命令行）。E1 测试 test_batch14_e1_help_grouping.py 更新
+  test_help_all_lists_inherited_commands（"继承命令（来自 hermes" not in out →
+  分组标题 + 逐条行断言，批次二十二新渲染）。回归：test_help_text_cleanup.py 7 +
+  test_batch14_e1_help_grouping.py 4 + test_commands.py + test_subparser_routing_
+  fallback.py + test_argparse_flag_propagation.py + test_startup_plugin_gating.py
+  全绿（62 passed；仅既有基线噪音 test_config_gate_included_in_slack_when_on ×1
+  与 test_gateway_service.py systemd ×5、test_relaunch.py ×2 在 base 同样失败，
+  非本批引入）。
+- **硬约束核对**：diff 白名单 = hermes_cli/main.py、hermes_cli/_parser.py、
+  hermes_cli/subcommands/*.py、hermes_cli/curator.py（继承命令 help 收编，见上）、
+  对应新测试 + E1 测试更新、OPS-DELTA.md——共 16 文件；无新 env var；无命令删除
+  （git diff 无 CommandDef 删除，login 等保留可调用）；不碰 conversation_loop /
+  prompt 缓存；数据根语义不变（display_hermes_home() 用户可见路径 ~/.vigil，
+  hermes_constants.py:787）。
+- **残留终扫（grep -rn \".hermes\" hermes_cli/ cli.py）**：help=/description=/epilog
+  上下文残留 = 0。其余 ~340 处全部保留，分三类：①代码注释/模块 docstring（如
+  main.py:680,2703,3524,3535、auth.py 各段、config_defaults.py 注释）——兼容层
+  说明，硬约束 4 明示保留；②运行时输出/错误消息（如 main.py:10094 dashboard
+  register 错误引导 print "writes HERMES_DASHBOARD_OAUTH_CLIENT_ID into
+  ~/.hermes/.env for you"）——非 help/description/epilog，本批 grep 范围外，且该
+  print 依赖具体写入实现路径，改动属行为层（排期单独处理）；③真实逻辑引用
+  （HERMES_HOME 环境名、.env 兼容加载、uninstall 清理路径等）——语义正确不能改。
+- **已知风险**：①文案改动对依赖旧路径文案的测试的影响——已扫全仓，仅本批新增
+  测试引用旧串（作为消失断言），test_cli_preloaded_skills 等含 "hermes-agent-dev"
+  的是技能名断言，与 Examples 无联动；②curator.py 在硬约束 5 白名单边缘，若
+  后续批次收紧白名单需连同说明一起评审；③--help-all 逐条展开后 login（无 help）
+  靠 description 兜底显示，若未来给 login 加回 help= 行为不变（仍显示）；④继承
+  命令数量会随上游增减变化，测试用 \d+ 正则 + ≥50 下限，不锁死具体数字（行为
+  契约而非快照）。
+- **核销方式**：测试常驻——test_help_text_cleanup.py（7 用例全自动断言）；行为
+  探针命令可复跑：`vigil -h | grep -c '~/.hermes'` = 0、`vigil -h` Examples 段含
+  topo-discover、`vigil --help-all` 分组逐条可读。
