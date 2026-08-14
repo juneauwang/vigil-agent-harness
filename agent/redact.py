@@ -558,9 +558,12 @@ _CMD_SUDO_HEREDOC_PASS_RE = re.compile(
 # 凭据获取赋值形态：``SUDO_PASS=$(curl … | jq …)`` / ``SUDO_PASS="$(curl …)"``——
 # 命令替换即凭据获取，整个 ``$(…)`` 值打码、赋值骨架保留（OPS-DELTA 批次十六 §V）。
 # 值前的可选引号（``"``/``'``）是结构字符，单独捕获并保留（``SUDO_PASS="****"``）。
+# ``$(…)`` 用平衡括号匹配（``[^()]|\([^()]*\)`` 两层嵌套足够覆盖 §AD 实测形态
+# ``$(curl … "$(cat /root/.bao_token)" …)``；更深嵌套罕见，超出一层时不匹配——
+# 由 _CMD_CONTEXT_RE 的高熵兜底或 header 规则补位，宁可残留结构不打码错位）。
 _CMD_CRED_ASSIGN_RE = re.compile(
     r"(?i)(^|[;&|\s])([A-Za-z_][A-Za-z0-9_]*(?:_PASS|_PASSWORD|_TOKEN|_KEY|_SECRET)"
-    r"\s*=\s*)(['\"]?)(\$?\([^)\n]*\))"
+    r"\s*=\s*)(['\"]?)(\$?\((?:[^()]|\([^()]*\))*\))"
 )
 # 凭据赋值键名（_CMD_CRED_ASSIGN_RE 的键名部分）与命令替换值形态。
 # ENV pass 对 ``$(…)`` 值只打第一个空白 token（``SUDO_PASS=$(curl``），会把
@@ -1121,11 +1124,17 @@ def redact_sensitive_text(
 
     # API-key style headers (x-api-key, api-key, …). Header values are
     # colon-separated, so gate on ":" — the regex itself is the precise filter.
+    # Skip values starting with a command substitution (``X-Vault-Token:
+    # $(cat …)``) — masking the ``$(cat`` fragment breaks the ``$(…)``
+    # structure and makes the command-text pass (_CMD_CRED_ASSIGN_RE) truncate
+    # at the inner paren (OPS-DELTA 批次十六 §V 嵌套形态实测). The command
+    # pass masks the whole assignment/herestring instead.
     if ":" in text:
-        text = _SECRET_HEADER_RE.sub(
-            lambda m: m.group(1) + _mask_token(m.group(2)),
-            text,
-        )
+        def _sub_header(m):
+            if m.group(2).lstrip().startswith("$("):
+                return m.group(0)
+            return m.group(1) + _mask_token(m.group(2))
+        text = _SECRET_HEADER_RE.sub(_sub_header, text)
 
     # Telegram bot tokens — pattern requires ":<token>" with digits prefix
     if ":" in text:

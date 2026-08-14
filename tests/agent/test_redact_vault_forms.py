@@ -165,3 +165,26 @@ class TestSudoStdinInjectionBlindSpot:
         out = redact_sensitive_text(cmd)
         assert "Sup3rSecr3t!" not in out
         assert 'sudo -S -p "" smem <<<' in out
+
+    def test_nested_command_substitution_assignment_masked(self):
+        """嵌套命令替换赋值（§AD 真实形态）整段打码。
+
+        ``SUDO_PASS=$(curl … "X-Vault-Token: $(cat /root/.bao_token)" …)``——
+        header 值以 ``$(`` 开头时 _SECRET_HEADER_RE 必须跳过（否则破坏括号结构，
+        命令文本 pass 在内层 ) 截断），由 _CMD_CRED_ASSIGN_RE 整段打码。
+        回归：2026-08-14 验收抓到的 Codex 交付漏洞（简化形态过、嵌套形态漏）。
+        """
+        cmd = (
+            'SUDO_PASS=$(curl -s -H "X-Vault-Token: $(cat /root/.bao_token)" '
+            'http://127.0.0.1:8200/v1/secret/data/CSNDC/maas | '
+            "jq -r '.data.data[\"ssh_key_0811/sudo_0811\"]')"
+        )
+        out = redact_sensitive_text(cmd)
+        assert out == "SUDO_PASS=****"
+        assert "bao_token" not in out and "sudo_0811" not in out and "curl" not in out
+
+    def test_nested_substitution_plain_header_still_masked(self):
+        """普通 header 值（非命令替换）仍打码——跳过逻辑不扩大为漏报。"""
+        cmd = 'curl -s -H "X-Vault-Token: s.pL7AbCdEfGhIjKlMnOpQrStU" http://127.0.0.1:8200/v1'
+        out = redact_sensitive_text(cmd)
+        assert "s.pL7" not in out and "***" in out
