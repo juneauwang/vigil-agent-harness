@@ -136,7 +136,7 @@ class TestProdGateScenarioFlags:
         import hermes_cli.config as hc
         from tools import approval as mod
 
-        mod.set_current_session_key(self.SESSION)
+        token = mod.set_current_session_key(self.SESSION)
         (tmp_path / "config.yaml").write_text(
             "approvals:\n"
             "  mode: manual\n"
@@ -155,6 +155,7 @@ class TestProdGateScenarioFlags:
         yield
         hc._LOAD_CONFIG_CACHE.clear()
         mod.clear_session(self.SESSION)
+        mod.reset_current_session_key(token)
 
     def test_prod_confirmation_gate_passes_false_false(self, ops_env, monkeypatch):
         from tools import approval as mod
