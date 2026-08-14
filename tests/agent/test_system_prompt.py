@@ -356,6 +356,15 @@ class TestOpsRunbookGuidance:
         assert "runbooks/<name>.yaml" in OPS_RUNBOOK_GUIDANCE
         assert "已创建 runbook，触发词为" in OPS_RUNBOOK_GUIDANCE
 
+    def test_feedback_loop_proposes_after_reusable_flow(self):
+        """跑通可复用流程后主动提议沉淀；用户确认才创建，不自动创建。"""
+        from agent.prompt_builder import OPS_RUNBOOK_GUIDANCE
+
+        assert "沉淀为 runbook" in OPS_RUNBOOK_GUIDANCE
+        assert "要我创建吗" in OPS_RUNBOOK_GUIDANCE
+        assert "user confirms" in OPS_RUNBOOK_GUIDANCE
+        assert "overwrite=true" in OPS_RUNBOOK_GUIDANCE
+
     def test_guidance_lands_when_runbook_tools_loaded(self):
         """runbook 工具加载时该块进 stable tier。"""
         agent = _make_agent(valid_tool_names=["runbook_create", "runbook_load"])

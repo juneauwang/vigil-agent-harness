@@ -788,6 +788,14 @@ OPS_RUNBOOK_GUIDANCE = (
     "- If the user's intent is a behavior rule ('next time I change X, run Y'), "
     "encode it in the runbook's triggers + steps, then tell the user: "
     "'已创建 runbook，触发词为 …'.\n"
+    "- After completing a reusable ops flow (incident fixed / deployment done / "
+    "troubleshooting path proven), proactively offer: '这次流程可以沉淀为 "
+    "runbook，要我创建吗？' — create only after the user confirms; never "
+    "auto-create (noise) and never skip offering (wasted experience). Judge "
+    "by: will this flow likely recur (restart a service / same-class incident "
+    "/ same app deployment)?\n"
+    "- When executing an existing runbook, if this run surfaces a new pitfall "
+    "or command, offer to update it (runbook_create overwrite=true)."
 )
 
 

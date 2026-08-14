@@ -194,3 +194,10 @@ class TestRunbookCreate:
         # 描述含专有名词绑定 + 凭据拒绝语义。
         assert "不是 Markdown 文档" in _DEFAULT_CREATE_SCHEMA["description"]
         assert "<vault:path/field>" in _DEFAULT_CREATE_SCHEMA["description"]
+
+    def test_load_tail_offers_update(self, rb_home):
+        """任务 3：runbook_load 返回尾部引导——执行有改进时提议更新 runbook。"""
+        runbook_create(**_incident_runbook(), home=rb_home)
+        result = _load(runbook_load(runbook="ansible-syntax-check", home=rb_home))
+        assert "提议更新" in result["note"]
+        assert "runbook_create overwrite=true" in result["note"]

@@ -436,6 +436,10 @@ def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
             "由你从保险箱/vault 读取并立即注入命令（命令串过 redact），不要在"
             "对话或命令文本里内插明文。"
         )
+    payload["note"] += (
+        " 若本次执行有改进（新坑/新命令），可向用户提议更新本 runbook"
+        "（runbook_create overwrite=true）。"
+    )
     return payload
 
 
