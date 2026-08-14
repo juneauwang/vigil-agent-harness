@@ -34,7 +34,13 @@ from typing import Any, Dict, List, Optional
 
 import yaml
 
-from tools.topo_discovery import discover_host
+from tools.topo_discovery import (
+    _LOCAL_HOST_ALIASES,
+    _build_local_runner,
+    _build_ssh_runner,
+    _parse_docker_ps,
+    discover_host,
+)
 from tools.registry import registry, tool_error
 
 logger = logging.getLogger(__name__)
@@ -174,6 +180,38 @@ _TOPO_DISCOVER_SCHEMA = {
             },
         },
         "required": ["host", "env"],
+    },
+}
+
+_TOPO_STATUS_SYNC_SCHEMA = {
+    "name": "topo_status_sync",
+    "description": (
+        "对比拓扑实体状态与实际容器状态，检测不一致（批次二十四 §R）。"
+        "对 docker 容器实体（attrs.container / type=docker-container / "
+        "attrs.runtime=docker）执行 docker ps -a 检查实际状态：实际状态可确定"
+        "（running/exited 等）且与拓扑 status 不一致 → 差异 action=update；"
+        "实际状态不确定（容器已删除/主机不可达/无 docker 权限）→ action=ask，"
+        "留给用户确认。confirm=false（默认）只报告差异不落盘（dry-run）；"
+        "confirm=true 对 action=update 的实体写 status（复用 topo_update 路径，"
+        "PROD 实体仍走审批）。容器/服务状态变更后先运行本工具检测差异，再向用户"
+        "确认同步；不要假设拓扑自动更新。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "host": {
+                "type": "string",
+                "description": "主机名/IP（或实体名）；省略时检查全部 docker 容器实体。",
+            },
+            "confirm": {
+                "type": "boolean",
+                "description": (
+                    "确认落盘：为 true 时对 action=update 的实体写入 status"
+                    "（默认 false = dry-run，只报告差异不落盘）。"
+                ),
+            },
+        },
+        "required": [],
     },
 }
 
@@ -769,6 +807,255 @@ def topo_update(
 
 
 # ---------------------------------------------------------------------------
+# topo_status_sync
+# ---------------------------------------------------------------------------
+
+# docker 实际状态 → 拓扑 status 语义映射。status 字段语义不变：只写
+# running/stopped 既有值，不引入新枚举（paused/created/dead/removing 均归
+# stopped——容器不在可服务状态；restarting 归 running——瞬时过渡仍视为拉起）。
+_DOCKER_STATE_TO_STATUS = {
+    "running": "running",
+    "restarting": "running",
+    "exited": "stopped",
+    "created": "stopped",
+    "dead": "stopped",
+    "removing": "stopped",
+    "paused": "stopped",
+}
+
+
+def _docker_managed(entity: Dict[str, Any]) -> bool:
+    """实体是否可做 docker 状态检查（容器实体：attrs.container / type / runtime 标记）。"""
+    attrs = entity.get("attrs") or {}
+    return bool(
+        attrs.get("container")
+        or entity.get("type") == "docker-container"
+        or attrs.get("runtime") == "docker"
+    )
+
+
+def _enrich_entity_detail(home: Path, entity: Dict[str, Any]) -> Dict[str, Any]:
+    """合并第三层详情档案到实体行：attrs/status/type 存在 L3（topo_update
+    写 status 的目标文件），L2 索引行只有 name/type/env/detail 引用。
+
+    L2 行已有字段优先（不覆盖），detail 档案只补齐缺失的 attrs/status/type。
+    """
+    detail = _load_entity_file(home, entity)
+    if not detail:
+        return entity
+    merged = dict(entity)
+    merged_attrs = dict(entity.get("attrs") or {})
+    for k, v in (detail.get("attrs") or {}).items():
+        merged_attrs.setdefault(k, v)
+    merged["attrs"] = merged_attrs
+    for key in ("status", "type", "env"):
+        if detail.get(key) and not merged.get(key):
+            merged[key] = detail[key]
+    return merged
+
+
+def _entity_host_name(entity: Dict[str, Any]) -> str:
+    """实体所属 docker 主机名：服务行用 _host 标记，第一层行用自身 name。"""
+    host = entity.get("_host")
+    return str(host or entity.get("name") or "")
+
+
+def _container_name_for_entity(entity: Dict[str, Any]) -> str:
+    """实体 → docker 容器名：attrs.container 最权威，其次 compose_service，兜底实体名。"""
+    attrs = entity.get("attrs") or {}
+    name = attrs.get("container") or attrs.get("compose_service") or entity.get("name")
+    return str(name or "").strip()
+
+
+def _declared_status(entity: Dict[str, Any]) -> Optional[str]:
+    """实体声明的期望状态：顶层 status 优先，其次发现快照 attrs.state。"""
+    status = entity.get("status")
+    if status:
+        return str(status)
+    attrs = entity.get("attrs") or {}
+    if attrs.get("state"):
+        return str(attrs["state"])
+    return None
+
+
+def _runner_for_host(topo: Dict[str, Any], host_name: str):
+    """按拓扑 credential 构建主机 docker 探测 runner（复用发现引擎 runner）。
+
+    主机行 credential 为 ssh_key → SSH runner；本机/localhost/拓扑查无此主机 →
+    本地 runner（v0.1 兼容）。凭据值不出现：key_path 只传引用路径，密码类凭据
+    由 runner 内部经 askpass 注入。
+    """
+    if not host_name or host_name.lower() in _LOCAL_HOST_ALIASES:
+        return _build_local_runner()
+    host_row = next(
+        (h for h in topo.get("hosts") or [] if isinstance(h, dict) and h.get("name") == host_name),
+        None,
+    )
+    if host_row is None:
+        return _build_local_runner()
+    cred = host_row.get("credential") or {}
+    if not isinstance(cred, dict):
+        cred = {}
+    key_path = cred.get("ref") if cred.get("type") == "ssh_key" else None
+    return _build_ssh_runner(host_name, user=str(cred.get("user") or "root"), key_path=key_path)
+
+
+def _probe_host_container_states(runner, host_name: str):
+    """探测一台主机的 docker ps -a 容器状态表（复用发现引擎解析，不新写探测）。
+
+    Returns:
+      (states, None) —— states: {容器名: docker 原始 State}；
+      (None, reason) —— 探测失败（exit!=0 / 异常），reason 用户可读。
+    """
+    try:
+        res = runner("docker ps -a --format '{{json .}}'")
+    except Exception as exc:
+        return None, f"docker 探测失败：{exc}"
+    if not getattr(res, "ok", False):
+        detail = (res.stderr or res.stdout or "").strip() or "docker 不可用（exit!=0）"
+        return None, f"docker 探测失败：{detail[:200]}"
+    states: Dict[str, str] = {}
+    for c in _parse_docker_ps(res.stdout):
+        name = str(c.get("name") or "").lstrip("/")
+        if name:
+            states[name] = str(c.get("state") or "")
+    return states, None
+
+
+def topo_status_sync(
+    host: Optional[str] = None,
+    confirm: bool = False,
+    home: Optional[Path] = None,
+    runner=None,
+) -> str:
+    """对比拓扑实体状态与实际容器状态（dry-run / confirm 落盘）。
+
+    - ``host`` 省略 → 检查全部 docker 容器实体；指定 → 只查该主机（或实体名）。
+    - ``confirm=False`` → 只报告差异不落盘；``confirm=True`` → 对 action=update
+      的实体复用 topo_update 写 status（PROD 实体仍走审批），action=ask 不动。
+    - 实际状态可确定且与拓扑不一致 → update；不确定（容器缺失/主机不可达/无
+      docker 权限）→ ask，留给用户；实体未声明 status 时避免自动覆盖手动值。
+    """
+    from tools.ops_data_home import resolve_ops_data_home
+    home = resolve_ops_data_home(home or _hermes_home(), _TOPO_FILENAME)
+    topo = load_topology(home)
+    if topo is None:
+        return tool_error("拓扑表不存在或无法解析，无法同步状态。")
+
+    entities = [_enrich_entity_detail(home, e) for e in _all_core_entities(topo, home)]
+    if host:
+        host_key = str(host).strip()
+        entities = [
+            e for e in entities
+            if _entity_host_name(e) == host_key or e.get("name") == host_key
+        ]
+    docker_entities = [e for e in entities if _docker_managed(e)]
+    if not docker_entities:
+        return json.dumps(
+            {
+                "checked": 0,
+                "changed": 0,
+                "confirm": bool(confirm),
+                "differences": [],
+                "needs_user": [],
+                "note": (
+                    "没有可检查的 docker 容器实体（需要 attrs.container / "
+                    "type=docker-container / attrs.runtime=docker）。"
+                ),
+            },
+            ensure_ascii=False, indent=2,
+        )
+
+    by_host: Dict[str, List[Dict[str, Any]]] = {}
+    for e in docker_entities:
+        by_host.setdefault(_entity_host_name(e), []).append(e)
+
+    differences: List[Dict[str, Any]] = []
+    needs_user: List[Dict[str, Any]] = []
+    for host_name, ents in sorted(by_host.items()):
+        host_runner = runner or _runner_for_host(topo, host_name)
+        states, probe_err = _probe_host_container_states(host_runner, host_name)
+        for e in ents:
+            rec = {
+                "entity": e.get("name"),
+                "env": _entity_env(topo, e),
+                "host": host_name or "",
+            }
+            if probe_err:
+                needs_user.append({**rec, "action": "ask", "reason": probe_err})
+                continue
+            container = _container_name_for_entity(e)
+            actual_raw = states.get(container)
+            if actual_raw is None:
+                needs_user.append(
+                    {**rec, "action": "ask",
+                     "reason": f"容器 {container or '?'} 未在 docker ps -a 中找到"
+                               "（已删除或不在本机）"}
+                )
+                continue
+            actual_mapped = _DOCKER_STATE_TO_STATUS.get(actual_raw, actual_raw)
+            expected_raw = _declared_status(e)
+            expected_mapped = (
+                _DOCKER_STATE_TO_STATUS.get(expected_raw, expected_raw)
+                if expected_raw else None
+            )
+            if expected_mapped is None:
+                if actual_mapped == "running":
+                    # 未声明 status 且容器实际运行：默认期望一致，不产生差异。
+                    continue
+                needs_user.append(
+                    {**rec, "action": "ask", "expected": "(未声明)", "actual": actual_raw,
+                     "reason": "实体未声明 status，避免自动覆盖手动值——"
+                               "请确认是否写入 status=stopped"}
+                )
+                continue
+            if expected_mapped == actual_mapped:
+                continue
+            differences.append(
+                {**rec, "expected": expected_raw, "actual": actual_raw,
+                 "action": "update", "write_status": actual_mapped}
+            )
+
+    changed = 0
+    write_errors: List[Dict[str, Any]] = []
+    if confirm:
+        for d in differences:
+            result = topo_update(
+                d["entity"],
+                {"status": d["write_status"]},
+                reason="topo_status_sync 自动同步（批次二十四 §R）",
+                home=home,
+            )
+            try:
+                parsed = json.loads(result)
+            except Exception:
+                parsed = {}
+            if parsed.get("status") == "updated":
+                changed += 1
+                d["written"] = True
+            else:
+                write_errors.append(
+                    {"entity": d["entity"], "error": parsed.get("error") or result[:200]}
+                )
+
+    return json.dumps(
+        {
+            "checked": len(docker_entities),
+            "changed": changed,
+            "confirm": bool(confirm),
+            "differences": differences,
+            "needs_user": needs_user,
+            "write_errors": write_errors,
+            "note": (
+                "confirm=false 为 dry-run：只报告差异不落盘。differences 中 "
+                "action=update 的实体在 confirm=true 时写 status；action=ask 留给用户确认。"
+            ),
+        },
+        ensure_ascii=False, indent=2,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Availability check + registry
 # ---------------------------------------------------------------------------
 
@@ -851,6 +1138,13 @@ def _discover_handler(args: Dict[str, Any], **kwargs) -> str:
     return json.dumps({**discovery, "_guide": guide}, ensure_ascii=False, default=str)
 
 
+def _status_sync_handler(args: Dict[str, Any], **kwargs) -> str:
+    return topo_status_sync(
+        host=args.get("host"),
+        confirm=bool(args.get("confirm", False)),
+    )
+
+
 registry.register(
     name="topo_query",
     toolset="topo",
@@ -878,4 +1172,14 @@ registry.register(
     handler=_discover_handler,
     emoji="🛰️",
     max_result_size_chars=60_000,
+)
+
+registry.register(
+    name="topo_status_sync",
+    toolset="topo",
+    schema=_TOPO_STATUS_SYNC_SCHEMA,
+    handler=_status_sync_handler,
+    check_fn=check_topo_requirements,
+    emoji="🔁",
+    max_result_size_chars=30_000,
 )
