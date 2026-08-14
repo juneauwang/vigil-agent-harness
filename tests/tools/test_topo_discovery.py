@@ -777,17 +777,95 @@ def test_write_discovery_refuses_v1_topology(tmp_path):
     assert "version: 1" in (home / "topology.yaml").read_text(encoding="utf-8")
 
 
-def test_write_discovery_refuses_existing_host_unless_force(tmp_path):
+def test_write_discovery_existing_host_merges_unless_force(tmp_path):
+    """批次十八 B：已存在 host 重扫默认合并（不拒绝）；--force 整体替换。"""
     home = tmp_path / "hermes_home"
     home.mkdir()
     d = _discovery()
     write_discovery(home, d)
+
+    # 默认 merge=True：重扫同一结果 → 全部同名跳过，不报错，行数不变。
+    result = write_discovery(home, d)
+    assert result["merged"] is True
+    assert result["appended"] == 0
+    assert result["kept"] == 4
+
+    # merge=False（显式关闭合并）→ 维持旧语义：拒绝，提示 --force。
     with pytest.raises(DiscoveryError) as exc:
-        write_discovery(home, d)  # 已存在 → 拒绝
+        write_discovery(home, d, merge=False)
     assert "--force" in str(exc.value)
 
-    result = write_discovery(home, d, force=True)  # --force → 覆盖
+    # --force → 整体替换（appended 全量、merged=False）。
+    result = write_discovery(home, d, force=True)
     assert result["written"]
+    assert result["merged"] is False
+    assert result["appended"] == 4
+    assert result["kept"] == 0
+
+
+def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path):
+    """批次十八 B：已有 host 重扫 → 新服务追加进索引+entities，手动实体保留。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    d = _discovery()
+    r1 = write_discovery(home, d)
+    assert r1["appended"] == 4 and r1["kept"] == 0 and r1["merged"] is False
+
+    # 手动维护：往索引加一条 app 手动实体（手动 endpoint + source=manual）。
+    index_path = home / "hosts" / "203.0.113.20.yaml"
+    data = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    data["services"].append({
+        "name": "app", "type": "service", "env": "prod", "cluster": "default",
+        "endpoint": "203.0.113.20:8080", "source": "manual", "needs_review": False,
+        "detail": "entities/prod__203.0.113.20__app.yaml",
+    })
+    index_path.write_text(
+        yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+    )
+
+    # 重扫：发现结果比现有索引多一个 db 服务 → 只追加 db。
+    d2 = dict(d)
+    d2["services"] = list(d["services"]) + [{
+        "name": "db", "type": "service", "env": "prod", "cluster": "default",
+        "endpoint": "203.0.113.20:5433", "source": "discovered",
+        "last_verified": "2026-08-14", "needs_review": True,
+        "detail": "entities/prod__203.0.113.20__db.yaml",
+        "attrs": {"image": "postgres:16"},
+    }]
+    d2["details"] = dict(d["details"])
+    d2["details"]["db"] = {
+        "name": "db", "type": "service", "env": "prod", "cluster": "default",
+        "detail": "entities/prod__203.0.113.20__db.yaml",
+        "attrs": {"image": "postgres:16"},
+        "source": "discovered", "last_verified": "2026-08-14", "needs_review": True,
+    }
+    r2 = write_discovery(home, d2)
+    assert r2["merged"] is True
+    assert r2["appended"] == 1
+    assert r2["kept"] == 5
+
+    data2 = yaml.safe_load(index_path.read_text(encoding="utf-8"))
+    names = {s["name"]: s for s in data2["services"]}
+    assert names["app"]["endpoint"] == "203.0.113.20:8080"   # 手动行保留
+    assert names["app"]["source"] == "manual"                # 手动行不被覆盖
+    assert names["app"]["needs_review"] is False
+    assert names["db"]["endpoint"] == "203.0.113.20:5433"    # 新服务追加
+    assert names["harbor"]["endpoint"] == "203.0.113.20:30443"  # 原自动行保留
+    # db 实体文件新写入；app 手动实体文件不被创建/覆盖。
+    assert (home / "entities" / "prod__203.0.113.20__db.yaml").is_file()
+    assert not (home / "entities" / "prod__203.0.113.20__app.yaml").exists()
+
+
+def test_write_discovery_new_host_append_unchanged(tmp_path):
+    """新 host 追加（现状行为不变）：互不干扰、topology hosts 段逐条追加。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    r1 = write_discovery(home, _discovery("node-a"))
+    r2 = write_discovery(home, _discovery("node-b"))
+    assert r1["merged"] is False and r2["merged"] is False
+    assert r1["appended"] == 4 and r2["appended"] == 4
+    topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
+    assert [h["name"] for h in topo["hosts"]] == ["node-a", "node-b"]
 
 
 def test_write_discovery_dry_run_not_applied_by_cli(tmp_path, monkeypatch):

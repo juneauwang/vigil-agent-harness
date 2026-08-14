@@ -846,16 +846,37 @@ def _topo_layered(topo: Dict[str, Any]) -> bool:
     return bool(topo.get("hosts") or topo.get("cross_host") or topo.get("clusters"))
 
 
-def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) -> Dict[str, Any]:
+def _read_host_index(home: Path, hostname: str) -> Dict[str, Any]:
+    """读取 hosts/<hostname>.yaml 服务索引（合并语义用；缺失/解析失败 → {}）。"""
+    path = Path(home) / "hosts" / f"{_sanitize_name(hostname)}.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
+                    merge: bool = True) -> Dict[str, Any]:
     """把发现结果落盘为 v0.3 结构（hosts/<host>.yaml + topology.yaml + entities/）。
 
     - 现有 topology.yaml 为 v0.1（扁平 core_entities）时拒绝写入（不自动改写用户数据）；
-    - host 已存在且未 ``force`` → 拒绝覆盖；
+    - host 已存在且未 ``force`` → 合并语义（批次十八 B）：发现的新服务自动追加进
+      hosts/<host>.yaml + entities/，已有同名服务/实体保留（含手动 endpoint/owner），
+      host 行保留原内容只刷新 last_verified；``merge=False`` 显式关闭合并时维持旧
+      的拒绝语义（需 ``--force`` 整体替换）；
     - 写路径：hosts/<hostname>.yaml（第二层服务索引）、
       entities/{cluster}__{host}__{name}.yaml（第三层详情草案，OPS-DELTA #42
       L3 命名）、topology.yaml 的 hosts 段追加；
     - 只产 v0.3：``version: 3``、hosts 行带 cluster、environments 只写四值档位
       （老自定义 env 按档位映射）。
+
+    Returns:
+      ``{"written", "topology", "index", "appended", "kept", "merged"}``——
+      appended = 本次新增服务数，kept = 合并时保留的现有索引行数（新 host/force
+      为 0），merged = 是否走了合并路径。
     """
     home = Path(home)
     host_row = dict(discovery.get("host") or {})
@@ -882,11 +903,19 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
                 "重铺样例，或手动添加 version: 2/3 + hosts: 段）后再发现。"
             )
         hosts = [h for h in topo.get("hosts") or [] if isinstance(h, dict)]
-        if any(h.get("name") == hostname for h in hosts) and not force:
+        host_exists = any(h.get("name") == hostname for h in hosts)
+        if host_exists and not force and not merge:
             raise DiscoveryError(
                 f"host {hostname} 已存在于 topology.yaml（--force 覆盖）。"
             )
-        topo["hosts"] = [h for h in hosts if h.get("name") != hostname] + [host_row]
+        if host_exists and not force:
+            # 合并：保留手动维护的 host 行，只刷新校验时间（不冲掉手动编辑）。
+            old_row = next(h for h in hosts if h.get("name") == hostname)
+            merged_row = dict(old_row)
+            merged_row["last_verified"] = _dt.date.today().isoformat()
+            topo["hosts"] = [h for h in hosts if h.get("name") != hostname] + [merged_row]
+        else:
+            topo["hosts"] = [h for h in hosts if h.get("name") != hostname] + [host_row]
         envs = [e.get("name") for e in (topo.get("environments") or []) if isinstance(e, dict)]
         if env_tier and env_tier not in envs:
             topo.setdefault("environments", []).append(
@@ -897,6 +926,7 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
         topo["version"] = 3
         topo["updated_at"] = _dt.date.today().isoformat()
     else:
+        host_exists = False
         topo = {
             "version": 3,
             "updated_at": _dt.date.today().isoformat(),
@@ -912,26 +942,52 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
             "key_paths": [],
         }
 
-    # 第二层：hosts/<hostname>.yaml 服务索引。
-    index_rows = []
+    # 第二层：hosts/<hostname>.yaml 服务索引（合并：同名跳过、新服务追加）。
+    existing_index: Dict[str, Any] = {}
+    if host_exists and not force:
+        existing_index = _read_host_index(home, hostname)
+    existing_rows = existing_index.get("services") or []
+    if not isinstance(existing_rows, list):
+        existing_rows = []
+    existing_names = {
+        str(s.get("name"))
+        for s in existing_rows
+        if isinstance(s, dict) and s.get("name")
+    }
+
+    merged_rows: List[Dict[str, Any]] = (
+        list(existing_rows) if (host_exists and not force) else []
+    )
+    appended = 0
     for svc in discovery.get("services") or []:
         if not isinstance(svc, dict):
             continue
         row = dict(svc)
         row.pop("_host", None)
-        index_rows.append(row)
+        if str(row.get("name")) in existing_names:
+            # 同名跳过：保留现有行（含手动 endpoint/owner/类型），不覆盖。
+            continue
+        merged_rows.append(row)
+        appended += 1
+    kept = len(existing_rows) if (host_exists and not force) else 0
+
     index_data = {
         "host": hostname,
-        "env": env,
-        "cluster": host_row["cluster"],
-        "services": index_rows,
+        "env": str(existing_index.get("env") or env) if (host_exists and not force) else env,
+        "cluster": (str(existing_index.get("cluster") or host_row["cluster"])
+                    if (host_exists and not force) else host_row["cluster"]),
+        "services": merged_rows,
     }
 
-    # 第三层：entities/{cluster}__{host}__{name}.yaml 详情草案（detail 字段是显式路径）。
+    # 第三层：entities/{cluster}__{host}__{name}.yaml 详情草案（合并：已有同名
+    # 实体保留不重写）。
     entities_dir = home / "entities"
     entity_paths = []
     for name, detail in (discovery.get("details") or {}).items():
         if not isinstance(detail, dict) or not _NAME_RE.fullmatch(str(name)):
+            continue
+        if name in existing_names and not force:
+            # 合并：索引里已存在的实体（含手动维护）不重写详情文件。
             continue
         rel = str(detail.get("detail") or f"entities/{name}.yaml")
         fname = rel[len("entities/"):] if rel.startswith("entities/") else rel
@@ -959,4 +1015,11 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False) 
     )
     written = [str(index_path.relative_to(home)), str(topo_path.relative_to(home))]
     written.extend(entity_paths)
-    return {"written": written, "topology": topo_path, "index": index_path}
+    return {
+        "written": written,
+        "topology": topo_path,
+        "index": index_path,
+        "appended": appended,
+        "kept": kept,
+        "merged": bool(host_exists and not force),
+    }
