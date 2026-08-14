@@ -13566,6 +13566,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # Canonical clarify timeout, shared with the gateway/TUI path. `<= 0`
         # means unlimited (never auto-skip mid-think) → a null deadline.
         timeout = resolve_clarify_timeout(CLI_CONFIG)
+        # approvals.timeout_policy aligns clarify with the approval prompt: in
+        # "wait" mode (default) a timed-out clarify is NOT auto-answered by the
+        # agent — the prompt stays pending and the timeout becomes a reminder
+        # interval. "deny" keeps the legacy "agent will decide" behavior.
+        timeout_policy = str(CLI_CONFIG.get("approvals", {}).get("timeout_policy", "wait"))
+        wait_policy = timeout_policy.strip().lower() != "deny"
         response_queue = queue.Queue()
         is_open_ended = not choices
         # multi-select support: only active when multi_select is True and choices exist
@@ -13606,7 +13612,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 if self._clarify_deadline is not None:
                     remaining = self._clarify_deadline - _time.monotonic()
                     if remaining <= 0:
-                        break
+                        if not wait_policy:
+                            break
+                        # Wait policy: remind and keep waiting — the user (who
+                        # may be in another session) still gets to answer
+                        # instead of the agent guessing.
+                        _cprint(
+                            f"\n{_DIM}(clarify 仍在等待你的回答 — 超时不会自动决定){_RST}"
+                        )
+                        self._clarify_deadline = _time.monotonic() + timeout
+                        continue
                 now = _time.monotonic()
                 if now - _last_countdown_refresh >= 1.0:
                     _last_countdown_refresh = now

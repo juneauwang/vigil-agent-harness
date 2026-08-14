@@ -192,3 +192,49 @@ def test_input_loop_wait_policy_keeps_waiting(monkeypatch, capsys):
     assert result == "once"
     rendered = capsys.readouterr().out
     assert "审批仍在等待" in rendered
+
+
+# ---------------------------------------------------------------------------
+# Task 3 — clarify 超时对齐（wait 不自动让 LLM 决定）
+# ---------------------------------------------------------------------------
+
+class TestClarifyTimeoutPolicy:
+    def _clarify_stub(self):
+        cli = SimpleNamespace(
+            _clarify_state=None, _clarify_deadline=None, _clarify_freetext=False,
+            _app=SimpleNamespace(invalidate=MagicMock()),
+        )
+        return cli
+
+    def test_wait_policy_keeps_waiting_past_deadline(self):
+        from hermes_cli.callbacks import clarify_callback
+        cli = self._clarify_stub()
+        cfg = {"agent": {"clarify_timeout": 1}, "approvals": {"timeout_policy": "wait"}}
+        result = {}
+        def _run():
+            result["value"] = clarify_callback(cli, "Pick one", ["A", "B"])
+        with patch("cli.CLI_CONFIG", cfg):
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            deadline = time.time() + 3
+            while cli._clarify_state is None and time.time() < deadline:
+                time.sleep(0.01)
+            assert cli._clarify_state is not None
+            time.sleep(1.5)  # 越过 clarify deadline
+            assert thread.is_alive(), "wait policy must keep clarify pending"
+            cli._clarify_state["response_queue"].put("A")
+            thread.join(timeout=3)
+        assert result["value"] == "A"
+
+    def test_deny_policy_auto_skips_at_deadline(self):
+        from hermes_cli.callbacks import clarify_callback
+        cli = self._clarify_stub()
+        cfg = {"agent": {"clarify_timeout": 1}, "approvals": {"timeout_policy": "deny"}}
+        result = {}
+        def _run():
+            result["value"] = clarify_callback(cli, "Pick one", ["A", "B"])
+        with patch("cli.CLI_CONFIG", cfg), patch("hermes_cli.callbacks.cprint"):
+            thread = threading.Thread(target=_run, daemon=True)
+            thread.start()
+            thread.join(timeout=5)
+        assert "best judgement" in result.get("value", "")
