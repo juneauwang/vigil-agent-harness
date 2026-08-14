@@ -182,7 +182,7 @@ def build_dashboard_parser(
         description=(
             "Register this install as a self-hosted dashboard with your Nous "
             "Portal account. Creates an OAuth client, writes "
-            "HERMES_DASHBOARD_OAUTH_CLIENT_ID into ~/.hermes/.env, and prints "
+            "HERMES_DASHBOARD_OAUTH_CLIENT_ID into ~/.vigil/.env, and prints "
             "how to engage the login gate. Requires being logged in (vigil setup)."
         ),
     )
