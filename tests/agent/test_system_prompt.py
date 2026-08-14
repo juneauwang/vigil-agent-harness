@@ -338,3 +338,34 @@ class TestOpsTopologySyncGuidance:
         from agent.prompt_builder import OPS_TOPOLOGY_SYNC_GUIDANCE
 
         assert OPS_TOPOLOGY_SYNC_GUIDANCE not in _stable_prompt(agent)
+
+
+# ---------------------------------------------------------------------------
+# 批次二十五 — runbook 专有名词绑定 + 反馈闭环主动提议（§AH 补丁 4 + TencentDB 借鉴）
+# ---------------------------------------------------------------------------
+
+class TestOpsRunbookGuidance:
+    def test_noun_binding_requires_runbook_create_not_markdown(self):
+        """用户说'沉淀为 runbook' = 调 runbook_create 建结构化 YAML，不是写 md。"""
+        from agent.prompt_builder import OPS_RUNBOOK_GUIDANCE
+
+        assert "runbook_create" in OPS_RUNBOOK_GUIDANCE
+        assert "runbook_load" in OPS_RUNBOOK_GUIDANCE
+        assert "runbook_checkpoint" in OPS_RUNBOOK_GUIDANCE
+        assert "不是写 Markdown 文档" in OPS_RUNBOOK_GUIDANCE
+        assert "runbooks/<name>.yaml" in OPS_RUNBOOK_GUIDANCE
+        assert "已创建 runbook，触发词为" in OPS_RUNBOOK_GUIDANCE
+
+    def test_guidance_lands_when_runbook_tools_loaded(self):
+        """runbook 工具加载时该块进 stable tier。"""
+        agent = _make_agent(valid_tool_names=["runbook_create", "runbook_load"])
+        from agent.prompt_builder import OPS_RUNBOOK_GUIDANCE
+
+        assert OPS_RUNBOOK_GUIDANCE in _stable_prompt(agent)
+
+    def test_guidance_absent_without_runbook_tools(self):
+        """无 runbook 工具时不注入。"""
+        agent = _make_agent(valid_tool_names=["read_file"])
+        from agent.prompt_builder import OPS_RUNBOOK_GUIDANCE
+
+        assert OPS_RUNBOOK_GUIDANCE not in _stable_prompt(agent)
