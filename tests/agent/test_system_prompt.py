@@ -266,3 +266,35 @@ class TestSkillsInVolatileBand:
         full = _build(build_system_prompt)
         assert full.index(_CONTEXT) < full.index(_SKILLS)
         assert full.index(_SKILLS) < full.index("Conversation started:")
+
+
+# ---------------------------------------------------------------------------
+# 批次二十一 — 凭据 fail-closed 行为约束（prompt 常量回归）
+# ---------------------------------------------------------------------------
+
+class TestOpsCredentialFailClosedGuidance:
+    def test_guidance_forbids_self_probing_on_auth_failure(self):
+        """认证失败 → 停止尝试并询问用户；禁止翻 ~/.ssh//试用户名/猜 vault 字段。"""
+        from agent.prompt_builder import OPS_CREDENTIAL_SSH_GUIDANCE
+
+        assert "STOP and ASK the user" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "dig through ~/.ssh/ for keys" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "try multiple usernames" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "guessing vault" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "swap tools/postures to retry the same target" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "MaxAuthTries" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "ask the user" in OPS_CREDENTIAL_SSH_GUIDANCE
+
+    def test_guidance_lands_when_ops_tools_loaded(self):
+        """ops 工具（sudo_exec/topo_discover）加载时该块进 stable tier。"""
+        agent = _make_agent(valid_tool_names=["sudo_exec", "topo_discover"])
+        with (
+            patch("run_agent.load_soul_md", return_value=""),
+            patch("run_agent.build_nous_subscription_prompt", return_value=""),
+            patch("run_agent.build_environment_hints", return_value=""),
+            patch("run_agent.build_context_files_prompt", return_value=""),
+        ):
+            parts = build_system_prompt_parts(agent)
+        from agent.prompt_builder import OPS_CREDENTIAL_SSH_GUIDANCE
+
+        assert OPS_CREDENTIAL_SSH_GUIDANCE in parts["stable"]

@@ -182,6 +182,8 @@ def _ssh_auth_breaker_error(host: str, user: str) -> str:
         "遍历所有 key 刷爆 MaxAuthTries）+ 检查重试次数；执行层错误（转义/远端"
         "权限）→ 才换传递方式，不要用换姿势掩盖连接层真凶。请：1) 手动 ssh "
         "验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
+        "。请勿换用户名/换 key/翻 ~/.ssh/ 继续尝试（§Q/§AD/§AF 教训——这些行为"
+        "会触发 sshd 限流锁 15 分钟）。3) 或询问用户提供正确凭据"
     )
 
 

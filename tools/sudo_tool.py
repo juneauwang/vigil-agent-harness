@@ -58,6 +58,16 @@ _EXEC_TIMEOUT_S = 120
 _PROVISION_TIMEOUT_S = 60
 _LOCAL_HOST_ALIASES = ("localhost", "127.0.0.1", "::1", "")
 
+# sudo 认证失败信号（本地/远端 sudo 密码错误）——fail-closed：返回问用户引导，
+# 不继续猜 vault 字段/换用户名重试（§Q/§AD 教训）。
+_SUDO_AUTH_FAILURE_HINTS = (
+    "incorrect password",
+    "sorry, try again",
+    "a password is required",
+    "authentication failure",
+    "authentication failed",
+)
+
 # 命令校验黑名单（确定性拒绝，防注入；全部 fail-closed）
 _FORBIDDEN_COMMAND_PATTERNS = (
     (re.compile(r"\b(bash|sh|zsh|dash|fish)\s+-c\b", re.IGNORECASE), "嵌套 shell（bash -c …）"),
@@ -311,6 +321,15 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
         return tool_error(f"sudo_exec 无法执行：{exc}")
     except Exception as exc:
         return tool_error(f"sudo_exec 失败：{exc}")
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").lower()
+        if any(hint in stderr for hint in _SUDO_AUTH_FAILURE_HINTS):
+            return tool_error(
+                "sudo 认证失败（凭据错误或未生效）——停止自动重试：1) 手动执行该命令 "
+                "2) 修正/补充拓扑表 credential 声明 3) 或询问用户提供正确密码；"
+                "禁止连续猜 vault 字段/换用户名试登录（§Q/§AD 教训，会触发限流）"
+            )
 
     return json.dumps({
         "status": "ok",

@@ -235,3 +235,48 @@ class TestHandlerSecurityBoundary:
         out = json.loads(_sudo_exec_handler(
             {"host": "localhost", "command": "ps aux | grep sshd", "env": "dev"}))
         assert out["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# 批次二十一 — 凭据 fail-closed（任务 1：sudo 认证失败 → 问用户引导）
+# ---------------------------------------------------------------------------
+
+def test_local_sudo_auth_failure_returns_ask_user_guidance(tmp_path, monkeypatch):
+    """本地 sudo 密码错误 → 返回问用户引导，不继续猜/重试。"""
+    cred = _vault_cred(tmp_path, monkeypatch)
+    monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
+    monkeypatch.setattr(sudo_tool, "_resolve_topology_credential", lambda host: cred)
+    monkeypatch.setattr(
+        sudo_tool.subprocess, "run",
+        lambda argv, **kw: SimpleNamespace(
+            returncode=1, stdout="", stderr="sudo: 1 incorrect password attempt"),
+    )
+    out = _sudo_exec_handler({"host": "localhost", "command": "ss -tlnp", "env": "dev"})
+    assert "sudo 认证失败" in out
+    assert "停止自动重试" in out and "询问用户提供正确密码" in out
+    assert "禁止连续猜 vault 字段" in out
+
+
+def test_remote_sudo_breaker_error_flows_ask_user_guidance(monkeypatch):
+    """远端 sudo 认证熔断（breaker RuntimeError）→ 返回带问用户引导的错误。
+
+    sudo_tool 的 scp/ssh 路径共享熔断计数，breaker 错误信息（已含 fail-closed
+    指令）经 handler 原样透传给 agent。
+    """
+    import tools.topo_discovery as topodisc
+
+    monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
+    monkeypatch.setattr(
+        sudo_tool, "_resolve_topology_credential",
+        lambda host: {"type": "vault", "ref": "srv-pass", "user": "ops", "port": 22},
+    )
+    topodisc._SSH_AUTH_FAILURES.clear()
+
+    def boom(*a, **kw):
+        raise RuntimeError(topodisc._ssh_auth_breaker_error("prod1", "ops"))
+
+    monkeypatch.setattr(sudo_tool, "_run_remote_sudo", boom)
+    out = _sudo_exec_handler({"host": "prod1", "command": "ss -tlnp", "env": "prod"})
+    topodisc._SSH_AUTH_FAILURES.clear()
+    assert "请勿换用户名/换 key" in out
+    assert "询问用户提供正确凭据" in out

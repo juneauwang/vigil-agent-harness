@@ -241,3 +241,26 @@ def test_sudo_tool_scp_ssh_paths_share_breaker_counter(monkeypatch):
     monkeypatch.setattr(sudo_tool.subprocess, "run", lambda argv, **kw: ok)
     sudo_tool._ssh_run(ssh_argv, {}, "sudo -A uptime")
     assert topodisc._ssh_auth_failures("host", "ops") == 0
+
+
+# ---------------------------------------------------------------------------
+# 批次二十一 — 凭据 fail-closed 硬化（任务 1：熔断错误信息扩展）
+# ---------------------------------------------------------------------------
+
+def test_breaker_error_forbids_credential_self_probing():
+    """熔断错误信息带 fail-closed 指令：禁止换用户名/换 key/翻 ~/.ssh/ 继续。
+
+    §Q/§AD/§AF 实锤：agent 在熔断后换姿势/换凭据来源继续试，把主机锁 15
+    分钟——错误信息必须显式禁止自探测并引导问用户。
+    """
+    topodisc._SSH_AUTH_FAILURES.clear()
+    topodisc._record_ssh_auth_failure("203.0.113.40", "root")
+    topodisc._record_ssh_auth_failure("203.0.113.40", "root")
+    topodisc._record_ssh_auth_failure("203.0.113.40", "root")
+    try:
+        msg = topodisc._ssh_auth_breaker_error("203.0.113.40", "root")
+        assert "请勿换用户名/换 key/翻 ~/.ssh/ 继续尝试" in msg
+        assert "限流锁 15 分钟" in msg
+        assert "询问用户提供正确凭据" in msg
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
