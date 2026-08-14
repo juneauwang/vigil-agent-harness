@@ -5300,13 +5300,18 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         会话内拓扑发现（方案 A：本地直调发现引擎，零 LLM 依赖）。无 host → 交互
         收集（host/IP → env → 凭据优先从拓扑表 host 的 credential 自动读，缺省再
-        问 user/key）；有 host → 直接跑。凭据复用 askpass/vault 机制，密码明文
-        不进 argv/命令串/日志。落盘联动（write_discovery merge + y/N 确认）由
-        批次十八任务 4 接入。
+        问 user/key）；有 host → 直接跑。落盘走合并语义（批次十八 B：已有 host
+        追加新服务、保留手动实体；systemd 无端口服务留在 pending_review 不入表），
+        落盘前打印将要写入的清单并 y/N 确认（默认 N；--yes 跳过）。凭据复用
+        askpass/vault 机制，密码明文不进 argv/命令串/日志。
         """
+        from hermes_constants import get_hermes_home
         from tools.topo_discovery import (
             DiscoveryError,
+            _read_host_index,
+            _sanitize_name,
             discover_host,
+            write_discovery,
         )
 
         tokens = (cmd_original or "").strip().split()[1:]
@@ -5355,6 +5360,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             )
             return
 
+        home = Path(get_hermes_home())
         successes: List[Dict[str, Any]] = []
         failures: List[Dict[str, Any]] = []
         for host in hosts:
@@ -5375,6 +5381,57 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if not successes:
             self._console_print("  ✗ 全部主机发现失败，未写入任何文件。")
             return
+
+        if dry_run:
+            self._print_topo_review_guide()
+            self._console_print("  · --dry-run：只展示不落盘。")
+            return
+
+        # 落盘清单 + 确认（合并语义：列出将新增的实体名；已有同名实体保留）。
+        manifest: List[str] = []
+        for item in successes:
+            hostname = _sanitize_name(item["host"])
+            existing = _read_host_index(home, hostname)
+            existing_names = {
+                str(s.get("name"))
+                for s in (existing.get("services") or [])
+                if isinstance(s, dict) and s.get("name")
+            }
+            new_names = [
+                str(s.get("name"))
+                for s in (item["discovery"].get("services") or [])
+                if isinstance(s, dict) and str(s.get("name")) not in existing_names
+            ]
+            manifest.append(
+                f"    - {hostname}：{'、'.join(new_names) if new_names else '（无新增）'}"
+            )
+        self._console_print("  将写入（合并：同名实体保留）：")
+        self._console_print("\n".join(manifest))
+        if not yes:
+            answer = self._prompt_text_input("  写入拓扑？[y/N]: ") or "n"
+            if str(answer).strip().lower() not in ("y", "yes"):
+                self._console_print("  已取消，未写入任何文件。")
+                return
+
+        written_paths: List[str] = []
+        for item in successes:
+            try:
+                result = write_discovery(
+                    home, item["discovery"], force=force, merge=not force
+                )
+                for path in result.get("written") or []:
+                    if path not in written_paths:
+                        written_paths.append(path)
+                pending = len(item["discovery"].get("pending_review") or [])
+                self._console_print(
+                    f"  ✓ {item['host']}：追加 {result.get('appended', 0)} 个 / "
+                    f"保留 {result.get('kept', 0)} 个 / "
+                    f"系统服务 {pending} 个未入表（needs_review）"
+                )
+            except DiscoveryError as exc:
+                self._console_print(f"  ✗ {item['host']} 落盘失败：{exc}")
+        for path in written_paths:
+            self._console_print(f"    写入 {home / path}")
         self._print_topo_review_guide()
 
     def _topo_creds_for_host(self, host: str, *, user_arg: str = "",
