@@ -425,6 +425,7 @@ from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
+from hermes_cli.subcommands.topo_export import build_topo_export_parser
 from hermes_cli.subcommands.vssh import build_vssh_parser
 from hermes_cli.subcommands.trajectory import build_trajectory_parser
 from hermes_cli.subcommands.watch import build_watch_parser
@@ -4639,6 +4640,13 @@ def cmd_topo_discover(args):
         *(["--force"] if args.force else []),
         *(["--yes"] if args.yes else []),
     ])
+
+
+def cmd_topo_export(args):
+    """导出拓扑表 HTML 可视化视图（vigil topo export --html）。"""
+    from hermes_cli.subcommands.topo_export import run as topo_export_run
+
+    return topo_export_run(args)
 
 
 def cmd_watch(args):
@@ -12525,6 +12533,7 @@ def main():
     # topo-discover command  (parser built in hermes_cli/subcommands/topo_discover.py)
     # =========================================================================
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
+    build_topo_export_parser(subparsers, cmd_topo_export=cmd_topo_export)
     build_vssh_parser(subparsers, cmd_vssh=cmd_vssh)
     build_trajectory_parser(subparsers, cmd_trajectory=cmd_trajectory)
     build_watch_parser(subparsers, cmd_watch=cmd_watch)
