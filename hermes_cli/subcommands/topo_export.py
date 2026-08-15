@@ -281,18 +281,19 @@ def build_view(home: Path) -> Optional[Dict[str, Any]]:
             "detail": _load_detail(home, row),
         })
 
-    # 详情索引：<kind>:<name> → sanitized 档案（JS 展开用）。
-    def _register(kind: str, name: str, detail: Optional[Dict[str, Any]]) -> None:
+    # 详情索引：<kind>:<name> → sanitized 档案（JS 展开用）。服务键带 host 前缀
+    # 消歧（同 host 内唯一），与渲染侧 _service_rows 的 detail_key 严格一致。
+    def _register(full_key: str, detail: Optional[Dict[str, Any]]) -> None:
         if detail:
-            view["details"][f"{kind}:{name}"] = detail
+            view["details"][full_key] = detail
 
     for host in view["hosts"]:
-        _register("host", host["card"]["name"], host["detail"])
+        _register(f"host:{host['card']['name']}", host["detail"])
         for svc in host["services"]:
             _register(f"service:{host['card']['name']}:{svc['card']['name']}",
-                      svc["card"]["name"], svc["detail"])
+                      svc["detail"])
     for cross in view["cross_host"]:
-        _register("cross", cross["card"]["name"], cross["detail"])
+        _register(f"cross:{cross['card']['name']}", cross["detail"])
 
     return view
 

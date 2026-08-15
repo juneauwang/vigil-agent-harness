@@ -662,7 +662,23 @@ async def auth_middleware(request: Request, call_next):
         return await call_next(request)
     path = request.url.path
     is_mcp_oauth_callback = path.startswith("/api/mcp/oauth/callback/")
-    if path.startswith("/api/") and path not in _PUBLIC_API_PATHS and not is_mcp_oauth_callback:
+    # Ops dashboard runbook *detail* route carries a path param, so it can't
+    # live in the exact-match PUBLIC_API_PATHS allowlist. It is the loopback
+    # read-only view of a credential-redacted runbook (see get_ops_runbook_detail);
+    # on public (gated) binds this middleware defers to the OAuth gate above,
+    # which keeps the detail gated — only the exact list/detail metadata paths
+    # in PUBLIC_API_PATHS stay public there.
+    is_ops_public = (
+        path == "/api/topology"
+        or path == "/api/runbooks"
+        or path.startswith("/api/runbooks/")
+    )
+    if (
+        path.startswith("/api/")
+        and path not in _PUBLIC_API_PATHS
+        and not is_ops_public
+        and not is_mcp_oauth_callback
+    ):
         if not _has_valid_session_token(request) and not _has_valid_query_token(request, path):
             return JSONResponse(
                 status_code=401,
@@ -3350,6 +3366,145 @@ async def get_status(profile: Optional[str] = None):
     finally:
         if status_scope is not None:
             status_scope.__exit__(*sys.exc_info())
+
+
+# ---------------------------------------------------------------------------
+# Ops dashboard read-only API（UI 壳第一批：拓扑 / runbook / 状态）
+#
+# 只读、脱敏后输出：拓扑经 topo_export 的 build_view（内部 _sanitize 递归剔除
+# credential/user/密码/token 等，值级再脱敏私钥路径/URL userinfo/home 前缀）；
+# runbook 列表/详情同样过 _redact_value 级值级脱敏。数据根显示为 ~ 相对路径
+# （_display_path）。会话/审批/命令执行为第二批，本批不做。
+# ---------------------------------------------------------------------------
+
+_RUNBOOK_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _runbooks_dir(home: Path) -> Path:
+    return home / "runbooks"
+
+
+def _load_runbook_yaml(home: Path, name: str) -> Optional[Dict[str, Any]]:
+    """只读加载 <home>/runbooks/<name>.yaml。名称白名单防路径穿越；坏 YAML → None。"""
+    if not name or not _RUNBOOK_NAME_RE.match(name):
+        return None
+    path = (_runbooks_dir(home) / f"{name}.yaml").resolve()
+    if not path.is_file():
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        _log.warning("runbook api: failed to parse %s: %s", path, exc)
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _redact_tree(obj: Any) -> Any:
+    """递归值级脱敏：每个字符串过 _redact_value（私钥路径/文件、URL userinfo、
+    绝对 home 前缀）。保留结构（键不删），runbook 内容只读展示。"""
+    from hermes_cli.subcommands.topo_export import _redact_value
+
+    if isinstance(obj, dict):
+        return {k: _redact_tree(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact_tree(v) for v in obj]
+    if isinstance(obj, str):
+        return _redact_value(obj)
+    return obj
+
+
+def _file_mtime_iso(path: Path) -> Optional[str]:
+    try:
+        return datetime.fromtimestamp(
+            path.stat().st_mtime, tz=timezone.utc
+        ).isoformat(timespec="seconds")
+    except OSError:
+        return None
+
+
+def _collect_runbook_list(home: Path) -> List[Dict[str, Any]]:
+    """runbooks/*.yaml 只读列表：name/title/summary/triggers/env/kind/checklist/updated。"""
+    rows: List[Dict[str, Any]] = []
+    rdir = _runbooks_dir(home)
+    if not rdir.is_dir():
+        return rows
+    for path in sorted(rdir.glob("*.yaml")):
+        if path.name.startswith("."):
+            continue
+        data = _load_runbook_yaml(home, path.stem)
+        if data is None:
+            continue
+        triggers = [str(t) for t in (data.get("triggers") or []) if isinstance(t, str)]
+        steps = data.get("steps") or []
+        checklist = bool(data.get("checklist")) if "checklist" in data else data.get("kind") == "deploy"
+        rows.append({
+            "name": data.get("name") or path.stem,
+            "title": data.get("title") or path.stem,
+            "summary": str(data.get("summary") or ""),
+            "triggers": triggers[:5],
+            "env": data.get("env"),
+            "kind": data.get("kind"),
+            "checklist": checklist,
+            "version": data.get("version"),
+            "step_count": len(steps) if isinstance(steps, list) else 0,
+            "updated_at": _file_mtime_iso(path),
+        })
+    return rows
+
+
+def _load_runbook_detail(home: Path, name: str) -> Optional[Dict[str, Any]]:
+    """单条 runbook：完整内容（steps/rollback/triggers...），递归值级脱敏后输出。"""
+    data = _load_runbook_yaml(home, name)
+    if data is None:
+        return None
+    out = _redact_tree(data)
+    out.setdefault("name", name)
+    out["updated_at"] = _file_mtime_iso(_runbooks_dir(home) / f"{name}.yaml")
+    return out
+
+
+@app.get("/api/topology")
+async def get_ops_topology():
+    """Ops dashboard: sanitized 3-layer topology view（凭据已过滤，数据根 ~ 相对）。"""
+    from hermes_cli.subcommands.topo_export import _display_path, build_view
+
+    def _build() -> Optional[Dict[str, Any]]:
+        return build_view(Path(get_hermes_home()))
+
+    view = await run_in_threadpool(_build)
+    if view is None:
+        return {"ok": False, "error": "无拓扑数据，先运行 vigil topo-discover 发现主机"}
+    view["data_root"] = _display_path(Path(get_hermes_home()))
+    return {"ok": True, "data": view}
+
+
+@app.get("/api/runbooks")
+async def get_ops_runbooks():
+    """Ops dashboard: read-only runbook list（元数据，不含步骤命令）。"""
+
+    def _collect() -> List[Dict[str, Any]]:
+        return _collect_runbook_list(Path(get_hermes_home()))
+
+    rows = await run_in_threadpool(_collect)
+    if not rows:
+        return {
+            "ok": False,
+            "error": "无 runbook 数据，先运行 vigil topo-discover 或创建 runbooks/*.yaml",
+        }
+    return {"ok": True, "data": {"count": len(rows), "runbooks": rows}}
+
+
+@app.get("/api/runbooks/{name}")
+async def get_ops_runbook_detail(name: str):
+    """Ops dashboard: single runbook detail（内容已递归值级脱敏）。"""
+
+    def _load() -> Optional[Dict[str, Any]]:
+        return _load_runbook_detail(Path(get_hermes_home()), name)
+
+    data = await run_in_threadpool(_load)
+    if data is None:
+        return {"ok": False, "error": f"runbook 不存在: {name}"}
+    return {"ok": True, "data": data}
 
 
 _WINDOWS_11_MIN_BUILD = 22000

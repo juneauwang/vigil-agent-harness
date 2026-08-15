@@ -57,4 +57,12 @@ PUBLIC_API_PATHS: frozenset[str] = frozenset({
     # the NAS relay's bearer-only callback reaches the verifier instead of a
     # 401 no_cookie. The JWT — not this allowlist — is the security boundary.
     "/api/cron/fire",
+    # Ops dashboard read-only views (UI 壳第一批): sanitized topology + runbook
+    # list. Both are pure GET reads of credential-redacted data (build_view /
+    # _redact_value on the server), safe for external probes and the SPA's
+    # pre-login bootstrap. The runbook *detail* route (/api/runbooks/{name})
+    # stays gated on public binds — full step commands are host-local — and is
+    # prefix-allowed only by the loopback gate in web_server.py.
+    "/api/topology",
+    "/api/runbooks",
 })
