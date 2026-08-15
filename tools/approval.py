@@ -2423,6 +2423,212 @@ def _denial_breaker_addendum(session_key: str) -> str:
         "ask them to run it manually or use /approve."
     )
 
+
+# =========================================================================
+# 统一 pending 审批注册表（web/UI 壳第二批，OPS-DELTA #47）
+# =========================================================================
+# 批二十"审批状态全局化"方案 B 的最小落地：进程内、线程安全。CLI/gateway
+# 审批路径完全不走这里（零行为影响）——本注册表只服务 web_server 的
+# /api/approvals + /api/exec 面。条目被批准/拒绝后通过 threading.Event 唤醒
+# 等待中的审批调用方（web exec 的 guard 线程），让 allowlist 持久化 +
+# trajectory 记录在既有审批流内原生完成，不复制判断逻辑。
+# 边界：跨进程/跨 gateway 全局化不在本批；进程重启即丢（同 exec 内存记录）。
+_web_approvals: dict = {}
+_web_approval_seq = 0
+
+
+def _new_web_approval_id() -> str:
+    global _web_approval_seq
+    _web_approval_seq += 1
+    return f"apv_{time.strftime('%Y%m%d')}_{_web_approval_seq:04d}"
+
+
+def register_web_approval(*, command, description, env="", grade=None,
+                          session_key="default", source="web",
+                          allow_session=True, allow_permanent=True,
+                          primary_key=None, pattern_keys=None,
+                          exec_id=None, smart_denied=False,
+                          timeout_seconds=None) -> str:
+    """登记一条 pending 审批（web/UI 壳用）。
+
+    ``command`` / ``description`` 必须是已脱敏的展示文本（调用方负责 redact）；
+    原始命令只存在于 exec 记录与审批 guard 的闭包里，不进注册表。条目字段照
+    UI 壳接口契约：id/command/description/env/grade/session_key/source/status/
+    scope/created_at/timeout_at/allow_session/allow_permanent。
+    """
+    from datetime import datetime, timedelta, timezone
+    if timeout_seconds is None:
+        timeout_seconds = _get_approval_timeout()
+    now = datetime.now(timezone.utc)
+    timeout_dt = now + timedelta(seconds=timeout_seconds) if timeout_seconds > 0 else None
+    approval_id = _new_web_approval_id()
+    entry = {
+        "id": approval_id,
+        "command": command,
+        "description": description,
+        "env": env or "",
+        "grade": grade,
+        "session_key": session_key,
+        "source": source,
+        "status": "pending",
+        "scope": None,
+        "created_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "timeout_at": (timeout_dt.strftime("%Y-%m-%dT%H:%M:%SZ") if timeout_dt else None),
+        "allow_session": bool(allow_session),
+        "allow_permanent": bool(allow_permanent),
+        "primary_key": primary_key,
+        "pattern_keys": list(pattern_keys or []),
+        "exec_id": exec_id,
+        "smart_denied": bool(smart_denied),
+        "reason": None,
+        "_timeout_epoch": (timeout_dt.timestamp() if timeout_dt else None),
+        "_event": threading.Event(),
+        "_choice": None,
+    }
+    with _lock:
+        _web_approvals[approval_id] = entry
+    return approval_id
+
+
+def _web_approval_view(entry: dict) -> dict:
+    """契约视图：只暴露草案字段，内部（事件/choice/pattern keys）不外泄。"""
+    return {
+        "id": entry["id"],
+        "command": entry["command"],
+        "description": entry["description"],
+        "env": entry["env"],
+        "grade": entry["grade"],
+        "session_key": entry["session_key"],
+        "source": entry["source"],
+        "status": entry["status"],
+        "scope": entry["scope"],
+        "created_at": entry["created_at"],
+        "timeout_at": entry["timeout_at"],
+        "allow_session": entry["allow_session"],
+        "allow_permanent": entry["allow_permanent"],
+    }
+
+
+def get_web_approval(approval_id: str) -> Optional[dict]:
+    """单条契约视图；不存在返回 None。"""
+    with _lock:
+        entry = _web_approvals.get(approval_id)
+        return _web_approval_view(entry) if entry else None
+
+
+def list_web_approvals(env: Optional[str] = None, status: Optional[str] = None,
+                       limit: int = 50, offset: int = 0) -> tuple:
+    """查询注册表：pending 排前、prod 优先、按创建时间倒序。返回 (views, total)。"""
+    with _lock:
+        entries = list(_web_approvals.values())
+    if env:
+        entries = [e for e in entries if e["env"] == env]
+    if status:
+        entries = [e for e in entries if e["status"] == status]
+    _env_rank = {"prod": 0, "dev": 1, "test": 2, "local": 3}
+    entries.sort(key=lambda e: (
+        0 if e["status"] == "pending" else 1,
+        _env_rank.get(e["env"], 9),
+        e["created_at"],
+    ))
+    total = len(entries)
+    page = entries[offset:offset + limit]
+    return [_web_approval_view(e) for e in page], total
+
+
+def wait_web_approval(approval_id: str, timeout: Optional[float] = None) -> Optional[str]:
+    """阻塞等待审批裁决；返回选择（once/session/permanent/deny）或 None（超时未决）。
+
+    超时语义（timeout_policy=wait）：不自动批准也不自动拒绝——调用方继续等；
+    已超时的条目由 /api/approvals 端点显式 409 timeout，命令保持 pending。
+    """
+    with _lock:
+        entry = _web_approvals.get(approval_id)
+        if entry is None:
+            return None
+        event = entry["_event"]
+    event.wait(timeout)
+    with _lock:
+        entry = _web_approvals.get(approval_id)
+        return entry["_choice"] if entry else None
+
+
+def _web_approval_timeout(entry: dict, now_epoch: float) -> bool:
+    return bool(entry.get("_timeout_epoch") and now_epoch > entry["_timeout_epoch"])
+
+
+def approve_web_approval(approval_id: str, scope: str = "once") -> dict:
+    """批准一条 pending 审批。返回 {"status": "approved", "scope": ...} 或错误
+    {"code": "not_found"|"timeout"|"invalid_request", "message": ...}。
+
+    scope 权限校验：prod 变更确认门条目 allow_session/allow_permanent=False →
+    只接受 once。已超时 → timeout（fail-closed，不自动批准）。状态置位后唤醒
+    等待的审批调用方，由既有审批流原生完成 allowlist 持久化 + trajectory。
+    """
+    now_epoch = time.time()
+    with _lock:
+        entry = _web_approvals.get(approval_id)
+        if entry is None:
+            return {"code": "not_found", "message": f"审批不存在: {approval_id}"}
+        if _web_approval_timeout(entry, now_epoch):
+            entry["status"] = "timeout"
+            return {"code": "timeout", "message": "审批已超时（wait 策略：不自动批准，命令保持 pending）"}
+        if entry["status"] != "pending":
+            return {"code": "invalid_request", "message": f"审批已处于 {entry['status']} 状态"}
+        if scope not in ("once", "session", "permanent"):
+            return {"code": "invalid_request", "message": "scope 必须是 once/session/permanent"}
+        if scope == "session" and not entry["allow_session"]:
+            return {"code": "invalid_request", "message": "该审批不支持 session 作用域（prod 变更确认门只允许 once）"}
+        if scope == "permanent" and not entry["allow_permanent"]:
+            return {"code": "invalid_request", "message": "该审批不支持 permanent 作用域"}
+        if entry["smart_denied"]:
+            scope = "once"
+        entry["scope"] = scope
+        entry["_choice"] = scope
+        entry["status"] = "approved"
+        entry["_event"].set()
+    return {"status": "approved", "scope": scope}
+
+
+def deny_web_approval(approval_id: str, reason: Optional[str] = None) -> dict:
+    """拒绝一条 pending 审批。返回 {"status": "denied"} 或错误
+    {"code": "not_found"|"timeout"|"invalid_request", ...}。"""
+    now_epoch = time.time()
+    with _lock:
+        entry = _web_approvals.get(approval_id)
+        if entry is None:
+            return {"code": "not_found", "message": f"审批不存在: {approval_id}"}
+        if _web_approval_timeout(entry, now_epoch):
+            entry["status"] = "timeout"
+            return {"code": "timeout", "message": "审批已超时（wait 策略：不自动拒绝，命令保持 pending）"}
+        if entry["status"] != "pending":
+            return {"code": "invalid_request", "message": f"审批已处于 {entry['status']} 状态"}
+        entry["status"] = "denied"
+        entry["reason"] = reason
+        entry["_choice"] = "deny"
+        entry["_event"].set()
+    return {"status": "denied"}
+
+
+def reclaim_timed_out_web_approvals() -> int:
+    """超时回收：把过期 pending 标记为 timeout（wait 语义——不自动批准/拒绝，
+    之后显式 approve/deny 一律 409 timeout）。返回回收条数。"""
+    now_epoch = time.time()
+    reclaimed = 0
+    with _lock:
+        for entry in _web_approvals.values():
+            if entry["status"] == "pending" and _web_approval_timeout(entry, now_epoch):
+                entry["status"] = "timeout"
+                reclaimed += 1
+    return reclaimed
+
+
+def clear_web_approvals() -> None:
+    """测试/进程内清理用。"""
+    with _lock:
+        _web_approvals.clear()
+
+
 # =========================================================================
 # Blocking gateway approval (mirrors CLI's synchronous input() flow)
 # =========================================================================

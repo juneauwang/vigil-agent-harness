@@ -102,11 +102,13 @@ from utils import env_var_enabled
 
 try:
     from fastapi import (
-        FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
+        Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
         WebSocket, WebSocketDisconnect,
     )
     from fastapi.middleware.cors import CORSMiddleware
-    from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+    from fastapi.responses import (
+        FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse,
+    )
     from fastapi.staticfiles import StaticFiles
     from pydantic import BaseModel, SecretStr, field_validator
     from starlette.concurrency import run_in_threadpool
@@ -118,11 +120,13 @@ except ImportError:
         from tools.lazy_deps import ensure as _lazy_ensure
         _lazy_ensure("tool.dashboard", prompt=False)
         from fastapi import (
-            FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
+            Body, FastAPI, File, Form, HTTPException, Query, Request, UploadFile,
             WebSocket, WebSocketDisconnect,
         )
         from fastapi.middleware.cors import CORSMiddleware
-        from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+        from fastapi.responses import (
+            FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse,
+        )
         from fastapi.staticfiles import StaticFiles
         from pydantic import BaseModel, SecretStr, field_validator
         from starlette.concurrency import run_in_threadpool
@@ -3511,6 +3515,771 @@ async def get_ops_runbook_detail(name: str):
     if data is None:
         return {"ok": False, "error": f"runbook 不存在: {name}"}
     return {"ok": True, "data": data}
+
+
+# ---------------------------------------------------------------------------
+# UI 壳第二批：执行/审批/审计 API（OPS-DELTA #47，契约见 vigil-exec-api-draft.md）
+# ---------------------------------------------------------------------------
+# 安全前提：本批全部端点都不进 PUBLIC_API_PATHS（public_paths.py 只保留第一批
+# 只读端点）——loopback 前缀放行、公网绑定走 OAuth/会话 token。所有响应统一过
+# _redact_tree 值级脱敏；命令/输出另过 redact_sensitive_text(credential_values=
+# True, force=True)（redact 三盲区修复后的规则）。错误格式照契约：
+# {"error": {"code", "message", "details"}}，code 枚举见草案总则 3。
+# 边界：执行记录与审批注册表都是进程内内存态（进程重启即丢，OPS-DELTA 注明）；
+# 审批注册表/allowlist/trajectory 侧效应由既有审批流原生完成（不复制判断逻辑）。
+
+_EXEC_RECORDS: dict = {}
+_EXEC_LOCK = threading.Lock()
+_EXEC_SEQ = 0
+_EXEC_OUTPUT_MAX_BYTES = 1024 * 1024      # 执行记录全量输出上限（内存保护）
+_EXEC_POST_OUTPUT_TRUNCATE = 100 * 1024   # POST /api/exec 返回输出截断 100KB
+_EXEC_RECORDS_MAX = 500                   # 软上限：超限淘汰最早的已终态记录
+_EXEC_GUARD_DECISION_WAIT = 15.0          # POST /api/exec 等 guard 决策/审批登记的最长秒数
+
+
+def _new_exec_id() -> str:
+    global _EXEC_SEQ
+    _EXEC_SEQ += 1
+    return f"exec_{time.strftime('%Y%m%d')}_{_EXEC_SEQ:04d}"
+
+
+def _now_iso_utc() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _api_error(code: str, message: str, details: Optional[dict] = None) -> dict:
+    return {"error": {"code": code, "message": message, "details": details or {}}}
+
+
+def _redact_exec_text(text: str) -> str:
+    """命令/输出展示文本脱敏：凭据值/路径/token 零泄露（redact 三盲区修复后规则）。
+
+    双层组合：redact_sensitive_text（token/ENV 赋值/password 值，force=True）
+    + topo_export._redact_value（URL userinfo / .pem/id_rsa 私钥路径 / home
+    前缀）——单层各自都有盲区（前者不遮 URL userinfo，后者不遮 token 值），
+    执行面（POST 输出 / SSE chunk / 执行记录）必须两层都过。
+    """
+    try:
+        from agent.redact import redact_sensitive_text
+        out = redact_sensitive_text(str(text), credential_values=True, force=True)
+        from hermes_cli.subcommands.topo_export import _redact_value
+        return _redact_value(out)
+    except Exception:
+        return str(text)
+
+
+def _default_ops_env() -> str:
+    """ops.permissions.env 默认值（/api/exec env 缺省用）。"""
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        return str(cfg.get("ops", {}).get("permissions", {}).get("env") or "").strip().lower()
+    except Exception:
+        return ""
+
+
+def _record_web_exec_trajectory(rec: dict, *, exit_code: Optional[int] = None,
+                                error: Optional[str] = None) -> None:
+    """terminal 轨迹事件（复用 agent.trajectory.record_event，action/result 强制 redact）。"""
+    try:
+        from agent.trajectory import record_event
+        record_event(
+            type="terminal",
+            session_id=rec.get("session_id") or "default",
+            tool="terminal",
+            action=rec.get("command_raw") or rec.get("command") or "",
+            result=(
+                f"exit {exit_code}" if error is None
+                else f"error: {error}"
+            ),
+            meta={"source": "web", "exec_id": rec.get("exec_id")},
+        )
+    except Exception:
+        _log.debug("web exec trajectory event failed", exc_info=True)
+
+
+def _exec_record_view(rec: dict) -> dict:
+    """契约视图：command 用已脱敏展示值；command_raw 绝不出 API。"""
+    return {
+        "exec_id": rec["exec_id"],
+        "command": rec["command"],
+        "env": rec["env"],
+        "host": rec["host"],
+        "session_id": rec["session_id"],
+        "status": rec["status"],
+        "exit_code": rec.get("exit_code"),
+        "output": rec.get("output") or "",
+        "executed_at": rec.get("executed_at"),
+        "duration_ms": rec.get("duration_ms"),
+        "approval_id": rec.get("approval_id"),
+        "error": rec.get("error"),
+        "created_at": rec.get("created_at"),
+        "timeout_seconds": rec.get("timeout_seconds"),
+    }
+
+
+def _audit_event_view(event: Dict[str, Any]) -> Dict[str, Any]:
+    """audit 列表视图：trajectory 事件原样 + action/result 前 500 字符 preview。"""
+    view = dict(event)
+    for key in ("action", "result"):
+        val = view.get(key)
+        if isinstance(val, str) and len(val) > 500:
+            view[key] = val[:500] + "…"
+    return view
+
+
+def _sse_event(name: str, data: dict) -> str:
+    return f"event: {name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+# ------------------------- 一、Approvals API --------------------------------
+
+
+@app.get("/api/approvals")
+async def list_approvals(env: Optional[str] = None, status: Optional[str] = None,
+                         limit: int = 50, offset: int = 0):
+    """pending + 最近 resolved 审批；env 过滤；pending 排前、prod 优先。"""
+    from tools.approval import list_web_approvals, reclaim_timed_out_web_approvals
+    limit = max(0, min(int(limit), 200))
+    offset = max(0, int(offset))
+    reclaim_timed_out_web_approvals()
+    views, total = list_web_approvals(
+        env=(env or "").strip() or None,
+        status=(status or "").strip() or None,
+        limit=limit, offset=offset,
+    )
+    return {
+        "approvals": _redact_tree(views),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(views) < total,
+    }
+
+
+@app.post("/api/approvals/{approval_id}/approve")
+async def approve_approval(approval_id: str,
+                           payload: Dict[str, Any] = Body(default_factory=dict)):
+    """批准：body {scope: once|session|permanent}。已超时 → 409 timeout。"""
+    from tools.approval import approve_web_approval
+    scope = str((payload or {}).get("scope") or "once")
+    result = approve_web_approval(approval_id, scope=scope)
+    if "code" in result:
+        status_code = {"not_found": 404, "timeout": 409, "invalid_request": 400}.get(
+            result["code"], 400
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content=_api_error(result["code"], result.get("message", ""), result.get("details")),
+        )
+    return {"status": "approved", "scope": result["scope"]}
+
+
+@app.post("/api/approvals/{approval_id}/deny")
+async def deny_approval(approval_id: str,
+                        payload: Dict[str, Any] = Body(default_factory=dict)):
+    """拒绝：body 可选 {reason}。已超时 → 409 timeout。"""
+    from tools.approval import deny_web_approval
+    reason = str((payload or {}).get("reason") or "").strip() or None
+    result = deny_web_approval(approval_id, reason=reason)
+    if "code" in result:
+        status_code = {"not_found": 404, "timeout": 409, "invalid_request": 400}.get(
+            result["code"], 400
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content=_api_error(result["code"], result.get("message", ""), result.get("details")),
+        )
+    return {"status": "denied"}
+
+
+# ------------------------- 三、Terminal / 执行 API ---------------------------
+
+
+def _web_exec_guard_callback_factory(exec_id: str, env: str, session_id: str,
+                                     grade_box: dict, approval_box: dict):
+    """构造 check_all_command_guards 的 approval_callback（web 面）。
+
+    回调在 guard 线程内被调用：登记 pending 审批 → 阻塞等待用户裁决（wait
+    语义：不自动批准/拒绝）→ 返回选择串。allowlist 持久化 + trajectory 由
+    guard 原生流程完成，本回调只做注册与等待。
+    """
+    from tools.approval import register_web_approval, wait_web_approval
+
+    def _cb(display_command: str, description: str, *,
+            allow_permanent: bool = True, allow_session: bool = True,
+            smart_denied: bool = False) -> str:
+        approval_id = register_web_approval(
+            command=display_command,
+            description=description,
+            env=env,
+            grade=grade_box.get("grade"),
+            session_key=session_id,
+            source="web",
+            allow_session=allow_session,
+            allow_permanent=allow_permanent,
+            exec_id=exec_id,
+            smart_denied=smart_denied,
+        )
+        approval_box["approval_id"] = approval_id
+        with _EXEC_LOCK:
+            rec = _EXEC_RECORDS.get(exec_id)
+            if rec is not None:
+                rec["approval_id"] = approval_id
+        return wait_web_approval(approval_id) or "timeout"
+
+    return _cb
+
+
+@app.post("/api/exec")
+async def create_exec(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """执行命令：权限矩阵（classify_command × env × B' prod 门）→ 三态。
+
+    executed（本机直接跑，输出截断 100KB）/ needs_approval（回 approval_id，
+    前端弹审批卡，通过后开 SSE 流）/ denied（回 reason）。host 缺省本机；
+    env 缺省 ops.permissions.env。执行链复用 terminal_tool.local_exec_stream
+    （sudo 变换复用 _transform_sudo_command；命令/输出过 redact）。
+    """
+    from tools.approval import (
+        check_all_command_guards,
+        reset_current_session_key,
+        reset_hermes_interactive_context,
+        set_current_session_key,
+        set_hermes_interactive_context,
+    )
+    from tools.terminal_tool import get_session_cwd, local_exec_stream
+
+    command = str((payload or {}).get("command") or "").strip()
+    if not command:
+        return JSONResponse(status_code=400, content=_api_error("invalid_request", "command 必填"))
+    host = str((payload or {}).get("host") or "").strip()
+    if host and host.lower() not in ("localhost", "127.0.0.1", "local", "本机"):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                f"远端 host 执行不在本批范围（仅支持本机；收到 host={host!r}）",
+            ),
+        )
+    env = str((payload or {}).get("env") or "").strip().lower() or _default_ops_env()
+    session_id = str((payload or {}).get("session_id") or "").strip() or "default"
+    try:
+        timeout_seconds = max(1, min(int(payload.get("timeout_seconds") or 60), 3600))
+    except (TypeError, ValueError):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", "timeout_seconds 必须是正整数"),
+        )
+
+    exec_id = _new_exec_id()
+    grade_box: dict = {}
+    try:
+        from tools.ops_permissions import check_ops_command_permission as _check_ops
+        _ops = _check_ops(command)
+        if _ops and _ops.get("action") == "approve":
+            grade_box["grade"] = _ops.get("grade")
+    except Exception:
+        _log.debug("web exec grade probe failed", exc_info=True)
+
+    try:
+        cwd = get_session_cwd(session_id) or ""
+    except Exception:
+        cwd = ""
+
+    record: Dict[str, Any] = {
+        "exec_id": exec_id,
+        "command_raw": command,
+        "command": _redact_exec_text(command),
+        "env": env,
+        "host": host or "localhost",
+        "session_id": session_id,
+        "status": "needs_approval",
+        "approval_id": None,
+        "exit_code": None,
+        "output": "",
+        "error": None,
+        "executed_at": None,
+        "duration_ms": None,
+        "created_at": _now_iso_utc(),
+        "timeout_seconds": timeout_seconds,
+        "_cwd": cwd,
+    }
+    with _EXEC_LOCK:
+        _EXEC_RECORDS[exec_id] = record
+        if len(_EXEC_RECORDS) > _EXEC_RECORDS_MAX:
+            # 软上限：淘汰最早的已终态记录（pending 中的不淘汰）。
+            for _old_id in list(_EXEC_RECORDS):
+                if len(_EXEC_RECORDS) <= _EXEC_RECORDS_MAX:
+                    break
+                _old = _EXEC_RECORDS[_old_id]
+                if _old["status"] in ("executed", "denied", "error"):
+                    _EXEC_RECORDS.pop(_old_id, None)
+
+    decision_box: dict = {}
+    approval_box: dict = {}
+
+    def _run_guard() -> None:
+        tk1 = set_hermes_interactive_context(True)
+        tk2 = set_current_session_key(session_id)
+        try:
+            decision_box["decision"] = check_all_command_guards(
+                command, "local", approval_callback=_web_exec_guard_callback_factory(
+                    exec_id, env, session_id, grade_box, approval_box
+                ),
+            )
+        except Exception as exc:
+            decision_box["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            reset_hermes_interactive_context(tk1)
+            reset_current_session_key(tk2)
+        with _EXEC_LOCK:
+            rec = _EXEC_RECORDS.get(exec_id)
+            if rec is None:
+                return
+            if decision_box.get("error"):
+                rec["status"] = "error"
+                rec["error"] = decision_box["error"]
+            elif decision_box["decision"].get("approved"):
+                rec["status"] = "approved"
+            else:
+                rec["status"] = "denied"
+                rec["error"] = (
+                    decision_box["decision"].get("message")
+                    or decision_box["decision"].get("description")
+                    or "命令被拒绝"
+                )
+
+    guard_thread = threading.Thread(
+        target=_run_guard, daemon=True, name=f"web-exec-guard-{exec_id}"
+    )
+    guard_thread.start()
+    guard_thread.join(timeout=1.5)
+
+    if guard_thread.is_alive():
+        # 决策仍在进行：审批提示挂起（等 approval_id），或 smart 评估/守卫
+        # 前置阶段较慢（此时没有审批条目）。轮询到 guard 完成或 approval_id
+        # 落定为止；guard 在等待期间完成（如 smart 直接放行/拒绝）则走下方
+        # 共享决策处理，而不是误报 internal。
+        _deadline = time.monotonic() + _EXEC_GUARD_DECISION_WAIT
+        while time.monotonic() < _deadline:
+            guard_thread.join(timeout=0.25)
+            if not guard_thread.is_alive() or approval_box.get("approval_id"):
+                break
+        if guard_thread.is_alive():
+            approval_id = approval_box.get("approval_id")
+            if approval_id is None:
+                return JSONResponse(
+                    status_code=500,
+                    content=_api_error("internal", "审批状态初始化失败"),
+                )
+            return {
+                "status": "needs_approval",
+                "exec_id": exec_id,
+                "approval_id": approval_id,
+                "pending": True,
+            }
+
+    if decision_box.get("error"):
+        return JSONResponse(
+            status_code=500,
+            content=_api_error("internal", decision_box["error"]),
+        )
+    decision = decision_box.get("decision")
+    if decision is None:
+        return JSONResponse(
+            status_code=500,
+            content=_api_error("internal", "命令裁决未完成"),
+        )
+    if not decision["approved"]:
+        return {
+            "status": "denied",
+            "code": "denied",
+            "reason": decision.get("message") or decision.get("description") or "命令被拒绝",
+        }
+
+    # 直接放行 → 本机执行（threadpool，不阻塞事件循环）。
+    def _run_local() -> tuple:
+        chunks: List[str] = []
+        exit_code: Optional[int] = None
+        duration_ms: Optional[int] = None
+        error: Optional[str] = None
+        for ev, pl in local_exec_stream(command, cwd=cwd, timeout_seconds=timeout_seconds):
+            if ev == "output":
+                chunks.append(_redact_exec_text(pl["chunk"]))
+            elif ev == "exit":
+                exit_code = pl["exit_code"]
+                duration_ms = pl["duration_ms"]
+            elif ev == "error":
+                error = pl["message"]
+        return "".join(chunks), exit_code, duration_ms, error
+
+    output, exit_code, duration_ms, error = await run_in_threadpool(_run_local)
+    with _EXEC_LOCK:
+        rec = _EXEC_RECORDS.get(exec_id)
+        if rec is not None:
+            rec["status"] = "error" if error else "executed"
+            rec["exit_code"] = exit_code
+            rec["duration_ms"] = duration_ms
+            rec["output"] = output[-_EXEC_OUTPUT_MAX_BYTES:]
+            rec["error"] = error
+            rec["executed_at"] = _now_iso_utc()
+    _record_web_exec_trajectory(record, exit_code=exit_code, error=error)
+    if error:
+        return {"status": "error", "exec_id": exec_id, "error": error}
+    return {
+        "status": "executed",
+        "exec_id": exec_id,
+        "exit_code": exit_code,
+        "output": output[:_EXEC_POST_OUTPUT_TRUNCATE],
+    }
+
+
+@app.get("/api/exec/{exec_id}")
+async def get_exec_record(exec_id: str):
+    """执行记录全量（output 全文，过脱敏）。"""
+    with _EXEC_LOCK:
+        rec = _EXEC_RECORDS.get(exec_id)
+        if rec is None:
+            return JSONResponse(
+                status_code=404,
+                content=_api_error("not_found", f"执行记录不存在: {exec_id}"),
+            )
+        view = _exec_record_view(dict(rec))
+    return _redact_tree(view)
+
+
+@app.get("/api/exec/{exec_id}/stream")
+async def exec_stream(exec_id: str):
+    """SSE 流：exec:start / exec:output（chunk）/ exec:exit / exec:error。
+
+    审批通过才允许启动流（status=approved → 本机执行并实时推送；executed →
+    重放已捕获输出；denied/error → exec:error；needs_approval → 轮询等审批，
+    超时/回收为 timeout → exec:error，命令保持 pending）。
+    """
+    return StreamingResponse(
+        _exec_stream_generator(exec_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+async def _exec_stream_generator(exec_id: str):
+    from tools.approval import get_web_approval
+    from tools.terminal_tool import local_exec_stream
+
+    with _EXEC_LOCK:
+        rec = dict(_EXEC_RECORDS.get(exec_id) or {})
+    if not rec:
+        yield _sse_event("exec:error", {"message": f"执行记录不存在: {exec_id}"})
+        return
+
+    # 等记录进入可执行/终态（needs_approval → 审批裁决；最长等 60s）。
+    for _ in range(120):
+        if rec["status"] in ("approved", "executed", "denied", "error"):
+            break
+        if rec["status"] == "needs_approval" and rec.get("approval_id"):
+            av = get_web_approval(rec["approval_id"])
+            if av and av["status"] == "timeout":
+                yield _sse_event(
+                    "exec:error",
+                    {"message": "审批已超时（fail-closed：命令保持 pending，未执行）"},
+                )
+                return
+        await asyncio.sleep(0.5)
+        with _EXEC_LOCK:
+            rec = dict(_EXEC_RECORDS.get(exec_id) or {})
+        if not rec:
+            yield _sse_event("exec:error", {"message": f"执行记录不存在: {exec_id}"})
+            return
+    else:
+        yield _sse_event("exec:error", {"message": "审批未在限时内通过"})
+        return
+
+    if rec["status"] in ("denied", "error"):
+        yield _sse_event("exec:error", {"message": rec.get("error") or "命令未获执行"})
+        return
+
+    if rec["status"] == "executed":
+        yield _sse_event("exec:start", {"exec_id": exec_id, "command": rec["command"]})
+        output = rec.get("output") or ""
+        if output:
+            for line in output.splitlines(keepends=True):
+                yield _sse_event("exec:output", {"chunk": line})
+        else:
+            yield _sse_event("exec:output", {"chunk": ""})
+        yield _sse_event("exec:exit", {
+            "exit_code": rec.get("exit_code"),
+            "duration_ms": rec.get("duration_ms"),
+        })
+        return
+
+    # status == "approved" → 开始执行并实时推送。
+    yield _sse_event("exec:start", {"exec_id": exec_id, "command": rec["command"]})
+    raw_command = rec.get("command_raw") or ""
+    cwd = rec.get("_cwd") or ""
+    timeout_seconds = rec.get("timeout_seconds") or 60
+    queue: "asyncio.Queue" = asyncio.Queue()
+    _loop = asyncio.get_running_loop()
+
+    def _run_local() -> None:
+        # asyncio.Queue.put_nowait 非线程安全：跨线程 put 不唤醒 await get()
+        # （实测：事件循环在 get() 上挂死直到超时）。必须经 call_soon_threadsafe
+        # 把 put 调度回事件循环线程。
+        try:
+            for ev, pl in local_exec_stream(raw_command, cwd=cwd, timeout_seconds=timeout_seconds):
+                _loop.call_soon_threadsafe(queue.put_nowait, (ev, pl))
+        except Exception as exc:
+            _loop.call_soon_threadsafe(
+                queue.put_nowait, ("error", {"message": f"{type(exc).__name__}: {exc}"})
+            )
+        finally:
+            _loop.call_soon_threadsafe(queue.put_nowait, ("__done__", None))
+
+    threading.Thread(target=_run_local, daemon=True, name=f"web-exec-stream-{exec_id}").start()
+    chunks: List[str] = []
+    exit_code: Optional[int] = None
+    duration_ms: Optional[int] = None
+    run_error: Optional[str] = None
+    while True:
+        ev, pl = await queue.get()
+        if ev == "__done__":
+            break
+        if ev == "output":
+            chunk = _redact_exec_text(pl["chunk"])
+            chunks.append(chunk)
+            yield _sse_event("exec:output", {"chunk": chunk})
+        elif ev == "exit":
+            exit_code = pl["exit_code"]
+            duration_ms = pl["duration_ms"]
+            yield _sse_event("exec:exit", {"exit_code": exit_code, "duration_ms": duration_ms})
+            break
+        elif ev == "error":
+            run_error = pl["message"]
+            yield _sse_event("exec:error", {"message": run_error})
+            break
+
+    with _EXEC_LOCK:
+        rec2 = _EXEC_RECORDS.get(exec_id)
+        if rec2 is not None:
+            rec2["status"] = "error" if run_error else "executed"
+            rec2["exit_code"] = exit_code
+            rec2["duration_ms"] = duration_ms
+            rec2["output"] = "".join(chunks)[-_EXEC_OUTPUT_MAX_BYTES:]
+            rec2["error"] = run_error
+            rec2["executed_at"] = _now_iso_utc()
+    _record_web_exec_trajectory(rec, exit_code=exit_code, error=run_error)
+
+
+# ------------------------- 二、Audit API ------------------------------------
+
+
+@app.get("/api/audit/sessions")
+async def audit_sessions(limit: int = 50, offset: int = 0):
+    """轨迹 session 列表（= trajectory list 的 JSON 化）。"""
+    from hermes_cli.subcommands.trajectory import _iter_event_files, _load_events
+    limit = max(0, min(int(limit), 200))
+    offset = max(0, int(offset))
+    sessions: List[Dict[str, Any]] = []
+    for path in _iter_event_files():
+        events = _load_events(path)
+        if not events:
+            continue
+        sessions.append({
+            "session_id": events[0].get("session_id") or path.stem,
+            "event_count": len(events),
+            "started_at": events[0].get("ts"),
+            "ended_at": events[-1].get("ts"),
+        })
+    sessions.sort(key=lambda s: s["started_at"] or "", reverse=True)
+    total = len(sessions)
+    page = sessions[offset:offset + limit]
+    return {
+        "sessions": _redact_tree(page),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(page) < total,
+    }
+
+
+@app.get("/api/audit/events")
+async def audit_events(session_id: Optional[str] = None, type: Optional[str] = None,
+                       limit: int = 50, offset: int = 0):
+    """轨迹事件列表（type 过滤 + 分页；action/result 只给前 500 字符 preview）。"""
+    from hermes_cli.subcommands.trajectory import _iter_event_files, _load_events
+    limit = max(0, min(int(limit), 200))
+    offset = max(0, int(offset))
+    events: List[Dict[str, Any]] = []
+    for path in _iter_event_files():
+        for event in _load_events(path):
+            if session_id and event.get("session_id") != session_id:
+                continue
+            if type and event.get("type") != type:
+                continue
+            events.append(_audit_event_view(event))
+    events.sort(key=lambda e: e.get("ts") or "", reverse=True)
+    total = len(events)
+    page = events[offset:offset + limit]
+    return {
+        "events": _redact_tree(page),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(page) < total,
+    }
+
+
+@app.get("/api/audit/events/{session_id}/{seq}")
+async def audit_event_detail(session_id: str, seq: int):
+    """单事件全量（过 redact，凭据/路径打码）。"""
+    from agent.trajectory import _event_file_path
+    from hermes_cli.subcommands.trajectory import _load_events
+    for event in _load_events(_event_file_path(session_id)):
+        if int(event.get("seq", -1)) == int(seq):
+            return _redact_tree(event)
+    return JSONResponse(
+        status_code=404,
+        content=_api_error("not_found", f"事件不存在: {session_id}/{seq}"),
+    )
+
+
+@app.delete("/api/audit/events")
+async def audit_prune(session_id: Optional[str] = None, older_than: Optional[str] = None):
+    """prune：删指定 session 或最后活动早于 older_than（ISO8601）的轨迹文件。"""
+    from hermes_cli.subcommands.trajectory import (
+        _iter_event_files, _load_events, _parse_iso,
+    )
+    before = _parse_iso(older_than) if older_than else None
+    if older_than and before is None:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", "older_than 必须是 ISO8601 时间"),
+        )
+    removed = 0
+    for path in _iter_event_files():
+        events = _load_events(path)
+        sess = events[0].get("session_id") if events else path.stem
+        if session_id and sess != session_id:
+            continue
+        if before is not None:
+            last_ts = None
+            for event in reversed(events):
+                if event.get("ts"):
+                    last_ts = _parse_iso(event["ts"])
+                    break
+            if last_ts is None or last_ts >= before:
+                continue
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return {"status": "pruned", "deleted": removed}
+
+
+# ------------------------- 五、Sessions（会话事件流） -------------------------
+
+
+@app.get("/api/sessions/{session_id}/events")
+async def get_session_events(session_id: str, limit: int = 50, offset: int = 0):
+    """会话事件流（trajectory 按 session 过滤，= Terminal 页历史面板）。"""
+    from agent.trajectory import _event_file_path
+    from hermes_cli.subcommands.trajectory import _load_events
+    limit = max(0, min(int(limit), 200))
+    offset = max(0, int(offset))
+    events = sorted(_load_events(_event_file_path(session_id)),
+                    key=lambda e: e.get("seq", 0))
+    total = len(events)
+    page = events[offset:offset + limit]
+    return {
+        "events": _redact_tree([_audit_event_view(e) for e in page]),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(page) < total,
+    }
+
+
+@app.get("/api/sessions")
+async def ui_sessions_list(
+    # 校验语义照原端点（ge=0/le=100 → 负数 422，防止 LIMIT -1 透传 SQLite）；
+    # 默认 50 对齐契约总则（原端点默认 20，显式传参两者等价）。
+    limit: int = Query(50, ge=0, le=100),
+    offset: int = Query(0, ge=0),
+    min_messages: int = 0,
+    archived: str = "exclude",
+    order: str = "created",
+    source: Optional[str] = None,
+    sources: Optional[str] = None,
+    exclude_sources: Optional[str] = None,
+    cwd_prefix: Optional[str] = None,
+    full: bool = False,
+    profile: Optional[str] = None,
+):
+    """契约五 /api/sessions：活动会话 + session db 历史（OPS-DELTA #47）。
+
+    既有 GET /api/sessions（web_routers/sessions.py）返回 id/last_active 行
+    结构，桌面侧 SessionInfo 按它消费，不能动；DSH/UI 壳前端按契约消费
+    session_id/last_activity_at/running。歧义解释：本进程先注册同路径包装
+    路由——委托原 handler（旧字段零变化），行级追加契约字段（session_id /
+    last_activity_at 别名 + running 活跃标记），两边消费方同时满足。
+    """
+    from hermes_cli.web_routers.sessions import get_sessions as _legacy_sessions
+    data = await run_in_threadpool(
+        _legacy_sessions,
+        limit=limit, offset=offset, min_messages=min_messages,
+        archived=archived, order=order, source=source, sources=sources,
+        exclude_sources=exclude_sources, cwd_prefix=cwd_prefix,
+        full=full, profile=profile,
+    )
+    sessions = data.get("sessions") or []
+    active_ids = set()
+    try:
+        from hermes_cli.active_sessions import active_session_registry_snapshot
+        for _ent in active_session_registry_snapshot():
+            _sid = _ent.get("session_id")
+            if _sid:
+                active_ids.add(str(_sid))
+    except Exception:
+        pass
+    for _row in sessions:
+        _row.setdefault("session_id", _row.get("id"))
+        _row.setdefault("last_activity_at", _row.get("last_active"))
+        _row["running"] = bool(
+            _row.get("is_active")
+            or (str(_row.get("session_id")) in active_ids)
+            or _row.get("ended_at") is None
+        )
+    total = data.get("total") or len(sessions)
+    return {
+        "sessions": _redact_tree(sessions),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(sessions) < total,
+    }
+
+
+# ------------------------- 四、Incidents（结构占位） --------------------------
+
+
+@app.get("/api/incidents")
+async def get_incidents(limit: int = 50, offset: int = 0):
+    """Incidents 结构占位：Vigil 无监控/告警体系，只定义 schema 不编数据。"""
+    limit = max(0, min(int(limit), 200))
+    offset = max(0, int(offset))
+    return {
+        "incidents": [],
+        "total": 0,
+        "schema_version": 1,
+        "limit": limit,
+        "offset": offset,
+        "has_more": False,
+    }
 
 
 _WINDOWS_11_MIN_BUILD = 22000
