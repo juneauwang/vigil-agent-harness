@@ -26,7 +26,6 @@ import {
   BarChart3,
   Bell,
   BookOpen,
-  ChevronDown,
   Clock,
   Code,
   Cpu,
@@ -37,6 +36,7 @@ import {
   FileText,
   Globe,
   Heart,
+  History,
   KeyRound,
   LayoutDashboard,
   Menu,
@@ -59,6 +59,7 @@ import {
   Star,
   Sun,
   Terminal,
+  TriangleAlert,
   Users,
   Webhook,
   Wrench,
@@ -81,6 +82,7 @@ import { useProfileScope } from "@/contexts/useProfileScope";
 import { ProfileSwitcher } from "@/components/ProfileSwitcher";
 import { useSystemActions } from "@/contexts/useSystemActions";
 import { TerminalPanel } from "@/components/ops/TerminalPanel";
+import { formatUptime } from "@/lib/ops";
 import type { SystemAction } from "@/contexts/system-actions-context";
 // Route pages are lazy-loaded so the initial dashboard shell does not pay for
 // every admin surface (and heavy deps like xterm) up front.
@@ -108,6 +110,8 @@ const StatusPage = lazy(() => import("@/pages/StatusPage"));
 const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
 const ExecutionLogsPage = lazy(() => import("@/pages/ExecutionLogsPage"));
 const ApprovalsPage = lazy(() => import("@/pages/ApprovalsPage"));
+const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
+const AuditPage = lazy(() => import("@/pages/AuditPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -166,7 +170,9 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/runbooks": RunbooksPage,
   "/exec-logs": ExecutionLogsPage,
   "/approvals": ApprovalsPage,
-  // Hermes 功能页（收进「系统设置」折叠区，仍可 URL 直达）。
+  "/incidents": IncidentsPage,
+  "/audit": AuditPage,
+  // Hermes 功能页（移出主菜单，保留 URL 直达 + 顶部「设置」菜单直达）。
   "/sessions": SessionsPage,
   "/files": FilesPage,
   "/analytics": AnalyticsPage,
@@ -204,17 +210,18 @@ interface NavItem {
   icon: ComponentType<{ className?: string }>;
 }
 
-/** 一级运维导航（常驻，顺序固定）。 */
+/** 左侧窄侧边栏七项（豆包布局基准：线形图标）。Terminal 项锚定底部终端面板。 */
 const VIGIL_PRIMARY_NAV: NavItem[] = [
-  { path: "/overview", label: "概览", icon: LayoutDashboard },
-  { path: "/topology", label: "资产拓扑", icon: Network },
-  { path: "/runbooks", label: "Runbook 剧本", icon: ScrollText },
-  { path: "/exec-logs", label: "执行日志", icon: Terminal },
-  { path: "/approvals", label: "审批中心", icon: ShieldCheck },
+  { path: "/overview", label: "Overview", icon: LayoutDashboard },
+  { path: "/topology", label: "Topology", icon: Network },
+  { path: "/runbooks", label: "Runbooks", icon: ScrollText },
+  { path: "/incidents", label: "Incidents", icon: TriangleAlert },
+  { path: "/approvals", label: "Approvals", icon: ShieldCheck },
+  { path: "/audit", label: "Audit", icon: History },
 ];
 
-/** 系统设置折叠区：Hermes 功能页全部收进这里。 */
-const SETTINGS_NAV: NavItem[] = [
+/** Hermes 功能页（顶部「设置」菜单，不在主侧边栏）。 */
+const SETTINGS_MENU: NavItem[] = [
   { path: "/chat", labelKey: "chat", label: "Chat", icon: MessageSquare },
   { path: "/sessions", labelKey: "sessions", label: "Sessions", icon: Activity },
   { path: "/files", label: "Files", icon: FolderOpen },
@@ -234,8 +241,8 @@ const SETTINGS_NAV: NavItem[] = [
   { path: "/docs", labelKey: "documentation", label: "Documentation", icon: BookOpen },
 ];
 
-/** 系统设置折叠区里按 flag 追加的项（Analytics 默认隐藏）。 */
-const SETTINGS_NAV_EXTRA: Array<NavItem & { flag?: "analytics" }> = [
+/** 设置菜单里按 flag 追加的项（Analytics 默认隐藏）。 */
+const SETTINGS_MENU_EXTRA: Array<NavItem & { flag?: "analytics" }> = [
   { path: "/analytics", labelKey: "analytics", label: "Analytics", icon: BarChart3, flag: "analytics" },
 ];
 
@@ -410,16 +417,17 @@ export default function App() {
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
-      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+      // 豆包布局：默认 60px 纯图标；"0" 表示用户手动展开过。
+      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) !== "0";
     } catch {
-      return false;
+      return true;
     }
   });
   const toggleCollapsed = useCallback(() => {
     setCollapsed((prev) => {
       const next = !prev;
       try {
-        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, next ? "1" : "0");
       } catch { /* localStorage may be unavailable in private browsing */ }
       return next;
     });
@@ -432,6 +440,34 @@ export default function App() {
   const normalizedPath = pathname.replace(/\/$/, "") || "/";
   const isChatRoute = normalizedPath === "/chat";
   const embeddedChat = isDashboardEmbeddedChatEnabled();
+
+  // 顶部栏徽标数据：环境标签（拓扑首个 cluster）+ API 健康 + 运行时长。
+  const [headerMeta, setHeaderMeta] = useState<{
+    env: string;
+    apiOk: boolean;
+    uptime: string;
+  }>({ env: "", apiOk: true, uptime: "-" });
+  useEffect(() => {
+    let alive = true;
+    Promise.all([api.getHealth().catch(() => null), api.getTopology().catch(() => null)])
+      .then(([health, topo]) => {
+        if (!alive) return;
+        setHeaderMeta({
+          apiOk: health?.ok !== false,
+          uptime: formatUptime(
+            (health as { uptime_seconds?: number } | null)?.uptime_seconds,
+          ),
+          env:
+            topo && topo.ok && topo.data && topo.data.clusters.length > 0
+              ? topo.data.clusters[0].name
+              : "",
+        });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
   // Defer mounting the persistent chat host (and its xterm chunk) until the
   // user has actually opened /chat at least once. Sticky after that so the
   // PTY survives later tab switches.
@@ -488,8 +524,8 @@ export default function App() {
   );
 
   const settingsNav = useMemo(() => {
-    const base = embeddedChat ? SETTINGS_NAV : SETTINGS_NAV.filter((n) => n.path !== "/chat");
-    return [...base, ...SETTINGS_NAV_EXTRA.filter((e) => (e.flag === "analytics" ? showTokenAnalytics : true))];
+    const base = embeddedChat ? SETTINGS_MENU : SETTINGS_MENU.filter((n) => n.path !== "/chat");
+    return [...base, ...SETTINGS_MENU_EXTRA.filter((e) => (e.flag === "analytics" ? showTokenAnalytics : true))];
   }, [embeddedChat, showTokenAnalytics]);
 
   const pluginItems = useMemo(
@@ -556,8 +592,9 @@ export default function App() {
         <PluginSlot name="backdrop" />
       </div>
 
-      {/* 顶部栏（紧凑）：Vigil Logo · 全局搜索 · 待审批红点 · 明暗切换 · 账户/设置 */}
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
+      {/* 顶部 Header（h-14 紧凑，豆包布局）：左 logo+环境标签 · 中全局搜索 ·
+          右状态徽标行（API Healthy / Approvals / 运行时长 / 铃铛红点 / 设置菜单） */}
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
         <Button
           ghost
           size="icon"
@@ -570,40 +607,63 @@ export default function App() {
           <Menu className="size-4" />
         </Button>
 
-        <button
-          type="button"
-          onClick={() => navigate("/overview")}
-          className="flex shrink-0 items-center gap-2"
-          aria-label="Vigil"
-        >
-          <img src="/favicon.png" alt="Vigil" className="size-5 rounded" />
-          <span className="text-sm font-semibold tracking-wide text-foreground">Vigil</span>
-        </button>
+        <div className="flex w-[220px] shrink-0 items-center gap-2">
+          <button
+            type="button"
+            onClick={() => navigate("/overview")}
+            className="flex items-center gap-2"
+            aria-label="Vigil"
+          >
+            <img src="/favicon.png" alt="Vigil" className="size-5 rounded" />
+            <span className="text-base font-semibold text-primary">Vigil</span>
+          </button>
+          {headerMeta.env && (
+            <span className="hidden text-sm text-muted-foreground md:inline">
+              {headerMeta.env}
+            </span>
+          )}
+        </div>
 
-        <form onSubmit={goSearch} className="relative ml-2 hidden w-full max-w-md sm:block">
-          <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+        <form onSubmit={goSearch} className="relative hidden w-full max-w-md flex-1 sm:block">
+          <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
           <input
             value={globalQuery}
             onChange={(e) => setGlobalQuery(e.target.value)}
-            placeholder="全局搜索（name / type / env，回车跳资产拓扑）…"
-            className="h-7 w-full rounded border border-border bg-muted/40 pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary focus:outline-none"
+            placeholder="Search hosts, services, commands…"
+            className="h-8 w-full rounded-md border border-border bg-muted/40 pl-9 pr-3 text-sm text-foreground placeholder:text-muted-foreground/70 focus:border-primary focus:outline-none"
           />
         </form>
 
-        <div className="ml-auto flex items-center gap-1">
-          {/* 待审批红点（数量 0，审批 API 未就绪） */}
-          <Button
-            ghost
-            size="icon"
-            onClick={() => navigate("/approvals")}
-            aria-label="审批中心"
-            className="relative text-muted-foreground"
+        <div className="ml-auto flex items-center gap-3 text-sm">
+          {/* API Healthy */}
+          <span
+            className={cn(
+              "hidden items-center gap-1.5 rounded border border-border px-2 py-0.5 lg:inline-flex",
+              headerMeta.apiOk
+                ? "text-emerald-600 dark:text-emerald-400"
+                : "text-red-600 dark:text-red-400",
+            )}
+            title="API /api/health"
           >
-            <Bell className="size-4" />
-            <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-red-500" />
-          </Button>
+            <span className={cn("size-1.5 rounded-full", headerMeta.apiOk ? "bg-emerald-500" : "bg-red-500")} />
+            API {headerMeta.apiOk ? "Healthy" : "Degraded"}
+          </span>
 
-          {/* 明暗切换（Vigil Console ↔ Vigil Console Dark） */}
+          {/* Approvals N（当前 0，审批 API 未就绪） */}
+          <button
+            type="button"
+            onClick={() => navigate("/approvals")}
+            className="hidden rounded border border-border px-2 py-0.5 text-muted-foreground hover:bg-muted lg:inline-block"
+          >
+            Approvals 0
+          </button>
+
+          {/* 运行时长 */}
+          <span className="hidden rounded border border-border px-2 py-0.5 text-muted-foreground lg:inline-block">
+            Agent upt: {headerMeta.uptime}
+          </span>
+
+          {/* 明暗切换 */}
           <Button
             ghost
             size="icon"
@@ -618,16 +678,20 @@ export default function App() {
             )}
           </Button>
 
-          {/* 账户/设置 */}
+          {/* 铃铛红点 → 审批中心 */}
           <Button
             ghost
             size="icon"
-            onClick={() => navigate("/config")}
-            aria-label="系统设置"
-            className="text-muted-foreground"
+            onClick={() => navigate("/approvals")}
+            aria-label="Approvals"
+            className="relative text-muted-foreground"
           >
-            <Settings className="size-4" />
+            <Bell className="size-4" />
+            <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-red-500" />
           </Button>
+
+          {/* 设置菜单（Hermes 功能页） */}
+          <SettingsMenu items={settingsNav} />
         </div>
       </header>
 
@@ -651,14 +715,14 @@ export default function App() {
             id="app-sidebar"
             aria-label={t.app.navigation}
             className={cn(
-              "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh w-64 min-h-0 flex-col font-sans",
+              "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh w-56 min-h-0 flex-col font-sans",
               "border-r border-current/20",
               "bg-background-base",
               "transition-[transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]",
               mobileOpen ? "translate-x-0" : "-translate-x-full",
               "lg:sticky lg:top-0 lg:translate-x-0 lg:shrink-0 lg:overflow-hidden",
               "lg:transition-[width] lg:duration-300 lg:ease-[cubic-bezier(0.23,1,0.32,1)]",
-              collapsed && "lg:w-14",
+              collapsed ? "lg:w-[60px]" : "lg:w-[200px]",
             )}
             style={{
               background: "var(--component-sidebar-background)",
@@ -668,20 +732,11 @@ export default function App() {
           >
             <div
               className={cn(
-                "flex h-11 shrink-0 items-center gap-2",
+                "flex h-14 shrink-0 items-center gap-2",
                 "border-b border-current/20",
                 collapsed ? "lg:justify-center lg:px-0" : "px-3 justify-between",
               )}
             >
-              <span
-                className={cn(
-                  "text-xs font-semibold tracking-wide text-muted-foreground",
-                  collapsed && "lg:hidden",
-                )}
-              >
-                Vigil 运维
-              </span>
-
               <Button
                 ghost
                 size="icon"
@@ -712,31 +767,28 @@ export default function App() {
             <ProfileSwitcher collapsed={isDesktopCollapsed} />
 
             <nav
-              className="min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden border-t border-current/10 py-2"
+              className="min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden border-t border-current/10 py-3"
               aria-label={t.app.navigation}
             >
-              {/* 一级运维导航 */}
-              <ul className="flex flex-col">
+              {/* 左侧窄侧边栏七项（豆包布局：默认 60px 纯图标，可展开图标+文字） */}
+              <ul className="flex flex-col items-center gap-1">
                 {VIGIL_PRIMARY_NAV.map((item) => (
-                  <SidebarNavLink
+                  <VigilSidebarItem
                     closeMobile={closeMobile}
                     collapsed={isDesktopCollapsed}
                     item={item}
                     key={item.path}
-                    t={t}
-                    tooltipWarmRef={tooltipWarmRef}
                   />
                 ))}
+                {/* Terminal 项：锚定底部终端面板（非路由） */}
+                <VigilTerminalItem
+                  collapsed={isDesktopCollapsed}
+                  onClick={() => {
+                    setTerminalCollapsed(false);
+                    setMobileOpen(false);
+                  }}
+                />
               </ul>
-
-              {/* 系统设置折叠区（Hermes 功能页） */}
-              <SettingsNavGroup
-                closeMobile={closeMobile}
-                collapsed={isDesktopCollapsed}
-                items={settingsNav}
-                t={t}
-                tooltipWarmRef={tooltipWarmRef}
-              />
 
               {pluginItems.length > 0 && (
                 <div
@@ -755,7 +807,7 @@ export default function App() {
                     {t.app.pluginNavSection}
                   </span>
 
-                  <ul className="flex flex-col">
+                  <ul className="flex flex-col items-center">
                     {pluginItems.map((item) => (
                       <SidebarNavLink
                         closeMobile={closeMobile}
@@ -899,7 +951,7 @@ export default function App() {
                 <TerminalPanel
                   collapsed={terminalCollapsed}
                   onToggle={toggleTerminal}
-                  className={terminalCollapsed ? undefined : "h-44"}
+                  className="mx-4 mb-4"
                 />
               )}
             </div>
@@ -929,95 +981,129 @@ function ProfileKeyedRoutes({ children }: { children: ReactNode }) {
 }
 
 /**
- * 系统设置折叠区（方向 1：六项运维导航的第六项）——Hermes 功能页收进这里，
- * 折叠后只留设置图标。选中态用细边框/底色微差，不用彩色大块高亮。
+ * 左侧窄侧边栏项（豆包布局）：默认 60px 纯图标，展开后图标+文字；
+ * 激活项主色浅底（bg-primary/10 + text-primary），非彩色大块高亮。
  */
-const SETTINGS_GROUP_KEY = "vigil-settings-nav-open";
-
-function SettingsNavGroup({
+function VigilSidebarItem({
   closeMobile,
   collapsed,
-  items,
-  tooltipWarmRef,
-  t,
+  item,
 }: {
   closeMobile: () => void;
   collapsed: boolean;
-  items: NavItem[];
-  tooltipWarmRef: TooltipWarmRef;
-  t: ReturnType<typeof useI18n>["t"];
+  item: NavItem;
 }) {
-  const navigate = useNavigate();
+  const { path, label, icon: Icon } = item;
   const { pathname } = useLocation();
-  const [open, setOpen] = useState(() => {
-    try {
-      return localStorage.getItem(SETTINGS_GROUP_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-  const toggle = useCallback(() => {
-    setOpen((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(SETTINGS_GROUP_KEY, next ? "1" : "0");
-      } catch { /* ignore */ }
-      return next;
-    });
-  }, []);
-
-  const active = items.some(
-    (item) =>
-      pathname === item.path ||
-      (item.path !== "/" && pathname.startsWith(item.path + "/")),
-  );
-
-  // 折叠（图标-only）模式：只留设置图标，点击展开设置区首个页面。
-  if (collapsed) {
-    return (
-      <div className="border-t border-current/10">
-        <button
-          type="button"
-          onClick={() => navigate("/config")}
-          title="系统设置"
-          className="flex w-full items-center justify-center gap-2 px-5 py-2.5 text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-        >
-          <Settings className="h-4 w-4" />
-        </button>
-      </div>
-    );
-  }
-
+  const active = pathname === path || pathname.startsWith(path + "/");
   return (
-    <div className="flex flex-col border-t border-current/10 pt-1">
-      <button
-        type="button"
-        onClick={toggle}
-        aria-expanded={open}
+    <li className="w-full">
+      <NavLink
+        to={path}
+        onClick={closeMobile}
+        title={collapsed ? label : undefined}
         className={cn(
-          "mx-2 flex items-center gap-2 rounded px-3 py-2 text-sm",
-          active ? "bg-muted/50 text-foreground" : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+          "mx-1.5 flex h-10 items-center justify-center gap-2 rounded-md text-sm transition-colors",
+          collapsed ? "w-10" : "w-auto px-2.5",
+          active
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
         )}
       >
-        <Settings className="h-4 w-4 shrink-0" />
-        <span className="flex-1 text-left">系统设置</span>
-        <ChevronDown
-          className={cn("size-3.5 transition-transform", open && "rotate-180")}
-        />
+        <Icon className="size-[18px] shrink-0" />
+        {!collapsed && <span className="truncate">{label}</span>}
+      </NavLink>
+    </li>
+  );
+}
+
+/** Terminal 项：锚定底部终端面板（展开面板，非路由）。 */
+function VigilTerminalItem({
+  collapsed,
+  onClick,
+}: {
+  collapsed: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <li className="w-full">
+      <button
+        type="button"
+        onClick={onClick}
+        title={collapsed ? "Terminal" : undefined}
+        className={cn(
+          "mx-1.5 flex h-10 items-center justify-center gap-2 rounded-md text-sm text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground",
+          collapsed ? "w-10" : "w-auto px-2.5",
+        )}
+      >
+        <Terminal className="size-[18px] shrink-0" />
+        {!collapsed && <span className="truncate">Terminal</span>}
       </button>
+    </li>
+  );
+}
+
+/**
+ * 顶部「设置」菜单（豆包布局右端）——Hermes 功能页在此直达（不在主侧边栏）。
+ * 极淡阴影下拉，点击外部关闭。
+ */
+function SettingsMenu({ items }: { items: NavItem[] }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      const el = ref.current;
+      if (el && !el.contains(e.target as Node)) setOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <Button
+        ghost
+        size="icon"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="设置菜单"
+        aria-expanded={open}
+        className="text-muted-foreground"
+      >
+        <Settings className="size-4" />
+      </Button>
       {open && (
-        <ul className="flex flex-col pb-1">
-          {items.map((item) => (
-            <SidebarNavLink
-              closeMobile={closeMobile}
-              collapsed={false}
-              item={item}
-              key={item.path}
-              t={t}
-              tooltipWarmRef={tooltipWarmRef}
-            />
-          ))}
-        </ul>
+        <div className="absolute right-0 top-full z-50 mt-1 max-h-[70vh] w-56 overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg shadow-black/5">
+          <div className="px-2.5 py-1.5 text-[11px] font-medium tracking-wide text-muted-foreground">
+            系统设置
+          </div>
+          {items.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.path}
+                type="button"
+                onClick={() => {
+                  navigate(item.path);
+                  setOpen(false);
+                }}
+                className="flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm text-foreground/85 hover:bg-muted"
+              >
+                <Icon className="size-3.5 shrink-0 text-muted-foreground" />
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
+        </div>
       )}
     </div>
   );

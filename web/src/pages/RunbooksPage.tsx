@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router";
 import {
   BookOpen,
   ChevronDown,
@@ -222,10 +223,12 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
 }
 
 export default function RunbooksPage() {
+  const [searchParams] = useSearchParams();
+  const urlName = searchParams.get("name");
   const [list, setList] = useState<RunbookSummary[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(urlName);
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);

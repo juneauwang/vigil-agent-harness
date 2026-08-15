@@ -135,6 +135,9 @@ except ImportError:
 WEB_DIST = Path(os.environ["HERMES_WEB_DIST"]) if "HERMES_WEB_DIST" in os.environ else Path(__file__).parent / "web_dist"
 _log = logging.getLogger(__name__)
 
+# Dashboard process start (monotonic) — /api/health uptime_seconds.
+_PROCESS_STARTED_AT = time.monotonic()
+
 # ---------------------------------------------------------------------------
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)
 # and /api/events (dashboard → browser sidebar).  Keyed by an opaque channel id
@@ -3028,6 +3031,9 @@ async def get_health():
         "ok": True,
         "version": __version__,
         "auth_required": bool(getattr(app.state, "auth_required", False)),
+        # Dashboard 进程运行时长（秒）——顶部栏 "运行时长" 徽标；仅整数秒，
+        # 不含任何路径/身份信息（PUBLIC_API_PATHS 契约：无秘密）。
+        "uptime_seconds": int(time.monotonic() - _PROCESS_STARTED_AT),
     }
 
 
@@ -16379,8 +16385,8 @@ _BUILTIN_DASHBOARD_THEMES = [
     {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
     {"name": "cyberpunk", "label": "Cyberpunk",      "description": "Neon green on black — matrix terminal"},
     {"name": "rose",      "label": "Rosé",           "description": "Soft pink and warm ivory — easy on the eyes"},
-    {"name": "vigil-console",       "label": "Vigil Console",       "description": "浅灰底 + 冷青绿 — 硬核工程师控制台（默认）"},
-    {"name": "vigil-console-dark",  "label": "Vigil Console Dark",  "description": "Vigil Console 青绿暗色变体"},
+    {"name": "vigil-console",       "label": "Vigil Console",       "description": "浅灰底 #f6f8fa + 靛蓝 #2563eb — GitLab 开源风控制台（默认）"},
+    {"name": "vigil-console-dark",  "label": "Vigil Console Dark",  "description": "Vigil Console 深色变体（#0f1c2d 系 + 主色亮化）"},
 ]
 
 

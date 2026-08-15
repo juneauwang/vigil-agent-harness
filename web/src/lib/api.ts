@@ -337,6 +337,7 @@ function appendSessionFilters(url: string, options: SessionQueryOptions): string
 export const api = {
   buildWsUrl,
   getStatus: () => fetchJSON<StatusResponse>("/api/status"),
+  getHealth: () => fetchJSON<HealthResponse>("/api/health"),
   /**
    * Ops dashboard read-only views (UI 壳第一批). Topology is credential-
    * redacted server-side (build_view / _sanitize); runbook detail is value-
@@ -1951,6 +1952,15 @@ export interface TopologyResponse {
   ok: boolean;
   error?: string;
   data?: TopologyView;
+}
+
+/** Liveness probe shape (`/api/health`). */
+export interface HealthResponse {
+  ok: boolean;
+  version: string;
+  auth_required: boolean;
+  /** Dashboard 进程运行时长（秒）。 */
+  uptime_seconds?: number;
 }
 
 export interface RunbookSummary {

@@ -283,3 +283,16 @@ def test_ops_endpoints_public_no_token(ops_home):
         resp = bare.get(url)
         assert resp.status_code == 200, f"{url} -> {resp.status_code}"
         assert resp.json()["ok"] is True
+
+
+# ---------------------------------------------------------------------------
+# /api/health uptime（第三批顶部栏「运行时长」徽标数据源）
+# ---------------------------------------------------------------------------
+
+def test_health_reports_uptime_seconds(client):
+    resp = client.get("/api/health")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert isinstance(body.get("uptime_seconds"), int)
+    assert body["uptime_seconds"] >= 0

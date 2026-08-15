@@ -3,12 +3,11 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { cn } from "@/lib/utils";
 
 /**
- * Persistent dark terminal panel (方向 1：主体下区常驻，等宽字体).
+ * Agent Terminal —— 主体下区全宽深色终端面板（豆包布局：min-h 280px，
+ * JetBrains Mono，标题栏 + 收起按钮）。
  *
- * Data source is not wired yet (Codex owns the execution/session core) — the
- * body renders an explicit empty-state placeholder and reserves the
- * scrollable surface + WS-subscription seam for batch 3. No fake log lines
- * are ever rendered.
+ * 数据源未就绪（执行/审计日志来自 Codex 核心批次）：正文为显式空态占位 +
+ * WS 订阅预留，绝不造假日志。展开时最小高度 280px，收起后只剩一条细栏。
  */
 export function TerminalPanel({
   collapsed,
@@ -23,13 +22,13 @@ export function TerminalPanel({
     return (
       <div
         className={cn(
-          "flex h-9 shrink-0 items-center gap-2 border-t border-black/40 px-3",
-          "bg-[#0b0f14] font-mono text-xs text-slate-400",
+          "flex h-8 shrink-0 items-center gap-2 border-t border-black/40 px-3",
+          "bg-[#0f1c2d] font-mono text-xs text-slate-400",
           className,
         )}
       >
-        <TerminalSquare className="size-3.5" />
-        <span className="text-slate-300">执行日志面板</span>
+        <TerminalSquare className="size-3.5 text-slate-500" />
+        <span className="text-slate-300">Agent Terminal</span>
         <span className="text-slate-600">· 等待执行 API 接入</span>
         <Button
           ghost
@@ -47,21 +46,20 @@ export function TerminalPanel({
   return (
     <div
       className={cn(
-        "flex shrink-0 flex-col border-t border-black/50 bg-[#0b0f14]",
+        "flex shrink-0 flex-col rounded-lg border border-black/40 bg-[#0f1c2d] font-mono shadow-[0_1px_3px_rgba(0,0,0,0.06)]",
         className,
       )}
+      style={{ minHeight: "280px" }}
     >
-      {/* Header */}
-      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-white/5 px-3">
-        <TerminalSquare className="size-3.5 text-teal-400" />
-        <span className="font-mono text-xs text-slate-200">执行日志 / 终端</span>
-        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] text-emerald-400">
+      {/* 标题栏 */}
+      <div className="flex h-9 shrink-0 items-center gap-2 border-b border-white/5 px-4">
+        <TerminalSquare className="size-4 text-sky-400" />
+        <span className="text-xs text-slate-200">Agent Terminal</span>
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
           <span className="size-1.5 rounded-full bg-emerald-400" />
           WS 待接入
         </span>
-        <span className="ml-auto font-mono text-[10px] text-slate-500">
-          JetBrains Mono · 审计 / 命令 / YAML
-        </span>
+        <span className="ml-auto text-[10px] text-slate-500">JetBrains Mono · 审计 / 命令 / YAML</span>
         <Button
           ghost
           size="sm"
@@ -73,15 +71,16 @@ export function TerminalPanel({
         </Button>
       </div>
 
-      {/* Body — scrollable surface for future log events */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 font-mono text-xs leading-relaxed text-slate-400">
-        <div className="flex h-full min-h-[120px] flex-col items-start justify-center gap-1.5">
+      {/* 终端正文（滚动区，空态 + WS 预留） */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3 text-xs leading-relaxed text-slate-400">
+        <div className="flex h-full min-h-[240px] flex-col items-start justify-center gap-1.5">
           <div className="flex items-center gap-2 text-slate-300">
             <Radio className="size-3.5 text-slate-500" />
             <span>等待执行 API 接入</span>
           </div>
           <p className="text-slate-500">
-            审计日志 / AI 执行命令 / YAML 片段将通过 WebSocket 推送到此面板（web_server 已有 WS 基础设施，执行核心由 Codex 批次落地）。
+            审计日志 / AI 执行命令 / YAML 片段将经 WebSocket 推送到此面板（web_server
+            已有 WS 基础设施，执行核心由 Codex 批次落地）；不造假日志。
           </p>
         </div>
       </div>

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   STATUS_FILTERS,
   aggregateTopologyStats,
+  formatUptime,
   statusMatchesFilter,
   statusTone,
   yamlPreview,
@@ -82,5 +83,20 @@ describe("yamlPreview", () => {
     const out = yamlPreview({ title: "a: b", note: "[已过滤]" });
     expect(out).toContain('title: "a: b"');
     expect(out).toContain("note: [已过滤]");
+  });
+});
+
+describe("formatUptime", () => {
+  it("formats seconds into compact durations", () => {
+    expect(formatUptime(0)).toBe("0s");
+    expect(formatUptime(45)).toBe("45s");
+    expect(formatUptime(3600)).toBe("1h");
+    expect(formatUptime(43200)).toBe("12h");
+    expect(formatUptime(90000)).toBe("1d 1h");
+  });
+  it("handles missing / invalid values", () => {
+    expect(formatUptime(undefined)).toBe("-");
+    expect(formatUptime(null)).toBe("-");
+    expect(formatUptime(-1)).toBe("-");
   });
 });

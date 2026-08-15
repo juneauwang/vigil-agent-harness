@@ -23,7 +23,6 @@ export function statusTone(status?: string): StatusTone {
 }
 
 export type StatusFilterId = "all" | StatusTone;
-
 export interface StatusFilter {
   id: StatusFilterId;
   label: string;
@@ -130,4 +129,19 @@ export function yamlPreview(value: unknown, indent = 0): string {
       .join("\n");
   }
   return `${pad}${yamlScalar(value)}`;
+}
+
+/** 运行时长格式化：秒 → "12h" / "3d 4h"（顶部栏徽标用）。 */
+export function formatUptime(seconds: number | undefined | null): string {
+  if (seconds === undefined || seconds === null || !Number.isFinite(seconds) || seconds < 0) {
+    return "-";
+  }
+  const s = Math.floor(seconds);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h`;
+  const d = Math.floor(h / 24);
+  return `${d}d ${h % 24}h`;
 }
