@@ -1,0 +1,6 @@
+# node2 —— 第二层服务索引（worker 节点）。
+host: node2
+env: prod
+cluster: k3s-prod
+services:
+  - {name: gateway-svc, type: gateway, env: prod, cluster: k3s-prod, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/k3s-prod__node2__gateway-svc.yaml}

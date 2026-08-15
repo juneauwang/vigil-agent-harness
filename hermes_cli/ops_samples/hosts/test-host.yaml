@@ -1,0 +1,6 @@
+# test-host —— 第二层服务索引（test 环境；cluster 缺省显示 default）。
+host: test-host
+env: test
+cluster: default
+services:
+  - {name: test-web, type: service, env: test, cluster: default, owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/default__test-host__test-web.yaml}
