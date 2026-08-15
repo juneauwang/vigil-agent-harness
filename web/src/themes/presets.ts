@@ -40,8 +40,8 @@ const DEFAULT_LAYOUT: ThemeLayout = {
 
 export const defaultTheme: DashboardTheme = {
   name: "default",
-  label: "Vigil Blue-Grey",
-  description: "Vigil 蓝灰运维主题——深灰蓝底 + 冷蓝光晕",
+  label: "Vigil Blue-Grey (Legacy)",
+  description: "Vigil 蓝灰运维主题——深灰蓝底 + 冷蓝光晕（旧默认，保留对比）",
   palette: {
     background: { hex: "#0b1220", alpha: 1 },
     midground: { hex: "#4A90D9", alpha: 1 },
@@ -52,6 +52,138 @@ export const defaultTheme: DashboardTheme = {
   typography: DEFAULT_TYPOGRAPHY,
   layout: DEFAULT_LAYOUT,
   terminalBackground: "#000000",
+};
+
+// ---------------------------------------------------------------------------
+// Vigil Console（方向 1：硬核工程师控制台，参考 Weave GitOps / Cilium Hubble）
+//
+// 浅中性灰底 #f3f4f6 + 主强调冷青绿 #009688；状态色 success #22c55e /
+// warning #f59e0b / destructive #ef4444；1px 纤细分割边框、圆角 6px、
+// 仅弹窗/下拉使用柔和阴影（卡片无阴影）；界面 Inter、日志/命令 JetBrains Mono；
+// 高信息密度、无装饰图形。暗色变体用青绿暗色。
+// ---------------------------------------------------------------------------
+
+const VIGIL_CONSOLE_TYPOGRAPHY: ThemeTypography = {
+  fontSans: `"Inter", ${SYSTEM_SANS}`,
+  fontMono: `"JetBrains Mono", ${SYSTEM_MONO}`,
+  fontUrl:
+    "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap",
+  baseSize: "14px",
+  lineHeight: "1.5",
+  letterSpacing: "-0.005em",
+};
+
+const VIGIL_CONSOLE_LAYOUT: ThemeLayout = {
+  radius: "0.375rem", // 6px
+  density: "comfortable",
+};
+
+export const vigilConsoleTheme: DashboardTheme = {
+  name: "vigil-console",
+  label: "Vigil Console",
+  description: "浅灰底 + 冷青绿 — 硬核工程师控制台（默认）",
+  palette: {
+    background: { hex: "#f3f4f6", alpha: 1 },
+    midground: { hex: "#009688", alpha: 1 },
+    foreground: { hex: "#1f2937", alpha: 1 },
+    warmGlow: "rgba(0, 150, 136, 0.10)",
+    noiseOpacity: 0,
+  },
+  typography: VIGIL_CONSOLE_TYPOGRAPHY,
+  layout: VIGIL_CONSOLE_LAYOUT,
+  layoutVariant: "tiled",
+  colorOverrides: {
+    primary: "#009688",
+    primaryForeground: "#ffffff",
+    destructive: "#ef4444",
+    destructiveForeground: "#ffffff",
+    success: "#22c55e",
+    warning: "#f59e0b",
+    border: "#d7dbe0",
+    input: "#d7dbe0",
+    ring: "#009688",
+  },
+  customCSS: `:root {
+    --text-primary: #1f2937;
+    --text-secondary: #4b5563;
+    --text-tertiary: #6b7280;
+    --text-disabled: #9ca3af;
+    --text-on-accent: #ffffff;
+    --text-display: #111827;
+    --color-foreground: #1f2937;
+    --color-background: #f3f4f6;
+    --color-card: #ffffff;
+    --color-card-foreground: #1f2937;
+    --color-muted: #f1f2f4;
+    --color-muted-foreground: #6b7280;
+    --color-secondary: #e9ebee;
+    --color-secondary-foreground: #1f2937;
+    --color-popover: #ffffff;
+    --color-popover-foreground: #1f2937;
+    --color-accent: #e0f2f1;
+    --color-accent-foreground: #00695c;
+    --color-destructive: #ef4444;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+  }`,
+  terminalBackground: "#0f172a",
+  terminalForeground: "#d7dee4",
+  seriesColors: { inputTokenAccent: "#009688", outputTokenAccent: "#22c55e" },
+  swatchColors: ["#f3f4f6", "#009688", "#22c55e"],
+};
+
+export const vigilConsoleDarkTheme: DashboardTheme = {
+  name: "vigil-console-dark",
+  label: "Vigil Console Dark",
+  description: "Vigil Console 青绿暗色变体",
+  palette: {
+    background: { hex: "#0f1518", alpha: 1 },
+    midground: { hex: "#26a69a", alpha: 1 },
+    foreground: { hex: "#e5e7eb", alpha: 1 },
+    warmGlow: "rgba(38, 166, 154, 0.18)",
+    noiseOpacity: 0.15,
+  },
+  typography: VIGIL_CONSOLE_TYPOGRAPHY,
+  layout: VIGIL_CONSOLE_LAYOUT,
+  layoutVariant: "tiled",
+  colorOverrides: {
+    primary: "#26a69a",
+    primaryForeground: "#06201e",
+    destructive: "#ef4444",
+    destructiveForeground: "#ffffff",
+    success: "#22c55e",
+    warning: "#f59e0b",
+    border: "#283236",
+    input: "#283236",
+    ring: "#26a69a",
+  },
+  customCSS: `:root {
+    --text-primary: #e5e7eb;
+    --text-secondary: #a8b3ba;
+    --text-tertiary: #7e8b93;
+    --text-disabled: #5b666e;
+    --text-on-accent: #06201e;
+    --text-display: #f3f4f6;
+    --color-foreground: #e5e7eb;
+    --color-background: #0f1518;
+    --color-card: #161e22;
+    --color-card-foreground: #e5e7eb;
+    --color-muted: #1b2429;
+    --color-muted-foreground: #94a0a8;
+    --color-secondary: #1e282d;
+    --color-secondary-foreground: #e5e7eb;
+    --color-popover: #161e22;
+    --color-popover-foreground: #e5e7eb;
+    --color-accent: #123b36;
+    --color-accent-foreground: #7fd4c9;
+    --color-destructive: #ef4444;
+    --color-success: #22c55e;
+    --color-warning: #f59e0b;
+  }`,
+  terminalBackground: "#0a0e11",
+  terminalForeground: "#cbd5d5",
+  seriesColors: { inputTokenAccent: "#26a69a", outputTokenAccent: "#22c55e" },
+  swatchColors: ["#0f1518", "#26a69a", "#22c55e"],
 };
 
 export const midnightTheme: DashboardTheme = {
@@ -237,4 +369,6 @@ export const BUILTIN_THEMES: Record<string, DashboardTheme> = {
   mono: monoTheme,
   cyberpunk: cyberpunkTheme,
   rose: roseTheme,
+  "vigil-console": vigilConsoleTheme,
+  "vigil-console-dark": vigilConsoleDarkTheme,
 };

@@ -1,5 +1,10 @@
 export { ThemeProvider, useTheme } from "./context";
-export { BUILTIN_THEMES, defaultTheme } from "./presets";
+export {
+  BUILTIN_THEMES,
+  defaultTheme,
+  vigilConsoleTheme,
+  vigilConsoleDarkTheme,
+} from "./presets";
 export {
   FONT_CHOICES,
   THEME_DEFAULT_FONT_ID,

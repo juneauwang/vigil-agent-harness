@@ -8,6 +8,7 @@ import {
   useState,
   type ComponentType,
   type FocusEvent,
+  type FormEvent,
   type MouseEvent,
   type ReactNode,
 } from "react";
@@ -23,7 +24,9 @@ import {
 import {
   Activity,
   BarChart3,
+  Bell,
   BookOpen,
+  ChevronDown,
   Clock,
   Code,
   Cpu,
@@ -33,11 +36,12 @@ import {
   FolderOpen,
   FileText,
   Globe,
-  Gauge,
   Heart,
   KeyRound,
+  LayoutDashboard,
   Menu,
   MessageSquare,
+  Moon,
   Network,
   Package,
   PanelLeftClose,
@@ -47,11 +51,13 @@ import {
   Radio,
   RotateCw,
   ScrollText,
+  Search,
   Settings,
   Shield,
   ShieldCheck,
   Sparkles,
   Star,
+  Sun,
   Terminal,
   Users,
   Webhook,
@@ -62,7 +68,6 @@ import {
 import { Button } from "@nous-research/ui/ui/components/button";
 import { SelectionSwitcher } from "@nous-research/ui/ui/components/selection-switcher";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import { Typography } from "@nous-research/ui/ui/components/typography/index";
 import { ConfirmDialog } from "@nous-research/ui/ui/components/confirm-dialog";
 import { cn } from "@/lib/utils";
 import { SidebarFooter } from "@/components/SidebarFooter";
@@ -74,8 +79,8 @@ import { PageHeaderProvider } from "@/contexts/PageHeaderProvider";
 import { ProfileProvider } from "@/contexts/ProfileProvider";
 import { useProfileScope } from "@/contexts/useProfileScope";
 import { ProfileSwitcher } from "@/components/ProfileSwitcher";
-import { ProfileScopeBanner } from "@/components/ProfileScopeBanner";
 import { useSystemActions } from "@/contexts/useSystemActions";
+import { TerminalPanel } from "@/components/ops/TerminalPanel";
 import type { SystemAction } from "@/contexts/system-actions-context";
 // Route pages are lazy-loaded so the initial dashboard shell does not pay for
 // every admin surface (and heavy deps like xterm) up front.
@@ -100,6 +105,9 @@ const SystemPage = lazy(() => import("@/pages/SystemPage"));
 const TopologyPage = lazy(() => import("@/pages/TopologyPage"));
 const RunbooksPage = lazy(() => import("@/pages/RunbooksPage"));
 const StatusPage = lazy(() => import("@/pages/StatusPage"));
+const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
+const ExecutionLogsPage = lazy(() => import("@/pages/ExecutionLogsPage"));
+const ApprovalsPage = lazy(() => import("@/pages/ApprovalsPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -129,7 +137,7 @@ function RouteFallback({ label = "Loading…" }: { label?: string }) {
 }
 
 function RootRedirect() {
-  return <Navigate to="/sessions" replace />;
+  return <Navigate to="/overview" replace />;
 }
 
 function UnknownRouteFallback({ pluginsLoading }: { pluginsLoading: boolean }) {
@@ -137,29 +145,28 @@ function UnknownRouteFallback({ pluginsLoading }: { pluginsLoading: boolean }) {
     // Render nothing during the plugin-load window — a spinner here would just flash.
     return null;
   }
-  return <Navigate to="/sessions" replace />;
+  return <Navigate to="/overview" replace />;
 }
 
-const CHAT_NAV_ITEM: NavItem = {
-  path: "/chat",
-  labelKey: "chat",
-  label: "Chat",
-  icon: Terminal,
-};
-
 /**
- * Built-in routes except /chat.  Chat is rendered persistently (outside
- * <Routes>) when embedded — see the persistent chat host block rendered
- * inline near the bottom of this file — so the PTY child, WebSocket,
- * and xterm instance survive when the user visits another tab and comes
- * back.  A `display:none` toggle hides the terminal without unmounting.
- * The host itself is still deferred until the first /chat visit so the
- * xterm chunk is not downloaded on unrelated pages.  Routing still owns
- * the URL so /chat deep-links, browser back/forward, and nav highlight
- * keep working.
+ * Built-in routes. Chat is rendered persistently (outside <Routes>) when
+ * embedded — see the persistent chat host block rendered inline near the
+ * bottom of this file — so the PTY child, WebSocket, and xterm instance
+ * survive when the user visits another tab and comes back.  A `display:none`
+ * toggle hides the terminal without unmounting.  The host itself is still
+ * deferred until the first /chat visit so the xterm chunk is not downloaded
+ * on unrelated pages.  Routing still owns the URL so /chat deep-links,
+ * browser back/forward, and nav highlight keep working.
  */
 const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/": RootRedirect,
+  // Vigil 运维主路由（方向 1 六项导航）。
+  "/overview": OverviewPage,
+  "/topology": TopologyPage,
+  "/runbooks": RunbooksPage,
+  "/exec-logs": ExecutionLogsPage,
+  "/approvals": ApprovalsPage,
+  // Hermes 功能页（收进「系统设置」折叠区，仍可 URL 直达）。
   "/sessions": SessionsPage,
   "/files": FilesPage,
   "/analytics": AnalyticsPage,
@@ -178,9 +185,7 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/config": ConfigPage,
   "/env": EnvPage,
   "/docs": DocsPage,
-  // Ops dashboard read-only views (UI 壳第一批): topology / runbook / status.
-  "/topology": TopologyPage,
-  "/runbooks": RunbooksPage,
+  // 状态页：概览页已聚合其关键信息，仍保留 URL 直达。
   "/status": StatusPage,
 };
 
@@ -192,26 +197,28 @@ function ChatRouteSink() {
   return null;
 }
 
-const BUILTIN_NAV_REST: NavItem[] = [
-  {
-    path: "/sessions",
-    labelKey: "sessions",
-    label: "Sessions",
-    icon: MessageSquare,
-  },
+interface NavItem {
+  path: string;
+  labelKey?: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+}
+
+/** 一级运维导航（常驻，顺序固定）。 */
+const VIGIL_PRIMARY_NAV: NavItem[] = [
+  { path: "/overview", label: "概览", icon: LayoutDashboard },
+  { path: "/topology", label: "资产拓扑", icon: Network },
+  { path: "/runbooks", label: "Runbook 剧本", icon: ScrollText },
+  { path: "/exec-logs", label: "执行日志", icon: Terminal },
+  { path: "/approvals", label: "审批中心", icon: ShieldCheck },
+];
+
+/** 系统设置折叠区：Hermes 功能页全部收进这里。 */
+const SETTINGS_NAV: NavItem[] = [
+  { path: "/chat", labelKey: "chat", label: "Chat", icon: MessageSquare },
+  { path: "/sessions", labelKey: "sessions", label: "Sessions", icon: Activity },
   { path: "/files", label: "Files", icon: FolderOpen },
-  {
-    path: "/analytics",
-    labelKey: "analytics",
-    label: "Analytics",
-    icon: BarChart3,
-  },
-  {
-    path: "/models",
-    labelKey: "models",
-    label: "Models",
-    icon: Cpu,
-  },
+  { path: "/models", labelKey: "models", label: "Models", icon: Cpu },
   { path: "/logs", labelKey: "logs", label: "Logs", icon: FileText },
   { path: "/cron", labelKey: "cron", label: "Cron", icon: Clock },
   { path: "/skills", labelKey: "skills", label: "Skills", icon: Package },
@@ -224,16 +231,12 @@ const BUILTIN_NAV_REST: NavItem[] = [
   { path: "/config", labelKey: "config", label: "Config", icon: Settings },
   { path: "/env", labelKey: "keys", label: "Keys", icon: KeyRound },
   { path: "/system", label: "System", icon: Wrench },
-  {
-    path: "/docs",
-    labelKey: "documentation",
-    label: "Documentation",
-    icon: BookOpen,
-  },
-  // Ops dashboard read-only views (UI 壳第一批) — Vigil 运维三页。
-  { path: "/topology", label: "拓扑", icon: Network },
-  { path: "/runbooks", label: "Runbooks", icon: ScrollText },
-  { path: "/status", label: "状态", icon: Gauge },
+  { path: "/docs", labelKey: "documentation", label: "Documentation", icon: BookOpen },
+];
+
+/** 系统设置折叠区里按 flag 追加的项（Analytics 默认隐藏）。 */
+const SETTINGS_NAV_EXTRA: Array<NavItem & { flag?: "analytics" }> = [
+  { path: "/analytics", labelKey: "analytics", label: "Analytics", icon: BarChart3, flag: "analytics" },
 ];
 
 const ICON_MAP: Record<string, ComponentType<{ className?: string }>> = {
@@ -387,10 +390,23 @@ const SIDEBAR_COLLAPSED_KEY = "hermes-sidebar-collapsed";
 export default function App() {
   const { t } = useI18n();
   const { pathname } = useLocation();
+  const navigate = useNavigate();
   const { manifests, loading: pluginsLoading } = usePlugins();
-  const { theme } = useTheme();
+  const { theme, themeName, setTheme } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
+  const [globalQuery, setGlobalQuery] = useState("");
+  const goSearch = useCallback(
+    (e: FormEvent) => {
+      e.preventDefault();
+      const q = globalQuery.trim();
+      navigate(q ? `/topology?q=${encodeURIComponent(q)}` : "/topology");
+    },
+    [globalQuery, navigate],
+  );
+  const toggleDark = useCallback(() => {
+    setTheme(themeName === "vigil-console-dark" ? "vigil-console" : "vigil-console-dark");
+  }, [themeName, setTheme]);
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -471,18 +487,14 @@ export default function App() {
     [embeddedChat],
   );
 
-  const builtinNav = useMemo(() => {
-    const base = embeddedChat
-      ? [CHAT_NAV_ITEM, ...BUILTIN_NAV_REST]
-      : BUILTIN_NAV_REST;
-    return showTokenAnalytics
-      ? base
-      : base.filter((n) => n.path !== "/analytics");
+  const settingsNav = useMemo(() => {
+    const base = embeddedChat ? SETTINGS_NAV : SETTINGS_NAV.filter((n) => n.path !== "/chat");
+    return [...base, ...SETTINGS_NAV_EXTRA.filter((e) => (e.flag === "analytics" ? showTokenAnalytics : true))];
   }, [embeddedChat, showTokenAnalytics]);
 
-  const sidebarNav = useMemo(
-    () => partitionSidebarNav(builtinNav, manifests),
-    [builtinNav, manifests],
+  const pluginItems = useMemo(
+    () => partitionSidebarNav([], manifests).pluginItems,
+    [manifests],
   );
   const routes = useMemo(
     () => buildRoutes(builtinRoutes, manifests),
@@ -500,6 +512,11 @@ export default function App() {
   );
 
   const layoutVariant = theme.layoutVariant ?? "standard";
+  const isExecLogsRoute = normalizedPath === "/exec-logs";
+
+  // 常驻终端面板折叠状态（方向 1：主体下区）。
+  const [terminalCollapsed, setTerminalCollapsed] = useState(false);
+  const toggleTerminal = useCallback(() => setTerminalCollapsed((v) => !v), []);
 
   useEffect(() => {
     if (!mobileOpen) return;
@@ -539,19 +556,8 @@ export default function App() {
         <PluginSlot name="backdrop" />
       </div>
 
-      <header
-        className={cn(
-          "lg:hidden fixed top-0 left-0 right-0 z-40 min-h-14",
-          "flex items-center gap-2 px-4 py-2",
-          "border-b border-current/20",
-          "bg-background-base",
-        )}
-        style={{
-          background: "var(--component-header-background)",
-          borderImage: "var(--component-header-border-image)",
-          clipPath: "var(--component-header-clip-path)",
-        }}
-      >
+      {/* 顶部栏（紧凑）：Vigil Logo · 全局搜索 · 待审批红点 · 明暗切换 · 账户/设置 */}
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-card px-3">
         <Button
           ghost
           size="icon"
@@ -559,14 +565,70 @@ export default function App() {
           aria-label={t.app.openNavigation}
           aria-expanded={mobileOpen}
           aria-controls="app-sidebar"
-          className="text-text-secondary hover:text-midground"
+          className="lg:hidden text-muted-foreground"
         >
-          <Menu />
+          <Menu className="size-4" />
         </Button>
 
-        <Typography className="font-bold text-[0.95rem] leading-[0.95] tracking-[0.05em] text-midground">
-          {t.app.brand}
-        </Typography>
+        <button
+          type="button"
+          onClick={() => navigate("/overview")}
+          className="flex shrink-0 items-center gap-2"
+          aria-label="Vigil"
+        >
+          <img src="/favicon.png" alt="Vigil" className="size-5 rounded" />
+          <span className="text-sm font-semibold tracking-wide text-foreground">Vigil</span>
+        </button>
+
+        <form onSubmit={goSearch} className="relative ml-2 hidden w-full max-w-md sm:block">
+          <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={globalQuery}
+            onChange={(e) => setGlobalQuery(e.target.value)}
+            placeholder="全局搜索（name / type / env，回车跳资产拓扑）…"
+            className="h-7 w-full rounded border border-border bg-muted/40 pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground/70 focus:border-primary focus:outline-none"
+          />
+        </form>
+
+        <div className="ml-auto flex items-center gap-1">
+          {/* 待审批红点（数量 0，审批 API 未就绪） */}
+          <Button
+            ghost
+            size="icon"
+            onClick={() => navigate("/approvals")}
+            aria-label="审批中心"
+            className="relative text-muted-foreground"
+          >
+            <Bell className="size-4" />
+            <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-red-500" />
+          </Button>
+
+          {/* 明暗切换（Vigil Console ↔ Vigil Console Dark） */}
+          <Button
+            ghost
+            size="icon"
+            onClick={toggleDark}
+            aria-label={themeName === "vigil-console-dark" ? "切换浅色模式" : "切换深色模式"}
+            className="text-muted-foreground"
+          >
+            {themeName === "vigil-console-dark" ? (
+              <Sun className="size-4" />
+            ) : (
+              <Moon className="size-4" />
+            )}
+          </Button>
+
+          {/* 账户/设置 */}
+          <Button
+            ghost
+            size="icon"
+            onClick={() => navigate("/config")}
+            aria-label="系统设置"
+            className="text-muted-foreground"
+          >
+            <Settings className="size-4" />
+          </Button>
+        </div>
       </header>
 
       {mobileOpen && (
@@ -582,9 +644,8 @@ export default function App() {
       )}
 
       <PluginSlot name="header-banner" />
-      <ProfileScopeBanner />
 
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pt-14 lg:pt-0">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex min-h-0 min-w-0 flex-1">
           <aside
             id="app-sidebar"
@@ -607,38 +668,26 @@ export default function App() {
           >
             <div
               className={cn(
-                "flex h-14 shrink-0 items-center gap-2",
+                "flex h-11 shrink-0 items-center gap-2",
                 "border-b border-current/20",
-                collapsed ? "lg:justify-center lg:px-0" : "px-4 justify-between",
+                collapsed ? "lg:justify-center lg:px-0" : "px-3 justify-between",
               )}
             >
-              <div
+              <span
                 className={cn(
-                  "flex items-center gap-2",
+                  "text-xs font-semibold tracking-wide text-muted-foreground",
                   collapsed && "lg:hidden",
                 )}
               >
-                <PluginSlot name="header-left" />
-
-                <img
-                  src="/favicon.png"
-                  alt="Vigil"
-                  className="size-6 shrink-0 rounded-md"
-                />
-
-                <Typography className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground uppercase">
-                  Vigil
-                  <br />
-                  Agent
-                </Typography>
-              </div>
+                Vigil 运维
+              </span>
 
               <Button
                 ghost
                 size="icon"
                 onClick={closeMobile}
                 aria-label={t.app.closeNavigation}
-                className="lg:hidden text-text-secondary hover:text-midground"
+                className="lg:hidden text-muted-foreground"
               >
                 <X />
               </Button>
@@ -650,7 +699,7 @@ export default function App() {
                 aria-label={
                   collapsed ? t.common.expand : t.common.collapse
                 }
-                className="hidden lg:flex text-text-secondary hover:text-midground"
+                className="hidden lg:flex text-muted-foreground"
               >
                 {collapsed ? (
                   <PanelLeftOpen className="h-4 w-4" />
@@ -666,8 +715,9 @@ export default function App() {
               className="min-h-0 w-full flex-1 overflow-y-auto overflow-x-hidden border-t border-current/10 py-2"
               aria-label={t.app.navigation}
             >
+              {/* 一级运维导航 */}
               <ul className="flex flex-col">
-                {sidebarNav.coreItems.map((item) => (
+                {VIGIL_PRIMARY_NAV.map((item) => (
                   <SidebarNavLink
                     closeMobile={closeMobile}
                     collapsed={isDesktopCollapsed}
@@ -679,7 +729,16 @@ export default function App() {
                 ))}
               </ul>
 
-              {sidebarNav.pluginItems.length > 0 && (
+              {/* 系统设置折叠区（Hermes 功能页） */}
+              <SettingsNavGroup
+                closeMobile={closeMobile}
+                collapsed={isDesktopCollapsed}
+                items={settingsNav}
+                t={t}
+                tooltipWarmRef={tooltipWarmRef}
+              />
+
+              {pluginItems.length > 0 && (
                 <div
                   aria-labelledby="hermes-sidebar-plugin-nav-heading"
                   className="flex flex-col border-t border-current/10 pb-2"
@@ -697,7 +756,7 @@ export default function App() {
                   </span>
 
                   <ul className="flex flex-col">
-                    {sidebarNav.pluginItems.map((item) => (
+                    {pluginItems.map((item) => (
                       <SidebarNavLink
                         closeMobile={closeMobile}
                         collapsed={isDesktopCollapsed}
@@ -833,6 +892,16 @@ export default function App() {
                   ) : null)}
               </div>
               <PluginSlot name="post-main" />
+
+              {/* 主体下区：常驻深色终端面板（方向 1）；/exec-logs 大视图与 /chat
+                  自带终端，不重复渲染。 */}
+              {!isExecLogsRoute && !isChatRoute && (
+                <TerminalPanel
+                  collapsed={terminalCollapsed}
+                  onToggle={toggleTerminal}
+                  className={terminalCollapsed ? undefined : "h-44"}
+                />
+              )}
             </div>
           </PageHeaderProvider>
         </div>
@@ -857,6 +926,101 @@ export default function App() {
 function ProfileKeyedRoutes({ children }: { children: ReactNode }) {
   const { profile } = useProfileScope();
   return <div key={profile || "__own__"} className="contents">{children}</div>;
+}
+
+/**
+ * 系统设置折叠区（方向 1：六项运维导航的第六项）——Hermes 功能页收进这里，
+ * 折叠后只留设置图标。选中态用细边框/底色微差，不用彩色大块高亮。
+ */
+const SETTINGS_GROUP_KEY = "vigil-settings-nav-open";
+
+function SettingsNavGroup({
+  closeMobile,
+  collapsed,
+  items,
+  tooltipWarmRef,
+  t,
+}: {
+  closeMobile: () => void;
+  collapsed: boolean;
+  items: NavItem[];
+  tooltipWarmRef: TooltipWarmRef;
+  t: ReturnType<typeof useI18n>["t"];
+}) {
+  const navigate = useNavigate();
+  const { pathname } = useLocation();
+  const [open, setOpen] = useState(() => {
+    try {
+      return localStorage.getItem(SETTINGS_GROUP_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
+  const toggle = useCallback(() => {
+    setOpen((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(SETTINGS_GROUP_KEY, next ? "1" : "0");
+      } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
+
+  const active = items.some(
+    (item) =>
+      pathname === item.path ||
+      (item.path !== "/" && pathname.startsWith(item.path + "/")),
+  );
+
+  // 折叠（图标-only）模式：只留设置图标，点击展开设置区首个页面。
+  if (collapsed) {
+    return (
+      <div className="border-t border-current/10">
+        <button
+          type="button"
+          onClick={() => navigate("/config")}
+          title="系统设置"
+          className="flex w-full items-center justify-center gap-2 px-5 py-2.5 text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+        >
+          <Settings className="h-4 w-4" />
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col border-t border-current/10 pt-1">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className={cn(
+          "mx-2 flex items-center gap-2 rounded px-3 py-2 text-sm",
+          active ? "bg-muted/50 text-foreground" : "text-muted-foreground hover:bg-muted/40 hover:text-foreground",
+        )}
+      >
+        <Settings className="h-4 w-4 shrink-0" />
+        <span className="flex-1 text-left">系统设置</span>
+        <ChevronDown
+          className={cn("size-3.5 transition-transform", open && "rotate-180")}
+        />
+      </button>
+      {open && (
+        <ul className="flex flex-col pb-1">
+          {items.map((item) => (
+            <SidebarNavLink
+              closeMobile={closeMobile}
+              collapsed={false}
+              item={item}
+              key={item.path}
+              t={t}
+              tooltipWarmRef={tooltipWarmRef}
+            />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
 }
 
 function SidebarNavLink({

@@ -964,7 +964,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "dashboard.theme": {
         "type": "select",
         "description": "Web dashboard visual theme",
-        "options": ["default", "midnight", "ember", "mono", "cyberpunk", "rose"],
+        "options": ["vigil-console", "vigil-console-dark", "default", "default-large", "nous-blue", "midnight", "ember", "mono", "cyberpunk", "rose"],
     },
     "display.resume_display": {
         "type": "select",
@@ -16126,7 +16126,7 @@ def _render_active_theme_bootstrap_css() -> str:
     """
     try:
         config = load_config()
-        active = cfg_get(config, "dashboard", "theme", default="default")
+        active = cfg_get(config, "dashboard", "theme", default="vigil-console")
         if not active or not isinstance(active, str):
             return ""
         # Built-in: the bundle already owns the definition, no flash.
@@ -16371,7 +16371,7 @@ def mount_spa(application: FastAPI):
 # Built-in dashboard themes — label + description only.  The actual color
 # definitions live in the frontend (web/src/themes/presets.ts).
 _BUILTIN_DASHBOARD_THEMES = [
-    {"name": "default",       "label": "Vigil Blue-Grey",       "description": "Vigil 蓝灰运维主题——深灰蓝底 + 冷蓝光晕"},
+    {"name": "default",       "label": "Vigil Blue-Grey (Legacy)", "description": "Vigil 蓝灰运维主题——深灰蓝底 + 冷蓝光晕（旧默认，保留对比）"},
     {"name": "default-large", "label": "Vigil Blue-Grey (Large)", "description": "Vigil Blue-Grey with bigger fonts and roomier spacing"},
     {"name": "nous-blue",     "label": "Nous Blue",           "description": "Light mode — vivid Nous-blue accents on cream canvas"},
     {"name": "midnight",      "label": "Midnight",            "description": "Deep blue-violet with cool accents"},
@@ -16379,6 +16379,8 @@ _BUILTIN_DASHBOARD_THEMES = [
     {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
     {"name": "cyberpunk", "label": "Cyberpunk",      "description": "Neon green on black — matrix terminal"},
     {"name": "rose",      "label": "Rosé",           "description": "Soft pink and warm ivory — easy on the eyes"},
+    {"name": "vigil-console",       "label": "Vigil Console",       "description": "浅灰底 + 冷青绿 — 硬核工程师控制台（默认）"},
+    {"name": "vigil-console-dark",  "label": "Vigil Console Dark",  "description": "Vigil Console 青绿暗色变体"},
 ]
 
 
@@ -16633,7 +16635,7 @@ async def get_dashboard_themes():
     them without a stub.
     """
     config = load_config()
-    active = cfg_get(config, "dashboard", "theme", default="default")
+    active = cfg_get(config, "dashboard", "theme", default="vigil-console")
     user_themes = _discover_user_themes()
     seen = set()
     themes = []
