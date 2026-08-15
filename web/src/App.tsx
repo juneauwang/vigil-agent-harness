@@ -33,10 +33,12 @@ import {
   FolderOpen,
   FileText,
   Globe,
+  Gauge,
   Heart,
   KeyRound,
   Menu,
   MessageSquare,
+  Network,
   Package,
   PanelLeftClose,
   PanelLeftOpen,
@@ -44,6 +46,7 @@ import {
   Puzzle,
   Radio,
   RotateCw,
+  ScrollText,
   Settings,
   Shield,
   ShieldCheck,
@@ -94,6 +97,9 @@ const PairingPage = lazy(() => import("@/pages/PairingPage"));
 const ChannelsPage = lazy(() => import("@/pages/ChannelsPage"));
 const WebhooksPage = lazy(() => import("@/pages/WebhooksPage"));
 const SystemPage = lazy(() => import("@/pages/SystemPage"));
+const TopologyPage = lazy(() => import("@/pages/TopologyPage"));
+const RunbooksPage = lazy(() => import("@/pages/RunbooksPage"));
+const StatusPage = lazy(() => import("@/pages/StatusPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
@@ -172,6 +178,10 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/config": ConfigPage,
   "/env": EnvPage,
   "/docs": DocsPage,
+  // Ops dashboard read-only views (UI 壳第一批): topology / runbook / status.
+  "/topology": TopologyPage,
+  "/runbooks": RunbooksPage,
+  "/status": StatusPage,
 };
 
 // Route placeholder for /chat.  The persistent ChatPage host (rendered
@@ -220,6 +230,10 @@ const BUILTIN_NAV_REST: NavItem[] = [
     label: "Documentation",
     icon: BookOpen,
   },
+  // Ops dashboard read-only views (UI 壳第一批) — Vigil 运维三页。
+  { path: "/topology", label: "拓扑", icon: Network },
+  { path: "/runbooks", label: "Runbooks", icon: ScrollText },
+  { path: "/status", label: "状态", icon: Gauge },
 ];
 
 const ICON_MAP: Record<string, ComponentType<{ className?: string }>> = {
