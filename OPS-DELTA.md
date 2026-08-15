@@ -2323,3 +2323,79 @@
 - **核销方式**：测试常驻——两个新套件全绿 + 凭据 grep 0 命中；季度体检检查注册表
   语义是否与既有审批流漂移（allowlist/trajectory 必须仍由源头完成）、SSE 线程安全
   （call_soon_threadsafe）是否被"优化"回裸 put_nowait。
+
+### 48. 批次二十九 setup 工具面净化 + Nous 残留移除 + cua-driver 禁用（批十二 D1 落地） — ✅ 已实施（2026-08-15，批次二十九）
+
+- **为什么**：批二十六清了 /help 命令面，工具面/配置面仍是 hermes 全量——工具选择
+  清单混排消费级工具且 **BFL FLUX 3 Video / TTS 默认勾选**（白占工具加载 + token）；
+  Search provider **默认选中 Nous Subscription（Firecrawl）**（Vigil 用户无 Nous
+  订阅 = 死入口，中间用户不换配置搜索就废）；TTS/Browser provider 列表也有 Nous
+  Subscription 死入口；dashboard 启动被指自动下载 cua-driver（实测现状已无该触发
+  路径，见任务 3 核实）。本批 = 工具面净化（批十二 D1）+ Nous 残留清理 + cua 确认。
+- **任务 1（工具选择清单净化）**：
+  1. 预选运维工具集：`_OPS_CORE_TOOLSETS`（web/terminal/file/code_execution/vision/
+     skills/todo/memory/session_search/clarify/delegation/cronjob/prom）默认勾选——
+     `tools_command` first_install 的 checklist 预选改为
+     `(current_enabled - _DEFAULT_OFF_TOOLSETS) | set(_OPS_CORE_TOOLSETS)`，prom
+     由此进入首次安装默认勾选（此前不在 hermes-cli composite，从未默认开）。
+  2. 取消默认勾选：`bfl`、`tts` 加入 `_DEFAULT_OFF_TOOLSETS`（运行时 schema 也不
+     加载，省 token；`vigil tools` 手动启用路径不变）。
+  3. 消费级工具折叠：`_prompt_toolset_checklist` 改为两段式——运维区在前，`── 高级 /
+     娱乐工具（默认不启用，需要的在此勾选）──` 分隔行后是 `_ADVANCED_TOOLSETS`
+     （video/image_gen/video_gen/bfl/x_search/tts/context_engine/homeassistant/
+     spotify/discord/discord_admin/yuanbao/computer_use/browser）。分隔行作为不可选
+     行处理（结果映射跳过 None 索引，勾选分隔行 = 空操作）；插件 toolset 仍在尾部。
+  4. 清单标题改为 "选择 Vigil 可用的工具 — {platform}"（运维语境）。
+  - **边界**：`_CONFIG_ONLY_TOOLSETS`（stt）仍在 "Reconfigure" 流程配 provider，不进
+    清单；`context_engine` 折叠但**不加入** `_DEFAULT_OFF_TOOLSETS`（其启停由
+    `context.engine` 驱动，非清单勾选）。
+- **任务 2（Nous 残留清理，功能代码保留）**：
+  - 删除 `TOOL_CATEGORIES` 全部 managed "Nous Subscription" 行：tts（342 段）、stt
+    （435 段）、web（508 段）、image_gen（543 段）、video_gen（563 段）、browser
+    （640 段）——只删 UI 行，`nous_subscription.py` / `nous_account.py` 模块与
+    gateway 运行时代码零改动。
+  - **Search provider 默认值**：web 类别剩 "Firecrawl Self-Hosted" 硬编码行；运行时
+    plugin 行注入后把免费无 key 的 `ddgs` 移到 index 0（`_visible_providers`），
+    未配置用户的默认高亮 = ddgs（免费可用），绝不默认订阅项。`tools/web_tools.py`
+    `_get_backend()` 最终兜底 `"firecrawl"` → `"ddgs"`（无任何凭据的新装用户不再落到
+    无 key 的 firecrawl 死后端；`hermes tools` 选 ddgs 时 post_setup 自动装 ddgs 包）。
+  - TTS 列表默认高亮仍为 Edge（免费），Browser 默认高亮仍为 Local Browser。
+  - **边界（插件侧 Nous 行保留）**：image_gen/video_gen 的 plugin 行（如 "Nous
+    Portal (image)"、Krea tag 里的 managed Nous Subscription 字样）**不在本批白名单**
+    （plugins/ 不可改）且仅经折叠的 advanced 区 + 显式 opt-in 可达；对 Nous 用户是
+    真实能力，保留。默认 setup 全链路（quick setup 无工具清单 + first_install 只配
+    web 免费项）已无 "Nous Subscription / Nous Portal / billed to your
+    subscription" 字样。
+  - `_RECENTLY_SHIPPED_TOOLSETS` 清空：bfl 在 v0.1.0 基线前已发布，早过 one-release
+    back-fill 窗口，且本批改默认关——保留会把默认关又拉回开（账本注释已更新）。
+  - `yuanbao` 加入 `_DEFAULT_OFF_TOOLSETS`（与 spotify 同类的消费级 IM 集成，默认关）。
+- **任务 3（cua-driver 禁用核实，无需改码）**：
+  - 核实结论：**默认路径已不含自动下载**——`install_cua_driver` 调用点仅 3 处：
+    `tools_config.py:1795`（post_setup="cua_driver"，仅用户显式启用 computer_use
+    工具集时）、`update_cmd.py`（`vigil update`，且前置 `shutil.which("cua-driver")`
+    ——未装不触发，默认 no-op）、`main.py`（`vigil computer-use install` 显式命令）。
+  - dashboard 启动无下载触发：web_server 只有只读 `computer_use_status()` 端点
+    （读 `cua-driver doctor` 不下载）；`computer_use` 在 `_DEFAULT_OFF_TOOLSETS` 且
+    check_fn 门控，默认会话零 schema。`_maybe_nudge_update`（cua_backend.py）只在
+    computer_use 后端 `start()` 时做 ~20h 缓存的 GitHub 版本检查（仅日志提示，非下载）。
+  - 未注册任何 autostart/systemd 行为（本批零改动）。
+- **测试**：tests/hermes_cli/test_batch29_tools_surface.py（23 用例：默认工具集断言
+  含 prom 预选/无 bfl/tts/消费级、清单两段式与分隔行不可选、provider 面无 Nous 死
+  入口 + web 默认 ddgs + tts/browser 免费默认、setup 可见文案无订阅措辞、web 运行时
+  兜底 ddgs、first_install 不触发 install_cua_driver）+ test_tools_config.py 既有
+  快照复用用例改挂 tts 类别（原 image_gen managed 行已删）。回归 test_tools_config.py
+  / test_setup_branding.py / test_setup_tools_direct.py / test_post_setup_gating.py /
+  test_install_cua_driver.py 全绿。
+- **硬约束核对**：diff 白名单 = hermes_cli/tools_config.py、tools/web_tools.py、
+  tests/hermes_cli/test_batch29_tools_surface.py + test_tools_config.py、OPS-DELTA.md
+  共 5 类文件（setup.py 无改动需求——工具可用性摘要早已运维化）；功能代码零删除
+  （nous_subscription/nous_account 保留，消费级工具代码保留）；无新 HERMES_*/VIGIL_*
+  env var；conversation_loop / prompt 缓存 / 压缩逻辑未碰；凭据值不进 argv/日志
+  （ddgs 免费无 key，无新增凭据面）。
+- **遗留**：插件侧 Nous gateway 行（image_gen/video_gen/browser 的 managed 行）保留
+  为 Nous 用户真实能力——若 Vigil 明确"永不支持 Nous"，另排期在 `_visible_providers`
+  按名过滤；`updates.refresh_cua_driver` 默认 True 属 config_defaults.py（不在白名单）
+  未动——实际已被 `shutil.which("cua-driver")` 门挡住，无自动下载。
+- **核销方式**：测试常驻——批次 29 套件全绿；季度体检检查：清单两段式是否被改回
+  单层混排、web 默认是否被改回订阅项、`_DEFAULT_OFF_TOOLSETS` 是否又漏掉消费级
+  工具、首次安装是否重新出现 cua-driver 下载。

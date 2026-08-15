@@ -155,13 +155,19 @@ def gui_toolset_label(label: str) -> str:
 # who want it opt in via `vigil tools` → Video Generation, which walks
 # them through provider + model selection.
 #
+# OPS-DELTA #48 (batch 29): bfl (BFL FLUX 3 Video) and tts
+# (Text-to-Speech) are also off by default — 运维场景用不到，白占工具加载 +
+# token。Users opt in via `vigil tools` → the matching category, which
+# walks them through provider selection (TTS defaults to the free Edge
+# backend once manually enabled).
+#
 # X search is off by default for users without xAI credentials, but
 # auto-enables when SuperGrok OAuth tokens are stored OR XAI_API_KEY is
 # set — mirroring the HASS_TOKEN → homeassistant auto-enable below. The
 # `vigil tools` → X (Twitter) Search setup walks users through credential
 # setup. The tool's check_fn means the schema still won't appear to the
 # model if the credential later goes missing or expires.
-_DEFAULT_OFF_TOOLSETS = {"browser", "image_gen", "computer_use", "homeassistant", "spotify", "discord", "discord_admin", "video", "video_gen", "x_search", "a2a"}
+_DEFAULT_OFF_TOOLSETS = {"browser", "image_gen", "computer_use", "homeassistant", "spotify", "yuanbao", "discord", "discord_admin", "video", "video_gen", "x_search", "a2a", "bfl", "tts"}
 
 
 # Config-only capabilities: they appear in `hermes tools` for provider/API-key
@@ -171,6 +177,49 @@ _DEFAULT_OFF_TOOLSETS = {"browser", "image_gen", "computer_use", "homeassistant"
 # per-platform enable/disable checklist; configured via the "Reconfigure an
 # existing tool" flow and the GUI provider matrix instead.
 _CONFIG_ONLY_TOOLSETS = {"stt"}
+
+
+# OPS-DELTA #48 (batch 29): the tool-choosing checklist is rendered as a
+# two-section list — the ops core first (pre-selected for first-time users),
+# then a "高级 / 娱乐工具" section at the bottom for consumer tools (default
+# unchecked, still manually enableable). ``_OPS_CORE_TOOLSETS`` is the batch's
+# 预选运维工具集; ``_ADVANCED_TOOLSETS`` is the folded consumer set from the
+# batch prompt (Video Analysis / Image Gen / Video Gen / BFL / X Search / TTS
+# / Context Engine / Home Assistant / Spotify / Discord / Yuanbao / Computer
+# Use / Browser Automation). Both are ordering/pre-selection only — the
+# toolsets stay registered and explicitly saved lists keep working.
+_OPS_CORE_TOOLSETS = (
+    "web",
+    "terminal",
+    "file",
+    "code_execution",
+    "vision",
+    "skills",
+    "todo",
+    "memory",
+    "session_search",
+    "clarify",
+    "delegation",
+    "cronjob",
+    "prom",
+)
+
+_ADVANCED_TOOLSETS = (
+    "video",
+    "image_gen",
+    "video_gen",
+    "bfl",
+    "x_search",
+    "tts",
+    "context_engine",
+    "homeassistant",
+    "spotify",
+    "discord",
+    "discord_admin",
+    "yuanbao",
+    "computer_use",
+    "browser",
+)
 
 
 def _xai_credentials_present() -> bool:
@@ -339,16 +388,6 @@ TOOL_CATEGORIES = {
                 "tts_provider": "edge",
             },
             {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed OpenAI TTS billed to your subscription",
-                "env_vars": [],
-                "tts_provider": "openai",
-                "requires_nous_auth": True,
-                "managed_nous_feature": "tts",
-                "override_env_vars": ["VOICE_TOOLS_OPENAI_KEY", "OPENAI_API_KEY"],
-            },
-            {
                 "name": "OpenAI TTS",
                 "badge": "paid",
                 "tag": "High quality voices",
@@ -432,16 +471,6 @@ TOOL_CATEGORIES = {
                 "post_setup": "faster_whisper",
             },
             {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed OpenAI transcription billed to your subscription",
-                "env_vars": [],
-                "stt_provider": "openai",
-                "requires_nous_auth": True,
-                "managed_nous_feature": "stt",
-                "override_env_vars": ["VOICE_TOOLS_OPENAI_KEY", "OPENAI_API_KEY"],
-            },
-            {
                 "name": "OpenAI",
                 "badge": "paid",
                 "tag": "whisper-1, gpt-4o-transcribe, gpt-transcribe",
@@ -497,23 +526,14 @@ TOOL_CATEGORIES = {
         # Per-provider rows are injected at runtime from
         # plugins.web.<vendor>.provider via _plugin_web_search_providers()
         # in _visible_providers(). Only non-provider UX setup-flow rows
-        # for the firecrawl backend are listed here:
-        #   - "Nous Subscription" — managed Firecrawl billed via Nous
-        #     subscription (requires_nous_auth + override_env_vars).
-        #   - "Firecrawl Self-Hosted" — points firecrawl at a private
-        #     Docker instance via FIRECRAWL_API_URL only.
-        # See PR #25182 for the migration rationale.
+        # for the firecrawl backend are listed here — the "Nous Subscription"
+        # managed-gateway row was removed in OPS-DELTA #48 (batch 29): Vigil
+        # users have no Nous Portal, so the default-highlighted row must be a
+        # free/no-key option (ddgs is moved to index 0 in _visible_providers).
+        # "Firecrawl Self-Hosted" points firecrawl at a private Docker
+        # instance via FIRECRAWL_API_URL only. See PR #25182 for the
+        # migration rationale.
         "providers": [
-            {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed Firecrawl billed to your subscription",
-                "web_backend": "firecrawl",
-                "env_vars": [],
-                "requires_nous_auth": True,
-                "managed_nous_feature": "web",
-                "override_env_vars": ["FIRECRAWL_API_KEY", "FIRECRAWL_API_URL"],
-            },
             {
                 "name": "Firecrawl Self-Hosted",
                 "badge": "free · self-hosted",
@@ -532,48 +552,20 @@ TOOL_CATEGORIES = {
         # OpenAI Codex, and xAI are injected at runtime from each
         # ``plugins.image_gen.<vendor>`` package via
         # ``_plugin_image_gen_providers()`` in ``_visible_providers``.
-        # Only non-provider UX setup-flow rows remain here:
-        #   - "Nous Subscription" — managed FAL billed via the Nous
-        #     subscription (requires_nous_auth + override_env_vars).
-        #     Uses the fal plugin as the underlying backend but has a
-        #     distinct setup UX.
-        # Mirrors the shape browser/video_gen ship today.
-        "providers": [
-            {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed FAL image generation billed to your subscription",
-                "env_vars": [],
-                "requires_nous_auth": True,
-                "managed_nous_feature": "image_gen",
-                "override_env_vars": ["FAL_KEY"],
-                "imagegen_backend": "fal",
-            },
-        ],
+        # OPS-DELTA #48 (batch 29): the managed "Nous Subscription" row was
+        # removed — Vigil users have no Nous Portal, and the plugin rows are
+        # the real providers. Empty providers list: every backend is a plugin.
+        "providers": [],
     },
     "video_gen": {
         "name": "Video Generation",
         "icon": "🎬",
-        # "Nous Subscription" row mirrors the image_gen pattern — managed
-        # FAL video generation billed via the Nous Portal.  Plugin-backed
-        # provider rows (FAL BYOK, xAI, …) are injected at runtime by
-        # ``_plugin_video_gen_providers()`` in ``_visible_providers``.
-        "providers": [
-            {
-                "name": "Nous Subscription",
-                "badge": "subscription",
-                "tag": "Managed FAL video generation billed to your subscription",
-                "env_vars": [],
-                "requires_nous_auth": True,
-                "managed_nous_feature": "video_gen",
-                "override_env_vars": ["FAL_KEY"],
-                # The underlying plugin backend — when the user picks
-                # "Nous Subscription" we set video_gen.provider = "fal"
-                # and video_gen.use_gateway = True so the FAL plugin
-                # routes through the managed queue gateway.
-                "video_gen_plugin_name": "fal",
-            },
-        ],
+        # Plugin-backed provider rows (FAL BYOK, xAI, …) are injected at
+        # runtime by ``_plugin_video_gen_providers()`` in
+        # ``_visible_providers``. OPS-DELTA #48 (batch 29): the managed
+        # "Nous Subscription" row was removed — Vigil users have no Nous
+        # Portal, and every real backend is a plugin.
+        "providers": [],
     },
     "x_search": {
         "name": "X (Twitter) Search",
@@ -619,12 +611,11 @@ TOOL_CATEGORIES = {
         # non-provider UX setup-flow rows remain here. "Local Browser" is
         # listed FIRST so it is the default-highlighted (index 0) choice on a
         # fresh install — pressing Enter must land on the free, no-key local
-        # backend, never on the paid Nous Subscription gateway row:
+        # backend. OPS-DELTA #48 (batch 29): the "Nous Subscription (Browser
+        # Use cloud)" managed-gateway row was removed — Vigil users have no
+        # Nous Portal, so it was a dead entry that misdirected users into a
+        # login page that does not exist for them:
         #   - "Local Browser" — non-cloud option, no CloudBrowserProvider.
-        #   - "Nous Subscription (Browser Use cloud)" — managed Browser Use
-        #     billed via Nous subscription (requires_nous_auth +
-        #     override_env_vars). Uses the browser-use plugin as the
-        #     underlying backend but has a distinct setup UX.
         #   - "Camofox" — anti-detection local Firefox; short-circuits the
         #     cloud-provider dispatch path via _is_camofox_mode().
         "providers": [
@@ -635,22 +626,6 @@ TOOL_CATEGORIES = {
                 "env_vars": [],
                 "browser_provider": "local",
                 "post_setup": "agent_browser",
-            },
-            {
-                "name": "Nous Subscription (Browser Use cloud)",
-                "badge": "subscription",
-                "tag": "Managed Browser Use billed to your subscription",
-                "env_vars": [],
-                "browser_provider": "browser-use",
-                "requires_nous_auth": True,
-                "managed_nous_feature": "browser",
-                "override_env_vars": ["BROWSER_USE_API_KEY"],
-                # Cloud hook: installs the agent-browser CLI only. Browser Use
-                # hosts its own Chromium, so the local-Chromium install (and
-                # the local-Chromium readiness gate) must not apply here —
-                # with "agent_browser" this row read "needs setup" forever on
-                # machines without a local Chromium build.
-                "post_setup": "browserbase",
             },
             {
                 "name": "Camofox",
@@ -2190,7 +2165,13 @@ def _exempt_explicit_platform_native(
 #: schemas to a user with no Nous credential — the same split Home Assistant
 #: uses. Probing the portal from this path would put a network call on every
 #: CLI start, gateway session and cron tick.
-_RECENTLY_SHIPPED_TOOLSETS = frozenset({"bfl"})
+#
+#: Empty since batch 29: ``bfl`` shipped before the v0.1.0 release baseline,
+#: so it has long outlived the one-release back-fill window AND is now in
+#: ``_DEFAULT_OFF_TOOLSETS`` (ops surface cleanup) — re-enabling it for
+#: composite users would fight the default-off decision. The set stays empty
+#: between releases (see the "emptied in the next one" rule above).
+_RECENTLY_SHIPPED_TOOLSETS = frozenset()
 
 
 def _enable_recently_shipped_toolsets(
@@ -2750,7 +2731,14 @@ def _prompt_toolset_checklist(
     *,
     force_fresh: bool = True,
 ) -> Set[str]:
-    """Multi-select checklist of toolsets. Returns set of selected toolset keys."""
+    """Multi-select checklist of toolsets. Returns set of selected toolset keys.
+
+    OPS-DELTA #48 (batch 29): rows are ordered ops-core first, then a
+    non-selectable separator, then the folded "高级 / 娱乐工具" section
+    (consumer tools — default unchecked, still manually enableable), then any
+    remaining (plugin) toolsets. The separator is a row in the flat curses
+    list but maps to ``None`` in the result so toggling it is a no-op.
+    """
     from hermes_cli.curses_ui import curses_checklist
     from toolsets import resolve_toolset
 
@@ -2760,14 +2748,27 @@ def _prompt_toolset_checklist(
     effective_all = _get_effective_configurable_toolsets()
     # Drop platform-scoped toolsets that don't apply to this platform, and
     # config-only capabilities (stt) that have no per-platform toggle.
-    effective = [
-        (k, l, d) for (k, l, d) in effective_all
+    available = {
+        k: (l, d) for (k, l, d) in effective_all
         if _toolset_allowed_for_platform(k, platform)
         and k not in _CONFIG_ONLY_TOOLSETS
-    ]
+    }
+    # Ordered rows: ops core → separator → advanced/entertainment → rest.
+    ordered: List[Optional[str]] = [k for k in _OPS_CORE_TOOLSETS if k in available]
+    advanced = [k for k in _ADVANCED_TOOLSETS if k in available]
+    if advanced:
+        ordered.append(None)  # section separator row
+        ordered.extend(advanced)
+    ordered.extend(k for k, _, _ in effective_all if k in available and k not in ordered)
 
     labels = []
-    for ts_key, ts_label, ts_desc in effective:
+    ts_keys: List[Optional[str]] = []
+    for row in ordered:
+        if row is None:
+            labels.append("── 高级 / 娱乐工具（默认不启用，需要的在此勾选）──")
+            ts_keys.append(None)
+            continue
+        ts_key, (ts_label, ts_desc) = row, available[row]
         suffix = ""
         if (
             not _toolset_has_keys(ts_key, force_fresh=force_fresh)
@@ -2775,35 +2776,37 @@ def _prompt_toolset_checklist(
         ):
             suffix = "  [no API key]"
         labels.append(f"{ts_label}  ({ts_desc}){suffix}")
+        ts_keys.append(ts_key)
 
     pre_selected = {
-        i for i, (ts_key, _, _) in enumerate(effective)
-        if ts_key in enabled
+        i for i, ts_key in enumerate(ts_keys)
+        if ts_key is not None and ts_key in enabled
     }
 
     # Build a live status function that shows deduplicated total token cost.
     status_fn = None
     if tool_tokens:
-        ts_keys = [ts_key for ts_key, _, _ in effective]
-
         def status_fn(chosen: set) -> str:
             # Collect unique tool names across all selected toolsets
             all_tools: set = set()
             for idx in chosen:
-                all_tools.update(resolve_toolset(ts_keys[idx]))
+                ts_key = ts_keys[idx]
+                if ts_key is None:
+                    continue
+                all_tools.update(resolve_toolset(ts_key))
             total = sum(tool_tokens.get(name, 0) for name in all_tools)
             if total >= 1000:
                 return f"Est. tool context: ~{total / 1000:.1f}k tokens"
             return f"Est. tool context: ~{total} tokens"
 
     chosen = curses_checklist(
-        f"Tools for {platform_label}",
+        f"选择 Vigil 可用的工具 — {platform_label}",
         labels,
         pre_selected,
         cancel_returns=pre_selected,
         status_fn=status_fn,
     )
-    return {effective[i][0] for i in chosen}
+    return {ts_keys[i] for i in chosen if ts_keys[i] is not None}
 
 
 # ─── Provider-Aware Configuration ────────────────────────────────────────────
@@ -2912,10 +2915,11 @@ def _plugin_video_gen_providers() -> list[dict]:
 # searxng, exa, parallel, tavily, firecrawl) live as plugins after
 # PR #25182 — this helper is the sole source of truth for the category's
 # provider rows. The hardcoded entries that used to drive the category
-# were deleted in the same PR; only the two non-provider UX rows
-# ("Nous Subscription" managed-gateway entry, "Firecrawl Self-Hosted")
-# remain in TOOL_CATEGORIES because they describe alternative *setup
-# flows* for the firecrawl backend rather than distinct providers.
+# were deleted in the same PR; only the non-provider UX row ("Firecrawl
+# Self-Hosted") remains in TOOL_CATEGORIES because it describes an
+# alternative *setup flow* for the firecrawl backend rather than a distinct
+# provider (the "Nous Subscription" managed-gateway row was removed in
+# OPS-DELTA #48 — batch 29).
 def _plugin_web_search_providers() -> list[dict]:
     """Build picker-row dicts from plugin-registered web search providers.
 
@@ -2997,8 +3001,9 @@ def web_provider_capabilities(backend: str) -> list:
 # for those three in the "Browser Automation" picker. The hardcoded
 # ``TOOL_CATEGORIES["browser"]`` entries that drove the category before
 # were deleted in the same PR; only non-provider UX setup-flow rows remain
-# ("Nous Subscription", "Local Browser", "Camofox") — see the comment block
-# in ``TOOL_CATEGORIES["browser"]`` for why each one stays hardcoded.
+# ("Local Browser", "Camofox") — see the comment block in
+# ``TOOL_CATEGORIES["browser"]`` for why each one stays hardcoded (the
+# "Nous Subscription (Browser Use cloud)" row was removed in OPS-DELTA #48).
 def _plugin_browser_providers() -> list[dict]:
     """Build picker-row dicts from plugin-registered cloud browser providers.
 
@@ -3154,7 +3159,8 @@ def _visible_providers(
         visible.append(provider)
 
     # Inject plugin-registered image_gen backends (OpenAI today, more
-    # later) so the picker lists them alongside FAL / Nous Subscription.
+    # later) so the picker lists the real provider rows. OPS-DELTA #48:
+    # the managed Nous row was removed — every backend is a plugin now.
     if cat.get("name") == "Image Generation":
         visible.extend(_plugin_image_gen_providers())
 
@@ -3165,22 +3171,29 @@ def _visible_providers(
 
     # Inject plugin-registered web search backends. After PR #25182, this
     # is the SOLE source of provider rows for the Web Search & Extract
-    # category — the per-provider hardcoded entries were deleted. The two
-    # remaining hardcoded rows ("Nous Subscription", "Firecrawl
-    # Self-Hosted") are non-provider UX setup-flow rows for firecrawl.
+    # category. The only remaining hardcoded row ("Firecrawl Self-Hosted")
+    # is a non-provider UX setup-flow row for firecrawl. OPS-DELTA #48:
+    # the "Nous Subscription" row was removed, and the free no-key ddgs row
+    # is moved to index 0 so the picker default-highlights a usable option
+    # (never a subscription/dead entry) on a fresh install.
     if cat.get("name") == "Web Search & Extract":
         visible.extend(_plugin_web_search_providers())
+        for i, p in enumerate(visible):
+            if p.get("web_backend") == "ddgs":
+                visible.insert(0, visible.pop(i))
+                break
 
     # Inject plugin-registered cloud browser backends. After PR #25214,
     # Browserbase / Browser Use / Firecrawl are the plugin-supplied rows;
-    # the hardcoded "Nous Subscription" / "Local Browser" / "Camofox" rows
-    # stay because they're non-provider UX setup flows (subscription auth,
-    # local fallback, and the REST-API anti-detection backend respectively).
+    # the hardcoded "Local Browser" / "Camofox" rows stay because they're
+    # non-provider UX setup flows (local fallback and the REST-API
+    # anti-detection backend respectively). The managed "Nous Subscription
+    # (Browser Use cloud)" row was removed in OPS-DELTA #48.
     if cat.get("name") == "Browser Automation":
         visible.extend(_plugin_browser_providers())
 
     # Inject plugin-registered TTS backends (issue #30398). Plugin rows
-    # render BELOW the 10 hardcoded built-in rows. Built-in shadowing
+    # render BELOW the hardcoded built-in rows. Built-in shadowing
     # is filtered out by ``_plugin_tts_providers`` defensively.
     if cat.get("name") == "Text-to-Speech":
         visible.extend(_plugin_tts_providers())
@@ -4915,8 +4928,16 @@ def tools_command(args=None, first_install: bool = False, config: dict = None):
             pinfo = PLATFORMS[pkey]
             current_enabled = _get_platform_tools(config, pkey, include_default_mcp_servers=False)
 
-            # Uncheck toolsets that should be off by default
-            checklist_preselected = current_enabled - _DEFAULT_OFF_TOOLSETS
+            # OPS-DELTA #48 (batch 29): 预选运维工具集 — the ops core
+            # (terminal/file/code/web/skills/todo/memory/session_search/cron/
+            # delegation/vision/prom) is pre-checked for first-time users even
+            # where a toolset (e.g. ``prom``) is not part of the hermes-cli
+            # composite; consumer tools are un-checked via _DEFAULT_OFF_TOOLSETS
+            # (bfl/tts included since batch 29).
+            checklist_preselected = (
+                (current_enabled - _DEFAULT_OFF_TOOLSETS)
+                | set(_OPS_CORE_TOOLSETS)
+            )
 
             # Show checklist
             new_enabled = _prompt_toolset_checklist(pinfo["label"], checklist_preselected, pkey)
