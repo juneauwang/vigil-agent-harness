@@ -2233,3 +2233,93 @@
 - **核销方式**：测试常驻——test_runbook_tools.py / test_runbook_create.py 的
   四值+映射用例；季度体检检查 _normalize_runbook_env 与 ops_permissions
   _map_env_tier 是否仍一致（映射表若有更新需同步）。
+
+### 47. 批次二十八 UI 壳第二批后端——执行/审批/审计 API（契约 vigil-exec-api-draft.md 逐项实现）
+- **背景**：第一批只读 API（/api/topology /api/runbooks /api/status /api/health）已上线；
+  本批按 DSH 前端契约实现第二批：统一 pending 审批注册表 + /api/approvals 三端点、
+  /api/exec 三态 + SSE 流、Audit/Sessions JSON 化、Incidents 结构占位。全批端点不进
+  PUBLIC_API_PATHS（public_paths.py 未改），错误格式统一 {"error": {code, message,
+  details}}，分页统一 limit/offset/total/has_more（默认 50/0）。
+- **任务 1（approval pending 注册表，tools/approval.py 加段）**：新增
+  register/list/get/wait/approve/deny/reclaim/clear 八原语，线程安全（复用 _lock），
+  条目字段照契约（id/command/description/env/grade/session_key/source/status/scope/
+  created_at/timeout_at/allow_session/allow_permanent）。**关键语义**：
+  - 已超时 approve/deny → {"code": "timeout"}（wait 策略：不自动批准/拒绝，命令保持
+    pending）；回收只改状态不裁决。
+  - scope 校验：allow_session=False 拒 session、allow_permanent=False 拒 permanent
+    （prod 变更确认门条目两者都 False → 只接受 once）；smart_denied 强制 once。
+  - 审批侧效应（allowlist 持久化 + trajectory 记录）**由源头审批流原生完成**——注册表
+    只存 callback 等待（threading.Event 唤醒 guard 线程），不复制判断逻辑，CLI/gateway
+    审批路径零改动零影响。
+  - **边界**：进程内注册表，跨进程/跨 gateway 全局化不在本批（进程重启即丢，同 exec
+    内存记录）。
+- **任务 2（/api/approvals）**：GET 列表（env/status 过滤 + pending 排前 + prod 优先 +
+  分页）；POST approve/deny——错误映射 not_found→404 / timeout→409 / invalid_request
+  →400，成功 200 {"status": "approved", "scope"} / {"status": "denied"}。
+- **任务 3（/api/exec + SSE，[新建]）**：POST /api/exec 校验链 = guard 线程
+  check_all_command_guards(command, "local", approval_callback=web 回调)（hardline /
+  sudo-stdin / user-deny / ops 矩阵 deny / B' 门全量继承，yolo 也绕不过 prod 未分级
+  确认门）→ 三态：executed（本机直跑，输出截断 100KB）/ needs_approval（回
+  approval_id + pending:true）/ denied（回 code+reason，终态无 exec_id，照契约）。
+  host 缺省本机；env 缺省 ops.permissions.env；远端 host → 400 明确"不在本批范围"。
+  执行链复用 terminal_tool.local_exec_stream（sudo 变换继承 _transform_sudo_command、
+  IdentitiesOnly/ASKPASS 语义由批十六/十九修复全量继承，不重新发明）。GET
+  /api/exec/{id} 返回执行记录全量（command 用已脱敏展示值，command_raw 绝不出 API）。
+  GET /api/exec/{id}/stream SSE 事件 exec:start/output/exit/error：approved → 实时
+  执行推送；executed → 重放已捕获（已脱敏）输出；denied/error → exec:error；
+  needs_approval → 轮询等审批（超时/回收 → exec:error，命令保持 pending）。
+  **执行记录为进程内内存态 + trajectory terminal 事件**（record_event 强制 redact），
+  进程重启丢内存记录可接受；软上限 500 条（淘汰最早已终态记录，pending 不淘汰）。
+- **任务 4（Audit / Sessions JSON 化，复用 trajectory.py）**：GET /api/audit/sessions
+  （session_id/event_count/started_at/ended_at）、GET /api/audit/events（type/session
+  过滤 + 分页，action/result 只给前 500 字符 preview）、GET
+  /api/audit/events/{session_id}/{seq}（单事件全量，过 redact）、DELETE
+  /api/audit/events（session_id/older_than prune）；GET /api/sessions/{id}/events
+  （会话事件流）。复用 _iter_event_files/_load_events/_event_file_path/_parse_iso，
+  不重写轨迹逻辑。
+- **任务 5（Incidents 占位）**：GET /api/incidents 返回空列表 + schema_version:1
+  （不编数据；未来数据源候选见契约，独立排期）。
+- **契约歧义解释（OPS-DELTA 登记，未改契约）**：
+  1. **§5 /api/sessions**：既有 GET /api/sessions（web_routers/sessions.py）返回
+     id/last_active 行结构，桌面 SessionInfo / dashboard selftest / 负数 limit 422
+     语义都依赖它，不能动；DSH 前端按契约消费 session_id/last_activity_at/running。
+     解释：web_server.py 先注册同路径包装路由——委托原 handler（旧字段与 422 校验
+     零变化），行级追加契约字段（session_id=id、last_activity_at=last_active 别名，
+     running=活跃注册表或 ended_at is None），两边消费方同时满足。
+  2. **Audit 事件结构**：契约示例 {command, result:{exit_code, output_preview}} 是
+     示意；实际 trajectory 事件为 {ts/session_id/seq/type/tool/action/result/...}
+     原样返回（契约明言"trajectory 事件原样"），preview = action/result 前 500 字符。
+  3. **denied 响应是终态**：{"status":"denied","code":"denied","reason"} 不带
+     exec_id（契约 §3 原文如此）；执行记录仍在内存中（GET /api/exec/{id} 与 SSE
+     exec:error 可查）。
+  4. **smart 审批模式**：DEFAULT_CONFIG 的 approvals.mode 缺省 smart，guard 会先跑
+     aux LLM 评估再触发审批回调；POST /api/exec 等 guard 决策/审批登记最长 15s
+     （_EXEC_GUARD_DECISION_WAIT），等待期间 guard 完成（smart 直接放行/拒绝）则按
+     真实决策返回，不误报 internal。
+- **安全（最高优先）**：新增端点一律不进 PUBLIC_API_PATHS；执行面命令/输出双层脱敏
+  ——redact_sensitive_text(credential_values=True, force=True)（token/ENV 赋值/
+  password 值）+ topo_export._redact_value（URL userinfo / .pem/id_rsa 私钥路径 /
+  home 前缀），单层各有盲区（前者不遮 URL userinfo，后者不遮 token 值），必须两层
+  都过；审批条目 command 在 prompt 面已先打码再展示。已知**既有**redact 盲区（非本
+  批引入，未修）：`-p <值>` 这类行内 flag 值两层都不遮，CLI/gateway/轨迹同受限于
+  此，单独排期。
+- **验收测试**：tests/tools/test_web_approval_registry.py（10 用例：注册表原语/
+  超时 fail-closed/scope/smart_denied 强制 once/列表排序分页）+ tests/hermes_cli/
+  test_batch28_exec_api.py（16 用例：approvals 三态含 409 timeout 与 scope 校验、
+  exec 三态含 B' yolo 绕过验证与凭据打码、SSE 事件序列、audit 过滤分页 prune、
+  sessions 契约字段、incidents 占位、凭据 grep 0 命中）。回归 test_web_server.py /
+  test_web_server_git.py / test_web_server_session_search.py / test_web_server_
+  gateway_topology.py / test_web_server_host_header.py / test_approval*.py /
+  test_ops_*.py / test_terminal_tool.py——失败集合与基线一致（环境噪音：test_debug
+  15 + test_commands 1 + web_server 主题/插件 manifest 7 + approval_mode_parity/
+  ops_permissions_guard 8，均 stash 对比在干净 main 上同样失败，无新增）。
+- **硬约束核对**：diff 白名单 = hermes_cli/web_server.py、tools/approval.py（仅新增
+  pending 注册表段）、tools/terminal_tool.py（仅 local_exec_stream 封装）、新增测试
+  2 个、OPS-DELTA.md 共 5 类文件；public_paths.py 未改；无新 HERMES_*/VIGIL_* env
+  var；conversation_loop / prompt 缓存 / 压缩逻辑未碰；terminal_tool/approval.py/
+  ops_permissions 既有判断逻辑零改动（approval.py 只加段）。
+- **遗留**：审批注册表与 exec 记录跨进程/跨 gateway 全局化、远端 host 执行、
+  Incidents 真实数据源、`-p` 行内凭据 redact 盲区，均单独排期。
+- **核销方式**：测试常驻——两个新套件全绿 + 凭据 grep 0 命中；季度体检检查注册表
+  语义是否与既有审批流漂移（allowlist/trajectory 必须仍由源头完成）、SSE 线程安全
+  （call_soon_threadsafe）是否被"优化"回裸 put_nowait。

@@ -3546,3 +3546,86 @@ registry.register(
     emoji="💻",
     max_result_size_chars=100_000,
 )
+
+
+# =========================================================================
+# Web exec 封装层（UI 壳第二批，OPS-DELTA #47）
+# =========================================================================
+# /api/exec 的本地执行面：薄封装，不重新发明安全链。sudo 变换复用
+# _transform_sudo_command（-S + ASKPASS/stdin 注入语义，批十六/十九修复
+# 继承）；命令/输出脱敏由调用方（web_server）负责，这里只产出原始流事件。
+# 事件序列：(event, payload)——start / output{chunk} / exit{exit_code,
+# duration_ms} / error{message}。bash 用 login shell（-l）加载用户 profile
+# 环境，与本地 terminal 后端的快照语义一致。
+def local_exec_stream(command: str, *, cwd: str = "", timeout_seconds: int = 60,
+                      extra_env: Optional[dict] = None):
+    """本地执行一条命令并产出流事件（生成器）。
+
+    Args:
+        command: 要执行的命令（已通过审批链；本函数不再做审批/危险命令检查）。
+        cwd: 工作目录；空 = 当前进程目录。
+        timeout_seconds: 执行超时（秒），超时产出 error 事件。
+        extra_env: 附加环境变量（覆盖 os.environ）。
+
+    Yields:
+        (event, payload) 元组：("start", {...}) / ("output", {"chunk": str}) /
+        ("exit", {"exit_code": int, "duration_ms": int}) /
+        ("error", {"message": str})。
+    """
+    if not isinstance(command, str) or not command.strip():
+        yield "error", {"message": "空命令"}
+        return
+    transformed, sudo_stdin = _transform_sudo_command(command)
+    exec_command = transformed or command
+    run_env = dict(os.environ)
+    if extra_env:
+        run_env.update({k: str(v) for k, v in extra_env.items() if v is not None})
+    started = time.monotonic()
+    yield "start", {"command_preview": _safe_command_preview(exec_command)}
+    try:
+        import subprocess as _subprocess
+        from tools.environments.local import _find_bash
+        bash = _find_bash()
+        safe_cwd = cwd or None
+        proc = _subprocess.Popen(
+            [bash, "-lc", exec_command],
+            stdin=_subprocess.PIPE if sudo_stdin is not None else None,
+            stdout=_subprocess.PIPE,
+            stderr=_subprocess.STDOUT,
+            cwd=safe_cwd,
+            env=run_env,
+            text=True,
+            errors="replace",
+        )
+        if sudo_stdin is not None:
+            try:
+                proc.stdin.write(sudo_stdin)
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass
+    except Exception as exc:
+        yield "error", {"message": f"无法启动命令: {exc}"}
+        return
+
+    deadline = time.monotonic() + max(1, int(timeout_seconds or 60))
+    exited = None
+    try:
+        for raw_line in proc.stdout:
+            if time.monotonic() > deadline:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except Exception:
+                    pass
+                yield "error", {"message": f"执行超时（{int(timeout_seconds or 60)}s）"}
+                return
+            yield "output", {"chunk": raw_line}
+    except (OSError, ValueError):
+        pass
+    try:
+        exited = proc.wait(timeout=5)
+    except Exception:
+        exited = proc.poll() or -1
+    duration_ms = int((time.monotonic() - started) * 1000)
+    yield "exit", {"exit_code": exited if exited is not None else -1,
+                   "duration_ms": duration_ms}
