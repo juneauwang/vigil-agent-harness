@@ -54,38 +54,68 @@
 adapter 预留，experimental，暂不启用）、Agent（语义层：用途/依赖/业务归属）、人工（兜底）。
 每实体带 `source` + `last_verified`，超期未验证标 `stale`——过期拓扑比没有拓扑更危险。
 
-### 2.2 Schema v0.1
+### 2.2 Schema v0.2（三层模型）
+
+拓扑是**三层模型**（OPS-DELTA #6）——层级是组织方式不是命名空间，权限矩阵按
+实体 name+env 绑定、runbook 按服务名绑定，不因分层失效：
+
+```
+第一层  topology.yaml（总览，<50 行，session 启动注入 system prompt）
+  ├─ environments（含 entry/isolation/role）
+  ├─ hosts:  [host 一行]（name / env / endpoint / role / runtime）
+  │    runtime: docker 是 host 属性（docker 不单独占层）
+  └─ cross_host: [跨 host 实体一行]（k3s 集群 / ingress 这类不服从
+       "服务挂单机"树形模型的实体）
+
+第二层  hosts/<hostname>.yaml（每 host 一个服务索引）
+  └─ services: [服务一行]（name / type / env / endpoint / detail 路径）
+       服务有独立 name + env——权限矩阵/runbook 照常按服务名绑定
+
+第三层  entities/<name>.yaml（= v0.1 的实体档案机制，原位沿用）
+  └─ 容器/依赖/端口/镜像 tag 明细（topo_query detail=True 时按需加载）
+```
+
+**查询路径**（核心契约）：system prompt 只注入第一层（总览开销恒定）；
+`topo_query` 无参返回第一层总览、`host=<name>` 展开第二层服务索引、
+`entity=<name>` 跨层名解析（先第二层服务名，再第一层 host/cross_host）、
+`detail=True` 进第三层详情。
 
 ```yaml
-# topology.yaml —— 第一层：总览，session 启动注入 system prompt，<50 行
-version: 1
-updated_at: 2026-08-06
-sources: [netbox, snipeit, agent]        # 实际启用的同步源
+# topology.yaml —— 第一层：总览（session 启动注入 system prompt，<50 行）
+version: 2
+updated_at: 2026-08-12
+sources: [terraform.tfstate, agent, manual, discovered]
 environments:
   - name: prod
     entry: "ssh user@203.0.113.10"
     isolation: strict                    # strict = 跨环境操作需审批
     role: prod                           # 见 §3 权限模型
-    core_entities: [harbor, k3s-prod, argocd]
   - name: test
     entry: "ssh test-jump"
     isolation: relaxed
     role: test
-core_entities:
-  - name: harbor
-    type: registry
-    env: prod
-    endpoint: 203.0.113.10:30443
-    owner: your-name
-    source: manual
-    last_verified: 2026-08-01
-    detail: entities/harbor.yaml         # 指向第二层
+hosts:
+  - {name: node1, env: prod, endpoint: "203.0.113.10", role: control-plane,
+     runtime: k3s, owner: your-name, source: agent, last_verified: 2026-08-08,
+     services_index: hosts/node1.yaml}
+cross_host:
+  - {name: k3s-prod, type: k8s, env: prod,
+     endpoint: "https://203.0.113.10:6443", detail: entities/k3s-prod.yaml}
 key_paths:                               # 关键链路：排障时最先查的主干
   - [ingress, gateway-svc, order-db]
 ```
 
 ```yaml
-# entities/<name>.yaml —— 第二层：单实体完整档案，按需加载（topo_query）
+# hosts/node1.yaml —— 第二层：node1 的服务索引（服务一行）
+host: node1
+env: prod
+services:
+  - {name: harbor, type: registry, env: prod, endpoint: "203.0.113.10:30443",
+     source: manual, last_verified: 2026-08-06, detail: entities/harbor.yaml}
+```
+
+```yaml
+# entities/<name>.yaml —— 第三层：单服务完整档案，按需加载（topo_query）
 name: harbor
 type: registry
 env: prod
@@ -99,8 +129,42 @@ ops:
   healthcheck: "curl -s http://localhost/api/v2.0/health"
 ```
 
-第三层（动态状态：CPU/版本/pod 数/告警）**不进文件**——desired/actual 分离，
-运行时状态由监控/k8s API 实时查，拓扑表只存"应该是什么样"。
+**Schema v0.1 兼容**（老数据不重写也能用）：`version: 1` 的扁平
+`core_entities` 走兼容路径——`load_topology` / `_all_core_entities` 内部展开
+为同一扁平实体视图，topo_query / 权限矩阵 / runbook 绑定行为不变；v0.1
+没有 host 概念，`host=` 过滤在 v0.1 下不可用（返回明确错误）。迁移不靠用户
+手动改文件。
+
+```yaml
+# topology.yaml —— schema v0.1（legacy，兼容读取）
+version: 1
+updated_at: 2026-08-06
+sources: [netbox, snipeit, agent]        # 实际启用的同步源
+environments:
+  - name: prod
+    entry: "ssh user@203.0.113.10"
+    isolation: strict
+    role: prod
+    core_entities: [harbor, k3s-prod, argocd]
+  - name: test
+    entry: "ssh test-jump"
+    isolation: relaxed
+    role: test
+core_entities:
+  - name: harbor
+    type: registry
+    env: prod
+    endpoint: 203.0.113.10:30443
+    owner: your-name
+    source: manual
+    last_verified: 2026-08-01
+    detail: entities/harbor.yaml
+key_paths:
+  - [ingress, gateway-svc, order-db]
+```
+
+动态状态（CPU/版本/pod 数/告警）**不进文件**——desired/actual 分离，运行时
+状态由监控/k8s API 实时查，拓扑表只存"应该是什么样"。
 
 ### 2.3 数据流（用户确认版）
 

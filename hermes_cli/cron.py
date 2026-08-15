@@ -63,6 +63,69 @@ def _active_cron_provider_name() -> str:
         return "builtin"
 
 
+def _read_process_environ(pid: int) -> Optional[str]:
+    """Read ``/proc/<pid>/environ`` (NUL-separated), or None when unavailable.
+
+    systemd unit 的 ``Environment=HERMES_HOME=...`` 会出现在进程环境里——
+    是区分安装归属（Vigil vs upstream Hermes）最可靠的信号。
+    """
+    path = Path(f"/proc/{pid}/environ")
+    try:
+        return path.read_bytes().decode("utf-8", "replace")
+    except (FileNotFoundError, PermissionError, OSError):
+        return None
+
+
+def _pid_belongs_to_home(pid: int, home: Path) -> bool:
+    """True when the PID is THIS installation's (``home``) gateway process.
+
+    优先级（OPS-DELTA #12 缺陷 4/5 的归属判定）：
+      1. ``/proc/<pid>/environ`` 的 ``HERMES_HOME=<home>`` 精确匹配——最可靠；
+      2. 环境读不到时回退命令行 ``--profile`` / ``HERMES_HOME=`` 匹配
+         （``gateway.status._command_line_belongs_to_profile``）；
+      3. 两者都读不到（权限/平台）→ 保留（无法判定时宁可多报，不误杀）。
+    """
+    env = _read_process_environ(pid)
+    if env is not None:
+        home_value = None
+        for line in env.split("\x00"):
+            if line.startswith("HERMES_HOME="):
+                home_value = line[len("HERMES_HOME="):]
+                break
+        if home_value:
+            try:
+                return Path(home_value).expanduser().resolve() == home
+            except Exception:
+                return False
+    try:
+        from gateway.status import (
+            _command_line_belongs_to_profile,
+            _read_process_cmdline,
+        )
+        cmdline = _read_process_cmdline(pid)
+        if cmdline:
+            return _command_line_belongs_to_profile(cmdline, home)
+    except Exception:
+        pass
+    return True
+
+
+def _vigil_owned_gateway_pids() -> List[int]:
+    """Gateway PIDs belonging to THIS installation (filtered by HERMES_HOME).
+
+    ``hermes_cli.gateway.find_gateway_pids()`` 的 systemd 服务扫描
+    （``hermes-gateway*`` 单位）不区分安装归属——upstream Hermes 的
+    ``hermes-gateway.service`` 会被当成自己的。这里逐 PID 按 HERMES_HOME /
+    --profile 过滤：upstream 一律不算，cron status 不再把别人的常驻进程当
+    自己的调度载体（假健康）。
+    """
+    from hermes_cli.gateway import find_gateway_pids
+    from hermes_constants import get_hermes_home
+
+    home = Path(get_hermes_home()).resolve()
+    return [pid for pid in find_gateway_pids() if _pid_belongs_to_home(pid, home)]
+
+
 def _warn_if_gateway_not_running() -> None:
     """Warn that scheduled jobs won't fire unless the gateway is running.
 
@@ -82,9 +145,7 @@ def _warn_if_gateway_not_running() -> None:
         if _active_cron_provider_name() != "builtin":
             return
 
-        from hermes_cli.gateway import find_gateway_pids
-
-        if find_gateway_pids():
+        if _vigil_owned_gateway_pids():
             return
     except Exception:
         # If we can't determine gateway state, stay quiet rather than nag.
@@ -217,7 +278,6 @@ def cron_runs(job_id: Optional[str] = None, limit: int = 20):
 def cron_status():
     """Show cron execution status."""
     from cron.jobs import list_jobs
-    from hermes_cli.gateway import find_gateway_pids
 
     print()
 
@@ -245,45 +305,38 @@ def cron_status():
         print()
         return
 
-    pids = find_gateway_pids()
+    pids = _vigil_owned_gateway_pids()
+    # Gateway 进程存活 ≠ 调度健康：ticker 线程可能已死或每轮失败（#32612,
+    # #32895），且 gateway PID 必须属于本安装（#12 缺陷 4/5——upstream Hermes
+    # 的 gateway 一律不算）。Gateway 状态与 Ticker 状态分开显示。
+    from cron.jobs import (
+        get_ticker_heartbeat_age,
+        get_ticker_last_error,
+        get_ticker_success_age,
+        TICKER_INTERVAL_SECONDS,
+    )
+
+    # 心跳新鲜阈值：< 2×tick 间隔视为活跃（任务契约）；明显死亡/失败沿用
+    # 既有的 ~3 个 tick 间隔 + 余量阈值。
+    FRESH_AFTER = TICKER_INTERVAL_SECONDS * 2
+    STALE_AFTER = TICKER_INTERVAL_SECONDS * 3 + 20  # = 200s at the 60s default
+    hb_age = get_ticker_heartbeat_age()
+    ok_age = get_ticker_success_age()
+
+    # Gateway 行（安装归属已过滤）
     if pids:
-        # The gateway PROCESS is alive — but the cron ticker THREAD inside it
-        # can die silently, or stay alive while every tick fails. Check both
-        # the liveness heartbeat and the last-successful-tick marker so we
-        # don't report "will fire" when the ticker is dead or failing
-        # (#32612, #32895).
-        from cron.jobs import (
-            get_ticker_heartbeat_age,
-            get_ticker_last_error,
-            get_ticker_success_age,
-            TICKER_INTERVAL_SECONDS,
-        )
+        print(color(f"  Gateway: ✓ 运行中 (PID {', '.join(map(str, pids))})", Colors.GREEN))
+    else:
+        print(color("  Gateway: ✗ 未运行（无 Vigil 归属的 gateway 进程）", Colors.RED))
 
-        # Allow ~3 missed ticker iterations (+ a little slack) before declaring
-        # trouble. Derived from the shared interval constant so this threshold
-        # tracks the ticker cadence instead of assuming a hardcoded 60s.
-        STALE_AFTER = TICKER_INTERVAL_SECONDS * 3 + 20  # = 200s at the 60s default
-        hb_age = get_ticker_heartbeat_age()
-        ok_age = get_ticker_success_age()
-
-        if hb_age is not None and hb_age > STALE_AFTER:
-            # No heartbeat at all → the ticker thread is gone.
+    # Ticker 行（真实心跳状态）
+    if hb_age is not None and hb_age < FRESH_AFTER:
+        if ok_age is not None and ok_age > STALE_AFTER:
+            # 心跳新鲜但 long 时间没有成功 tick → 每轮失败。
             print(color(
-                "⚠ Gateway is running but the cron ticker looks STALLED — "
-                f"no heartbeat for {int(hb_age)}s (expected every ~60s).",
+                "  Ticker: ⚠ 心跳新鲜但近期无成功 tick——可能每轮失败。",
                 Colors.YELLOW,
             ))
-            print(f"  PID: {', '.join(map(str, pids))}")
-            print("  Cron jobs may NOT be firing. Restart: vigil gateway restart")
-        elif hb_age is not None and ok_age is not None and ok_age > STALE_AFTER:
-            # Loop is alive (fresh heartbeat) but no tick has SUCCEEDED in a
-            # long time → ticks are failing every iteration.
-            print(color(
-                "⚠ Gateway and cron ticker are running, but no tick has "
-                f"succeeded in {int(ok_age)}s — ticks may be failing.",
-                Colors.YELLOW,
-            ))
-            print(f"  PID: {', '.join(map(str, pids))}")
             last_error = get_ticker_last_error()
             if last_error:
                 # Show WHY ticks fail — e.g. a root-rewritten jobs.json
@@ -300,12 +353,35 @@ def cron_status():
                     ))
             print("  Check the gateway log for 'Cron tick error'.")
         else:
-            print(color("✓ Gateway is running — cron jobs will fire automatically", Colors.GREEN))
-            print(f"  PID: {', '.join(map(str, pids))}")
-            if hb_age is not None:
-                print(f"  Ticker heartbeat: {int(hb_age)}s ago")
+            print(color("  Ticker: ✓ ticker 活跃，调度正常", Colors.GREEN))
     else:
-        print(color("✗ Gateway is not running — cron jobs will NOT fire", Colors.RED))
+        age_note = (
+            f"（心跳 {int(hb_age)}s 前过期，间隔 ~{TICKER_INTERVAL_SECONDS}s）"
+            if hb_age is not None
+            else "（心跳缺失）"
+        )
+        print(color(
+            f"  Ticker: ⚠ ticker 未运行{age_note}——会话未打开或 vigil-watch 未安装",
+            Colors.YELLOW,
+        ))
+        print(color(
+            "    调度依赖会话进程内的 ticker；常驻采集见 `vigil watch install`。",
+            Colors.DIM,
+        ))
+
+    # 采集常驻接管提示（best-effort；watch 未安装/不可判定时静默）。
+    try:
+        from hermes_cli.watch import watch_service_active
+        if watch_service_active() is True:
+            print(color(
+                "  （采集已由 vigil-watch 常驻接管；巡检/告警采集状态以 "
+                "`vigil watch status` 为准。）",
+                Colors.DIM,
+            ))
+    except Exception:
+        pass
+
+    if not pids:
         print()
         print("  To enable automatic execution:")
         print("    vigil gateway install    # Install as a user service")

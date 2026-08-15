@@ -42,7 +42,10 @@ def _load_ops_config() -> Dict[str, Any]:
 
 def _load_topology_l1(home: Path):
     """Return (topo_dict, topology_path); (None, path) when absent/broken."""
-    path = home / "topology.yaml"
+    # OPS-DELTA #14 迁移路径：default profile 无 topology.yaml 时回退 sibling
+    # ops profile（老用户数据铺在 <root>/profiles/ops 下）。
+    from tools.ops_data_home import resolve_ops_data_home
+    path = resolve_ops_data_home(Path(home), "topology.yaml") / "topology.yaml"
     if not path.is_file():
         return None, path
     try:
@@ -79,35 +82,69 @@ def _entity_line(entity: Dict[str, Any]) -> str:
     return f"- {', '.join(bits)}"
 
 
+def _host_line(host: Dict[str, Any]) -> str:
+    """v0.2 第一层 host 紧凑行（runtime/role 是 host 属性，docker 不单独占层）。"""
+    bits = [str(host.get("name", "?")), f"env={host.get('env', '?')}"]
+    if host.get("role"):
+        bits.append(f"role={host.get('role')}")
+    if host.get("runtime"):
+        bits.append(f"runtime={host.get('runtime')}")
+    if host.get("endpoint"):
+        bits.append(f"endpoint={host.get('endpoint')}")
+    owner = host.get("owner")
+    if owner:
+        bits.append(f"owner={owner}")
+    return f"- {', '.join(bits)}"
+
+
 def render_topo_block(home: Path, max_lines: int = 45) -> str:
     """Render the layer-1 topology overview as the TOPO system-prompt section.
 
     Returns "" when the topology table is missing/disabled so the injection
     slot stays silent (no prompt-cache churn for non-ops profiles).
+
+    OPS-DELTA #6：只注入第一层——v0.2 渲染 hosts + cross_host（服务索引在第二层，
+    不进 system prompt，token 开销恒定）；v0.1 数据走兼容路径渲染扁平
+    core_entities（走 tools.topo_tools 的 topo_first_layer 统一视图）。
     """
     topo, path = _load_topology_l1(home)
     if topo is None:
         return ""
 
+    try:
+        from tools.topo_tools import topo_first_layer
+        first = topo_first_layer(topo)
+    except Exception:
+        # topo_tools 不可用（罕见）→ 回退到原有 v0.1 直接渲染。
+        first = {
+            "environments": topo.get("environments") or [],
+            "core_entities": list(topo.get("core_entities") or []),
+            "key_paths": topo.get("key_paths") or [],
+        }
+
     lines: List[str] = ["## TOPO — 平台拓扑总览（事实层，第一层）"]
 
-    envs = topo.get("environments") or []
+    envs = first.get("environments") or []
     if envs:
         lines.append("环境:")
         lines.extend(_env_line(e) for e in envs if isinstance(e, dict))
 
-    entities = list(topo.get("core_entities") or [])
-    for env in envs:
-        if not isinstance(env, dict):
-            continue
-        for name in env.get("core_entities") or []:
-            if not any(e.get("name") == name for e in entities):
-                entities.append({"name": name, "env": env.get("name", "")})
+    hosts = first.get("hosts") or []
+    if hosts:
+        lines.append("主机:")
+        lines.extend(_host_line(h) for h in hosts if isinstance(h, dict))
+
+    cross_host = first.get("cross_host") or []
+    if cross_host:
+        lines.append("跨主机实体:")
+        lines.extend(_entity_line(e) for e in cross_host if isinstance(e, dict))
+
+    entities = first.get("core_entities") or []
     if entities:
         lines.append("核心实体:")
         lines.extend(_entity_line(e) for e in entities if isinstance(e, dict))
 
-    key_paths = topo.get("key_paths") or []
+    key_paths = first.get("key_paths") or []
     if key_paths:
         lines.append("关键链路（排障优先）:")
         for kp in key_paths:
@@ -131,8 +168,17 @@ class TopoMemoryProvider(MemoryProvider):
         return "topo"
 
     def is_available(self) -> bool:
-        return bool(_load_ops_config().get("topology", {}).get("enabled", False))
+        """数据存在性门控（与 tools/topo_tools.py 的 check_fn 同语义）。
 
+        - 显式 ``ops.topology.enabled: false`` → 关闭（向后兼容）；
+        - 缺省/显式 true → 按 topology.yaml 是否就位决定（装上即用，
+          OPS-DELTA #1/#14）。
+        """
+        ops = _load_ops_config()
+        if ops.get("topology", {}).get("enabled") is False:
+            return False
+        from hermes_constants import get_hermes_home
+        return _load_topology_l1(Path(get_hermes_home()))[0] is not None
     def initialize(self, session_id: str, **kwargs) -> None:
         home = kwargs.get("hermes_home")
         self._hermes_home = Path(home) if home else None

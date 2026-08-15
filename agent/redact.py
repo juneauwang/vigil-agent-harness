@@ -384,7 +384,7 @@ _JSON_FIELD_RE = re.compile(
 )
 
 # OPS-DELTA #35：值形态检测兜底——任意键名的 JSON 值兜底 pass。键名无法穷举
-# （组合字段名 ssh_key_0811/sudo_0811 形态），只要值本身像凭据就打码。值组
+# （组合字段名 ssh_key_YYYYMMDD/sudo_YYYYMMDD 形态），只要值本身像凭据就打码。值组
 # 要求 ≥16 字符（与 _looks_like_inline_secret 的长度门槛一致，短值不匹配，
 # 也避免在普通 JSON 上无谓扫描）。
 _JSON_VALUE_SHAPE_RE = re.compile(

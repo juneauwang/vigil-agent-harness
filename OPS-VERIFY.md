@@ -12,7 +12,8 @@ source .venv/bin/activate
 vigil ops-init                        # 默认写到 ~/.hermes/profiles/ops（旧入口：python3 scripts/ops_init.py 同效）
 ```
 
-输出应包含：创建 profile、写入 config.yaml、写入 topology.yaml、写入 entities/（8 个实体档案）、
+输出应包含：创建 profile、写入 config.yaml、写入 topology.yaml（schema v0.2 第一层：
+hosts + cross_host）、写入 hosts/（第二层服务索引）、写入 entities/（第三层实体档案）、
 写入 runbooks/（3 个 runbook）。
 想装到别处用 `--root <path>`；初始权限环境默认 `test`（安全默认），可用 `--env prod` 覆盖。
 
@@ -30,12 +31,15 @@ hermes -p ops chat
 
 第一句话：
 
-> TOPO 段里列出了哪些核心实体和关键链路？逐条念给我。
+> TOPO 段里列出了哪些主机、跨主机实体和关键链路？逐条念给我。
 
-**预期**：agent 报出 8 个核心实体（harbor / k3s-prod / argocd / gateway-svc / order-db /
-postgres / ingress / test-web），两个环境（prod=strict / test=relaxed），关键链路
+**预期**：agent 报出第一层总览——主机（node1 / node2 / test-host，含 runtime）、
+跨主机实体（k3s-prod / ingress），两个环境（prod=strict / test=relaxed），关键链路
 `ingress → gateway-svc → order-db`，并复述行为约束「执行任何运维操作前，先 topo_query
 确认目标实体的身份和环境」。
+
+> 第二层服务（harbor / gateway-svc / order-db / postgres …）**不在** TOPO 段——
+> 总览只注入第一层（token 成本恒定），服务走 topo_query 展开。
 
 可选硬校验（不依赖 LLM，直接渲染 TOPO 段）：
 
@@ -52,7 +56,7 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
 
 在同一个会话里依次说：
 
-1. **按实体查 + 第二层**
+1. **按实体查 + 第三层详情**
    > 用 topo_query 查一下 harbor，detail=True，告诉我它的版本、存储位置、依赖和健康检查命令。
 
    **预期**：返回 harbor 档案 JSON——`attrs.version=v2.11`、`attrs.storage=/data/harbor`、
@@ -62,6 +66,17 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
    > 用 topo_query 列出 prod 环境所有 db 类型实体。
 
    **预期**：返回 `order-db` 和 `postgres` 两条。
+
+3. **按 host 展开第二层服务索引（v0.2）**
+   > 用 topo_query 查一下 host=node1，列出它的服务。
+
+   **预期**：返回 node1 主机行 + `services` 列表（harbor / argocd / order-db / postgres）。
+
+4. **跨层名解析**
+   > 用 topo_query 查一下 entity=node1（第一层 host 命中应附带服务列表），再查 entity=harbor。
+
+   **预期**：`entity=node1` 返回 node1 + 其 services 列表；`entity=harbor` 返回
+   第二层服务行 + detail 路径。
 
 可再加一条负例：查不存在的实体（如 `xxx`）应报「拓扑表中不存在实体」，而不是瞎编。
 

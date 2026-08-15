@@ -195,10 +195,13 @@ def resolve_command_target(command: str) -> Optional[Dict[str, Any]]:
     except Exception as exc:
         logger.debug("ops_target: topo_tools unavailable: %s", exc)
         return None
-    topo = load_topology()
+    home = _hermes_home()
+    topo = load_topology(home)
     if not topo:
         return None
-    entities = _all_core_entities(topo)
+    # OPS-DELTA #6：v0.2 下扁平视图含第二层服务（服务经 "服务 → 所属 host →
+    # env" 链路继承 env）——ssh/scp 命中服务实体时同样能解析目标级 env。
+    entities = _all_core_entities(topo, home)
     if not entities:
         return None
 

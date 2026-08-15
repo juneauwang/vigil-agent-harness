@@ -308,6 +308,29 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "prom": {
+        "description": (
+            "Prometheus 监控（只读，OPS-DELTA #10）：prom_query 做 PromQL 查询"
+            "（即时/range，紧凑结构化摘要），alert_query 查 Alertmanager 活跃告警。"
+            "工具按配置门控（ops.prometheus.endpoint 存在才可用，未配置零 footprint）；"
+            "不默认注册到核心工具集，ops profile 显式启用。"
+        ),
+        "tools": ["prom_query", "alert_query"],
+        "includes": [],
+    },
+
+    "watch": {
+        "description": (
+            "值守层第二层（OPS-DELTA #9）：watch_digest 读 vigil-watch 常驻采集"
+            "服务写入的 inbox（~/.vigil/watch/inbox/），返回未处理告警摘要 + 拓扑"
+            "关联（instance → 实体/env），agent 据此分级/播报/匹配 runbook。"
+            "纯数据只读；ops.watch.enabled: false 时工具不出现；不默认注册，"
+            "与 prom 同策略（用户显式启用 toolset）。"
+        ),
+        "tools": ["watch_digest"],
+        "includes": [],
+    },
+
     "kanban": {
         "description": (
             "Kanban multi-agent coordination — only active when the agent "
