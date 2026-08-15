@@ -1,56 +1,47 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
-import {
-  ArrowRight,
-  Boxes,
-  ListChecks,
-  Server,
-  TriangleAlert,
-  X,
-} from "lucide-react";
-import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import { Card, CardContent } from "@nous-research/ui/ui/components/card";
+import { ArrowRight, Boxes, ListChecks, Server, TriangleAlert, X } from "lucide-react";
 import { api } from "@/lib/api";
-import type { TopologyView, RunbookSummary } from "@/lib/api";
-import { TopologyMiniGraph } from "@/components/ops/TopologyMiniGraph";
-import { EmptyState } from "@/components/ops/EmptyState";
-import { cn } from "@/lib/utils";
+import type { RunbookSummary, TopologyView } from "@/lib/api";
+import { TopologyMiniGraph } from "@/components/TopologyMiniGraph";
+import { EmptyState } from "@/components/EmptyState";
+import { cn } from "@/lib/ops";
 
+/** 4 指标卡（Nodes sky / Services emerald / Runbooks amber / Incidents rose）。 */
 function MetricCard({
-  iconClass,
+  tone,
   icon,
   label,
   value,
   sub,
 }: {
-  iconClass: string;
+  tone: "sky" | "emerald" | "amber" | "rose";
   icon: React.ReactNode;
   label: string;
   value: React.ReactNode;
   sub?: React.ReactNode;
 }) {
+  const tones: Record<string, string> = {
+    sky: "bg-sky-100 text-sky-600 dark:bg-sky-500/15 dark:text-sky-400",
+    emerald: "bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400",
+    amber: "bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400",
+    rose: "bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400",
+  };
   return (
-    <Card className="border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
-      <CardContent className="flex items-center gap-3 p-4">
-        <div
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-md",
-            iconClass,
-          )}
-        >
-          {icon}
-        </div>
-        <div className="min-w-0">
-          <div className="text-sm text-muted-foreground">{label}</div>
-          <div className="text-xl font-semibold leading-tight">{value}</div>
-          {sub && <div className="truncate text-[11px] text-muted-foreground/80">{sub}</div>}
-        </div>
-      </CardContent>
-    </Card>
+    <div className="vigil-card flex items-center gap-3 p-4">
+      <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-md", tones[tone])}>
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="text-sm text-[var(--vigil-muted)]">{label}</div>
+        <div className="text-xl font-semibold leading-tight">{value}</div>
+        {sub && <div className="truncate text-[11px] text-[var(--vigil-muted)] opacity-80">{sub}</div>}
+      </div>
+    </div>
   );
 }
 
-/** Runbook Queue 悬浮抽屉（可关闭，行点击跳 Runbook 详情）。 */
+/** Runbook Queue 悬浮抽屉（可关闭，行点击跳 Runbooks?name=）。 */
 function RunbookQueue({
   runbooks,
   onClose,
@@ -61,15 +52,15 @@ function RunbookQueue({
   onSelect: (name: string) => void;
 }) {
   return (
-    <Card className="relative w-full shrink-0 border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)] lg:w-[320px]">
-      <CardContent className="p-4">
+    <div className="vigil-card relative w-full shrink-0 lg:w-[320px]">
+      <div className="p-4">
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-sm font-medium">Runbook Queue</h3>
           <button
             type="button"
             onClick={onClose}
             aria-label="关闭 Runbook Queue"
-            className="text-muted-foreground hover:text-foreground"
+            className="text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
           >
             <X className="size-4" />
           </button>
@@ -82,31 +73,25 @@ function RunbookQueue({
             className="py-8"
           />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full border-collapse text-sm">
+          <div className="scroll-thin overflow-x-auto">
+            <table className="vigil-table">
               <thead>
-                <tr className="border-b border-border text-left text-[11px] text-muted-foreground">
-                  <th className="py-1.5 pr-2 font-medium">Name</th>
-                  <th className="py-1.5 pr-2 font-medium">Type</th>
-                  <th className="py-1.5 pr-2 font-medium">Status</th>
-                  <th className="py-1.5 text-right font-medium">更新</th>
+                <tr>
+                  <th>Name</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th className="text-right">更新</th>
                 </tr>
               </thead>
               <tbody>
                 {runbooks.map((rb) => (
-                  <tr
-                    key={rb.name}
-                    onClick={() => onSelect(rb.name)}
-                    className="cursor-pointer border-b border-border/60 text-xs last:border-b-0 hover:bg-muted/40"
-                  >
-                    <td className="max-w-[130px] truncate py-1.5 pr-2 font-medium" title={rb.title}>
+                  <tr key={rb.name} onClick={() => onSelect(rb.name)}>
+                    <td className="max-w-[130px] truncate font-medium" title={rb.title}>
                       {rb.title}
                     </td>
-                    <td className="py-1.5 pr-2 text-muted-foreground">{rb.kind ?? "runbook"}</td>
-                    <td className="py-1.5 pr-2 text-muted-foreground">
-                      {rb.checklist ? "checklist" : "-"}
-                    </td>
-                    <td className="py-1.5 text-right text-muted-foreground">
+                    <td className="text-[var(--vigil-muted)]">{rb.kind ?? "runbook"}</td>
+                    <td className="text-[var(--vigil-muted)]">{rb.checklist ? "checklist" : "-"}</td>
+                    <td className="text-right text-[var(--vigil-muted)]">
                       {rb.updated_at ? String(rb.updated_at).slice(0, 10) : "-"}
                     </td>
                   </tr>
@@ -115,8 +100,8 @@ function RunbookQueue({
             </table>
           </div>
         )}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -126,7 +111,6 @@ export default function OverviewPage() {
   const [runbooks, setRunbooks] = useState<RunbookSummary[]>([]);
   const [queueOpen, setQueueOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
@@ -142,9 +126,6 @@ export default function OverviewPage() {
       })
       .catch((e: unknown) => {
         if (alive) setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
       });
     return () => {
       alive = false;
@@ -159,83 +140,50 @@ export default function OverviewPage() {
     };
   }, [view]);
 
-  const onSelectRunbook = (name: string) => navigate(`/runbooks?name=${encodeURIComponent(name)}`);
-
-  if (loading) {
-    return (
-      <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Spinner />
-        <span>加载概览…</span>
-      </div>
-    );
-  }
+  const onSelectRunbook = (name: string) =>
+    navigate(`/runbooks?name=${encodeURIComponent(name)}`);
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
       {error && !view && (
-        <Card className="border-dashed">
-          <CardContent className="p-6 text-center text-sm text-muted-foreground">{error}</CardContent>
-        </Card>
+        <div className="vigil-card border-dashed p-6 text-center text-sm text-[var(--vigil-muted)]">
+          {error}
+        </div>
       )}
 
-      {/* 4 指标卡行（Nodes sky / Services emerald / Runbooks amber / Incidents rose） */}
+      {/* 4 指标卡行 */}
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        <MetricCard
-          iconClass="bg-sky-100 text-sky-600 dark:bg-sky-500/15 dark:text-sky-400"
-          icon={<Boxes className="size-4" />}
-          label="Nodes"
-          value={stats.nodes}
-          sub={view ? `clusters ${view.clusters.length}` : undefined}
-        />
-        <MetricCard
-          iconClass="bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400"
-          icon={<Server className="size-4" />}
-          label="Services"
-          value={stats.services}
-        />
-        <MetricCard
-          iconClass="bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400"
-          icon={<ListChecks className="size-4" />}
-          label="Runbooks"
-          value={runbooks.length}
-          sub="剧本库"
-        />
-        <MetricCard
-          iconClass="bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400"
-          icon={<TriangleAlert className="size-4" />}
-          label="Incidents"
-          value={0}
-          sub="事件 API 未就绪"
-        />
+        <MetricCard tone="sky" icon={<Boxes className="size-4" />} label="Nodes" value={stats.nodes} sub={view ? `clusters ${view.clusters.length}` : undefined} />
+        <MetricCard tone="emerald" icon={<Server className="size-4" />} label="Services" value={stats.services} />
+        <MetricCard tone="amber" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub="剧本库" />
+        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={0} sub="事件 API 未就绪" />
       </div>
 
       {/* 中：Topology Graph 通栏 + Runbook Queue 抽屉 */}
       <div className="flex min-h-0 flex-1 flex-col gap-4 xl:flex-row">
-        <Card className="min-h-[240px] flex-1 border-border bg-card shadow-[0_1px_3px_rgba(0,0,0,0.06)]">
-          <CardContent className="flex h-full flex-col p-4">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-medium">Topology Graph</h3>
-              <button
-                type="button"
-                onClick={() => navigate("/topology")}
-                className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-              >
-                打开资产拓扑 <ArrowRight className="size-3" />
-              </button>
+        <div className="vigil-card flex min-h-[240px] flex-1 flex-col p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-medium">Topology Graph</h3>
+            <button
+              type="button"
+              onClick={() => navigate("/topology")}
+              className="vigil-link inline-flex items-center gap-1 text-xs"
+            >
+              打开资产拓扑 <ArrowRight className="size-3" />
+            </button>
+          </div>
+          {view ? (
+            <div className="min-h-0 flex-1">
+              <TopologyMiniGraph view={view} />
             </div>
-            {view ? (
-              <div className="min-h-0 flex-1">
-                <TopologyMiniGraph view={view} />
-              </div>
-            ) : (
-              <EmptyState
-                title="无拓扑数据"
-                hint="先运行 vigil topo-discover 发现主机"
-                className="min-h-[180px] flex-1"
-              />
-            )}
-          </CardContent>
-        </Card>
+          ) : (
+            <EmptyState
+              title="无拓扑数据"
+              hint="先运行 vigil topo-discover 发现主机"
+              className="min-h-[180px] flex-1"
+            />
+          )}
+        </div>
 
         {queueOpen && (
           <RunbookQueue

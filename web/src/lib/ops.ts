@@ -1,9 +1,11 @@
+/** 轻量 className 合并（替代 Hermes 的 @/lib/utils cn）。 */
+export function cn(...parts: Array<string | false | null | undefined>): string {
+  return parts.filter(Boolean).join(" ");
+}
+
 /**
- * Ops console shared logic — status tone mapping + filters (方向 1).
- *
- * Pure functions so the frontend can unit-test the mapping without a
- * server. Tone colors live in the theme (success/warning/destructive) plus
- * a gray for offline/unknown.
+ * Vigil Console 共享逻辑——状态色调映射 + 筛选器 + YAML 预览 + 运行时长。
+ * 纯函数，前端单测覆盖。
  */
 
 export type StatusTone = "ok" | "warn" | "error" | "offline";
@@ -23,12 +25,13 @@ export function statusTone(status?: string): StatusTone {
 }
 
 export type StatusFilterId = "all" | StatusTone;
+
 export interface StatusFilter {
   id: StatusFilterId;
   label: string;
 }
 
-/** 状态筛选器（拓扑页/概览页共用）：全部 / 正常 / 告警 / 故障 / 离线。 */
+/** 状态筛选器：全部 / 正常 / 告警 / 故障 / 离线。 */
 export const STATUS_FILTERS: StatusFilter[] = [
   { id: "all", label: "全部" },
   { id: "ok", label: "正常" },
@@ -42,12 +45,20 @@ export function statusMatchesFilter(status: string | undefined, filterId: Status
   return statusTone(status) === filterId;
 }
 
-/** Overview stat aggregation from the topology view. */
+/** 搜索匹配：name / type / env 子串（不区分大小写）。 */
+export function matchesSearch(
+  card: { name: string; type?: string; env?: string },
+  q: string,
+): boolean {
+  if (!q) return true;
+  const needle = q.trim().toLowerCase();
+  if (!needle) return true;
+  return `${card.name} ${card.type ?? ""} ${card.env ?? ""}`.toLowerCase().includes(needle);
+}
+
+/** Overview 指标聚合。 */
 export function aggregateTopologyStats(
-  view: {
-    clusters: unknown[];
-    hosts: Array<{ services: unknown[] }>;
-  },
+  view: { clusters: unknown[]; hosts: Array<{ services: unknown[] }> },
 ): { clusters: number; hosts: number; services: number } {
   return {
     clusters: view.clusters.length,
@@ -56,25 +67,51 @@ export function aggregateTopologyStats(
   };
 }
 
-/** Status pills for the high-density table / stat cards. */
+/** 状态 pill 色类（CSS 变量在 index.css）。 */
 export function statusPillClass(status?: string): string {
   switch (statusTone(status)) {
     case "ok":
-      return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400";
+      return "pill-ok";
     case "warn":
-      return "bg-amber-500/15 text-amber-600 dark:text-amber-400";
+      return "pill-warn";
     case "error":
-      return "bg-red-500/15 text-red-600 dark:text-red-400";
+      return "pill-error";
     default:
-      return "bg-slate-500/15 text-slate-500 dark:text-slate-400";
+      return "pill-offline";
+  }
+}
+
+export function statusDotClass(status?: string): string {
+  switch (statusTone(status)) {
+    case "ok":
+      return "dot-ok";
+    case "warn":
+      return "dot-warn";
+    case "error":
+      return "dot-error";
+    default:
+      return "dot-offline";
+  }
+}
+
+export function envClass(env?: string): string {
+  switch ((env ?? "").trim().toLowerCase()) {
+    case "prod":
+      return "env-prod";
+    case "test":
+      return "env-test";
+    case "dev":
+      return "env-dev";
+    case "local":
+      return "env-local";
+    default:
+      return "env-other";
   }
 }
 
 function yamlScalar(v: unknown): string {
   if (v === null || v === undefined) return "null";
   if (typeof v === "string") {
-    // Plain-scalar-safe characters only (no `: ` / `#` / quotes); anything
-    // else (e.g. "a: b") gets JSON-quoted so the preview stays valid YAML.
     return /^[\w.\-/@[\] \u4e00-\u9fff]+$/.test(v) && !/^[\s\-?]/.test(v)
       ? v
       : JSON.stringify(v);
@@ -82,14 +119,7 @@ function yamlScalar(v: unknown): string {
   return String(v);
 }
 
-/**
- * Minimal YAML-flavoured serialization for the runbook detail preview.
- *
- * The server already credential-redacts the payload (paths / keys / URL
- * userinfo masked) — this only re-serializes the sanitized dict so users
- * can read the runbook "as YAML" without a raw-file endpoint. Not a full
- * YAML emitter: enough for the v0.1 runbook shape (scalars + lists).
- */
+/** Minimal YAML-flavoured serialization for the runbook preview (redacted data). */
 export function yamlPreview(value: unknown, indent = 0): string {
   const pad = "  ".repeat(indent);
   if (Array.isArray(value)) {
@@ -131,7 +161,7 @@ export function yamlPreview(value: unknown, indent = 0): string {
   return `${pad}${yamlScalar(value)}`;
 }
 
-/** 运行时长格式化：秒 → "12h" / "3d 4h"（顶部栏徽标用）。 */
+/** 运行时长格式化：秒 → "12h" / "3d 4h"。 */
 export function formatUptime(seconds: number | undefined | null): string {
   if (seconds === undefined || seconds === null || !Number.isFinite(seconds) || seconds < 0) {
     return "-";

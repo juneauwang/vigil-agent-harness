@@ -1,8 +1,9 @@
-"""方向 1 主题同步验收：Vigil Console 默认主题 + 前后端主题名单不漂移。
+"""UI 壳第四批：新前端完全自绘（无 Hermes 主题系统），``dashboard.theme`` 保持
+API 兼容——后端 ``_BUILTIN_DASHBOARD_THEMES`` 与 ``GET /api/dashboard/themes``
+仍返回正常结构（新前端不使用主题机，仅保证不破坏既有 API）。
 
 覆盖：``_BUILTIN_DASHBOARD_THEMES`` 含 vigil-console / vigil-console-dark 且
-旧默认改名（Vigil Blue-Grey Legacy）；前端 presets.ts 的内建主题名与后端名单
-一致（解析 presets.ts 源码）；``dashboard.theme`` 配置缺省为 vigil-console；
+旧默认改名（Vigil Blue-Grey Legacy）；``dashboard.theme`` 配置缺省 vigil-console；
 ``GET /api/dashboard/themes`` 返回新主题并默认激活 vigil-console。
 """
 
@@ -21,19 +22,6 @@ def _backend_theme_names() -> set[str]:
     return {t["name"] for t in _BUILTIN_DASHBOARD_THEMES}
 
 
-def _frontend_theme_names() -> set[str]:
-    """从 presets.ts 源码解析内建主题 name 列表（防止前后端名单漂移）。
-
-    BUILTIN_THEMES 的键既有未加引号的（default: defaultTheme）也有加引号的
-    （"vigil-console": vigilConsoleTheme），两种形态都解析。
-    """
-    src = (REPO_ROOT / "web" / "src" / "themes" / "presets.ts").read_text(encoding="utf-8")
-    block = src.split("BUILTIN_THEMES", 1)[1]
-    names = re.findall(
-        r'^\s{2}(?:"([a-z0-9-]+)"|([a-z0-9-]+)):', block, re.MULTILINE)
-    return {a or b for a, b in names}
-
-
 class TestBackendThemeList:
     def test_vigil_console_is_default_and_listed(self):
         names = _backend_theme_names()
@@ -45,13 +33,12 @@ class TestBackendThemeList:
         default_entry = next(t for t in _BUILTIN_DASHBOARD_THEMES if t["name"] == "default")
         assert "Legacy" in default_entry["label"]
 
-    def test_frontend_and_backend_theme_names_in_sync(self):
-        backend = _backend_theme_names()
-        frontend = _frontend_theme_names()
-        # 前端每个内建主题都必须在后端名单里（后端 label/description 由
-        # /api/dashboard/themes 下发）；后端名单不应有前端缺失的项。
-        assert frontend <= backend, f"前端缺失于后端: {frontend - backend}"
-        assert backend <= frontend, f"后端缺失于前端: {backend - frontend}"
+    def test_theme_list_is_api_compatible(self):
+        """第四批新前端无主题注册表；后端名单仅作 API 兼容保留（结构正常）。"""
+        names = _backend_theme_names()
+        assert names  # 非空
+        assert "vigil-console" in names
+        assert "default" in names
 
 
 class TestConfigDefault:

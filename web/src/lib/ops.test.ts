@@ -4,6 +4,7 @@ import {
   STATUS_FILTERS,
   aggregateTopologyStats,
   formatUptime,
+  matchesSearch,
   statusMatchesFilter,
   statusTone,
   yamlPreview,
@@ -48,10 +49,21 @@ describe("statusMatchesFilter", () => {
 });
 
 describe("STATUS_FILTERS", () => {
-  it("exposes the five-direction filters", () => {
+  it("exposes the five filters", () => {
     expect(STATUS_FILTERS.map((f) => f.id)).toEqual([
       "all", "ok", "warn", "error", "offline",
     ]);
+  });
+});
+
+describe("matchesSearch", () => {
+  it("matches name / type / env case-insensitively", () => {
+    const card = { name: "node1", type: "k8s", env: "prod" };
+    expect(matchesSearch(card, "node")).toBe(true);
+    expect(matchesSearch(card, "K8S")).toBe(true);
+    expect(matchesSearch(card, "prod")).toBe(true);
+    expect(matchesSearch(card, "nope")).toBe(false);
+    expect(matchesSearch(card, "")).toBe(true);
   });
 });
 

@@ -1,17 +1,14 @@
 import { History } from "lucide-react";
-import { EmptyState } from "@/components/ops/EmptyState";
+import { EmptyState } from "@/components/EmptyState";
 
-/**
- * Audit 页 —— 无数据源（审计日志来自执行/会话核心，Codex 批次落地）。
- * 空态占位，不造假数据；与底部 Agent Terminal 共用同一事件流（WS 预留）。
- */
+/** Audit —— 无数据源（审计日志来自执行/会话核心），空态占位 + WS 预留。 */
 export default function AuditPage() {
   return (
-    <div className="mx-auto w-full max-w-5xl p-4 lg:p-6">
+    <div className="mx-auto w-full max-w-5xl">
       <div className="mb-4 flex items-center gap-2">
-        <History className="size-5 text-muted-foreground" />
+        <History className="size-5 text-[var(--vigil-muted)]" />
         <h1 className="text-lg font-semibold">Audit</h1>
-        <span className="text-xs text-muted-foreground">· 审计日志</span>
+        <span className="text-xs text-[var(--vigil-muted)]">· 审计日志</span>
       </div>
       <EmptyState
         icon={<History className="size-6" />}

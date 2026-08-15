@@ -1,255 +1,252 @@
 @import 'tailwindcss';
-/* `fonts.css` must come BEFORE `globals.css`: as of @nous-research/ui 0.14.x,
-   `globals.css` only declares the `--font-*` CSS variables (Collapse, Rules
-   Compressed/Expanded, Mondwest). The `@font-face` registrations live in
-   `fonts.css`, so without this import the DS variables resolve to font
-   families the browser never loads and components fall back to a system
-   stack (Tabs, Segmented, Typography, Buttons, etc. all look unstyled). */
-@import '@nous-research/ui/styles/fonts.css';
-@import '@nous-research/ui/styles/globals.css';
-
-/* Scan the published design-system bundle so its utility classes survive
-   Tailwind's JIT purge. */
-@source '../node_modules/@nous-research/ui/dist';
 
 /* ------------------------------------------------------------------ */
-/* JetBrains Mono — bundled for the embedded TUI (/chat tab).          */
-/* Gives the terminal a proper monospace font even on systems where    */
-/* the user doesn't have one installed locally; xterm.js picks it up   */
-/* via ChatPage's `fontFamily` option.                                 */
-/* Apache-2.0.                                                         */
+/* Vigil Console —— 完全自有的设计系统（豆包 HTML 为唯一基准）            */
+/* 不复用 @nous-research/ui / Hermes 主题系统；字体本地化（无 CDN）。      */
 /* ------------------------------------------------------------------ */
 
+/* 本地字体（web/public/fonts/，禁止 Google Fonts CDN） */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/Inter-500.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('/fonts/Inter-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('/fonts/Inter-700.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: italic;
+  font-weight: 400;
+  font-display: swap;
+  src: url('/fonts/Inter-400-italic.woff2') format('woff2');
+}
 @font-face {
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
-  src: url('/fonts-terminal/JetBrainsMono-Regular.woff2') format('woff2');
+  src: url('/fonts/JetBrainsMono-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('/fonts/JetBrainsMono-500.woff2') format('woff2');
 }
 @font-face {
   font-family: 'JetBrains Mono';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
-  src: url('/fonts-terminal/JetBrainsMono-Bold.woff2') format('woff2');
-}
-@font-face {
-  font-family: 'JetBrains Mono';
-  font-style: italic;
-  font-weight: 400;
-  font-display: swap;
-  src: url('/fonts-terminal/JetBrainsMono-Italic.woff2') format('woff2');
+  src: url('/fonts/JetBrainsMono-700.woff2') format('woff2');
 }
 
 /* ------------------------------------------------------------------ */
-/* Vigil — Nous DS with the LENS_0 (Vigil slate) palette applied
-   statically as the default dashboard theme. */
+/* 豆包色值（浅色默认 / 暗色变体 #0f1c2d 系）                            */
 /* ------------------------------------------------------------------ */
-
 :root {
-  /* LENS_0 — from design-language/src/ui/components/overlays/index.tsx.
-     These are the defaults for the `default` (Vigil slate) dashboard theme;
-     ThemeProvider rewrites them as inline styles when a user switches themes. */
-  --foreground: color-mix(in srgb, #ffffff 0%, transparent);
-  --foreground-base: #ffffff;
-  --foreground-alpha: 0;
-  --midground: color-mix(in srgb, #ffe6cb 100%, transparent);
-  --midground-base: #ffe6cb;
-  --midground-alpha: 1;
-  --background: color-mix(in srgb, #041c1c 100%, transparent);
-  --background-base: #041c1c;
-  --background-alpha: 1;
-
-  /* Typography tokens — rewritten by ThemeProvider. Defaults match the
-     system stack so themes that don't override look native. */
-  --theme-font-sans: system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --theme-font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo,
-    Consolas, monospace;
-  --theme-font-display: var(--theme-font-sans);
-  --theme-base-size: 15px;
-  --theme-line-height: 1.55;
-  --theme-letter-spacing: 0;
-
-  /* Layout tokens. */
-  --radius: 0.5rem;
-  --theme-radius: 0.5rem;
-  --theme-spacing-mul: 1;
-  --theme-density: comfortable;
-
-  /* Data-series accents — consumed by Analytics + Models pages for the
-     input-vs-output token visualisations (chart bars, table values,
-     legend swatches). Defaults are tuned for the Vigil-slate LENS_0
-     look: cream input + emerald-400 output read as warm/cool against
-     the dark canvas. Themes override via ThemeProvider, which emits
-     these as `--series-input-token` / `--series-output-token`. */
-  --series-input-token: #ffe6cb;
-  --series-output-token: #34d399;
+  --vigil-bg: #f6f8fa;
+  --vigil-primary: #2563eb;
+  --vigil-dark: #0f1c2d;
+  --vigil-card: #ffffff;
+  --vigil-border: #e1e5eb;
+  --vigil-text: #1f2937;
+  --vigil-text-secondary: #4b5563;
+  --vigil-muted: #6b7280;
+  --vigil-muted-bg: #f1f3f6;
+  --vigil-accent-bg: #e8effd;
+  --vigil-accent-text: #1d4ed8;
+  --vigil-ok: #22c55e;
+  --vigil-warn: #f59e0b;
+  --vigil-error: #ef4444;
+  --vigil-offline: #6b7280;
+  --vigil-terminal-bg: #0f1c2d;
+  --vigil-terminal-text: #d7e0ea;
+  --vigil-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
 }
 
-/* Theme tokens cascade into the document root so every descendant inherits
-   the font stack, base size, and letter spacing without explicit calls. */
-html {
-  font-family: var(--theme-font-sans);
-  font-size: var(--theme-base-size);
-  line-height: var(--theme-line-height);
-  letter-spacing: var(--theme-letter-spacing);
-  height: 100dvh;
-  max-height: 100dvh;
-  overflow: hidden;
+[data-theme='dark'] {
+  --vigil-bg: #0f1c2d;
+  --vigil-primary: #3b82f6;
+  --vigil-dark: #0a1524;
+  --vigil-card: #16263a;
+  --vigil-border: #24344a;
+  --vigil-text: #e5e7eb;
+  --vigil-text-secondary: #aab6c2;
+  --vigil-muted: #9aa9b8;
+  --vigil-muted-bg: #1c2e44;
+  --vigil-accent-bg: #1c3a5f;
+  --vigil-accent-text: #93c5fd;
+  --vigil-terminal-bg: #0a1524;
+  --vigil-terminal-text: #c9d6e2;
+  --vigil-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
 
 body {
-  font-family: var(--theme-font-sans);
-  min-height: 0;
-  height: 100%;
   margin: 0;
-  overflow: hidden;
+  background: var(--vigil-bg);
+  color: var(--vigil-text);
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-code, kbd, pre, samp, .font-mono, .font-mono-ui {
-  font-family: var(--theme-font-mono);
+.font-mono, code, pre, kbd {
+  font-family: 'JetBrains Mono', ui-monospace, Menlo, Consolas, monospace;
 }
 
-/* Density: scale the shadcn spacing utilities via a multiplier. The DS
-   components use `p-N` / `gap-N` / `space-*` classes which resolve against
-   Tailwind's spacing scale; multiplying `--spacing` at :root scales them
-   all proportionally in Tailwind v4. */
-@theme inline {
-  --spacing: calc(0.25rem * var(--theme-spacing-mul, 1));
-  --font-sans: var(--theme-font-sans);
-  --font-mono: var(--theme-font-mono);
+/* ------------------------------------------------------------------ */
+/* 组件类（豆包 HTML 风格：1px 细边框 / 圆角 6px / 仅悬浮抽屉极淡阴影）    */
+/* ------------------------------------------------------------------ */
+.vigil-card {
+  background: var(--vigil-card);
+  border: 1px solid var(--vigil-border);
+  border-radius: 6px;
+  box-shadow: var(--vigil-shadow);
 }
 
-#root {
-  min-height: 0;
-  height: 100%;
-  max-height: 100%;
-  overflow: hidden;
+.vigil-input {
+  width: 100%;
+  height: 32px;
+  border: 1px solid var(--vigil-border);
+  border-radius: 6px;
+  background: var(--vigil-muted-bg);
+  color: var(--vigil-text);
+  padding: 0 10px;
+  font-size: 14px;
+  outline: none;
+  font-family: inherit;
+}
+.vigil-input:focus { border-color: var(--vigil-primary); }
+
+.vigil-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--vigil-border);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  color: var(--vigil-muted);
+  background: transparent;
 }
 
-@media (max-width: 768px) {
-  html,
-  body,
-  #root {
-    min-height: 100dvh;
-    height: auto;
-    max-height: none;
-    overflow-x: hidden;
-    overflow-y: auto;
-  }
+.vigil-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  background: transparent;
+  color: var(--vigil-text-secondary);
 }
-
-/* Nousnet's hermes-agent layout bumps `small` and `code` to readable
-   dashboard sizes. Keep in sync. */
-small { font-size: 1.0625rem; }
-code { font-size: 0.875rem; }
-
-/* Shadcn-compat tokens.
-   The dashboard's page code predates the Nous DS and uses shadcn-style
-   utility classes (bg-card, text-muted-foreground, border-border, etc.)
-   extensively. Rather than rewrite every call site, we expose those
-   tokens on top of the Nous palette so classes continue to resolve. */
-@theme inline {
-  /* Remap foreground to midground so `text-foreground` / `bg-foreground`
-     stay visible — in LENS_0, `--foreground` itself has alpha 0. */
-  --color-foreground: var(--midground);
-
-  --color-card: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
-  --color-card-foreground: var(--midground);
-  --color-primary: var(--midground);
-  --color-primary-foreground: var(--background-base);
-  --color-secondary: color-mix(in srgb, var(--midground-base) 6%, var(--background-base));
-  --color-secondary-foreground: var(--midground);
-  --color-muted: color-mix(in srgb, var(--midground-base) 8%, var(--background-base));
-  /* Routes the shadcn `muted-foreground` slot through the DS semantic
-     text-secondary token (defaults to midground 80%) so legacy call
-     sites that use `text-muted-foreground` get a readable color
-     instead of the old 55%-transparent default. */
-  --color-muted-foreground: var(--color-text-secondary);
-  --color-accent: color-mix(in srgb, var(--midground-base) 10%, var(--background-base));
-  --color-accent-foreground: var(--midground);
-  --color-destructive: #fb2c36;
-  --color-destructive-foreground: #ffffff;
-  --color-success: #4ade80;
-  --color-warning: #ffbd38;
-  --color-border: color-mix(in srgb, var(--midground-base) 15%, transparent);
-  --color-input: color-mix(in srgb, var(--midground-base) 15%, transparent);
-  --color-ring: var(--midground);
-  --color-popover: color-mix(in srgb, var(--midground-base) 4%, var(--background-base));
-  --color-popover-foreground: var(--midground);
-
-  --radius-sm: calc(var(--theme-radius) - 4px);
-  --radius-md: calc(var(--theme-radius) - 2px);
-  --radius-lg: var(--theme-radius);
-  --radius-xl: calc(var(--theme-radius) + 4px);
+.vigil-btn:hover { background: var(--vigil-muted-bg); }
+.vigil-btn-primary {
+  background: var(--vigil-primary);
+  color: #fff;
 }
+.vigil-btn-primary:hover { opacity: 0.9; background: var(--vigil-primary); }
 
+.vigil-link {
+  color: var(--vigil-primary);
+  cursor: pointer;
+  background: none;
+  border: none;
+  padding: 0;
+  font-size: inherit;
+  font-family: inherit;
+}
+.vigil-link:hover { text-decoration: underline; }
 
-/* Collapsed sidebar tooltip entrance — skipped when moving between items. */
-@keyframes sidebar-tooltip-in {
-  from { opacity: 0; transform: translateY(-50%) translateX(-4px); }
-  to   { opacity: 1; transform: translateY(-50%) translateX(0); }
+.vigil-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.vigil-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--vigil-muted);
+  font-size: 11px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--vigil-border);
 }
+.vigil-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--vigil-border);
+  color: var(--vigil-text);
+}
+.vigil-table tr:last-child td { border-bottom: none; }
+.vigil-table tbody tr { cursor: pointer; }
+.vigil-table tbody tr:hover { background: var(--vigil-muted-bg); }
 
-/* Toast animations used by `components/Toast.tsx`. */
-@keyframes toast-in {
-  from { opacity: 0; transform: translateX(16px); }
-  to   { opacity: 1; transform: translateX(0); }
+.vigil-status-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
 }
-@keyframes toast-out {
-  from { opacity: 1; transform: translateX(0); }
-  to   { opacity: 0; transform: translateX(16px); }
-}
+.dot-ok { background: var(--vigil-ok); }
+.dot-warn { background: var(--vigil-warn); }
+.dot-error { background: var(--vigil-error); }
+.dot-offline { background: var(--vigil-offline); }
 
-/* Generic fade + dialog entrance used by popovers and confirm dialogs. */
-@keyframes fade-in {
-  from { opacity: 0; }
-  to   { opacity: 1; }
+.vigil-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border-radius: 9999px;
+  padding: 1px 9px;
+  font-size: 11px;
 }
-@keyframes dialog-in {
-  from { opacity: 0; transform: translateY(4px) scale(0.98); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
-}
+.pill-ok { background: rgba(34, 197, 94, 0.14); color: #16a34a; }
+[data-theme='dark'] .pill-ok { color: #4ade80; }
+.pill-warn { background: rgba(245, 158, 11, 0.14); color: #d97706; }
+[data-theme='dark'] .pill-warn { color: #fbbf24; }
+.pill-error { background: rgba(239, 68, 68, 0.14); color: #dc2626; }
+[data-theme='dark'] .pill-error { color: #f87171; }
+.pill-offline { background: rgba(107, 114, 128, 0.14); color: var(--vigil-offline); }
 
-/* Hide scrollbar utility — used by the header's overflow-x nav row. */
-.scrollbar-none {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
+.vigil-env {
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: #fff;
 }
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
-}
+.env-prod { background: #dc2626; }
+.env-test { background: #d97706; }
+.env-dev { background: #ea580c; }
+.env-local { background: #2563eb; }
+.env-other { background: #6b7280; }
 
-/* System UI-monospace stack — distinct from `font-courier` (Courier
-   Prime), used for dense data readouts where the display font would
-   break the grid. Routes through the theme's mono stack so themes
-   with a different monospace (JetBrains Mono, IBM Plex Mono, etc.)
-   still apply here. */
-.font-mono-ui {
-  font-family: var(--theme-font-mono);
-}
-
-/* Subtle grain overlay for badges. */
-.grain {
-  position: relative;
-}
-.grain::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  opacity: 0.12;
-  pointer-events: none;
-  background: repeating-conic-gradient(currentColor 0% 25%, #0000 0% 50%) 0 0 /
-    2px 2px;
-}
-
-/* RTL support — Arabic and any future right-to-left locale. The i18n provider
-   sets `dir` on <html>; Tailwind v4's logical spacing utilities (ms-/me-,
-   ps-/pe-) and logical properties then flip automatically. Scoped so the
-   default LTR layout is untouched. */
-html[dir="rtl"] {
-  direction: rtl;
-}
-
+.scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scroll-thin::-webkit-scrollbar-thumb { background: var(--vigil-border); border-radius: 3px; }
+.scroll-thin::-webkit-scrollbar-track { background: transparent; }
