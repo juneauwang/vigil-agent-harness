@@ -4963,8 +4963,8 @@ class GatewaySlashCommandsMixin:
         source = event.source
         session_key = self._session_key_for_source(source)
 
-        # `/usage reset [--force]` — redeem one banked Codex rate-limit reset
-        # credit. Parsed before the display path so it never mixes with the
+        # `/usage reset [--force]` — redeem one rate-limit reset credit.
+        # Parsed before the display path so it never mixes with the
         # stats rendering below.
         raw_args = event.get_command_args().strip()
         args = [a.lower() for a in raw_args.split()] if raw_args else []

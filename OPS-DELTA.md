@@ -2148,3 +2148,49 @@
   （base64/拼接）不在本批覆盖。④env 枚举与批次 prompt 文案差异（见一致性说明）。
 - **核销方式**：测试常驻——test_runbook_create.py（创建/回读/凭据拒绝/覆盖）+
   test_system_prompt.py 常量断言；行为探针命令在批次二十五 prompt 验收段可复跑。
+
+### 45. 批次二十六 /help 会话内清理最后一轮 + 花哨命令去留 + UI 壳收尾 — ✅ 已实施（2026-08-15，批次二十六）
+- **背景**：批二十二已做第一轮 /help 清理，用户 2026-08-13 排期的逐项清单还有
+  残留：/reload-skills 文案仍写 ~/.hermes；/debug nous 是死入口（上传即外泄到
+  Nous 内部存储）；/usage 描述含 Codex 概念；Skill Commands 段逐条列出 67 个
+  hermes 继承的消费级 skill；/pet /hatch /moa 三个死命令（宠物消费功能 + 依赖
+  Nous 多模型）仍挂在命令面；UI 壳合入后工作树残留 node_modules / web_dist /
+  package-lock.json 噪音。
+- **任务 1（/reload-skills 文案）**：`hermes_cli/commands.py` reload-skills 描述
+  `~/.hermes/skills/` → `VIGIL_HOME (~/.vigil) skills/`；连带
+  `agent/skill_commands.py` scan_skill_commands / reload_skills docstring 同改。
+- **任务 2（/debug nous 死入口移除）**：`commands.py` args_hint `[nous|local]` →
+  `[local]`；`cli_commands_mixin.py` `_handle_debug_command` nous 恒 False（nous
+  词容忍但绝不置 True），输 nous 打印一行中文提示（已移除，按默认 paste 处理或
+  用 /debug local），args.nous=False 字段保留（run_debug_share 读取）；
+  hermes_cli/debug.py 底层 nous 路径未动（子命令层面不在本批范围）。
+- **任务 3（/usage 文案中性化）**：`commands.py` usage 描述去 "banked Codex
+  limit reset" → "rate-limit reset"；`cli.py` 两处 docstring + `gateway/
+  slash_commands.py` 注释同改；reset 功能与 handler 语义原样保留（用户已拍板）。
+- **任务 4（Skill Commands 折叠）**：`cli.py` show_help ⚡ Skill Commands 段
+  改为一行 "⚡ Skill Commands (N installed) — 使用 --help-all 或 /skills 查看全部"；
+  skill 注册/执行机制完全不动（自定义 skill 仍可 /skill-name 调用）。
+- **任务 5（花哨命令去留，用户已拍板）**：从 COMMAND_REGISTRY 删除 /pet
+  （petdex）、/hatch + 别名 /generate-pet、/moa；删除对应 CLI dispatch 分支与
+  handler（cli.py process_command + cli_commands_mixin.py _handle_pet_command /
+  _handle_hatch_command）；`_SLACK_VIA_HERMES_ONLY` 移除 moa 并清理注释；
+  /curator、/kanban 保留不动；宠物机制 hermes_cli/pets.py 保留（TUI 在用）；
+  ui-tui/ 前端不动；`-m moa:<preset>` 模型路由与 MoA provider 基建保留（非命令面）。
+- **任务 6（UI 壳收尾）**：`web_dist` 是构建产物（wheel 不打包——pyproject
+  package-data 无 web_dist、setup.py 注明运行时解析，`cd web && npm run build`
+  生成）→ .gitignore 新增 `node_modules/` + `hermes_cli/web_dist/`；本地
+  npm install 产生的 package-lock.json `peer: true` 噪音回退（web_dist 未提交，
+  锁文件不随批提交）。
+- **验收测试**：tests/hermes_cli/test_debug.py（nous 词容忍但不置 True + 已移除
+  提示）、tests/cli/test_moa_command.py（/moa 从 registry 删除 + unknown-command
+  不排程，保留 TestNormalizeMoaModel）、tests/hermes_cli/test_help_text_cleanup.py
+  / test_batch14_e1_help_grouping.py（--help-all 继承命令名单去掉 moa）；回归
+  test_commands.py / test_busy_policy_invariants.py / test_commands_execute.py /
+  test_pet_toggle.py / test_cli_pet_pane.py / gateway/test_moa_one_shot_restore.py。
+- **硬约束核对**：只改显示层/命令注册/handler + 测试 + OPS-DELTA.md + .gitignore
+  （白名单内）；无新 HERMES_*/VIGIL_* env var；conversation_loop / prompt 缓存 /
+  压缩逻辑未碰；工具（tool）语义、skills/ 目录未动；gateway/run.py 的 /moa
+  dispatch 分支未动（本批只清 CLI 命令面，gateway 属消息面，单独排期）。
+- **核销方式**：测试常驻——debug/moa/help 三组用例 + /help 实测（--help-all
+  无 moa/pet/hatch，Skill Commands 折叠行）；季度体检检查命令面是否回添
+  消费级命令、nous 上传路径是否重新暴露。

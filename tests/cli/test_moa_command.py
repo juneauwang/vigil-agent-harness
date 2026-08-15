@@ -38,9 +38,17 @@ def _make_cli():
     return cli
 
 
-def test_moa_bare_shows_usage_no_switch():
-    # /moa with no prompt is usage-only now; switching to a preset for the
-    # session is done via the model picker, not /moa.
+def test_moa_command_removed_from_registry():
+    # 批次二十六：/moa 已从 COMMAND_REGISTRY 删除（依赖 Nous 多模型，Vigil
+    # 单模型死功能）。Model picker 的 MoA preset 与 `-m moa:<preset>` 路由保留。
+    from hermes_cli.commands import resolve_command
+
+    assert resolve_command("moa") is None
+
+
+def test_moa_bare_is_unknown_command_no_switch():
+    # /moa 删除后 process_command 走 unknown-command 路径：不切 provider、
+    # 不排程 one-shot，也不设置 MoA restore。
     cli = _make_cli()
     cli._pending_moa_disable_after_turn = False
     with patch("cli._cprint"):
@@ -50,27 +58,15 @@ def test_moa_bare_shows_usage_no_switch():
     assert cli._pending_moa_disable_after_turn is False
 
 
-def test_moa_arg_is_always_one_shot_prompt():
-    # Any argument (even a string that matches a preset name) is treated as a
-    # one-shot prompt through the DEFAULT preset, then the model is restored.
+def test_moa_arg_is_not_queued_as_one_shot():
+    # /moa <prompt> 不再是命令：参数不会被排程为 MoA one-shot prompt。
     cli = _make_cli()
     with patch("cli._cprint"):
         cli.process_command("/moa review")
-    assert cli._pending_agent_seed == "review"
-    assert cli._pending_moa_disable_after_turn is True
-    assert cli.provider == "moa"
-    assert cli.model == "default"
-
-
-def test_moa_non_preset_is_one_shot_prompt():
-    cli = _make_cli()
-    with patch("cli._cprint"):
-        cli.process_command("/moa inspect the flaky test")
-    assert cli._pending_agent_seed == "inspect the flaky test"
-    assert cli._pending_moa_disable_after_turn is True
-    assert cli.provider == "moa"
-    assert cli.model == "default"
-    assert cli._pending_moa_restore_model["provider"] != "moa"
+    assert cli._pending_agent_seed is None
+    assert cli._pending_moa_disable_after_turn is False
+    assert cli.provider != "moa"
+    assert cli.model != "default"
 
 
 
@@ -112,4 +108,3 @@ class TestNormalizeMoaModel:
         requested_provider = override or "deepseek" or "auto"
         assert requested_provider == "moa"
         assert model == "strategy"
-

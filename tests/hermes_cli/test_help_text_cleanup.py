@@ -174,7 +174,7 @@ def test_help_all_grouped_and_expanded():
     assert out.index("Vigil 命令：") < out.index("继承命令（来自 hermes")
     # 继承命令逐条展开（说明可见）。
     assert "Messaging gateway management" in out
-    for name in ("moa", "gateway", "secrets", "egress", "cron"):
+    for name in ("gateway", "secrets", "egress", "cron"):
         assert re.search(rf"^\s+{re.escape(name)}\s", out, re.M), name
     # 别名/弃用命令在 --help-all 全量里也有说明（全量名副其实）。
     for name in ("gui", "learning", "memory-graph", "login"):

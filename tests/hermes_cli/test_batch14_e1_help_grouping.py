@@ -67,7 +67,7 @@ def test_help_all_lists_inherited_commands():
     assert "Messaging gateway management" in out
     # 批次二十二：--help-all 与 -h 同用分组渲染，继承命令有分组标题且逐条展开。
     assert re.search(r"继承命令（来自 hermes，\d+ 个）：", out)
-    for name in ("moa", "gateway", "secrets", "egress", "cron"):
+    for name in ("gateway", "secrets", "egress", "cron"):
         assert re.search(rf"^\s+{re.escape(name)}\s", out, re.M), name
 
 

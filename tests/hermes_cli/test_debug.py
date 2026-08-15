@@ -1000,12 +1000,13 @@ class TestRunDebugShareNous:
 
 
 class TestDebugSlashCommand:
-    """`/debug [nous|local]` parsing in the CLI/TUI handler.
+    """`/debug [local]` parsing in the CLI/TUI handler.
 
     The classic CLI and the TUI slash worker both dispatch through
     ``HermesCLI.process_command`` → ``_handle_debug_command(cmd_original)``,
     which parses an optional destination word and builds the args namespace
-    handed to ``run_debug_share``.
+    handed to ``run_debug_share``. ``nous`` is tolerated as a word but never
+    enables nous — Vigil has no Nous-internal storage, so it was removed.
     """
 
     def _handler(self):
@@ -1037,7 +1038,12 @@ class TestDebugSlashCommand:
 
     def test_word_parsing_is_case_insensitive(self):
         c = self._captured("/debug NOUS")
-        assert c["nous"] is True
+        assert c["nous"] is False
+
+    def test_nous_word_prints_removed_notice(self, capsys):
+        c = self._captured("/debug nous")
+        assert c["nous"] is False
+        assert "已移除" in capsys.readouterr().out
 
 
     def test_no_arg_default_keyword(self):
