@@ -39,7 +39,8 @@ function Facts({ card }: { card: TopologyCard }) {
       {facts.map(([k, v]) => (
         <span
           key={k}
-          className="rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-1.5 py-px text-[11px]"
+          className="max-w-[260px] truncate whitespace-nowrap rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-1.5 py-px text-[11px]"
+          title={v}
         >
           <span className="text-[var(--vigil-muted)]">{k}</span> {v}
         </span>
@@ -301,13 +302,13 @@ export default function TopologyPage() {
           </div>
 
           {/* 搜索 */}
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-[var(--vigil-muted)]" />
+          <div className="flex h-8 w-56 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
+            <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索 name / type / env…"
-              className="vigil-input h-8 w-56 pl-7"
+              placeholder="搜索名称 / 类型 / 环境"
+              className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
             />
           </div>
         </div>
@@ -330,9 +331,12 @@ export default function TopologyPage() {
           </div>
 
           <div className="vigil-card mb-4 p-3">
-            <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-[var(--vigil-muted)]">
+            <div
+              className="mb-1.5 flex items-center gap-2 text-xs font-medium text-[var(--vigil-muted)]"
+              title="业务请求链路：入口 → 网关 → 服务 → 存储；琥珀点 = 链上服务"
+            >
               <Database className="size-3.5" />
-              关键链路缩略图（琥珀点 = 链上服务）
+              拓扑总览（琥珀点 = 关键链路服务）
             </div>
             <TopologyMiniGraph view={view} />
           </div>
@@ -436,13 +440,19 @@ export default function TopologyPage() {
             </>
           )}
 
-          {/* 关键链路 */}
+          {/* 关键链路（业务请求链路：入口 → 网关 → 服务 → 存储） */}
           {view.key_paths.length > 0 && (
             <section className="mt-6">
-              <h2 className="mb-2.5 flex items-center gap-2 text-sm font-semibold">
+              <h2
+                className="mb-1 flex items-center gap-2 text-sm font-semibold"
+                title="业务请求链路：入口 → 网关 → 服务 → 存储（定义在拓扑表 key_paths）"
+              >
                 <Link2 className="size-4 text-[var(--vigil-muted)]" />
                 关键链路（{view.key_paths.length}）
               </h2>
+              <p className="mb-2.5 text-xs text-[var(--vigil-muted)]">
+                业务请求的主干路径——排障时最先检查这里。
+              </p>
               <div className="space-y-2">
                 {view.key_paths.map((chain, i) => (
                   <div key={i} className="flex flex-wrap items-center gap-1.5 text-sm">

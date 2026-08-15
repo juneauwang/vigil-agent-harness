@@ -30,7 +30,7 @@ export function TerminalPanel({
       >
         <TerminalSquare className="size-3.5 opacity-70" />
         <span style={{ color: "#cbd5e1" }}>Agent Terminal</span>
-        <span className="opacity-60">· 执行 API（POST /api/exec + SSE）</span>
+        <span className="opacity-60">· 待命</span>
         <button
           type="button"
           onClick={onToggle}
@@ -62,9 +62,9 @@ export function TerminalPanel({
         <span className="text-xs" style={{ color: "#e2e8f0" }}>Agent Terminal</span>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
           <span className="size-1.5 rounded-full bg-emerald-400" />
-          API 已接线
+          已连接
         </span>
-        <span className="ml-auto text-[10px] opacity-50">JetBrains Mono · POST /api/exec + SSE</span>
+        <span className="ml-auto text-[10px] opacity-50">审计 / 命令 / YAML</span>
         {!expanded && (
           <button
             type="button"
@@ -79,7 +79,7 @@ export function TerminalPanel({
 
       {/* 执行控制台 */}
       <div className="min-h-0 flex-1 px-4 py-3">
-        <ExecConsole expanded={expanded} />
+        <ExecConsole />
       </div>
     </div>
   );

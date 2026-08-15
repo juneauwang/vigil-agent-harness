@@ -11,7 +11,7 @@ function renderValue(value: unknown): ReactNode {
     return (
       <span className="flex flex-wrap gap-x-2 gap-y-1">
         {value.map((v, i) => (
-          <span key={i} className="break-all">
+          <span key={i} className="min-w-0 max-w-full">
             {renderValue(v)}
           </span>
         ))}
@@ -29,13 +29,18 @@ function renderValue(value: unknown): ReactNode {
             className="flex gap-2 border-b border-dotted border-[var(--vigil-border)] py-1 last:border-b-0"
           >
             <span className="min-w-32 shrink-0 text-[var(--vigil-muted)]">{k}</span>
-            <span className="break-all">{renderValue(v)}</span>
+            <span className="min-w-0 flex-1 overflow-x-auto">{renderValue(v)}</span>
           </div>
         ))}
       </div>
     );
   }
-  return <span className="break-all">{String(value)}</span>;
+  // 字符串（命令/YAML 等）：不折行，超出横向滚动——长命令可读。
+  return (
+    <span className="block whitespace-pre font-mono text-[var(--vigil-text)] opacity-85">
+      {String(value)}
+    </span>
+  );
 }
 
 export function DetailTree({ data }: { data: Record<string, unknown> }) {
@@ -51,7 +56,7 @@ export function DetailTree({ data }: { data: Record<string, unknown> }) {
           className="flex gap-2 border-b border-dotted border-[var(--vigil-border)] py-1.5 last:border-b-0"
         >
           <span className="min-w-32 shrink-0 text-[var(--vigil-muted)]">{k}</span>
-          <span className="min-w-0 flex-1">{renderValue(v)}</span>
+          <span className="min-w-0 flex-1 overflow-x-auto">{renderValue(v)}</span>
         </div>
       ))}
     </div>

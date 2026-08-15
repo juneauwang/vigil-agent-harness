@@ -20,7 +20,7 @@ describe("mockRunExec (批二十八契约三态)", () => {
     const r = mockRunExec("kubectl delete pod x");
     expect(r.status).toBe("denied");
     expect(r.code).toBe("denied");
-    expect(r.reason).toContain("deny");
+    expect(r.reason).toContain("拒绝");
   });
   it("restart command → needs_approval with approval_id", () => {
     const r = mockRunExec("kubectl rollout restart deploy/gateway-svc");

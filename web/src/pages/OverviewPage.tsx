@@ -156,7 +156,7 @@ export default function OverviewPage() {
         <MetricCard tone="sky" icon={<Boxes className="size-4" />} label="Nodes" value={stats.nodes} sub={view ? `clusters ${view.clusters.length}` : undefined} />
         <MetricCard tone="emerald" icon={<Server className="size-4" />} label="Services" value={stats.services} />
         <MetricCard tone="amber" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub="剧本库" />
-        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={0} sub="事件 API 未就绪" />
+        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={0} sub="告警接入后显示" />
       </div>
 
       {/* 中：Topology Graph 通栏 + Runbook Queue 抽屉 */}

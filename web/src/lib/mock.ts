@@ -125,7 +125,7 @@ export function mockRunExec(command: string): ExecResponse {
     return {
       status: "denied",
       code: "denied",
-      reason: "L3 命令 prod 档 deny（模拟数据：仅用于前端联调）",
+      reason: "该命令被安全策略拒绝（模拟数据）",
     };
   }
   if (lower.includes("restart") || lower.includes("rollout")) {
@@ -143,7 +143,7 @@ export function mockRunExec(command: string): ExecResponse {
     output:
       "$ " + command + "\n" +
       "node1  prod  k3s  control-plane  203.0.113.10\n" +
-      "（模拟数据：仅用于前端联调，后端批二十八落地后走真实执行）",
+      "（模拟数据）",
   };
 }
 
