@@ -1520,3 +1520,677 @@
 - **核销方式**：redact 名单追加式，季度体检 grep 新增形态仍生效；sudo_exec 可用性
   由 check_topo_requirements 数据门控（无 topology.yaml 零 footprint）；熔断计数
   进程内存、重启清零（会话级语义）。
+
+### 39. 批次十七 权限矩阵 B'：未分级命令 prod 档默认审批 + 变更类覆盖测试（§AA 联动） — ✅ 已实施（2026-08-14，批次十七；commit hash 佐证：B' dc59dde / 变更覆盖 98f7b70）
+- **发现**（2026-08-13 晚 + 2026-08-14 §AA 源码核验）：
+  1. 实测洞：agent 把 k3s-prod 集群改名成 k8s-prod，跨 20+ 文件 `mv` + patch 全部
+     放行——`mv 单文件` 不在任何分级模式里（classify_command → grade=None），
+     prod 档对未分级命令直接放行（批量危险操作拆成单条无害命令即全绕过）。
+  2. §AA 风险点 1：prod 变更确认门依赖 `_CHANGE_COMMAND_RE` 识别变更类，漏识别的
+     变更命令会退回普通审批 → yolo 放行；现有测试没有覆盖变更清单完整性。
+- **修复（批次十七，B' 方案拍板"毕竟是 Prod"）**：
+  1. B'（tools/ops_permissions.py，dc59dde）：`check_ops_command_permission`
+     else 分支（grade=None 或未声明环境）——prod 档未分级命令默认
+     approve + require_confirmation=True（强制人工确认门，同 #32 变更门通道，
+     yolo / smart-approval / 永久 allowlist 都绕不过）；L1 查询命令匹配 L1 模式
+     （grade 非 None）不受影响，prod 仍 execute；L3/L4 deny 优先级不变；非 prod
+     档（local/test/dev）未分级命令维持现状放行。description 文案：未分级+prod
+     明示"未分级命令在 prod 需人工确认（B'）"，保留"prod 变更确认门"字样。
+  2. 变更类覆盖测试（tests/tools/test_change_command_coverage.py，98f7b70）：
+     20 条变更样本（ansible-playbook/kubectl apply/delete/edit/scale/rollout/drain/
+     cordon、docker compose up/restart/rm/down、docker restart/rm/stop、
+     systemctl restart/stop、helm upgrade/install/uninstall）逐条断言命中
+     `_CHANGE_COMMAND_RE` + prod 档 require_confirmation=True；反向断言
+     （ls/cat/kubectl get/docker ps/systemctl status/helm list）不命中。
+     全部命中，无需补正则（变更清单无漏项）。
+- **验收**：tests/tools/test_ops_permissions.py（30）+ test_ops_permissions_guard.py
+  （23）+ test_change_command_coverage.py（4）全绿；审批侧回归
+  （test_ops_confirmation_gate / test_approval / test_command_guards /
+  test_sudo_stdin_guard_sources / test_yolo_mode / test_denial_circuit_breaker /
+  test_sudo_exec，221 例）不破；行为探针三条符合预期（prod 未分级 mv →
+  approve+confirm；同命令 test 档 → None 不变；classify ls -la → L1）。
+- **硬约束**：_DEFAULT_GRADES / L1 排除名单未动；非 prod 行为不变（探针对比确认）；
+  无新 env var；diff 只含白名单文件（tools/ops_permissions.py + 三个测试文件）。
+- **已知风险（B' 噪音面）**：prod 上原本"直接跑"的未分级命令开始要审批——典型
+  噪音：`helm list`（未分级查询，不在 L1 模式）、`ssh host 'df -h'` 类包装命令
+  （整体未分级）、自定义脚本/单文件 mv/cp/tar。这些是 B' 的预期代价（宁可多确认
+  不漏放）；若某类查询高频且确属只读，后续应补进 L1 模式（需另立批次，本批不改
+  分级模式）。
+- **核销方式**：approval.py `_ops_confirmation_required` 通道复检（require_confirmation
+  的 approve 决策 yolo/allowlist 不绕过，批次十七 guard 测试钉住）；变更清单
+  test_change_command_coverage.py 常驻，新增变更类命令需同步加样本。
+
+### 40. 批次十八 /topo 斜杠命令 + 合并式补齐 + systemd 无端口过滤（A+B 方案落地） — ✅ 已实施（2026-08-14，批次十八；commit hash 佐证：/topo 命令 2963602 / 合并补齐 d7c22aa / systemd 过滤 68f1d8a / 落盘联动 d2a4e27）
+- **背景（dogfood 实测）**：
+  1. 手打 topo discover 走 LLM 路由（agent 初始化 + API 调用 3-8s/次 + 可能被打断
+     "Interrupted during API call" + clarify 12s+）——用户拍板要**不依赖 LLM、本地
+     直调发现引擎**的会话内入口（方案 A）。
+  2. 现状 write_discovery 对已存在 host 非 force 直接拒绝（--force 整体替换会冲掉
+     手动维护实体，dogfood §M 教训）——用户拍板重扫已有 host 时**新服务自动追加、
+     旧手动实体保留**（方案 B，不是覆盖）。
+  3. 8/14 §H：扫真实 prod 主机 117 条 services，systemd 70+ 全是系统噪音
+     （aegis/chronyd/cloud-*/plymouth/networkmanager），业务只有 app/db 2 个；C1
+     黑名单只挡 systemd 内部服务，其余靠 LLM 在 topo_update 手动过滤——**LLM 判断
+     不是机制保证**。用户拍板：systemd-service 且无监听端口 → 不自动落盘，保留
+     发现结果里标 needs_review（不误杀脚本服务，用户确认后才入表）。
+- **修复（批次十八，A+B 方案落地）**：
+  1. /topo 斜杠命令（2963602）：commands.py 注册（Session 组、cli_only，照 /env
+     先例）+ cli.py 路由 + `_handle_topo_command`——`/topo [host...] [--env E]
+     [--user U] [--key K] [--cluster C] [--force] [--yes]`，无 host 交互收集
+     （host/env/凭据优先从拓扑表 credential 自动读，缺省再问 user/key）；凭据复用
+     vssh 同套 askpass/vault 机制，密码明文不进 argv/命令串/日志；展示服务列表
+     （needs_review=true）+ 三步 review 引导。agent 工具 topo_discover 与 CLI 子
+     命令 vigil topo-discover 均保留（新增入口不替代）。
+  2. 合并式补齐（d7c22aa）：write_discovery 新增 merge=True（默认）：已有 host 非
+     force 时读 hosts/<host>.yaml 现有索引，发现服务同名跳过（保留现有行含手动
+     endpoint/owner），新名字追加进索引 + entities/；host 行保留原内容只刷新
+     last_verified；merge=False 显式关闭时维持旧拒绝语义；--force 整体替换不变；
+     结果新增 appended/kept/merged 统计。
+  3. systemd 无端口过滤（68f1d8a）：新增 _parse_ss_proc_ports（ss -tlnp 进程名→
+     端口，含 loopback，进程名按字母数字归一容忍 node-exporter/node_exporter
+     差异）；discover_host 重构 ss 探测提前到 systemd 之前——systemd 实体无监听
+     端口 → 进 pending_review（不入 services/details/落盘），有端口
+     （prometheus/node-exporter 等）正常入表且端口不再补 unidentified；docker/k8s
+     与同名跳过逻辑不变；probes['systemctl'] 补"另 N 个无端口系统服务未入表（可
+     确认）"。
+  4. 落盘联动（d2a4e27）：/topo 落盘路径调 write_discovery(merge=not force)；落盘
+     前打印将写入清单（host + 新增实体名）y/N 确认（默认 N，--yes 跳过；
+     --dry-run 只展示）；落盘后打印"追加 N / 保留 M / 系统服务 P 未入表"。
+- **验收**：tests/hermes_cli/test_topo_slash_command.py（8）+ tests/tools/
+  test_topo_discovery.py（43，其中批次十八新增 8：合并 3 + systemd 过滤 3 + 更新
+  2）全绿；回归 test_commands.py / test_topo_tools.py 不破（test_commands 与
+  test_env_command 各 1-3 例既有失败为 HERMES_HOME/VIGIL_HOME 环境 fixture 问题，
+  基线同样失败，与本批无关）；行为探针四条符合预期（/topo 参数解析+引擎被调+
+  引导；write_discovery 合并语义；systemd 无端口过滤；落盘联动 merge 传递与计数）。
+- **硬约束**：ops_permissions.py 未动；无新 env var（SUDO_ASKPASS 等均为既有
+  机制）；不碰 conversation_loop / prompt 缓存 / 压缩；diff 只含白名单文件
+  （hermes_cli/commands.py、cli.py、tools/topo_discovery.py、两个测试文件）。
+- **合并补齐边界**：追加时按 name 同名跳过（现有行含手动 endpoint/owner 保留，
+  不覆盖）；新 host 走正常追加；force=True 语义不变（整体替换供主动重建）。
+- **已知风险**：/topo 交互式收集在 TUI（_app 非空且非主线程）下 _prompt_text_input
+  会干净取消（None），交互模式主要服务经典 CLI；合并追加按 name 判重，同 host
+  不同 cluster 的同名服务会视为已存在（v0.3 索引按 host 分文件，cluster 维度在
+  行内）；systemd 无端口过滤依赖 ss -tlnp 有权限读到 Process 列（无权限时全部
+  systemd 服务进 pending_review，是安全方向）。
+- **核销方式**：/topo 走 process_command 路由 → 本地直调 discover_host/write_discovery
+  （与 agent 工具同引擎）；合并/过滤统计在 write_discovery 返回值与 probes 文案
+  常驻可测；测试钉住 merge/force 语义与 pending_review 边界。
+
+### 41. 批次十九 行为层安全加固——SSH 多 key IdentitiesOnly + vault 值打码 + 熔断扩展 + sudoers.d 硬拒（§AF/§AG/§AE） — ✅ 已实施（2026-08-14，批次十九；commit hash 佐证：IdentitiesOnly 2ce48a8 / vault 打码 76c9a85 / 熔断扩展 6e947db / sudoers.d 5c86b75 / -K clarify 1fafe60 / write_file 46299b3）
+- **背景（dogfood 实测，8/14 下午 NetBox 迁移实验）**：批次十六的熔断只挂
+  topo_discovery runner，agent 自由拼的 ssh/scp/ansible 路径全在外 → 当天锁
+  15 分钟 ×5 次；vault 密码明文复述（改密码 30 秒内再泄露）；agent 想写
+  /etc/sudoers.d/ 传密码；ansible -K 密码提示挂死 terminal；inventory 同步
+  报告把凭据写进 644 MD。本批 = 行为层强制约束（不再加 redact 名单——名单
+  追不上 LLM 自由发挥）。
+- **修复**：
+  1. IdentitiesOnly 全线（2ce48a8）：vssh `_build_ssh_argv` 与 topo_discovery
+     `_build_ssh_runner` 无条件加 `-o IdentitiesOnly=yes`（多 key 环境 `-i key`
+     不等于只用这个 key，会遍历 agent 所有 key 刷爆 MaxAuthTries）；sudo_tool
+     `_scp_argv_from_ssh` 改逐段翻译（`-p`→`-P`、其余 `-o`/`-i` 原样透传，
+     scp 支持 `-o`），不再按下标取位（防 argv 加参数即碎）。
+  2. vault 值打码（76c9a85）：redact 补三个盲区——①引号 YAML 值
+     （`monitor_auth_token: "MsVY…"`，`_YAML_ASSIGN_RE` lookahead 与 JSON 引号
+     key 要求之间的空档，新增 `_YAML_QUOTED_ASSIGN_RE` 同款 key 门控）；②任意
+     键名高熵值（`{"cipher": "bW9u…"}`，严格模式值形态 pass 不再挂
+     `_CFG_SECRET_WORD_RE` 门控——文本无秘密词时也运行，只靠
+     `_looks_like_inline_secret` 过滤）；③`_JSON_KEY_NAMES` 补 `passwd`（精确
+     短值）。值打码、key 名保留；UUID/版本号/hex/散文引号值不误伤。
+  3. 熔断扩展（6e947db）：信号不只 exit 255——`Too many authentication
+     failures`（sshd 限流信号）与单次 stderr 内 `Permission denied` ×2（多 key
+     遍历典型输出）都计数；runner 计数逻辑重构（认证失败判定移出 returncode
+     255 分支）；sudo_tool 远端 `_scp`/`_ssh_run` 接入共享计数（guard 预检 +
+     note 记录/清零，模块级 dict 与 topo 探测同会话共用）；熔断错误分层归因：
+     连接层错误（Too many/Permission denied）→ 停止 + 检查 IdentitiesOnly +
+     重试次数；执行层错误（转义/权限）→ 才换传递方式，不换姿势掩盖真凶。
+  4. sudoers.d 硬拒（5c86b75）：HARDLINE_PATTERNS 追加两类——重定向写入
+     （`> / >>` 目标为 /etc/sudoers(.d)/，含 heredoc 形态）与 tee/install/cp/mv
+     写入（`_CMDPOS` 锚定命令位、路径须为末参，防 `cp /etc/sudoers.d/x
+     /tmp/backup` 备份误杀）；描述引导"禁止通过修改 sudoers 实现免密/传密码
+     ——提权走 sudo_exec 工具（ASKPASS 注入）"；yolo 也绕不过。
+  5. -K 转 clarify（1fafe60）：terminal_tool 前景执行输出后处理——输出以交互
+     密码提示收尾（BECOME password / Password for / Enter passphrase / sudo
+     password / password:，先剥 `_wait_for_process` 超时后缀）→ 不透传挂起，
+     返回明确错误引导 clarify / `ANSIBLE_BECOME_PASS` 环境变量（值从
+     vault 取，不进命令行）/ vssh/sudo_exec；长输出中间提密码、裸词 password
+     不误伤。
+  6. write_file 过 redact + 0600（46299b3）：write_file_tool 写入前内容过
+     redact_sensitive_text（code_file=True + credential_values=True，与工具
+     输出展示同一条通道）；疑似凭据 → 写打码内容 + chmod 600 + 警告；普通
+     内容原样、权限不变。
+  7. system prompt 行为约束（2ce48a8）：stable tier 新增静态常量
+     `OPS_CREDENTIAL_SSH_GUIDANCE`（ops/terminal 工具就位即注入，字节稳定不
+     破 prompt 缓存）——SSH 系命令必须带 IdentitiesOnly、优先 vssh/sudo_exec、
+     凭据值只许 env/askpass/stdin 注入禁止复述/落盘、熔断后停止重试 + 用户
+     纠正即停、sudoers.d 禁写、-bK 优先 ANSIBLE_BECOME_PASS。
+- **验收**：新增/扩展测试全绿——test_batch14_e3_vssh.py（argv 各形态 +
+  IdentitiesOnly 专项）、test_topo_discovery.py（runner 探测路径）、
+  test_redact_vault_forms.py（三形态 + 误伤反向）、test_ssh_auth_breaker.py
+  （信号扩展 2 + 归因 1 + sudo_tool 共享计数 1）、test_hardline_blocklist.py
+  （sudoers.d 写入 14 + 读取 11 + yolo 场景）、test_terminal_password_prompt.py
+  （19 例）、test_file_tools.py（4 例）；回归 test_sudo_exec.py / test_topo_tools.py /
+  test_system_prompt.py / 全部 redact 套件不破；行为探针 6 条符合预期。
+- **硬约束**：diff 只含白名单文件（vssh.py、sudo_tool.py、topo_discovery.py、
+  approval.py、redact.py、file_tools.py、terminal_tool.py【任务 5 正文点名挂载
+  点】、prompt_builder.py/system_prompt.py 仅常量文本、对应新测试、OPS-DELTA）；
+  无新 env var；凭据值不进 argv/命令串/日志；不碰 conversation_loop/prompt
+  缓存/压缩；批次十六 sudo_exec/redact 三盲区未破坏（测试回归佐证）。
+- **任务 2 影响评估（值打码对正常 vault 读取）**：三形态（精确键名、引号 YAML、
+  任意键名高熵值）值打码、key 名保留——agent 仍能看到"哪些凭据存在"，只是
+  值不可复述，可读性损失小；误伤面被 `_looks_like_inline_secret` 收窄
+  （≥16 字符、混合字符类、熵 ≥3.2、无空格、无 `/ \ : .`）——UUID/hex/版本号/
+  短占位值/散文引号值全部豁免；短精确键值（`"passwd": "shortpw"`）按 key 名
+  打码，与既有 `"password"` 语义一致。
+- **任务 3 共享状态说明**：计数器保持 topo_discovery 模块级 dict（进程内存，
+  host:user 独立，线程锁保护）；sudo_tool 通过函数 import 接入同一 dict——同一
+  进程内 vssh（exec 不计数）/sudo_exec/topo 探测路径共用；成功一次清零；
+  vssh 是 os.execvpe 无返回值，不计数不受影响（既有测试钉住）。
+- **已知风险**：①write_file redact 误伤面——高熵非凭据值（如 32 字符随机
+  标识符、`{"nonce": "AbCdEfGhIjKlMnOpQrStUvWxYz012345"}`）可能被打码；短
+  占位值（`apiKey: "test"`）按 key 名打码（与展示通道一致）——写真实配置
+  时若含占位凭据会被打码，需用户手动修正；②熔断按 host:user 计数，agent
+  对同一 host 换 user 试登录会另起计数（凭据缺失 fail-closed 已在 sudo_exec
+  挡）；③`_is_ssh_auth_failure` 对 exit 255 + 单次 Permission denied 的远端
+  命令退出码与 ssh 认证失败无法 100% 区分（批次十六既有语义，非本批引入）；
+  ④terminal -K 识别是输出后置（挂起到超时才报错）——前置识别需改
+  environments/base.py（白名单外），本批不落地。
+- **核销方式**：测试常驻——vssh argv 含 IdentitiesOnly、redact 三形态值打码、
+  熔断 3 次即断 + 错误含 IdentitiesOnly、sudoers.d 写入 hardline 拦截（yolo
+  场景）、terminal 密码提示转 clarify、write_file 敏感内容 600+打码；行为
+  探针命令在批次十九 prompt 验收段可复跑。
+
+### 42. 批次二十 审批交互体验——审批框选项按场景过滤（session/always 无效选项）+ 审批/clarify 超时策略 wait 化 — ✅ 已实施（2026-08-14，批次二十；commit hash 佐证：任务 1 选项过滤 3f4a4f5 / 任务 2 超时 wait 化 5d9252a / 任务 3 clarify 对齐 206fbad）
+- **背景（用户 8/14 上午发现 + dogfood §I）**：① prod 变更确认门（require_confirmation）
+  弹审批框仍显示 "session"/"always"——但确认门在 approval.py 的 allowlist 短路
+  **之前**判定，选了也不生效（下次照样弹），误导用户以为已授权；② 多 session
+  场景（gateway 推 Telegram/Discord + 多个 CLI 会话）下 approvals.timeout 默认
+  300s 超时静默 deny，用户根本看不见请求就被拒绝——"用户没机会决定"违反复核
+  语义。判定层本身是对的（确认门短路 + fail-closed 不变），本批只修交互层。
+- **修复（任务 1，选项过滤）**：
+  1. `tools/approval.py`：`prompt_dangerous_approval` 新增 `allow_session` 参数并
+     透传给回调（旧签名回调 TypeError 时自动去 allow_session 重试，兼容旧调用）；
+     `_run_approval_gate` 新增 `allow_permanent`/`allow_session` 参数（gateway
+     approval_data 不再写死 True）；`check_all_command_guards` Phase 3 对
+     `_ops_confirmation_required`（prod 确认门）传 `allow_permanent=False` +
+     `allow_session=False` 给 gateway 与 CLI 两条 surface——非 prod 普通审批保持
+     原作用域不变。
+  2. `hermes_cli/callbacks.py` `approval_callback` 签名加
+     `allow_permanent=True, allow_session=True`（默认值，兼容旧调用），choices 按
+     参数过滤（prod 门 → 只剩 `["once","deny"]`，+view 逻辑保留）。
+  3. `cli.py` `HermesCLI._approval_callback`/`_approval_choices`（实际注册的 CLI
+     交互框）同步加 `allow_session`，choices 过滤后编号/高亮提示自动只显示有效项。
+  4. TUI/API 展示层：`tui_gateway/server.py` `_emit_approval_request` 与
+     `gateway/platforms/api_server.py` `_approval_event_choices` 增加
+     `allow_session is False` → `["once","deny"]` 分支（choices 渲染处同步隐藏
+     session 提示）。
+- **修复（任务 2，超时 wait 化）**：`hermes_cli/config_defaults.py` approvals 段新增
+  `timeout_policy: "wait"`（默认 wait：超时后不自动 deny 也不自动批准，fail-closed
+  保持 pending，超时仅作"提醒间隔"；`"deny"` = 旧行为超时拒绝）。`_await_gateway_decision`
+  wait 模式超时后重推一次通知并继续挂起等待（interrupt 仍可中断 → deny）；CLI
+  交互框（cli.py + callbacks.py）wait 模式超时打印"审批仍在等待"并继续等；非交互
+  input() 循环 wait 模式 join 超时后继续等同一个输入线程。判定层未动：timeout
+  永远不等于批准。
+- **修复（任务 3，clarify 对齐）**：cli.py `_clarify_callback` + callbacks.py
+  `clarify_callback` 对齐同一 `approvals.timeout_policy`——wait 超时后不自动
+  "agent will decide"，打印提示继续等；deny 保持旧行为。`<=0` 无限等待语义
+  不变（wait 模式下 `timeout<=0` = null deadline，与既有 clarify 语义一致）。
+- **验收**：新增 tests/tools/test_approval_choices_filter.py（choices 过滤 5 组 +
+  view、HermesCLI._approval_choices 5 例、prod 确认门回调收到 False/False、非 prod
+  保持双作用域、旧签名回调兼容 2 例）+ tests/tools/test_approval_timeout_policy.py
+  （默认值 wait、gateway wait 重推 2 次 / deny 单次通知 timeout、CLI wait 越过
+  deadline 继续等 / deny 返回 timeout、input 循环 wait 继续等、clarify wait 继续等
+  / deny 自动跳过）；回归 test_approval*.py / test_ops_confirmation_gate.py /
+  test_command_guards.py / test_ops_permissions_guard.py / test_clarify_gateway.py /
+  test_cli_approval_ui.py / test_tui_approval_redaction.py / test_api_server_runs
+  （choices）/ test_commands.py 全部通过（基线既有 9 例环境噪音失败不变：config
+  readonly ×2 + mode_parity ×6 + slack config gate ×1，stash 基线同命令同结果）；
+  行为探针 5 条符合预期。
+- **注册点清单（重点）**：`set_approval_callback` 实际注册点为 `HermesCLI._approval_callback`
+  （cli.py:7512/14358 + cli_commands_mixin.py:1980 后台任务）——本批已同步签名；
+  `computer_use` 独立回调经 `_computer_use_approval_callback` 转发不受影响；
+  background_review / delegate_tool / acp 回调均带 **kwargs 或 **_，新 kwarg 天然
+  兼容。签名改动影响面：CLI（choices 过滤 + wait 策略生效）、TUI/desktop
+  （`approval.request` choices 载荷过滤）、gateway（approval_data 标志位传适配器，
+  wait 重推通知）；判定层（L3/L4 deny/hardline/prod 确认门优先级）零改动。
+- **已知风险（wait 挂起对 agent 循环的影响）**：wait 模式审批/clarify 长期挂起会
+  阻塞当前 agent 执行线程（与旧 deny 模式同样阻塞，只是不再自动解除）——后续
+  工具调用排队等待，用户可能误以为卡死；缓解：①每间隔打印/重推"仍在等待"提示，
+  ②gateway 有 interrupt（/stop、/new、inactivity）逃生口立即 resolve deny，
+  ③多 session 用户可在任一会话 /approve|/deny 解除。CLI 单会话场景若用户完全
+  离开，会一直挂到用户回来或 Ctrl+C——这是"不静默拒绝"的代价（fail-closed
+  保持 pending，绝不自动批准）；若后续要"挂起但不阻塞"（agent 先做别的），
+  需要把审批状态提升为全局 pending 队列（排期方案 B，本批未做）。
+- **核销方式**：测试常驻——prod 确认门回调 kwargs 双 False、choices 过滤、
+  timeout_policy 默认 wait、gateway wait 重推通知、CLI wait 越过 deadline 继续
+  等；行为探针命令在批次二十 prompt 验收段可复跑。
+
+### 43. 批次二十一 凭据 fail-closed 硬化——认证失败停+问用户，禁止自探测（§Q/§AD/§AF 收口） — ✅ 已实施（2026-08-14，批次二十一；commit hash 佐证：任务 1 认证失败停+问 857b364 / 任务 2 凭据缺失 fail-closed 969e008 / 任务 3 force_trip dd57bcc / 任务 4 vssh 双路径 3440d75）
+- **背景（§Q/§AD/§AF 连续 3 天实测）**：批次十六熔断只约束"失败 3 次停止重试"，
+  "停之后"没约束——agent 熔断后换工具/换姿势继续试（§AF 补丁 2 实锤 heredoc→管道→
+  base64）；凭据缺失时自行翻 ~/.ssh/ 试密钥/猜 vault 字段（§Q 实锤）；用户纠正方向
+  后仍换姿势重试（§AF 补丁 2 需求 2）。根因层 = 行为层缺 fail-closed：凭据缺失/
+  认证失败/被纠正 → 停 + 问用户。
+- **修复（任务 1，认证失败 → 停 + 问用户）**：
+  1. `tools/topo_discovery.py` `_ssh_auth_breaker_error` 扩展：熔断错误信息加
+     "请勿换用户名/换 key/翻 ~/.ssh/ 继续尝试（会触发 sshd 限流锁 15 分钟）" +
+     "3) 或询问用户提供正确凭据"（既有 1) 手动 ssh 验证凭据 2) 补充拓扑表
+     credential 声明保留，全链路可操作）。
+  2. `tools/sudo_tool.py`：本地/远端 sudo 认证失败（stderr 命中 incorrect
+     password / sorry try again / password required 等信号）→ 返回"停止自动重试 +
+     询问用户提供正确密码 + 禁止连续猜 vault 字段"引导；熔断 RuntimeError 经
+     handler 原样透传（现含问用户指令）。
+  3. `agent/prompt_builder.py` `OPS_CREDENTIAL_SSH_GUIDANCE` 新增：认证失败 →
+     停止尝试并询问用户；禁止翻 ~/.ssh/ 找 key、试多个用户名、连续猜 vault 字段、
+     换工具换姿势重试同一目标（会触发 MaxAuthTries 限流锁 15 分钟）；正确做法 =
+     报告失败原因 + 请用户提供凭据或手动执行。
+- **修复（任务 2，凭据缺失 → 问用户，禁止自探测）**：
+  1. `_build_ssh_runner` fail-closed：无 SSH 认证凭据（无 key_path/askpass_file/
+     key_passphrase_file）→ 直接报"目标主机未配置 SSH 凭据（拓扑表 credential
+     缺失）"错误，**不再回退"尝试默认 key/ssh-agent"**（§Q 根因）；sudo_password_file
+     是 sudo 密码不是 SSH 认证凭据，单独提供不放行。
+  2. `tools/sudo_tool.py` 无凭据消息扩展：3) 或询问用户提供正确凭据；禁止翻
+     ~/.ssh/ 试密钥/猜 vault 字段/换用户名试登录。
+  3. prompt 常量新增：凭据缺失/未配置时询问用户，禁止自行翻 ~/.ssh/ 找 key、
+     试多个用户名、猜 vault 字段名。
+- **修复（任务 3，用户纠正 → 停止当前路径）**：`tools/topo_discovery.py` 熔断
+  计数器加 `force_trip(host, user)` 方法——外部检测到用户纠正信号后调用，该
+  host:user 立即进入熔断态（等价 3 次失败），runner/guard 入口直接停试、零 ssh
+  调用（sudo_tool 共享计数同样生效）；prompt 常量强化：用户纠正操作方向时立即
+  停止当前尝试路径，不换姿势/换工具重试同一目标，先确认正确做法（检查工具清单/
+  问用户）再继续。会话层"检测纠正信号"的接线点不在本批白名单（conversation
+  loop），以 prompt 约束 + force_trip 可供接线实现。
+- **修复（任务 4，vssh 凭据解析双路径对齐）**：`_resolve_topology_credential`
+  加 `allow_fallback: bool = True` 参数——CLI 交互路径（用户手动 `vigil vssh`，
+  默认 True）保留 None → ssh-agent/交互回退；agent 工具路径（`sudo_exec` 传
+  False）把 None 视为硬停，调用方 fail-closed 报错问用户，不自行翻 ~/.ssh/。
+- **验收**：新增 tests/tools/test_credential_fail_closed.py（无凭据零 ssh 调用、
+  discover_host 透传、key_path/askpass 正常、sudo_password 单独不放行）+ 追加
+  test_ssh_auth_breaker.py（熔断错误含禁自探测指令、force_trip 立即熔断/零调用/
+  host 隔离/sudo_tool guard 联动）+ test_sudo_exec.py（本地 sudo 认证失败问用户、
+  breaker 错误透传）+ test_batch14_e3_vssh.py（allow_fallback=False 无凭据 None、
+  有凭据正常、sudo_exec 传 False 接线）+ test_system_prompt.py（prompt 常量三
+  行为约束 + ops 工具加载时进 stable tier）。回归 test_topo_discovery.py /
+  test_topo_tools.py / test_topo_update_contract.py / test_topo_v2.py /
+  test_sudo_stdin_guard_sources.py / test_topo_slash_command.py 全部通过
+  （174 passed, 6 skipped 为 test_topo_v2 既有版本 skip）。
+- **硬约束核对**：diff 白名单 = tools/sudo_tool.py、tools/topo_discovery.py、
+  hermes_cli/subcommands/vssh.py、agent/prompt_builder.py（行为约束常量）、对应
+  新测试 + 既有测试更新、OPS-DELTA.md——共 10 文件；无新 env var；批次十六熔断
+  判定逻辑未改（3 次计数语义不变，只扩错误信息 + 加 force_trip）；sudo_exec 工具
+  本体未改（只加认证失败引导分支 + 消息）。
+- **任务 2 影响面（不再 fallback 默认 key）**：依赖无凭据 → ssh-agent/默认 key
+  回退的合法流程 = CLI 交互路径 `topo-discover`（无 --key/无密码时此前走
+  BatchMode）+ agent 工具 `topo_discover`（无 key 参数）。本批后两路径在无凭据
+  时都返回"未配置凭据"错误——CLI 用户在场，用 --key / 交互密码 / 拓扑表 credential
+  声明即可恢复（错误消息含 3 步引导）；agent 工具路径正是 §Q 自探测源头，fail-closed
+  是目标。CLI `_prompt_credentials` 的"使用 ssh-agent / 默认 key"提示行保留（非
+  白名单文件），紧随其后的 fail-closed 错误会明确覆盖其语义。
+- **已知风险（标准位置 key 误伤评估）**：fail-closed 会拒绝"agent 用 ~/.ssh/id_rsa
+  直接连"的场景（§Q 教训的正反两面）——评估结论：不放行"标准位置有 key"豁免。
+  理由：①§Q 实锤"翻 ~/.ssh/"正是自探测，豁免会重新打开探测口（agent 无法区分
+  "标准 key"与"翻找"）；②OpenSSH 默认 key 同样触发 MaxAuthTries 遍历；③逃生口
+  已存在：用户把 key 声明进拓扑表（`credential: {type: ssh_key, ref: ~/.ssh/id_rsa}`）
+  或 `--key`/vssh 显式指定，一行声明即放行，无需探测。误伤面 = 未声明凭据的既有
+  自动化流程，报错信息含完整 3 步引导可恢复。
+- **已知风险（force_trip 接线点）**：会话层"检测用户纠正信号"（新对话轮次明确
+  否定）→ 调 force_trip 的接线不在本批白名单内（需动 conversation loop），本批
+  落地为 prompt 行为约束 + 可接线 API；若后续发现纠正后仍自试，需在 run_agent/
+  cli 检测否定反馈时调 force_trip（排期）。
+- **核销方式**：测试常驻——test_credential_fail_closed.py（零 ssh 调用断言）、
+  test_ssh_auth_breaker.py（force_trip + 熔断消息指令）、test_sudo_exec.py（认证
+  失败问用户）、test_batch14_e3_vssh.py（allow_fallback 接线）；行为探针命令在
+  批次二十一 prompt 验收段可复跑。
+
+### 44. 批次二十二 /help 清理——~/.hermes→~/.vigil 文案残留 + Examples 运维化 + 折叠命令可查性（§G 收尾） — ✅ 已实施（2026-08-14，批次二十二；commit hash 佐证：任务 1 文案清理 599ec50 / 任务 2 Examples b366672 / 任务 3 可查性 0b5aff6）
+- **背景（§G 需求 3/4/5）**：①用户机器数据根是 ~/.vigil，help 文案仍写
+  ~/.hermes/... 会误导排查（dogfood 2026-08-13 实测 9 处）；②`vigil -h` 底部
+  Examples 是上游模板（hermes-agent-dev,github-auth / gateway install），对运维
+  用户无用且误导；③58 个继承命令折叠成一行，用户不知道里面有什么、怎么查。
+- **任务 1（~/.hermes → ~/.vigil 用户可见文案清理，13 处 help/description）**：
+  1. `hermes_cli/main.py:11663` checkpoints help（`Inspect / prune / clear ~/.hermes/checkpoints/`）。
+  2. `hermes_cli/main.py:11403` secrets description（`~/.hermes/.env` → `~/.vigil/.env`）。
+  3. `hermes_cli/_parser.py:283` 顶层 `--ignore-user-config` help。
+  4. `hermes_cli/_parser.py:476` chat 版 `--ignore-user-config` help。
+  5. `hermes_cli/subcommands/acp.py:41` `--setup-browser` help（node/）。
+  6. `hermes_cli/subcommands/approvals.py:74` `--db` help（state.db）。
+  7. `hermes_cli/subcommands/claw.py:57-58` `--no-backup` help（zip snapshot + backups/）。
+  8. `hermes_cli/subcommands/webhook.py:61` `--script` help（scripts/）。
+  9. `hermes_cli/subcommands/hooks.py:19-21` description（config.yaml + shell-hooks-allowlist.json）。
+  10. `hermes_cli/subcommands/security.py:21` description（plugins/）。
+  11. `hermes_cli/subcommands/skills.py:164` reset description（skills/.bundled_manifest）。
+  12. `hermes_cli/subcommands/cron.py:51,123` `--script` help（scripts/，两处）。
+  13. `hermes_cli/subcommands/dashboard.py:185` register description（.env）。
+  14. `hermes_cli/subcommands/gateway.py:264,303` relay description（.env，两处）。
+  15. `hermes_cli/curator.py:808,819` backup/rollback help（skills/，两处）——继承命令
+      help，`--help-all` 逐条展示，任务 1 全仓 grep 漏网收编（curator.py 在白名单
+      边缘：hermes_cli/ 下但非 main/_parser/subcommands，属"继承命令 description 由
+      Vigil 展示，改它不违反"的明示类别）。
+- **任务 2（Examples 换运维场景）**：`hermes_cli/_parser.py` `_EPILOGUE` 上游模板
+  全删，换 6 条运维用例——`vigil chat`（完整 ops harness）/ `topo-discover -e prod
+  -H 10.0.1.29`（SSH 扫描）/ `watch status` / `vssh node1`（凭据注入，密码不进命令行）/
+  `config set model.default deepseek-v4-flash` / `setup`。命令名/参数形态按当前真实
+  parser 核对（topo-discover/vssh/watch 均存在）。
+- **任务 3（折叠命令可查性）**：
+  1. 折叠行提示补全：`完整列表与说明见：vigil --help-all` + 新增
+     `运维常用继承命令：doctor / sessions / cron / skills（用法：vigil <命令> --help）`。
+  2. `--help-all` 改用 `_ExpandedGroupedHelpFormatter`（继承 `_GroupedHelpFormatter`，
+     仅 `expand_inherited=True`）：Vigil 命令一组 + 继承命令一组逐条完整展开，
+     与 `-h` 同分组渲染（原来平铺）。
+  3. 展开行覆盖所有可调用名字：argparse 只为带 `help=` 的子命令生成伪 action，
+     别名（learning/memory-graph/gui）与无 help 的弃用命令（login）需专门处理——
+     别名复用正名 help、login 用子 parser description 兜底（弃用指引在 --help-all
+     可见），保证"全量"名副其实、`-h`/`--help-all` 数量一致（56 个）。
+  4. 运维高频白名单：`_VIGIL_COMMANDS` 15 个——config/logs/status 原有已覆盖，
+     新补 `doctor`/`sessions`；`resume` 未提（sessions 已覆盖会话管理，折叠行提示
+     点 doctor/sessions/cron/skills 四个即可，不过度膨胀 Vigil 组）。
+- **验收**：新增 tests/hermes_cli/test_help_text_cleanup.py——7 用例：18 条
+  help/description 旧串消失+新串就位（读源码断言）、`-h`/`--help-all` 输出无
+  ~/.hermes 且含 ~/.vigil（行为探针）、_EPILOGUE 含 6 运维示例不含上游模板、
+  `-h` Examples 段含 topo-discover/vssh、_VIGIL_COMMANDS 覆盖 config/logs/status/
+  doctor/sessions、折叠行含 --help-all 提示+运维常用提示、`--help-all` 分组标题+
+  逐条展开（moa/gateway/secrets/egress/cron 行 + gui/learning/memory-graph/login
+  别名与弃用命令行）。E1 测试 test_batch14_e1_help_grouping.py 更新
+  test_help_all_lists_inherited_commands（"继承命令（来自 hermes" not in out →
+  分组标题 + 逐条行断言，批次二十二新渲染）。回归：test_help_text_cleanup.py 7 +
+  test_batch14_e1_help_grouping.py 4 + test_commands.py + test_subparser_routing_
+  fallback.py + test_argparse_flag_propagation.py + test_startup_plugin_gating.py
+  全绿（62 passed；仅既有基线噪音 test_config_gate_included_in_slack_when_on ×1
+  与 test_gateway_service.py systemd ×5、test_relaunch.py ×2 在 base 同样失败，
+  非本批引入）。
+- **硬约束核对**：diff 白名单 = hermes_cli/main.py、hermes_cli/_parser.py、
+  hermes_cli/subcommands/*.py、hermes_cli/curator.py（继承命令 help 收编，见上）、
+  对应新测试 + E1 测试更新、OPS-DELTA.md——共 16 文件；无新 env var；无命令删除
+  （git diff 无 CommandDef 删除，login 等保留可调用）；不碰 conversation_loop /
+  prompt 缓存；数据根语义不变（display_hermes_home() 用户可见路径 ~/.vigil，
+  hermes_constants.py:787）。
+- **残留终扫（grep -rn \".hermes\" hermes_cli/ cli.py）**：help=/description=/epilog
+  上下文残留 = 0。其余 ~340 处全部保留，分三类：①代码注释/模块 docstring（如
+  main.py:680,2703,3524,3535、auth.py 各段、config_defaults.py 注释）——兼容层
+  说明，硬约束 4 明示保留；②运行时输出/错误消息（如 main.py:10094 dashboard
+  register 错误引导 print "writes HERMES_DASHBOARD_OAUTH_CLIENT_ID into
+  ~/.hermes/.env for you"）——非 help/description/epilog，本批 grep 范围外，且该
+  print 依赖具体写入实现路径，改动属行为层（排期单独处理）；③真实逻辑引用
+  （HERMES_HOME 环境名、.env 兼容加载、uninstall 清理路径等）——语义正确不能改。
+- **已知风险**：①文案改动对依赖旧路径文案的测试的影响——已扫全仓，仅本批新增
+  测试引用旧串（作为消失断言），test_cli_preloaded_skills 等含 "hermes-agent-dev"
+  的是技能名断言，与 Examples 无联动；②curator.py 在硬约束 5 白名单边缘，若
+  后续批次收紧白名单需连同说明一起评审；③--help-all 逐条展开后 login（无 help）
+  靠 description 兜底显示，若未来给 login 加回 help= 行为不变（仍显示）；④继承
+  命令数量会随上游增减变化，测试用 \d+ 正则 + ≥50 下限，不锁死具体数字（行为
+  契约而非快照）。
+- **核销方式**：测试常驻——test_help_text_cleanup.py（7 用例全自动断言）；行为
+  探针命令可复跑：`vigil -h | grep -c '~/.hermes'` = 0、`vigil -h` Examples 段含
+  topo-discover、`vigil --help-all` 分组逐条可读。
+
+### 45. 批次二十三 Trajectory 运行轨迹——事件级记录 + 审计查询/回放（DSH/TencentDB 借鉴，Vigil 独缺补上） — ✅ 已实施（2026-08-14，批次二十三；commit hash 佐证：任务 1 事件记录 77a992c / 任务 2 查询命令 40c8b60 / 任务 3 复盘回放 237dad3）
+- **背景**：运行轨迹/使用记录三家对比中 Vigil 独缺（DSH 有 append-only
+  SessionEvent log + 可回放；TencentDB 控制层有使用记录；Vigil 只有审批审计）。
+  运维审计合规是硬需求——出事时要知道"agent 当时看到了什么、为什么这么决策、
+  执行了什么"。本批落地轻量版：审计合规（谁在什么时间执行了什么命令、结果
+  如何）+ 事故复盘（当时的决策链）。不做 DSH 的 projection 折叠架构。
+- **任务 1（事件级记录，agent/trajectory.py 扩展 + 挂载点注入）**：
+  1. `record_event(**kwargs)`：append-only JSONL 落盘 <数据根>/trajectory/
+     <session_id>.jsonl；事件字段 ts/session_id/seq/type/tool/action/result/
+     approval/meta；seq 会话内递增（启动时读一次文件行数作基数，跨进程续号）。
+  2. **强制 redact**：action/result 过 redact_sensitive_text(credential_values=
+     True, force=True)——凭据值绝不落轨迹（`sudo -S <<< 'hunter2secret'` →
+     `sudo -S <<< '***'`，`ghp_xxx` → `ghp_ab...3456`，`curl -u admin:pass` →
+     `admin:***`）。
+  3. **容量控制**：单 session 上限 5000 条（MAX_EVENTS_PER_SESSION），超限记
+     一条 trajectory_truncated 后该 session 停止记录（防 runaway 会话撑爆磁盘）。
+  4. **best-effort**：任何失败只记 debug 日志，绝不干扰执行路径（挂载点用
+     try/except 包裹）。
+  5. 现有 save_trajectory（ShareGPT conversation dump）保留，事件通道为新增
+     并行通道，互不替代。
+- **任务 2（`vigil trajectory` 查询命令，hermes_cli/subcommands/trajectory.py
+  新增 + main.py 注册）**：
+  - `trajectory list`：列出所有轨迹文件（session + 事件数 + 首末事件时间跨度）。
+  - `trajectory show <session_id>`：按 seq 时间正序打印事件流；`--type
+    terminal` 只看命令事件（type 或 tool 命中，审计核心）；`--type approval`
+    只看审批事件。
+  - `trajectory search <query>`：跨 session 子串搜 action/result。
+  - `trajectory prune --before <ISO>`：删最后活动早于指定时间的轨迹文件
+    （保留期管理，默认不自动删）；naive 输入按本地时区解释。
+  - 单行可 grep 输出；show 的 session_id 做路径安全净化（防穿越）。
+- **任务 3（复盘回放，--replay）**：紧凑时间线模式——`[HH:MM:SS] +2.5s
+  [tool_result] terminal: <action> → <result>`，事件间间隔标注（识别审批 300s
+  等待/熔断锁 15 分钟等待等卡顿点）；`--replay --approval` 只看审批时间线
+  （复核"哪些命令被批准了"）。
+- **挂载点清单（最小侵入，全部 best-effort 单行调用）**：
+  1. terminal 工具调用：`tools/terminal_tool.py`——前台分支 `env.execute` 前记
+     tool_call、result_dict 构建后 return 前记 tool_result（result=exit_code +
+     输出前 200 字符）；后台分支 spawn 前记 tool_call、启动成功 return 前记
+     tool_result（"background started (pid N)"）；命令被用户中断（rc=130 +
+     [Command interrupted] marker）追加记 interrupt 事件；顶层异常记 error
+     事件。共 6 处挂载点，均不改变返回路径。
+  2. 审批事件：`tools/approval.py`——`_run_approval_gate`（check_dangerous_
+     command / request_tool_approval 的汇聚核心）与 `check_all_command_guards`
+     （terminal 命令守卫）的 gateway/CLI 两条请求路径：prompt/notify 前记
+     requested，各结果 return 前记 approved/denied/timeout；无 notify callback
+     的排队路径记 requested(pending_approval)。共 14 处挂载点（每处 1 行）。
+  3. interrupt/error：**未改 run_agent.py**（不在本批白名单）——interrupt 事件
+     由 terminal 挂载点检测 rc=130 + 中断 marker 记录（命令级中断即审计关注点）；
+     error 事件由 terminal 顶层异常路径记录。会话级 interrupt 需动 conversation
+     loop，属后续排期（prompt 任务 1.3 的 run_agent.py 挂点因白名单冲突下沉，
+     语义等价：审计可见"命令被中断"）。
+- **验收测试**：tests/agent/test_trajectory_events.py（11 用例：落盘/seq/append-
+  only、sudo 密码与 URL userinfo 打码、5000 截断+停止、写入失败不抛、save_
+  trajectory 回归、真实 terminal 执行产生 call/result 事件、真实执行命令含密钥
+  打码、两次执行两对事件、审批 deny/timeout/approved 各记 requested+结果）+
+  tests/hermes_cli/test_trajectory_cmd.py（8 用例：list 两 session、show 排序与
+  --type 过滤、缺失 session 报错、search 命中/不命中、prune 删旧留新、
+  --replay 时间线 +2.5s/+3.0s 间隔、--approval 过滤）。回归：test_terminal_tool* 4
+  套件 + test_approval* 3 套件 + test_subparser_routing_fallback.py +
+  test_batch14_e1_help_grouping.py + test_help_text_cleanup.py 全绿
+  （181 passed；既有基线噪音不在本批套件内）。
+- **硬约束核对**：diff 白名单 = agent/trajectory.py、tools/terminal_tool.py、
+  tools/approval.py、hermes_cli/subcommands/trajectory.py、hermes_cli/main.py、
+  对应新测试、OPS-DELTA.md——共 8 文件；无新 env var；**conversation_loop 未碰**
+  （run_agent.py 零改动，验证方式：git diff 无 run_agent.py/model_tools.py/
+  cli.py；挂载点全部在工具执行层 best-effort 单行调用，不改变返回路径）；
+  现有 trajectory JSONL 兼容（save_trajectory 原样保留）。
+- **行为探针（实测）**：python3 -c 模拟 terminal（含密码）+ 审批 → JSONL 4 条
+  seq 1-4、`secret leaked: False`、action 打码 `sudo -S <<< '***' ...`；
+  `vigil trajectory list` 显示 2 个 session 及事件数；`show --type approval`
+  只出审批；`--replay` 输出 `[HH:MM:SS] [tool_call] terminal: ...` 紧凑时间线。
+- **事件量性能影响评估**：record_event 单事件约 52µs（2000 事件 104ms 实测，
+  含 redact + JSONL append）；每次 terminal 执行 2 条事件约 0.1ms，相对命令
+  执行时间（秒级）可忽略；审批事件仅在有人工审批发生时产生（低频）。写入为
+  单行 append（O(1)），不读不重写文件（仅跨进程启动时读一次行数）。
+- **已知风险**：①磁盘长期占用——每条事件 ~200-400 字节，5000 条上限下单
+  session 最大 ~2MB；建议保留期（如 90 天）用 `vigil trajectory prune --before`
+  定期清理（命令已提供，默认不自动删）。②redact 截断策略——result 只存输出
+  前 200 字符（事故复盘看的是"执行了什么/结果如何"，完整输出在会话内仍可
+  复现；命令输出已在 terminal 工具层 redact 过，事件层二次 redact 兜底）。
+  ③审批 action 用 command 或 description——tirith 描述可能含长文本，事件层
+  只存摘要字段不存完整描述。④seq 跨进程续号依赖文件行数，若事件文件被外部
+  截断/损坏则续号回退（append-only 语义下正常使用不会发生）。
+- **核销方式**：测试常驻——test_trajectory_events.py（事件记录/redact/截断/
+  挂载点）+ test_trajectory_cmd.py（查询/回放）；行为探针命令在批次二十三
+  prompt 验收段可复跑。
+
+### 46. 批次二十四 拓扑状态自动同步——topo_status_sync 差异检测/确认落盘 + 状态变更主动询问（§R） — ✅ 已实施（2026-08-14，批次二十四；commit hash 佐证：任务 1 工具 6a744c9 / 任务 2 行为约束 1743d98 / 任务 3 描述引导 3c1c117）
+
+- **为什么**：§R 实测（2026-08-13 停 snipe-it）——容器 stop 后拓扑实体状态不
+  自动同步，用户需专门补"同步为 stopped"才改 entities/hosts 文件。期望：状态
+  变更后实体状态自动跟进或主动询问。现状 topo_query（查）/topo_update（改）
+  都没有"对比拓扑状态 vs 实际容器状态"的差异检测能力。
+- **怎么改**（3 文件 + 2 测试文件，均在白名单内）：
+  1. **任务 1（工具）** `tools/topo_tools.py` 新增 `topo_status_sync` agent 工具
+     （注册进 `topo` toolset，check_fn=check_topo_requirements 同 topo_query）：
+     - 参数 `host`（可选，默认全部；也接受实体名）+ `confirm`（bool，默认 False）。
+     - 读拓扑表（复用 load_topology / _all_core_entities / _entity_env），对
+       docker 容器实体（`attrs.container` / `type=docker-container` /
+       `attrs.runtime=docker`）执行 `docker ps -a --format '{{json .}}'` 检查
+       实际状态；**复用发现引擎 `topo_discovery._parse_docker_ps`**（模块级函数
+       直接 import，未新写探测，topo_discovery.py 零改动）。
+     - **L3 合并**：容器实体的 attrs.container/status 存第三层 detail 档案
+       （topo_update 写 status 的目标文件），L2 索引行只有引用——`topo_status_sync`
+       先 `_enrich_entity_detail` 合并 L3 再判断，避免误判"无容器实体"。
+     - 差异判定：实际状态可确定（docker ps 明确 running/exited）且与拓扑 status
+       不一致 → `action=update`；不确定（容器缺失/主机不可达/无 docker 权限）→
+       `action=ask`；实体未声明 status 时**不自动覆盖手动值**（容器实际 stopped
+       且未声明 → ask，避免覆盖手工维护）。
+     - `confirm=False`（默认）dry-run 只报告差异不落盘；`confirm=True` 对
+       action=update 实体复用 `topo_update` 写 status（PROD 实体仍走审批矩阵，
+       action=ask 不动）。docker 原始 State → 既有 status 语义映射（exited/
+       created/dead/removing/paused → stopped，restarting → running），**不引入
+       新枚举**。返回 `{checked, changed, confirm, differences, needs_user,
+       write_errors}`。
+     - 探测 runner 复用发现引擎 `_build_ssh_runner`/`_build_local_runner`：
+       SSH 凭据走拓扑表 credential 引用（ssh_key → key_path 引用，密码类凭据
+       runner 内部 askpass 注入），凭据值不进 argv/日志。
+  2. **任务 2（行为约束）** `agent/prompt_builder.py` 新增静态常量
+     `OPS_TOPOLOGY_SYNC_GUIDANCE`（不读环境/会话，随 stable tier 进入缓存前缀，
+     字节稳定）；`agent/system_prompt.py` 在 topo 工具加载时注入 stable tier——
+     "执行改变容器/服务状态的命令（docker stop/start/restart/rm、systemctl、
+     kubectl scale/delete/restart、docker compose down/up）后主动跑
+     topo_status_sync 检查差异，不一致时向用户报告并询问'是否同步拓扑状态？'，
+     用户确认后 confirm=True；不要假设拓扑自动更新"。`topo_status_sync` 加入
+     `_OPS_SECURITY_TOOLS`（该工具会 SSH 探测，SSH 纪律块同步生效）。
+  3. **任务 3（描述引导）** `topo_tools.py` topo_update schema 描述补一句：
+     "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认
+     同步；手动 topo_update 写 status 仅用于 topo_status_sync 无法确定的状态"
+     ——引导 agent 走正规链路，不绕过工具直接 patch 文件（§P/§R 问题 2）。
+- **验收测试**：tests/tools/test_topo_status_sync.py（新，10 用例：dry-run 检测
+  差异不落盘 / confirm 落盘 status=stopped / docker 不可用 → ask 不落盘 / 无差异
+  checked>0 changed=0 / host 过滤 / 未声明 status 不覆盖 → ask / handler 透传 /
+  registry 注册 + toolset 成员 + schema 引导）；tests/agent/test_system_prompt.py
+  增量 3 用例（常量含 topo_status_sync + 命令清单关键词、topo 工具加载时进
+  stable tier、无 topo 工具不注入）。回归：tests/tools/test_topo_tools.py +
+  test_topo_discovery.py + test_system_prompt.py 全绿（91 passed）。
+- **行为探针（实测）**：mock docker ps（exited）+ 实体 running → 差异 detected
+  （action=update/write_status=stopped），dry-run 文件不变；confirm=True → 实体
+  status 变 stopped（落盘断言）；无差异 → checked=1 changed=0；system prompt
+  常量含 topo_status_sync 约束；resolve_toolset("topo") 含 topo_status_sync。
+- **docker ps State 解析复用方式**：import 已有模块级函数
+  `topo_discovery._parse_docker_ps`（不提取不改写；topo_discovery.py 零改动），
+  探测命令 `docker ps -a` 与发现引擎的 `docker ps` 同一 JSON 格式，解析共用。
+- **硬约束核对**：diff 白名单 = tools/topo_tools.py、agent/prompt_builder.py、
+  agent/system_prompt.py、tests/tools/test_topo_status_sync.py、
+  tests/agent/test_system_prompt.py、OPS-DELTA.md——共 6 文件；无新
+  HERMES_*/VIGIL_* env var；**conversation_loop / prompt 缓存 / 压缩逻辑未碰**；
+  权限矩阵/审批判定未动（topo_update PROD 审批原样复用）。
+- **已知风险**：①无 docker 权限/主机不可达 → 全部 action=ask，不自动写（宁可
+  问也不误写）；②手动维护实体（status 手工填/未声明 status）不会被自动覆盖——
+  未声明 status 且实际 stopped → ask 由用户决定；③SSH 探测仅支持拓扑表
+  credential ssh_key 引用，vault/askpass 类凭据的 host 探测会走 ask 分支
+  （交给用户/未来 vssh 凭据链路）；④confirm=True 逐实体写（PROD 逐个审批），
+  部分成功部分失败时 write_errors 可见。
+- **核销方式**：测试常驻——test_topo_status_sync.py（差异检测/落盘/ask 语义）+
+  test_system_prompt.py 常量断言；行为探针命令在批次二十四 prompt 验收段可复跑。
+
+### 47. 批次二十五 反馈闭环——runbook_create 工具 + 专有名词绑定 + 跑通任务主动提议沉淀（§AH 补丁 4 + TencentDB 借鉴） — ✅ 已实施（2026-08-14，批次二十五；commit hash 佐证：任务 1 工具 9e0ca98 / 任务 2 名词绑定 774eaa3 / 任务 3 主动提议 6427596）
+
+- **为什么**：§AH 补丁 4 实测——用户说"沉淀为 runbook 下次修改 ansible 之后进行
+  syntax-check"，agent 写了 Markdown 文档（/opt/ansible/runbooks/*.md）而非结构化
+  YAML，且 runbook 体系只有 load/checkpoint 没有创建工具，无自动触发。TencentDB
+  反馈闭环借鉴：跑通任务 → runbook 草稿自动沉淀。本批 = 反馈闭环第一步。
+- **怎么改**（3 文件 + 3 测试文件，均在白名单内）：
+  1. **任务 1（runbook_create 工具）** `tools/runbook_tools.py` 新增 `runbook_create`
+     agent 工具（注册进 `runbook` toolset，check_fn=check_runbook_requirements 同
+     runbook_load/checkpoint）：
+     - 参数：runbook（kebab-case 必填）/ title / triggers / summary / steps /
+       rollback / env / kind（deploy|incident|checklist，默认 incident）/
+       overwrite（默认 False）。
+     - **fail-closed 校验**：名称严格 `^[a-z0-9]+(-[a-z0-9]+)*$`（防路径穿越
+       ".."/隐藏文件）；steps/commands 非空；commands 疑似明文凭据（赋值式
+       password=/token:、flag 式 --password/-p、curl `-u user:pass`）→ 拒绝并
+       提示改用 `<vault:path/field>` 占位符（复用 _VAULT_REF_RE 机制），错误消息
+       **只报键名不报值**（凭据值绝不回显）；`-p 8080:80` 端口发布不误判。
+     - 写盘前复用 `_validate_runbook` 校验 → 保证 runbook_load 原样加载回来
+       （kind=deploy 的 checklist/rollback 规则一并生效）；同名已存在未
+       overwrite → 报错。写 `<home>/runbooks/<name>.yaml`（复用 _runbooks_dir）。
+     - 返回 {status: created/updated, name, path, steps}。
+  2. **任务 2（专有名词绑定）** `agent/prompt_builder.py` 静态常量
+     `OPS_RUNBOOK_GUIDANCE`（任务 3 扩展前的名词绑定段）："用户说'沉淀/记录/保存为
+     runbook' = 调 **runbook_create** 创建结构化 YAML（runbooks/<name>.yaml），
+     **不是写 Markdown 文档**；runbook 是程序层机制（triggers+steps+commands+
+     rollback，runbook_load 加载、runbook_checkpoint 门控）；意图是行为约束时把
+     约束写进 triggers+steps，创建后告知'已创建 runbook，触发词为 …'"。
+     `agent/system_prompt.py`：`runbook_create` 加入 `_OPS_SECURITY_TOOLS`，新增
+     `_RUNBOOK_TOOLS` 门控——runbook 工具加载时注入 stable tier（字节稳定静态文本）。
+  3. **任务 3（主动提议 + 尾部引导）** 同常量追加反馈闭环段："完成可复用运维流程
+     （故障修复/部署/排查跑通）后主动提议'这次流程可以沉淀为 runbook，要我创建
+     吗？'——用户确认才创建，不自动创建（噪音）也不从不提议（浪费经验）；判断
+     标准 = 是否可能再次发生（重启服务/同类故障/同一应用部署）。执行既有 runbook
+     有新坑/新命令时提议更新（overwrite=true）"。`tools/runbook_tools.py`
+     `_full_payload` 的 note 尾部追加"若本次执行有改进（新坑/新命令），可向用户
+     提议更新本 runbook（runbook_create overwrite=true）"。
+- **验收测试**：tests/tools/test_runbook_create.py（新，14 用例：创建→runbook_load
+  回读 / triggers 模糊匹配 / 明文密码拒绝且值不回显 / vault 占位符放行 /
+  `-p 8080:80` 不误判 / overwrite 保护与更新 / 非法名称（含 ".."）拒绝 / 空 steps
+  拒绝 / deploy checklist 规则复用 / handler 透传 / registry 注册 + schema /
+  load 尾部引导）。tests/agent/test_system_prompt.py 增量 4 用例（名词绑定 + 提议
+  语义 + 注入/不注入门控）。回归：tests/tools/test_runbook_tools.py +
+  test_runbook_vault_refs.py 全绿（52 passed）。
+- **行为探针（实测）**：runbook_create 创建 ansible-syntax-check → runbook_load
+  回读 triggers/commands；明文 `curl -u admin:secret123` 拒绝且错误消息不含值、
+  `<vault:ansible/pass>` 放行；prompt 常量含 runbook_create + "不是写 Markdown
+  文档" + "沉淀为 runbook"；runbook_load 返回尾部含"提议更新…overwrite=true"；
+  resolve_toolset("runbook") 含 runbook_create。
+- **runbook_create schema 与现有样例一致性**：落盘结构对齐 schema v0.1 样例
+  （name/title/version:1/env/kind/triggers/summary/steps/rollback 字段序一致）；
+  写盘前复用 `_validate_runbook`（load 同一校验器）保证可回读。env 沿用 runbook
+  schema 既有枚举 test/uat/prod（批次 prompt 写 local/test/dev/prod 系与 topo
+  枚举混写；硬约束"不改 runbook_load/checkpoint 既有语义"优先，若放开 _VALID_ENVS
+  会改 load 校验行为——已按 schema v0.1 收敛，工具描述已注明）。
+- **硬约束核对**：diff 白名单 = tools/runbook_tools.py、agent/prompt_builder.py、
+  agent/system_prompt.py、tests/tools/test_runbook_create.py、
+  tests/agent/test_system_prompt.py、OPS-DELTA.md——共 6 文件；无新
+  HERMES_*/VIGIL_* env var；**conversation_loop / prompt 缓存 / 压缩逻辑未碰**；
+  runbook_load / runbook_checkpoint 语义未动（create 为纯增量，load 仅尾部追加
+  一行引导文本）。
+- **已知风险**：①主动提议噪音控制——判断标准（是否可能再次发生）在 prompt 常量
+  里约束，靠 LLM 遵循；不自动创建，用户确认才落盘。②overwrite 误覆盖风险——
+  同名需显式 overwrite=true，默认拒绝；覆盖前无二次确认，靠工具参数显式化兜底。
+  ③明文凭据识别是"疑似"启发式（宁误报提示改占位符），非加密检测；复杂形态
+  （base64/拼接）不在本批覆盖。④env 枚举与批次 prompt 文案差异（见一致性说明）。
+- **核销方式**：测试常驻——test_runbook_create.py（创建/回读/凭据拒绝/覆盖）+
+  test_system_prompt.py 常量断言；行为探针命令在批次二十五 prompt 验收段可复跑。
+
+### 45. 批次二十六 /help 会话内清理最后一轮 + 花哨命令去留 + UI 壳收尾 — ✅ 已实施（2026-08-15，批次二十六）
+- **背景**：批二十二已做第一轮 /help 清理，用户 2026-08-13 排期的逐项清单还有
+  残留：/reload-skills 文案仍写 ~/.hermes；/debug nous 是死入口（上传即外泄到
+  Nous 内部存储）；/usage 描述含 Codex 概念；Skill Commands 段逐条列出 67 个
+  hermes 继承的消费级 skill；/pet /hatch /moa 三个死命令（宠物消费功能 + 依赖
+  Nous 多模型）仍挂在命令面；UI 壳合入后工作树残留 node_modules / web_dist /
+  package-lock.json 噪音。
+- **任务 1（/reload-skills 文案）**：`hermes_cli/commands.py` reload-skills 描述
+  `~/.hermes/skills/` → `VIGIL_HOME (~/.vigil) skills/`；连带
+  `agent/skill_commands.py` scan_skill_commands / reload_skills docstring 同改。
+- **任务 2（/debug nous 死入口移除）**：`commands.py` args_hint `[nous|local]` →
+  `[local]`；`cli_commands_mixin.py` `_handle_debug_command` nous 恒 False（nous
+  词容忍但绝不置 True），输 nous 打印一行中文提示（已移除，按默认 paste 处理或
+  用 /debug local），args.nous=False 字段保留（run_debug_share 读取）；
+  hermes_cli/debug.py 底层 nous 路径未动（子命令层面不在本批范围）。
+- **任务 3（/usage 文案中性化）**：`commands.py` usage 描述去 "banked Codex
+  limit reset" → "rate-limit reset"；`cli.py` 两处 docstring + `gateway/
+  slash_commands.py` 注释同改；reset 功能与 handler 语义原样保留（用户已拍板）。
+- **任务 4（Skill Commands 折叠）**：`cli.py` show_help ⚡ Skill Commands 段
+  改为一行 "⚡ Skill Commands (N installed) — 使用 --help-all 或 /skills 查看全部"；
+  skill 注册/执行机制完全不动（自定义 skill 仍可 /skill-name 调用）。
+- **任务 5（花哨命令去留，用户已拍板）**：从 COMMAND_REGISTRY 删除 /pet
+  （petdex）、/hatch + 别名 /generate-pet、/moa；删除对应 CLI dispatch 分支与
+  handler（cli.py process_command + cli_commands_mixin.py _handle_pet_command /
+  _handle_hatch_command）；`_SLACK_VIA_HERMES_ONLY` 移除 moa 并清理注释；
+  /curator、/kanban 保留不动；宠物机制 hermes_cli/pets.py 保留（TUI 在用）；
+  ui-tui/ 前端不动；`-m moa:<preset>` 模型路由与 MoA provider 基建保留（非命令面）。
+- **任务 6（UI 壳收尾）**：`web_dist` 是构建产物（wheel 不打包——pyproject
+  package-data 无 web_dist、setup.py 注明运行时解析，`cd web && npm run build`
+  生成）→ .gitignore 新增 `node_modules/` + `hermes_cli/web_dist/`；本地
+  npm install 产生的 package-lock.json `peer: true` 噪音回退（web_dist 未提交，
+  锁文件不随批提交）。
+- **验收测试**：tests/hermes_cli/test_debug.py（nous 词容忍但不置 True + 已移除
+  提示）、tests/cli/test_moa_command.py（/moa 从 registry 删除 + unknown-command
+  不排程，保留 TestNormalizeMoaModel）、tests/hermes_cli/test_help_text_cleanup.py
+  / test_batch14_e1_help_grouping.py（--help-all 继承命令名单去掉 moa）；回归
+  test_commands.py / test_busy_policy_invariants.py / test_commands_execute.py /
+  test_pet_toggle.py / test_cli_pet_pane.py / gateway/test_moa_one_shot_restore.py。
+- **硬约束核对**：只改显示层/命令注册/handler + 测试 + OPS-DELTA.md + .gitignore
+  （白名单内）；无新 HERMES_*/VIGIL_* env var；conversation_loop / prompt 缓存 /
+  压缩逻辑未碰；工具（tool）语义、skills/ 目录未动；gateway/run.py 的 /moa
+  dispatch 分支未动（本批只清 CLI 命令面，gateway 属消息面，单独排期）。
+- **核销方式**：测试常驻——debug/moa/help 三组用例 + /help 实测（--help-all
+  无 moa/pet/hatch，Skill Commands 折叠行）；季度体检检查命令面是否回添
+  消费级命令、nous 上传路径是否重新暴露。
