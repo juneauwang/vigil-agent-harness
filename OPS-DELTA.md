@@ -2194,3 +2194,42 @@
 - **核销方式**：测试常驻——debug/moa/help 三组用例 + /help 实测（--help-all
   无 moa/pet/hatch，Skill Commands 折叠行）；季度体检检查命令面是否回添
   消费级命令、nous 上传路径是否重新暴露。
+
+### 46. 批次二十七 runbook env 枚举对齐——test/uat/prod → local/test/dev/prod + 老值档位映射（批二十五遗留关闭）
+- **背景**：批十已把 ops env 统一为四值 local/test/dev/prod（ops_permissions
+  `_ENV_TIERS` / `_LEGACY_ENV_TIER_MAP` / `_map_env_tier`，老自定义名读取按档位
+  映射不报错、只打一次警告）。但 runbook schema 的 `_VALID_ENVS` 仍是 v0.1 三值
+  {"test","uat","prod"}——用户按四值写 `env: dev/local` 直接报错；
+  `_full_payload` 的 env_mismatch 拿老值 uat 与四值 session_env 比会误判不匹配。
+  批二十五 runbook_create 落地时为避免改 load 语义收敛到 v0.1，本批专项对齐。
+- **任务 1（load 路径）**：`tools/runbook_tools.py` `_VALID_ENVS` →
+  {"local","test","dev","prod"}；新增 `_normalize_runbook_env(env)`——四值直通，
+  老值 uat→prod、staging→dev（直接复用 ops_permissions._map_env_tier，档位映射 +
+  每名只警告一次），ops 配置显式声明的老自定义名按 isolation/role 档位接受；
+  **未声明名（如 sandbox）拒绝**——不沿用 _map_env_tier 的"名字推导默认 dev"
+  兜底，避免把拼写错误静默接受成 dev（与验收探针/测试一致）。`_validate_runbook`
+  用映射后值校验，**不改写 data["env"]**（load 保留文件原值，约束 1）；错误消息
+  改为"可选 local/test/dev/prod；老值 uat/staging 按档位映射"。`_full_payload`
+  env_mismatch 比较前 rb env 与 session env 各自映射（uat→prod 与 prod 会话不误报）。
+- **任务 2（create 路径）**：`runbook_create` env 校验用同款
+  `_normalize_runbook_env`；uat/staging 接受并**落盘映射后的新值**（create 是新
+  写入，直接规范到新枚举：uat→prod、staging→dev）；未声明名拒绝，错误消息去掉
+  "与 runbook schema v0.1 一致"；docstring 补 env 四值 + 映射说明。
+- **验收测试**：test_runbook_tools.py +4（load 老值 uat fixture 不报错且
+  data["env"] 保留 "uat"、session=prod 不误报 / session=test 报不匹配；load
+  sandbox 拒绝且消息含新枚举；_validate_runbook 直调四值+uat/staging 合法、
+  sandbox 抛错）。test_runbook_create.py +6（四值 parametrize 落盘+回读、uat→prod
+  / staging→dev 落盘断言、sandbox 拒绝 + 错误消息含新枚举、无 "test/uat/prod"
+  字样）。回归 test_runbook_vault_refs.py 全绿；套件 30→40 passed，失败集合与
+  基线一致（无新增）。
+- **硬约束核对**：diff 白名单 = tools/runbook_tools.py、tests/tools/
+  test_runbook_tools.py、tests/tools/test_runbook_create.py、OPS-DELTA.md 共 4
+  文件；无新 HERMES_*/VIGIL_* env var；conversation_loop / prompt 缓存未碰；
+  runbook_load/checkpoint/create 返回契约未变（load 不落盘改写、create 返回值
+  结构不变）；映射语义复用 ops_permissions（import 无循环，tools 同包）。
+- **遗留关闭**：批二十五"env 枚举与批次 prompt 文案差异"遗留关闭（OPS-DELTA
+  条目 45 记录项 ④）；README/cli.py/topo_discover 的 "test/uat/prod" 历史文案
+  不在本批白名单，单独排期。
+- **核销方式**：测试常驻——test_runbook_tools.py / test_runbook_create.py 的
+  四值+映射用例；季度体检检查 _normalize_runbook_env 与 ops_permissions
+  _map_env_tier 是否仍一致（映射表若有更新需同步）。
