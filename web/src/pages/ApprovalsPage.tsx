@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Clock, ShieldAlert, ShieldCheck, X, XCircle } from "lucide-react";
+import { Check, Clock, ShieldCheck, X, XCircle } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { ApprovalItem, ApprovalScope } from "@/lib/api";
 import { isMockEnabled, MOCK_APPROVALS } from "@/lib/mock";
@@ -65,7 +65,7 @@ export default function ApprovalsPage() {
         .catch((e: unknown) => {
           setError(
             e instanceof ApiError
-              ? `[${e.code}] ${e.message}（后端批二十八未就绪时显示此提示）`
+              ? `[${e.code}] ${e.message}`
               : e instanceof Error
                 ? e.message
                 : String(e),
@@ -87,7 +87,7 @@ export default function ApprovalsPage() {
       await load(offset);
     } catch (e) {
       if (e instanceof ApiError && e.code === "timeout") {
-        setError(`审批 ${id} 已超时（fail-closed，不自动批准），命令保持 pending。`);
+        setError(`审批 ${id} 已超时，不自动通过；命令保持待审批状态。`);
       } else if (e instanceof ApiError) {
         setError(`[${e.code}] ${e.message}`);
       } else {
@@ -130,13 +130,13 @@ export default function ApprovalsPage() {
           {total} 条
         </span>
         <span className="ml-auto text-xs text-[var(--vigil-muted)]">
-          GET /api/approvals · 超时 fail-closed
+          超时审批不自动通过
         </span>
       </div>
 
       {mockNote && (
         <div className="mb-3 inline-flex items-center gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-          <Clock className="size-3" /> 模拟数据（文档 IP / 占位符，无真实凭据）
+          <Clock className="size-3" /> 模拟数据
         </div>
       )}
 
@@ -198,7 +198,7 @@ export default function ApprovalsPage() {
       {items.length === 0 ? (
         <div className="rounded-md border border-dashed border-[var(--vigil-border)] p-12 text-center text-sm text-[var(--vigil-muted)]">
           暂无审批条目
-          {error && <div className="mt-1 text-xs opacity-70">（后端批二十八未就绪；前端已按契约接线）</div>}
+          {error && <div className="mt-1 text-xs opacity-70"></div>}
         </div>
       ) : (
         <div className="vigil-card">
@@ -277,12 +277,7 @@ export default function ApprovalsPage() {
         </div>
       )}
 
-      {items.length === 0 && !error && (
-        <p className="mt-3 text-xs text-[var(--vigil-muted)]">
-          <ShieldAlert className="mr-1 inline size-3" />
-          交互设计：风险分级（L1-L3）+ 行内批准/拒绝；超时 fail-closed（409 timeout）。
-        </p>
-      )}
+      {items.length === 0 && !error && null}
     </div>
   );
 }

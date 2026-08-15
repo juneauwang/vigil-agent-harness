@@ -1,11 +1,11 @@
 import { useMemo } from "react";
-import { useNavigate } from "react-router";
 import type { TopologyView } from "@/lib/api";
 import { cn } from "@/lib/ops";
 
 /**
- * 轻量拓扑示意（真实渲染，非占位）：集群盒 → 主机条 → 服务点 + 纤细连线。
- * 琥珀点 = 关键链路服务；点击跳拓扑页。无光晕/3D/装饰图形。
+ * 轻量拓扑示意（只读预览，非交互图）：集群盒 → 主机条 → 服务点 + 纤细连线。
+ * 琥珀点 = 关键链路服务。节点带悬停名称 tooltip；SVG 保留原始宽度，
+ * 窄容器横向滚动（避免等比压扁看不清）。
  */
 const W = 960;
 const CLUSTER_Y = 10;
@@ -41,8 +41,8 @@ export function TopologyMiniGraph({
   view: TopologyView;
   className?: string;
 }) {
-  const navigate = useNavigate();
   const kpNames = new Set(view.key_path_entity_names ?? []);
+
   const { clusters, height } = useMemo(() => {
     const clusters: ClusterNode[] = [];
     const grouped = new Map<string, TopologyView["hosts"]>();
@@ -95,18 +95,15 @@ export function TopologyMiniGraph({
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => navigate("/topology")}
-      title="打开资产拓扑页"
+    <div
       className={cn(
-        "block w-full cursor-pointer rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-1 text-left transition-colors hover:border-[var(--vigil-primary)]/50",
+        "scroll-thin overflow-x-auto rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-1",
         className,
       )}
     >
       <svg
         viewBox={`0 0 ${W} ${height}`}
-        className="h-auto w-full"
+        className="h-auto w-full min-w-[720px]"
         role="img"
         aria-label="拓扑缩略图：集群 / 主机 / 服务"
         preserveAspectRatio="xMidYMid meet"
@@ -133,7 +130,7 @@ export function TopologyMiniGraph({
           )}
         </g>
 
-        {/* clusters */}
+        {/* clusters — 卡片底 + 主色描边 */}
         {clusters.map((c) => (
           <g key={`c-${c.name}`}>
             <rect
@@ -143,35 +140,43 @@ export function TopologyMiniGraph({
               height={CLUSTER_H}
               rx={4}
               fill="var(--vigil-card)"
-              stroke="currentColor"
+              stroke="var(--vigil-primary)"
+              strokeOpacity="0.45"
               strokeWidth="1"
-              className="text-[var(--vigil-muted)]"
             />
             <text
               x={c.cx}
               y={CLUSTER_Y + 15}
               textAnchor="middle"
               fontSize="9"
-              fontWeight="500"
-              fill="currentColor"
-              className="text-[var(--vigil-text)]"
+              fontWeight="600"
+              fill="var(--vigil-primary)"
             >
               {c.name.length > 10 ? `${c.name.slice(0, 10)}…` : c.name}
             </text>
+            <title>{`集群 ${c.name}`}</title>
           </g>
         ))}
 
-        {/* hosts */}
+        {/* hosts — 主色浅条 */}
         {clusters.flatMap((c) =>
           c.hosts.map((h) => (
             <g key={`h-${h.name}`}>
-              <rect x={h.cx - 4} y={HOST_Y} width={8} height={HOST_H} rx={2} fill="currentColor" opacity="0.7" className="text-[var(--vigil-muted)]" />
-              <title>{h.name}</title>
+              <rect
+                x={h.cx - 4}
+                y={HOST_Y}
+                width={8}
+                height={HOST_H}
+                rx={2}
+                fill="var(--vigil-primary)"
+                opacity="0.55"
+              />
+              <title>{`主机 ${h.name}`}</title>
             </g>
           )),
         )}
 
-        {/* service dots — 琥珀 = 关键链路 */}
+        {/* service dots — 灰点，关键链路琥珀 */}
         {clusters.flatMap((c) =>
           c.hosts.flatMap((h) =>
             h.services.map((s, i) => (
@@ -180,14 +185,15 @@ export function TopologyMiniGraph({
                 cx={s.cx}
                 cy={s.cy}
                 r={SVC_R}
-                fill={kpNames.has(s.name) ? "#f59e0b" : "currentColor"}
-                opacity={kpNames.has(s.name) ? 1 : 0.5}
-                className="text-[var(--vigil-muted)]"
-              />
+                fill={kpNames.has(s.name) ? "#f59e0b" : "var(--vigil-muted)"}
+                opacity={kpNames.has(s.name) ? 1 : 0.55}
+              >
+                <title>{`服务 ${s.name}${kpNames.has(s.name) ? "（关键链路）" : ""}`}</title>
+              </circle>
             )),
           ),
         )}
       </svg>
-    </button>
+    </div>
   );
 }

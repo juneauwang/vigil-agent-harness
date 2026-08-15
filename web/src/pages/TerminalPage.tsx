@@ -14,7 +14,7 @@ export default function TerminalPage() {
         <TerminalSquare className="size-5 text-[var(--vigil-muted)]" />
         <h1 className="text-lg font-semibold">Terminal</h1>
         <span className="text-xs text-[var(--vigil-muted)]">
-          · 执行 / 审计 / YAML（POST /api/exec + SSE，批二十八契约）
+          · 执行 / 审计 / YAML
         </span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col">

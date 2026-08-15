@@ -16,7 +16,7 @@ import {
   Terminal,
   TriangleAlert,
 } from "lucide-react";
-import { api, type HealthResponse, type TopologyResponse } from "@/lib/api";
+import { api, type ApprovalItem, type HealthResponse, type TopologyResponse } from "@/lib/api";
 import { cn, formatUptime } from "@/lib/ops";
 import { TerminalPanel } from "@/components/TerminalPanel";
 
@@ -95,6 +95,21 @@ export default function App() {
     };
   }, []);
 
+  // 待审批数量（顶部徽标 + 铃铛角标）
+  const [pendingCount, setPendingCount] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    api
+      .getApprovals({ status: "pending", limit: 1 })
+      .then((resp) => {
+        if (alive) setPendingCount(resp.total ?? 0);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // 侧边栏：默认 60px 纯图标，可展开 200px
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -156,32 +171,35 @@ export default function App() {
         </div>
 
         <form onSubmit={goSearch} className="relative hidden w-full max-w-md flex-1 sm:block">
-          <Search className="absolute left-3 top-1/2 size-3.5 -translate-y-1/2 text-[var(--vigil-muted)]" />
-          <input
-            value={globalQuery}
-            onChange={(e) => setGlobalQuery(e.target.value)}
-            placeholder="Search hosts, services, commands…"
-            className="vigil-input pl-9"
-          />
+          <div className="flex h-8 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-3 focus-within:border-[var(--vigil-primary)]">
+            <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
+            <input
+              value={globalQuery}
+              onChange={(e) => setGlobalQuery(e.target.value)}
+              placeholder="搜索主机 / 服务 / 命令…"
+              className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
+            />
+          </div>
         </form>
 
         <div className="ml-auto flex items-center gap-3 text-sm">
           {/* API Healthy */}
           <span
             className={cn("vigil-badge hidden lg:inline-flex", headerMeta.apiOk ? "text-[var(--vigil-ok)]" : "text-[var(--vigil-error)]")}
-            title="GET /api/health"
+            title="服务健康检查"
           >
             <span className={cn("vigil-status-dot", headerMeta.apiOk ? "dot-ok" : "dot-error")} />
             API {headerMeta.apiOk ? "Healthy" : "Degraded"}
           </span>
 
-          {/* Approvals N（当前 0） */}
+          {/* 待审批数（点击跳审批中心） */}
           <button
             type="button"
             onClick={() => navigate("/approvals")}
+            title="待审批（点击进入审批中心）"
             className="vigil-badge hidden lg:inline-flex hover:bg-[var(--vigil-muted-bg)]"
           >
-            Approvals 0
+            Approvals {pendingCount}
           </button>
 
           {/* 运行时长 */}
@@ -192,21 +210,14 @@ export default function App() {
             type="button"
             onClick={toggle}
             aria-label={dark ? "切换浅色模式" : "切换深色模式"}
+            title={dark ? "切换浅色模式" : "切换深色模式"}
             className="flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
           >
             {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>
 
-          {/* 铃铛红点 → 审批中心 */}
-          <button
-            type="button"
-            onClick={() => navigate("/approvals")}
-            aria-label="Approvals"
-            className="relative flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
-          >
-            <Bell className="size-4" />
-            <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-red-500" />
-          </button>
+          {/* 待审批通知（铃铛 + 数量角标 + 下拉列表，可跳审批中心） */}
+          <ApprovalBell />
 
           {/* 设置菜单（主题 + 版本，无 Hermes 继承页入口） */}
           <SettingsMenu dark={dark} onToggleTheme={toggle} />
@@ -230,6 +241,10 @@ export default function App() {
                   key={item.path}
                   to={item.path}
                   title={collapsed ? item.label : undefined}
+                  onClick={() => {
+                    // 点当前页导航项 = 回到概览（或保持收起态交互）
+                    if (active) navigate("/overview");
+                  }}
                   className={cn(
                     "flex h-10 items-center rounded-md transition-colors",
                     collapsed ? "w-10 justify-center" : "w-[176px] gap-2 px-2.5",
@@ -307,6 +322,101 @@ export default function App() {
 }
 
 /** 顶部设置菜单：主题切换 + 版本信息（无 Hermes 继承页入口）。 */
+/** 待审批通知：铃铛 + 数量角标；点开下拉列出待审批项，可跳审批中心。 */
+function ApprovalBell() {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<ApprovalItem[]>([]);
+  const [count, setCount] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getApprovals({ status: "pending", limit: 5 })
+      .then((resp) => {
+        if (!alive) return;
+        setItems(resp.approvals ?? []);
+        setCount(resp.total ?? 0);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: globalThis.MouseEvent) => {
+      const el = ref.current;
+      if (el && !el.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="待审批通知"
+        title={`待审批 ${count} 项`}
+        aria-expanded={open}
+        className="relative flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
+      >
+        <Bell className="size-4" />
+        {count > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-semibold text-white">
+            {count > 99 ? "99+" : count}
+          </span>
+        )}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-50 mt-1 w-80 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-1 shadow-[var(--vigil-shadow)]">
+          <div className="px-2.5 py-1.5 text-[11px] font-medium tracking-wide text-[var(--vigil-muted)]">
+            待审批（{count}）
+          </div>
+          {items.length === 0 ? (
+            <div className="px-2.5 py-3 text-center text-xs text-[var(--vigil-muted)]">暂无待审批</div>
+          ) : (
+            items.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  navigate("/approvals");
+                  setOpen(false);
+                }}
+                className="flex w-full flex-col gap-0.5 rounded px-2.5 py-1.5 text-left hover:bg-[var(--vigil-muted-bg)]"
+              >
+                <span className="truncate font-mono text-xs text-[var(--vigil-text)]">{item.command}</span>
+                <span className="text-[11px] text-[var(--vigil-muted)]">
+                  {item.env ? `${item.env} · ` : ""}
+                  {item.grade ? `L${item.grade} · ` : ""}
+                  {item.id}
+                </span>
+              </button>
+            ))
+          )}
+          <div className="mt-1 border-t border-[var(--vigil-border)] pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                navigate("/approvals");
+                setOpen(false);
+              }}
+              className="vigil-link w-full px-2.5 py-1 text-left text-xs"
+            >
+              进入审批中心 →
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsMenu({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -335,6 +445,7 @@ function SettingsMenu({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: (
         onClick={() => setOpen((v) => !v)}
         aria-label="设置菜单"
         aria-expanded={open}
+        title="设置（主题 / 版本）"
         className="flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
       >
         <Settings className="size-4" />

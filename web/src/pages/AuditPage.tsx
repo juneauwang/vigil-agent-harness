@@ -41,7 +41,7 @@ export default function AuditPage() {
       .catch((e: unknown) => {
         setError(
           e instanceof ApiError
-            ? `[${e.code}] ${e.message}（后端批二十八未就绪时显示此提示）`
+            ? `[${e.code}] ${e.message}`
             : e instanceof Error
               ? e.message
               : String(e),
@@ -83,8 +83,13 @@ export default function AuditPage() {
     };
   }, [selectedSession, typeFilter, mock]);
 
+  // 事件行点击 = 展开/收起切换（再次点击同一行收起）
   const openDetail = async (seq: number) => {
     if (!selectedSession) return;
+    if (detail?.seq === seq) {
+      setDetail(null);
+      return;
+    }
     setDetail(null);
     if (mock) {
       setDetail(MOCK_AUDIT_EVENTS.find((e) => e.seq === seq) ?? null);
@@ -115,9 +120,11 @@ export default function AuditPage() {
       ? "text-sky-600 dark:text-sky-400"
       : t === "approval"
         ? "text-amber-600 dark:text-amber-400"
-        : t === "tool"
+        : t === "tool" || t === "tool_call"
           ? "text-emerald-600 dark:text-emerald-400"
-          : "text-[var(--vigil-muted)]";
+          : t === "tool_result"
+            ? "text-violet-600 dark:text-violet-400"
+            : "text-[var(--vigil-muted)]";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -125,14 +132,14 @@ export default function AuditPage() {
         <div className="flex items-center gap-2">
           <History className="size-5 text-[var(--vigil-muted)]" />
           <h1 className="text-lg font-semibold">Audit</h1>
-          <span className="text-xs text-[var(--vigil-muted)]">· 运行轨迹（trajectory JSON 化）</span>
+          <span className="text-xs text-[var(--vigil-muted)]">· 审计日志</span>
         </div>
-        <span className="ml-auto text-xs text-[var(--vigil-muted)]">GET /api/audit/sessions + events</span>
+        <span className="ml-auto text-xs text-[var(--vigil-muted)]">只读 · 内容已脱敏</span>
       </div>
 
       {mockNote && (
         <div className="mb-3 inline-flex w-fit items-center gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-          模拟数据（文档 IP / 占位符）
+          模拟数据
         </div>
       )}
 
@@ -160,7 +167,7 @@ export default function AuditPage() {
           </div>
           {sessions.length === 0 ? (
             <div className="rounded-md border border-dashed border-[var(--vigil-border)] p-6 text-center text-xs text-[var(--vigil-muted)]">
-              暂无会话（后端未就绪）
+              暂无会话
             </div>
           ) : (
             <div className="vigil-card">
@@ -193,14 +200,18 @@ export default function AuditPage() {
           <div className="flex items-center gap-2">
             <select
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
+              onChange={(e) => {
+                setTypeFilter(e.target.value);
+                setDetail(null); // 筛选变更：清详情，列表重新拉取
+              }}
               className="vigil-input h-8 w-36 text-xs"
             >
-              <option value="">type 全部</option>
+              <option value="">全部类型</option>
               <option value="terminal">terminal</option>
+              <option value="tool_call">tool_call</option>
+              <option value="tool_result">tool_result</option>
               <option value="approval">approval</option>
               <option value="llm">llm</option>
-              <option value="tool">tool</option>
             </select>
             <span className="text-xs text-[var(--vigil-muted)]">
               会话 <span className="font-mono">{selectedSession ?? "-"}</span> · {events.length} 事件
