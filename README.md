@@ -45,8 +45,9 @@ Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实�
 | 层 | 载体 | 职责 |
 |---|---|---|
 | **事实层** | 平台拓扑表（`topo_query` / `topo_update` / `topo-discover`） | 长记忆地记住平台：实体、环境、依赖、归属。`topo-discover` 自动发现（SSH 扫 docker/k8s/端口）生成，任何运维动作前先确认目标身份与环境；跨环境操作默认拒绝 |
-| **程序层** | runbook（`runbook_load` / `runbook_checkpoint`） | 唯一允许的「怎么动」：事故处理按 runbook 匹配流程执行；部署按 checklist 阶段门推进，不允许跳过 |
-| **纵深防御** | 权限矩阵（命令分级 L1–L4 × 环境 test/uat/prod） | 命令 → **执行 / 审批 / 拒绝** 三态裁决。矩阵 DENY 不可被 yolo、mode=off 或 allowlist 绕过；approve 必须有真人在场 |
+| **程序层** | runbook（`runbook_load` / `runbook_checkpoint` / `runbook_create`） | 唯一允许的「怎么动」：事故处理按 runbook 匹配流程执行；部署按 checklist 阶段门推进；跑通的处置流程可 `runbook_create` 沉淀为结构化 YAML，越用越厚 |
+| **审计层** | 运行轨迹（`vigil trajectory` / Web 审计页） | append-only 事件级日志：谁在什么时间执行了什么命令、结果如何；可查询、可回放、可裁剪——运维审计合规的底账 |
+| **纵深防御** | 权限矩阵（命令分级 L1–L4 × 环境 local/test/dev/prod） | 命令 → **执行 / 审批 / 拒绝** 三态裁决。矩阵 DENY 不可被 yolo、mode=off 或 allowlist 绕过；approve 必须有真人在场 |
 
 额外两个让它"越用越强"的机制：
 
@@ -109,6 +110,15 @@ vigil topo-discover          # 引导式：填 IP + 凭据 → 扫描 → 人工
 也可以手动编辑拓扑表（`topology.yaml` + `entities/`，高级用法）。然后让它干
 第一件真活：**"检查拓扑里哪些实体 last_verified 过期了"**。
 
+### Web 控制台（UI 壳）
+
+v0.1.15 起带 Web 控制台（`vigil dashboard`，默认 http://127.0.0.1:9119）：
+拓扑 / Runbook / 状态 / 审批 / 审计 / 终端六页可视化界面，审批和命令执行走同一套
+权限矩阵与审批门（Web 上批准 = 与 CLI 同一个审批流，prod 变更确认门照样拦）。
+```bash
+vigil dashboard        # 启动控制台，浏览器打开 http://127.0.0.1:9119
+```
+
 ### 从源码安装（开发者 / 自托管）
 
 想改代码、跑测试、自定义 fork 时用这条路。一键脚本 `setup-vigil.sh`
@@ -168,7 +178,7 @@ Vigil 的数据目录已独立为 `~/.vigil`（可用 `VIGIL_HOME` 覆盖）。`
 启动 `vigil -p ops` 后,控制台头部长这样(真实输出):
 
 ```text
-╭──────────────────── Vigil v0.1.0 (2026.8.8) ────────────────────╮
+╭──────────────────── Vigil v0.1.15 (2026.8.15) ──────────────────╮
 │                PROFILE     ops                                   │
 │       /\_/\    ENV         [test]                                │
 │      ( ◉.◉ )   GATES       matrix ON · L1–L4 × env               │
@@ -208,6 +218,9 @@ Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
 - [x] 品牌化（Vigil 入口 / banner / 皮肤）
 - [x] PyPI 分发（pip install vigil-agent-harness）
 - [x] 一键安装脚本 `setup-vigil.sh`（源码安装/自托管路径：clone → 装依赖 → 初始化）
+- [x] Web 控制台（`vigil dashboard`，拓扑/runbook/审批/审计/终端）
+- [x] 运行轨迹审计（`vigil trajectory`，append-only 事件日志 + 查询/回放/裁剪）
+- [x] 反馈闭环（`runbook_create`：跑通的任务沉淀为结构化 runbook）
 - [ ] 同步 adapter（terraform.tfstate / k8s API）
 - [ ] 拓扑体检 cron（自动检查实体 freshness）
 - [x] 数据目录独立（默认 `~/.vigil`，`VIGIL_HOME` 可覆盖；旧 `~/.hermes` 自动回退）
