@@ -135,6 +135,9 @@ except ImportError:
 WEB_DIST = Path(os.environ["HERMES_WEB_DIST"]) if "HERMES_WEB_DIST" in os.environ else Path(__file__).parent / "web_dist"
 _log = logging.getLogger(__name__)
 
+# Dashboard process start (monotonic) — /api/health uptime_seconds.
+_PROCESS_STARTED_AT = time.monotonic()
+
 # ---------------------------------------------------------------------------
 # Per-channel subscriber registry used by /api/pub (PTY-side gateway → dashboard)
 # and /api/events (dashboard → browser sidebar).  Keyed by an opaque channel id
@@ -964,7 +967,7 @@ _SCHEMA_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "dashboard.theme": {
         "type": "select",
         "description": "Web dashboard visual theme",
-        "options": ["default", "midnight", "ember", "mono", "cyberpunk", "rose"],
+        "options": ["vigil-console", "vigil-console-dark", "default", "default-large", "nous-blue", "midnight", "ember", "mono", "cyberpunk", "rose"],
     },
     "display.resume_display": {
         "type": "select",
@@ -3028,6 +3031,9 @@ async def get_health():
         "ok": True,
         "version": __version__,
         "auth_required": bool(getattr(app.state, "auth_required", False)),
+        # Dashboard 进程运行时长（秒）——顶部栏 "运行时长" 徽标；仅整数秒，
+        # 不含任何路径/身份信息（PUBLIC_API_PATHS 契约：无秘密）。
+        "uptime_seconds": int(time.monotonic() - _PROCESS_STARTED_AT),
     }
 
 
@@ -16126,7 +16132,7 @@ def _render_active_theme_bootstrap_css() -> str:
     """
     try:
         config = load_config()
-        active = cfg_get(config, "dashboard", "theme", default="default")
+        active = cfg_get(config, "dashboard", "theme", default="vigil-console")
         if not active or not isinstance(active, str):
             return ""
         # Built-in: the bundle already owns the definition, no flash.
@@ -16371,7 +16377,7 @@ def mount_spa(application: FastAPI):
 # Built-in dashboard themes — label + description only.  The actual color
 # definitions live in the frontend (web/src/themes/presets.ts).
 _BUILTIN_DASHBOARD_THEMES = [
-    {"name": "default",       "label": "Vigil Blue-Grey",       "description": "Vigil 蓝灰运维主题——深灰蓝底 + 冷蓝光晕"},
+    {"name": "default",       "label": "Vigil Blue-Grey (Legacy)", "description": "Vigil 蓝灰运维主题——深灰蓝底 + 冷蓝光晕（旧默认，保留对比）"},
     {"name": "default-large", "label": "Vigil Blue-Grey (Large)", "description": "Vigil Blue-Grey with bigger fonts and roomier spacing"},
     {"name": "nous-blue",     "label": "Nous Blue",           "description": "Light mode — vivid Nous-blue accents on cream canvas"},
     {"name": "midnight",      "label": "Midnight",            "description": "Deep blue-violet with cool accents"},
@@ -16379,6 +16385,8 @@ _BUILTIN_DASHBOARD_THEMES = [
     {"name": "mono",      "label": "Mono",           "description": "Clean grayscale — minimal and focused"},
     {"name": "cyberpunk", "label": "Cyberpunk",      "description": "Neon green on black — matrix terminal"},
     {"name": "rose",      "label": "Rosé",           "description": "Soft pink and warm ivory — easy on the eyes"},
+    {"name": "vigil-console",       "label": "Vigil Console",       "description": "浅灰底 #f6f8fa + 靛蓝 #2563eb — GitLab 开源风控制台（默认）"},
+    {"name": "vigil-console-dark",  "label": "Vigil Console Dark",  "description": "Vigil Console 深色变体（#0f1c2d 系 + 主色亮化）"},
 ]
 
 
@@ -16633,7 +16641,7 @@ async def get_dashboard_themes():
     them without a stub.
     """
     config = load_config()
-    active = cfg_get(config, "dashboard", "theme", default="default")
+    active = cfg_get(config, "dashboard", "theme", default="vigil-console")
     user_themes = _discover_user_themes()
     seen = set()
     themes = []

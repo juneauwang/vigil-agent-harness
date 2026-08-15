@@ -1,74 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router";
 import {
-  ChevronDown,
-  ChevronRight,
   Database,
+  LayoutGrid,
   Layers,
   Link2,
+  List,
   Network,
-  RefreshCw,
   Search,
   Server,
-  ShieldAlert,
 } from "lucide-react";
-import { Button } from "@nous-research/ui/ui/components/button";
-import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import { Input } from "@nous-research/ui/ui/components/input";
-import { Card, CardContent } from "@nous-research/ui/ui/components/card";
-import { Badge } from "@nous-research/ui/ui/components/badge";
 import { api } from "@/lib/api";
-import type {
-  TopologyCard,
-  TopologyHost,
-  TopologyService,
-  TopologyView,
-} from "@/lib/api";
-import { OpsKeyValueTree } from "@/components/OpsKeyValueTree";
-import { cn } from "@/lib/utils";
+import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "@/lib/api";
+import { TopologyMiniGraph } from "@/components/TopologyMiniGraph";
+import { DetailBox } from "@/components/DetailTree";
+import { EnvBadge, StatusPill } from "@/components/StatusBits";
+import { cn, matchesSearch, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
 
-const ENV_COLORS: Record<string, string> = {
-  local: "bg-sky-600",
-  test: "bg-amber-600",
-  dev: "bg-orange-600",
-  prod: "bg-red-600",
-};
-
-function envClass(env?: string): string {
-  return ENV_COLORS[(env ?? "").trim().toLowerCase()] ?? "bg-slate-500";
-}
-
-const STATUS_OK = new Set(["running", "up", "healthy", "ok"]);
-const STATUS_DOWN = new Set(["stopped", "down", "offline", "error", "failed"]);
-
-function statusClass(status?: string): string {
-  const s = (status ?? "").trim().toLowerCase();
-  if (STATUS_OK.has(s)) return "bg-emerald-500/15 text-emerald-400";
-  if (STATUS_DOWN.has(s)) return "bg-slate-500/15 text-slate-400";
-  return "bg-amber-500/15 text-amber-400";
-}
-
-function EnvBadge({ env }: { env?: string }) {
-  if (!env?.trim()) return null;
-  return (
-    <Badge tone="default" className={cn("border-transparent text-white", envClass(env))}>
-      {env}
-    </Badge>
-  );
-}
-
-function StatusPill({ status }: { status?: string }) {
-  if (!status?.trim()) return null;
-  return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs",
-        statusClass(status),
-      )}
-    >
-      ● {status}
-    </span>
-  );
-}
+const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; label: string }> = [
+  { id: "all", label: "全部" },
+  { id: "ok", label: "正常" },
+  { id: "warn", label: "告警" },
+  { id: "error", label: "故障" },
+  { id: "offline", label: "离线" },
+];
 
 function Facts({ card }: { card: TopologyCard }) {
   const facts: Array<[string, string]> = [];
@@ -84,274 +39,186 @@ function Facts({ card }: { card: TopologyCard }) {
       {facts.map(([k, v]) => (
         <span
           key={k}
-          className="rounded-md bg-muted px-2 py-0.5 text-xs text-foreground/80"
+          className="rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-1.5 py-px text-[11px]"
         >
-          <span className="text-muted-foreground">{k}</span> {v}
+          <span className="text-[var(--vigil-muted)]">{k}</span> {v}
         </span>
       ))}
     </div>
   );
 }
 
-/** Search matcher: name / type / env, case-insensitive substring. */
-function matchesCard(card: TopologyCard, q: string): boolean {
-  if (!q) return true;
-  const hay = `${card.name} ${card.type ?? ""} ${card.env ?? ""}`.toLowerCase();
-  return hay.includes(q);
-}
-
-function DetailToggle({
-  open,
-  onToggle,
-  hasDetail,
-  label,
-}: {
-  open: boolean;
-  onToggle: () => void;
-  hasDetail: boolean;
-  label: string;
-}) {
-  if (!hasDetail) return null;
-  return (
-    <Button
-      ghost
-      size="sm"
-      className="h-6 gap-1 px-2 text-xs text-foreground/70"
-      onClick={onToggle}
-      aria-expanded={open}
-    >
-      {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-      {open ? "收起" : label}
-    </Button>
-  );
-}
-
-function DetailBox({ detailKey, view }: { detailKey: string; view: TopologyView }) {
-  const detail = view.details?.[detailKey];
-  return (
-    <div className="mt-2 rounded-lg border border-border bg-muted/40 p-3">
-      {detail ? (
-        <OpsKeyValueTree data={detail} />
-      ) : (
-        <span className="text-sm text-muted-foreground">无详情数据</span>
-      )}
-    </div>
-  );
-}
-
 function ServiceRow({
   svc,
-  hostName,
-  view,
   q,
-  openDetail,
-  toggleDetail,
+  filter,
 }: {
   svc: TopologyService;
-  hostName: string;
-  view: TopologyView;
   q: string;
-  openDetail: string | null;
-  toggleDetail: (key: string) => void;
+  filter: StatusFilterId;
 }) {
   const card = svc.card;
-  if (!matchesCard(card, q)) return null;
-  const detailKey = `service:${hostName}:${card.name}`;
-  const open = openDetail === detailKey;
+  if (!matchesSearch(card, q)) return null;
+  if (!statusMatchesFilter(card.status, filter)) return null;
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-2 rounded-lg px-2 py-1.5 text-sm",
-        "odd:bg-muted/50",
-        card.on_key_path && "ring-1 ring-inset ring-amber-500/50",
+        "flex flex-wrap items-center gap-2 rounded px-2 py-1 text-sm",
+        "odd:bg-[var(--vigil-muted-bg)]",
+        card.on_key_path && "ring-1 ring-inset ring-amber-500/40",
       )}
     >
       <span className="font-medium">{card.name}</span>
       {card.on_key_path && (
-        <span className="text-amber-500" title="关键链路实体">
-          <Link2 className="size-3.5" />
+        <span title="关键链路实体">
+          <Link2 className="size-3.5 text-amber-500" />
         </span>
       )}
-      {card.type && (
-        <span className="rounded-md bg-muted px-1.5 py-0.5 text-xs text-foreground/70">
-          {card.type}
-        </span>
-      )}
+      {card.type && <span className="text-xs text-[var(--vigil-muted)]">{card.type}</span>}
       {card.endpoint && (
-        <span className="font-mono text-xs text-muted-foreground">{card.endpoint}</span>
+        <span className="font-mono text-[11px] text-[var(--vigil-muted)]">{card.endpoint}</span>
       )}
       <StatusPill status={card.status} />
-      <DetailToggle
-        open={open}
-        onToggle={() => toggleDetail(detailKey)}
-        hasDetail={Boolean(svc.detail)}
-        label="详情"
-      />
-      {open && <DetailBox detailKey={detailKey} view={view} />}
+      <div className="ml-auto">
+        <DetailBox detail={svc.detail} />
+      </div>
     </div>
   );
 }
 
 function HostCard({
   host,
-  view,
   q,
-  openDetail,
-  toggleDetail,
+  filter,
 }: {
   host: TopologyHost;
-  view: TopologyView;
   q: string;
-  openDetail: string | null;
-  toggleDetail: (key: string) => void;
+  filter: StatusFilterId;
 }) {
   const card = host.card;
-  const detailKey = `host:${card.name}`;
-  const open = openDetail === detailKey;
-
-  // Search: the host card shows when the host itself matches, or any of its
-  // services match (service rows are filtered individually below).
-  const anyServiceMatches = host.services.some((svc) => matchesCard(svc.card, q));
-  if (!matchesCard(card, q) && !anyServiceMatches) return null;
-
-  const visibleServices = host.services.filter((svc) => matchesCard(svc.card, q));
+  const anyServiceVisible = host.services.some(
+    (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
+  );
+  if (!matchesSearch(card, q)) return null;
+  if (!statusMatchesFilter(card.status, filter) && !anyServiceVisible) return null;
+  const visibleServices = host.services.filter(
+    (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
+  );
 
   return (
-    <Card
-      className={cn(
-        "shadow-sm transition-shadow hover:shadow-md",
-        card.on_key_path && "border-amber-500/60",
-      )}
-    >
-      <CardContent className="p-4">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Server className="size-4 text-muted-foreground" />
-          <span className="font-semibold">{card.name}</span>
-          <EnvBadge env={card.env} />
-          <StatusPill status={card.status} />
-          {card.on_key_path && (
-            <span className="text-xs text-amber-500" title="关键链路实体">
-              <Link2 className="size-3.5" /> 关键链路
-            </span>
-          )}
-          <div className="ml-auto">
-            <DetailToggle
-              open={open}
-              onToggle={() => toggleDetail(detailKey)}
-              hasDetail={Boolean(host.detail)}
-              label="主机详情"
+    <div className={cn("vigil-card p-3.5", card.on_key_path && "border-amber-500/50")}>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Server className="size-4 text-[var(--vigil-muted)]" />
+        <span className="font-semibold">{card.name}</span>
+        <EnvBadge env={card.env} />
+        <StatusPill status={card.status} />
+        {card.on_key_path && (
+          <span className="flex items-center gap-1 text-[11px] text-amber-500">
+            <Link2 className="size-3" /> 关键链路
+          </span>
+        )}
+        <div className="ml-auto">
+          <DetailBox detail={host.detail} />
+        </div>
+      </div>
+      <Facts card={card} />
+      <div className="border-t border-dashed border-[var(--vigil-border)] pt-2">
+        <div className="mb-1 text-[11px] text-[var(--vigil-muted)]">
+          服务{visibleServices.length > 0 ? `（${visibleServices.length}）` : ""}
+        </div>
+        {visibleServices.length === 0 ? (
+          <div className="text-xs italic text-[var(--vigil-muted)]">无服务数据</div>
+        ) : (
+          visibleServices.map((svc) => (
+            <ServiceRow
+              key={svc.card.name}
+              svc={svc}
+              q={q}
+              filter={filter}
             />
-          </div>
-        </div>
-        <Facts card={card} />
-        <div className="border-t border-dashed border-border pt-2">
-          <div className="mb-1.5 text-xs text-muted-foreground">
-            服务{visibleServices.length > 0 ? `（${visibleServices.length}）` : ""}
-          </div>
-          {visibleServices.length === 0 ? (
-            <div className="text-xs italic text-muted-foreground">无服务数据</div>
-          ) : (
-            visibleServices.map((svc) => (
-              <ServiceRow
-                key={svc.card.name}
-                svc={svc}
-                hostName={card.name}
-                view={view}
-                q={q}
-                openDetail={openDetail}
-                toggleDetail={toggleDetail}
-              />
-            ))
-          )}
-        </div>
-        {open && <DetailBox detailKey={detailKey} view={view} />}
-      </CardContent>
-    </Card>
+          ))
+        )}
+      </div>
+    </div>
   );
 }
 
 function CrossCard({
   svc,
-  view,
   q,
-  openDetail,
-  toggleDetail,
+  filter,
 }: {
   svc: TopologyService;
-  view: TopologyView;
   q: string;
-  openDetail: string | null;
-  toggleDetail: (key: string) => void;
+  filter: StatusFilterId;
 }) {
   const card = svc.card;
-  if (!matchesCard(card, q)) return null;
-  const detailKey = `cross:${card.name}`;
-  const open = openDetail === detailKey;
+  if (!matchesSearch(card, q)) return null;
+  if (!statusMatchesFilter(card.status, filter)) return null;
   return (
-    <Card
-      className={cn(
-        "shadow-sm transition-shadow hover:shadow-md",
-        card.on_key_path && "border-amber-500/60",
-      )}
-    >
-      <CardContent className="p-4">
-        <div className="mb-2 flex flex-wrap items-center gap-2">
-          <Layers className="size-4 text-muted-foreground" />
-          <span className="font-semibold">{card.name}</span>
-          <EnvBadge env={card.env} />
-          <StatusPill status={card.status} />
-          {card.on_key_path && (
-            <span className="text-xs text-amber-500">
-              <Link2 className="size-3.5" />
-            </span>
-          )}
-          <div className="ml-auto">
-            <DetailToggle
-              open={open}
-              onToggle={() => toggleDetail(detailKey)}
-              hasDetail={Boolean(svc.detail)}
-              label="详情"
-            />
-          </div>
+    <div className={cn("vigil-card p-3.5", card.on_key_path && "border-amber-500/50")}>
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Layers className="size-4 text-[var(--vigil-muted)]" />
+        <span className="font-semibold">{card.name}</span>
+        <EnvBadge env={card.env} />
+        <StatusPill status={card.status} />
+        {card.on_key_path && <Link2 className="size-3 text-amber-500" />}
+        <div className="ml-auto">
+          <DetailBox detail={svc.detail} />
         </div>
-        <Facts card={card} />
-        {open && <DetailBox detailKey={detailKey} view={view} />}
-      </CardContent>
-    </Card>
+      </div>
+      <Facts card={card} />
+    </div>
+  );
+}
+
+/** 高密度列表视图行。 */
+function ListRow({ card, kind }: { card: TopologyCard; kind: string }) {
+  return (
+    <div className="grid grid-cols-[1fr_auto_auto_auto_1fr_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm last:border-b-0 hover:bg-[var(--vigil-muted-bg)]">
+      <span className="flex items-center gap-1.5 truncate">
+        {card.on_key_path && <Link2 className="size-3 shrink-0 text-amber-500" />}
+        <span className="font-medium">{card.name}</span>
+      </span>
+      <span className="text-xs text-[var(--vigil-muted)]">{kind}</span>
+      {card.type ? (
+        <span className="text-xs text-[var(--vigil-muted)]">{card.type}</span>
+      ) : (
+        <span />
+      )}
+      <EnvBadge env={card.env} />
+      <span className="truncate font-mono text-[11px] text-[var(--vigil-muted)]">
+        {card.endpoint ?? "-"}
+      </span>
+      <StatusPill status={card.status} />
+    </div>
   );
 }
 
 export default function TopologyPage() {
+  const [searchParams] = useSearchParams();
   const [view, setView] = useState<TopologyView | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [query, setQuery] = useState("");
-  const [openDetail, setOpenDetail] = useState<string | null>(null);
+  const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
+  const [filter, setFilter] = useState<StatusFilterId>("all");
+  const [viewMode, setViewMode] = useState<"card" | "list">("card");
 
-  const load = () => {
-    setLoading(true);
-    setError(null);
+  useEffect(() => {
+    let alive = true;
     api
       .getTopology()
       .then((resp) => {
-        if (resp.ok && resp.data) {
-          setView(resp.data);
-        } else {
-          setView(null);
-          setError(resp.error ?? "拓扑加载失败");
-        }
+        if (!alive) return;
+        if (resp.ok && resp.data) setView(resp.data);
+        else setError(resp.error ?? "拓扑加载失败");
       })
       .catch((e: unknown) => {
-        setView(null);
-        setError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(load, []);
-
-  const toggleDetail = (key: string) =>
-    setOpenDetail((prev) => (prev === key ? null : key));
+        if (alive) setError(e instanceof Error ? e.message : String(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   const q = query.trim().toLowerCase();
 
@@ -371,164 +238,218 @@ export default function TopologyPage() {
     }
     return order
       .filter((name) => byCluster.has(name))
-      .map((name) => ({
-        name,
-        meta: meta.get(name),
-        hosts: byCluster.get(name)!,
-      }));
+      .map((name) => ({ name, meta: meta.get(name), hosts: byCluster.get(name)! }));
   }, [view]);
 
-  if (loading) {
-    return (
-      <div className="flex min-h-[40vh] items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Spinner />
-        <span>加载拓扑…</span>
-      </div>
-    );
-  }
-
   return (
-    <div className="mx-auto w-full max-w-7xl p-4 lg:p-6">
-      {/* Header */}
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+    <div className="flex h-full min-h-0 flex-col">
+      {/* 工具条 */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2">
-          <Network className="size-5 text-muted-foreground" />
-          <h1 className="text-lg font-semibold">拓扑视图</h1>
+          <Network className="size-5 text-[var(--vigil-muted)]" />
+          <h1 className="text-lg font-semibold">Topology</h1>
         </div>
-        <Button ghost size="sm" onClick={load} aria-label="刷新">
-          <RefreshCw className="size-4" />
-        </Button>
-        <div className="ml-auto flex flex-wrap items-center gap-3">
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* 状态筛选 */}
+          <div className="flex items-center gap-0.5 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
+            {STATUS_FILTER_LABELS.map((f) => (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => setFilter(f.id)}
+                className={cn(
+                  "rounded px-2 py-0.5 text-[11px] transition-colors",
+                  filter === f.id
+                    ? "bg-[var(--vigil-primary)] text-white"
+                    : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]",
+                )}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
+          {/* 列表/卡片切换 */}
+          <div className="flex items-center gap-0.5 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
+            <button
+              type="button"
+              onClick={() => setViewMode("card")}
+              aria-label="卡片视图"
+              className={cn(
+                "rounded p-1",
+                viewMode === "card"
+                  ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]"
+                  : "text-[var(--vigil-muted)]",
+              )}
+            >
+              <LayoutGrid className="size-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode("list")}
+              aria-label="列表视图"
+              className={cn(
+                "rounded p-1",
+                viewMode === "list"
+                  ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]"
+                  : "text-[var(--vigil-muted)]",
+              )}
+            >
+              <List className="size-3.5" />
+            </button>
+          </div>
+
+          {/* 搜索 */}
           <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              className="w-64 pl-8"
-              placeholder="搜索 name / type / env…"
+            <Search className="absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-[var(--vigil-muted)]" />
+            <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              placeholder="搜索 name / type / env…"
+              className="vigil-input h-8 w-56 pl-7"
             />
           </div>
-          <span className="text-xs text-muted-foreground">凭据已过滤 · 只读</span>
         </div>
       </div>
 
       {error ? (
-        <Card className="border-dashed">
-          <CardContent className="flex flex-col items-center gap-3 p-10 text-center">
-            <ShieldAlert className="size-8 text-muted-foreground" />
-            <div className="text-sm text-muted-foreground">{error}</div>
-            <Button size="sm" onClick={load}>
-              重试
-            </Button>
-          </CardContent>
-        </Card>
+        <div className="vigil-card border-dashed p-10 text-center text-sm text-[var(--vigil-muted)]">
+          {error}
+        </div>
       ) : view ? (
-        <>
-          {/* Meta strip */}
-          <div className="mb-5 rounded-lg border border-border bg-card p-3 text-xs text-muted-foreground shadow-sm">
-            <div className="mb-1 flex flex-wrap gap-x-4 gap-y-1">
-              <span>
-                数据根：<span className="text-foreground/80">{view.data_root}</span>
-              </span>
-              <span>生成时间：{view.generated_at}</span>
-              <span>
-                数据来源：
-                {view.sources && view.sources.length > 0 ? view.sources.join("、") : "-"}
-              </span>
-              <span>
-                环境：
-                {view.environments && view.environments.length > 0
-                  ? view.environments.join("、")
-                  : "-"}
-              </span>
-            </div>
-            <div className="flex flex-wrap gap-x-4 gap-y-1">
-              <span>{view.clusters.length} 集群</span>
-              <span>{view.hosts.length} 主机</span>
-              <span>{view.hosts.reduce((n, h) => n + h.services.length, 0)} 服务</span>
-              <span>{view.cross_host.length} 跨主机实体</span>
-              <span>{view.key_paths.length} 条关键链路</span>
-              <span className="ml-auto text-muted-foreground/70">schema v{view.version ?? "?"}</span>
-            </div>
+        <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+          {/* Meta + 关键链路缩略图 */}
+          <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--vigil-muted)]">
+            <span>数据根：{view.data_root}</span>
+            <span>{view.clusters.length} 集群</span>
+            <span>{view.hosts.length} 主机</span>
+            <span>{view.hosts.reduce((n, h) => n + h.services.length, 0)} 服务</span>
+            <span>{view.cross_host.length} 跨主机实体</span>
+            <span>{view.key_paths.length} 条关键链路</span>
           </div>
 
-          {/* Cluster sections */}
-          {groups.map((group) => (
-            <section key={group.name} className="mb-8">
-              <h2 className="mb-3 flex flex-wrap items-baseline gap-2 text-base font-semibold">
-                <Database className="size-4 text-muted-foreground" />
-                集群 {group.name}
-                {group.meta?.description && (
-                  <span className="text-xs font-normal text-muted-foreground">
-                    — {group.meta.description}
-                  </span>
-                )}
-                <span className="text-xs font-normal text-muted-foreground">
-                  （{group.hosts.length} 台主机）
-                </span>
-              </h2>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {group.hosts.map((host) => (
-                  <HostCard
-                    key={host.card.name}
-                    host={host}
-                    view={view}
-                    q={q}
-                    openDetail={openDetail}
-                    toggleDetail={toggleDetail}
-                  />
-                ))}
-              </div>
-            </section>
-          ))}
+          <div className="vigil-card mb-4 p-3">
+            <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-[var(--vigil-muted)]">
+              <Database className="size-3.5" />
+              关键链路缩略图（琥珀点 = 链上服务）
+            </div>
+            <TopologyMiniGraph view={view} />
+          </div>
 
-          {view.hosts.length === 0 && (
-            <p className="text-sm italic text-muted-foreground">
-              拓扑表暂无主机（hosts 段为空）。
-            </p>
+          {viewMode === "list" ? (
+            <div className="vigil-card p-2">
+              {groups.map((group) => {
+                const visibleHosts = group.hosts.filter((host) => {
+                  if (!matchesSearch(host.card, q)) return false;
+                  const svcVisible = host.services.some(
+                    (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
+                  );
+                  return statusMatchesFilter(host.card.status, filter) || svcVisible;
+                });
+                if (visibleHosts.length === 0) return null;
+                return (
+                  <div key={group.name} className="mb-2 last:mb-0">
+                    <div className="flex items-center gap-2 px-2 py-1 text-xs font-semibold">
+                      <Database className="size-3.5 text-[var(--vigil-muted)]" />
+                      集群 {group.name}
+                      <span className="font-normal text-[var(--vigil-muted)]">
+                        （{visibleHosts.length} 台主机）
+                      </span>
+                    </div>
+                    <div className="rounded border border-[var(--vigil-border)]/70">
+                      {visibleHosts.map((host) => (
+                        <div key={host.card.name}>
+                          <ListRow card={host.card} kind="host" />
+                          {host.services
+                            .filter(
+                              (s) =>
+                                matchesSearch(s.card, q) &&
+                                statusMatchesFilter(s.card.status, filter),
+                            )
+                            .map((s) => (
+                              <ListRow key={s.card.name} card={s.card} kind="service" />
+                            ))}
+                        </div>
+                      ))}
+                      {view.cross_host
+                        .filter(
+                          (c) =>
+                            matchesSearch(c.card, q) &&
+                            statusMatchesFilter(c.card.status, filter),
+                        )
+                        .map((c) => (
+                          <ListRow key={c.card.name} card={c.card} kind="cross_host" />
+                        ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {view.hosts.length === 0 && (
+                <p className="px-2 py-4 text-sm italic text-[var(--vigil-muted)]">
+                  拓扑表暂无主机（hosts 段为空）。
+                </p>
+              )}
+            </div>
+          ) : (
+            <>
+              {groups.map((group) => (
+                <section key={group.name} className="mb-6">
+                  <h2 className="mb-2.5 flex flex-wrap items-baseline gap-2 text-sm font-semibold">
+                    <Database className="size-4 text-[var(--vigil-muted)]" />
+                    集群 {group.name}
+                    {group.meta?.description && (
+                      <span className="text-xs font-normal text-[var(--vigil-muted)]">
+                        — {group.meta.description}
+                      </span>
+                    )}
+                    <span className="text-xs font-normal text-[var(--vigil-muted)]">
+                      （{group.hosts.length} 台主机）
+                    </span>
+                  </h2>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+                    {group.hosts.map((host) => (
+                      <HostCard
+                        key={host.card.name}
+                        host={host}
+                        q={q}
+                        filter={filter}
+                      />
+                    ))}
+                  </div>
+                </section>
+              ))}
+
+              {view.cross_host.length > 0 && (
+                <section className="mb-6">
+                  <h2 className="mb-2.5 flex items-center gap-2 text-sm font-semibold">
+                    <Layers className="size-4 text-[var(--vigil-muted)]" />
+                    跨主机实体（{view.cross_host.length}）
+                  </h2>
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                    {view.cross_host.map((svc) => (
+                      <CrossCard key={svc.card.name} svc={svc} q={q} filter={filter} />
+                    ))}
+                  </div>
+                </section>
+              )}
+            </>
           )}
 
-          {/* Cross-host entities */}
-          {view.cross_host.length > 0 && (
-            <section className="mb-8">
-              <h2 className="mb-3 flex items-center gap-2 text-base font-semibold">
-                <Layers className="size-4 text-muted-foreground" />
-                跨主机实体（{view.cross_host.length}）
-              </h2>
-              <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-                {view.cross_host.map((svc) => (
-                  <CrossCard
-                    key={svc.card.name}
-                    svc={svc}
-                    view={view}
-                    q={q}
-                    openDetail={openDetail}
-                    toggleDetail={toggleDetail}
-                  />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {/* Key paths */}
+          {/* 关键链路 */}
           {view.key_paths.length > 0 && (
-            <section className="mb-8">
-              <h2 className="mb-3 flex items-center gap-2 text-base font-semibold">
-                <Link2 className="size-4 text-muted-foreground" />
+            <section className="mt-6">
+              <h2 className="mb-2.5 flex items-center gap-2 text-sm font-semibold">
+                <Link2 className="size-4 text-[var(--vigil-muted)]" />
                 关键链路（{view.key_paths.length}）
               </h2>
-              <div className="space-y-2.5">
+              <div className="space-y-2">
                 {view.key_paths.map((chain, i) => (
-                  <div key={i} className="flex flex-wrap items-center gap-2 text-sm">
+                  <div key={i} className="flex flex-wrap items-center gap-1.5 text-sm">
                     {chain.map((name, j) => (
-                      <span key={`${name}-${j}`} className="flex items-center gap-2">
-                        {j > 0 && <span className="text-muted-foreground">→</span>}
-                        <span
-                          className={cn(
-                            "rounded-md border border-amber-500/50 px-2 py-0.5 text-amber-600 dark:text-amber-400",
-                            view.key_path_entity_names?.includes(name) && "bg-amber-500/10",
-                          )}
-                        >
+                      <span key={`${name}-${j}`} className="flex items-center gap-1.5">
+                        {j > 0 && <span className="text-[var(--vigil-muted)]">→</span>}
+                        <span className="rounded border border-amber-500/50 bg-amber-500/5 px-1.5 py-0.5 text-amber-600 dark:text-amber-400">
                           {name}
                         </span>
                       </span>
@@ -536,12 +457,9 @@ export default function TopologyPage() {
                   </div>
                 ))}
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                链上实体在页面中以琥珀色边框高亮。
-              </p>
             </section>
           )}
-        </>
+        </div>
       ) : null}
     </div>
   );

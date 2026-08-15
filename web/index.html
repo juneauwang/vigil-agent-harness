@@ -7,7 +7,12 @@
       name="viewport"
       content="width=device-width, initial-scale=1.0, viewport-fit=cover"
     />
-    <title>Vigil Agent - Dashboard</title>
+    <title>Vigil Console</title>
+    <style>
+      /* 字体由 /src/index.css 的 @font-face 本地加载（web/public/fonts/，无 CDN）；
+         此处兜底背景色避免首帧白屏。 */
+      html { background: #f6f8fa; }
+    </style>
   </head>
   <body>
     <div id="root"></div>
