@@ -1,9 +1,11 @@
-import { ChevronDown, ChevronUp, Radio, TerminalSquare } from "lucide-react";
+import { ChevronDown, ChevronUp, TerminalSquare } from "lucide-react";
+import { ExecConsole } from "@/components/ExecConsole";
 import { cn } from "@/lib/ops";
 
 /**
  * Agent Terminal —— 主体下区全宽深色终端面板（豆包：min-h 280px，
- * JetBrains Mono，标题栏 + 收起按钮）。数据源未就绪 → 空态 + WS 预留。
+ * JetBrains Mono，标题栏 + 收起按钮）。内部为执行控制台
+ * （POST /api/exec + SSE；needs_approval 弹审批卡；mock 模式联调）。
  */
 export function TerminalPanel({
   collapsed,
@@ -14,7 +16,6 @@ export function TerminalPanel({
   collapsed: boolean;
   onToggle: () => void;
   className?: string;
-  /** true = 展开形态（Terminal 页大视图），去掉收起按钮与最小高度上限。 */
   expanded?: boolean;
 }) {
   if (collapsed && !expanded) {
@@ -29,7 +30,7 @@ export function TerminalPanel({
       >
         <TerminalSquare className="size-3.5 opacity-70" />
         <span style={{ color: "#cbd5e1" }}>Agent Terminal</span>
-        <span className="opacity-60">· 等待执行 API 接入</span>
+        <span className="opacity-60">· 执行 API（POST /api/exec + SSE）</span>
         <button
           type="button"
           onClick={onToggle}
@@ -61,9 +62,9 @@ export function TerminalPanel({
         <span className="text-xs" style={{ color: "#e2e8f0" }}>Agent Terminal</span>
         <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-400">
           <span className="size-1.5 rounded-full bg-emerald-400" />
-          WS 待接入
+          API 已接线
         </span>
-        <span className="ml-auto text-[10px] opacity-50">JetBrains Mono · 审计 / 命令 / YAML</span>
+        <span className="ml-auto text-[10px] opacity-50">JetBrains Mono · POST /api/exec + SSE</span>
         {!expanded && (
           <button
             type="button"
@@ -76,18 +77,9 @@ export function TerminalPanel({
         )}
       </div>
 
-      {/* 终端正文（滚动区，空态 + WS 预留） */}
-      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto px-4 py-3 font-mono text-xs leading-relaxed">
-        <div className={cn("flex flex-col items-start justify-center gap-1.5", expanded ? "min-h-0 flex-1" : "min-h-[240px]")}>
-          <div className="flex items-center gap-2" style={{ color: "#cbd5e1" }}>
-            <Radio className="size-3.5 opacity-60" />
-            <span>等待执行 API 接入</span>
-          </div>
-          <p className="opacity-60">
-            审计日志 / AI 执行命令 / YAML 片段将经 WebSocket 推送到此面板
-            （web_server 已有 WS 基础设施，执行核心由 Codex 批次落地）；不造假日志。
-          </p>
-        </div>
+      {/* 执行控制台 */}
+      <div className="min-h-0 flex-1 px-4 py-3">
+        <ExecConsole expanded={expanded} />
       </div>
     </div>
   );
