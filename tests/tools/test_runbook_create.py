@@ -118,6 +118,45 @@ class TestRunbookCreate:
         result = _load(runbook_create(**data, home=rb_home))
         assert result["status"] == "created"
 
+    @pytest.mark.parametrize("env_val", ["local", "test", "dev", "prod"])
+    def test_create_env_four_values_roundtrip(self, rb_home, env_val):
+        """批二十七：四值 local/test/dev/prod 均合法——create 落盘 + load 回读。"""
+        data = _incident_runbook(env=env_val)
+        result = _load(runbook_create(**data, home=rb_home))
+        assert result["status"] == "created"
+
+        path = rb_home / "runbooks" / "ansible-syntax-check.yaml"
+        written = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert written["env"] == env_val
+
+        loaded = _load(runbook_load(runbook="ansible-syntax-check", home=rb_home))
+        assert loaded["env"] == env_val
+
+    @pytest.mark.parametrize("legacy,expected", [("uat", "prod"), ("staging", "dev")])
+    def test_create_legacy_env_maps_to_new_enum(self, rb_home, legacy, expected):
+        """批二十七：create 传老值 uat/staging → 落盘映射后的新值（uat→prod、staging→dev）。"""
+        data = _incident_runbook(env=legacy)
+        result = _load(runbook_create(**data, home=rb_home))
+        assert result["status"] == "created"
+
+        path = rb_home / "runbooks" / "ansible-syntax-check.yaml"
+        written = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert written["env"] == expected
+
+        loaded = _load(runbook_load(runbook="ansible-syntax-check", home=rb_home))
+        assert loaded["env"] == expected
+
+    def test_create_rejects_undefined_env(self, rb_home):
+        """批二十七：未声明名（sandbox）拒绝，错误消息含新枚举 + 老值映射提示。"""
+        data = _incident_runbook(env="sandbox")
+        result = _load(runbook_create(**data, home=rb_home))
+        assert "error" in result
+        assert "local/test/dev/prod" in result["error"]
+        assert "uat/staging" in result["error"]
+        # 文案不再出现旧三值枚举。
+        assert "test/uat/prod" not in result["error"]
+        assert not (rb_home / "runbooks" / "ansible-syntax-check.yaml").exists()
+
     def test_overwrite_requires_flag(self, rb_home):
         runbook_create(**_incident_runbook(), home=rb_home)
         result = _load(runbook_create(**_incident_runbook(), home=rb_home))

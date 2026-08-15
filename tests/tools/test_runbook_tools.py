@@ -226,6 +226,66 @@ def test_env_mismatch_warning(rb_home):
     assert "由命令级权限矩阵逐条判定" in result["env_warning"]
 
 
+def test_load_legacy_env_uat_kept_and_mapped_for_mismatch(rb_home):
+    """批二十七：老值 env=uat 的 runbook 可加载，data["env"] 保留原值 "uat"；
+    env_mismatch 按映射后档位比较（uat→prod，会话 env=prod 时不误报）。"""
+    _write_runbook(
+        rb_home, "legacy-uat.yaml",
+        {
+            "name": "legacy-uat", "title": "x", "env": "uat", "kind": "incident",
+            "steps": [{"id": "s1", "title": "x", "commands": ["echo ok"]}],
+        },
+    )
+    _write_config(rb_home, {"ops": {"permissions": {"enabled": True, "env": "prod", "role": "operator"}}})
+
+    loaded = _load(runbook_load(runbook="legacy-uat", home=rb_home))
+    assert loaded["env"] == "uat"
+    assert loaded["session_env"] == "prod"
+    assert loaded.get("env_mismatch") is not True
+
+    # 会话在 test 档时按映射后档位判断：prod 档 runbook 与 test 会话不匹配。
+    _write_config(rb_home, {"ops": {"permissions": {"enabled": True, "env": "test", "role": "operator"}}})
+    mismatched = _load(runbook_load(runbook="legacy-uat", home=rb_home))
+    assert mismatched["env"] == "uat"
+    assert mismatched["env_mismatch"] is True
+
+
+def test_load_rejects_undefined_env_with_new_enum_message(rb_home):
+    """批二十七：未声明名（sandbox）仍拒绝，错误消息含新四值枚举 + 老值映射提示。"""
+    _write_runbook(
+        rb_home, "bad-env.yaml",
+        {
+            "name": "bad-env", "title": "x", "env": "sandbox", "kind": "incident",
+            "steps": [{"id": "s1", "title": "x", "commands": ["echo ok"]}],
+        },
+    )
+    result = runbook_load(runbook="bad-env", home=rb_home)
+    assert "local/test/dev/prod" in result
+    assert "uat/staging" in result
+    assert "test/uat/prod" not in result
+
+
+def test_validate_runbook_env_accepts_four_values_and_legacy(rb_home):
+    """批二十七：_validate_runbook 直调——四值 + uat/staging 合法，sandbox 抛错。"""
+    from tools.runbook_tools import _validate_runbook
+
+    base = {
+        "name": "x", "title": "x", "kind": "incident",
+        "steps": [{"id": "s1", "title": "x", "commands": ["echo ok"]}],
+    }
+    for env_val in ("local", "test", "dev", "prod", "uat", "staging"):
+        data = dict(base)
+        data["env"] = env_val
+        _validate_runbook(data, "x")  # 不抛
+
+    data = dict(base)
+    data["env"] = "sandbox"
+    with pytest.raises(ValueError) as exc:
+        _validate_runbook(data, "x")
+    assert "local/test/dev/prod" in str(exc.value)
+    assert "test/uat/prod" not in str(exc.value)
+
+
 def test_check_runbook_requirements_data_existence_gating(rb_home):
     """OPS-DELTA #1：runbook 工具默认按数据存在性可用，enabled 降级为显式覆盖。"""
     import hermes_cli.config as hc

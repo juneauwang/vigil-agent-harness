@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 _RUNBOOKS_DIRNAME = "runbooks"
 _STATE_FILENAME = ".runbook-state.json"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-_VALID_ENVS = {"test", "uat", "prod"}
+_VALID_ENVS = {"local", "test", "dev", "prod"}
 _VALID_STATUSES = {"pass", "fail"}
 # OPS-DELTA #21：runbook commands 的 <vault:path/field> 凭据引用占位符。
 # runbook_load 永远不返回明文——占位符描述化返回，明文只在执行时由 agent 从
@@ -46,6 +46,33 @@ _VAULT_REF_RE = re.compile(r"<vault:([A-Za-z0-9_./-]+)>")
 # 防路径穿越（".." / 隐藏文件/点号下划线）与非法文件名写盘。
 _CREATE_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _VALID_KINDS = {"deploy", "incident", "checklist"}
+
+
+def _normalize_runbook_env(env: Any) -> Optional[str]:
+    """runbook env → 四值档位（local/test/dev/prod）；非法返回 None。
+
+    四值直通；老值 uat→prod、staging→dev（复用 ops_permissions._map_env_tier，
+    档位映射 + 每个名字只警告一次，不阻断读取）；ops 配置里显式声明的老自定义名
+    按 isolation/role 档位接受。其余未声明名（如 sandbox）视为非法——不沿用
+    _map_env_tier 的"名字推导默认 dev"兜底，避免把拼写错误静默接受成 dev。
+    本函数只做校验/比较用，不改写 data["env"]（load 保留文件原值）。
+    """
+    lower = str(env or "").strip().lower()
+    if lower in _VALID_ENVS:
+        return lower
+    from tools.ops_permissions import (
+        _LEGACY_ENV_TIER_MAP,
+        _map_env_tier,
+        _raw_env_definition,
+    )
+    if lower in _LEGACY_ENV_TIER_MAP:
+        return _map_env_tier(lower)
+    try:
+        if _raw_env_definition(lower) is not None:
+            return _map_env_tier(lower)
+    except Exception:
+        return None
+    return None
 # 疑似明文凭据模式（runbook_create 校验用）：赋值式（password= / token: ...）
 # 与 flag 式（--password / -p value）。命中即拒绝（fail-closed），提示改用
 # <vault:path/field> 占位符；只判"疑似"，不漏明文，宁误报也提示。
@@ -164,7 +191,7 @@ _DEFAULT_CREATE_SCHEMA = {
             },
             "env": {
                 "type": "string",
-                "description": "适用环境 test/uat/prod（可选，默认不限制；与 runbook schema v0.1 一致）。",
+                "description": "适用环境 local/test/dev/prod（可选，默认不限制；老值 uat/staging 按档位映射）。",
             },
             "kind": {
                 "type": "string",
@@ -258,8 +285,11 @@ def _validate_runbook(data: Dict[str, Any], name: str) -> None:
     if not isinstance(data.get("steps"), list) or not data["steps"]:
         raise ValueError(f"runbook {name} 缺少非空 steps")
     env = data.get("env")
-    if env is not None and str(env) not in _VALID_ENVS:
-        raise ValueError(f"runbook {name} env 非法: {env!r}（可选 test/uat/prod）")
+    if env is not None and _normalize_runbook_env(env) is None:
+        raise ValueError(
+            f"runbook {name} env 非法: {env!r}（可选 local/test/dev/prod；"
+            "老值 uat/staging 按档位映射）"
+        )
     for step in data["steps"]:
         if not isinstance(step, dict) or not isinstance(step.get("id"), str):
             raise ValueError(f"runbook {name} 的步骤缺少字符串 id")
@@ -418,7 +448,9 @@ def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
     name = rb["name"]
     payload = dict(rb)
     payload["session_env"] = _session_env()
-    if rb.get("env") and payload["session_env"] and rb["env"] != payload["session_env"]:
+    rb_env = _normalize_runbook_env(rb.get("env"))
+    session_env = _normalize_runbook_env(payload["session_env"])
+    if rb.get("env") and payload["session_env"] and rb_env and session_env and rb_env != session_env:
         payload["env_mismatch"] = True
         payload["env_warning"] = (
             f"runbook 适用环境 {rb['env']} 与当前会话环境 {payload['session_env']} 不一致；"
@@ -642,7 +674,9 @@ def runbook_create(
     Fail-closed: 严格 kebab-case 名称（防路径穿越）、非空 steps/commands、
     commands 拒绝疑似明文凭据（用 <vault:path/field> 占位符）、同名已存在需
     overwrite=True。写盘前复用 ``_validate_runbook`` 校验，保证 runbook_load
-    能原样加载回来（checklist/deploy 规则一并生效）。
+    能原样加载回来（checklist/deploy 规则一并生效）。env 接受四值
+    local/test/dev/prod；老值 uat→prod、staging→dev 按档位映射后落盘（create
+    是新写入，直接规范到新枚举；load 保留文件原值）。
     """
     home = home or _hermes_home()
     name = str(runbook or "").strip()
@@ -655,10 +689,14 @@ def runbook_create(
         return tool_error("title 必填且不能为空。")
     if kind not in _VALID_KINDS:
         return tool_error(f"kind 必须是 {sorted(_VALID_KINDS)} 之一（默认 incident）。")
-    if env is not None and str(env) not in _VALID_ENVS:
-        return tool_error(
-            f"env 非法: {env!r}（可选 {sorted(_VALID_ENVS)}，与 runbook schema v0.1 一致）。"
-        )
+    mapped_env = None
+    if env is not None:
+        mapped_env = _normalize_runbook_env(env)
+        if mapped_env is None:
+            return tool_error(
+                f"env 非法: {env!r}（可选 local/test/dev/prod；老值 uat/staging "
+                "按档位映射）。"
+            )
     if not isinstance(steps, list) or not steps:
         return tool_error("steps 必填且不能为空（[{id, title, commands: [...]}]）。")
     for step in steps:
@@ -693,8 +731,8 @@ def runbook_create(
         "version": 1,
         "kind": kind,
     }
-    if env:
-        data["env"] = str(env)
+    if mapped_env:
+        data["env"] = mapped_env
     if triggers:
         cleaned = [str(t).strip() for t in triggers if isinstance(t, str) and t.strip()]
         if cleaned:
