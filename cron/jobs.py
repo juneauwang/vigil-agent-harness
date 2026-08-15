@@ -1,8 +1,8 @@
 """
 Cron job storage and management.
 
-Jobs are stored in ~/.hermes/cron/jobs.json
-Output is saved to ~/.hermes/cron/output/{job_id}/{timestamp}.md
+Jobs are stored in ~/.vigil/cron/jobs.json
+Output is saved to ~/.vigil/cron/output/{job_id}/{timestamp}.md
 """
 
 import contextlib
@@ -66,25 +66,25 @@ def _ensure_croniter() -> bool:
 # =============================================================================
 
 # Cron is per-profile by design (issue #4707). Each profile owns its own cron
-# store under its own HERMES_HOME, and a profile-scoped gateway runs that
-# profile's jobs under that same HERMES_HOME — so a job authored in profile
-# `coder` lives in `~/.hermes/profiles/coder/cron/jobs.json` and executes with
+# store under its own VIGIL_HOME, and a profile-scoped gateway runs that
+# profile's jobs under that same VIGIL_HOME — so a job authored in profile
+# `coder` lives in `~/.vigil/profiles/coder/cron/jobs.json` and executes with
 # `coder`'s `.env`, `config.yaml`, and skills. We deliberately anchor on
 # `get_hermes_home()` (the active profile home), NOT `get_default_hermes_root()`
 # (the shared root). Anchoring at the root would funnel every profile's jobs
-# into one shared `jobs.json` and run them under whatever HERMES_HOME the
+# into one shared `jobs.json` and run them under whatever VIGIL_HOME the
 # ticker process happens to have — leaking config/credentials/skills across
 # profiles (the security boundary #4707 was filed for). Do NOT change this to
 # the default root: that re-breaks per-profile isolation. See also the dynamic
 # `_get_hermes_home()` / `_get_lock_paths()` resolution in cron/scheduler.py.
-HERMES_DIR = get_hermes_home().resolve()
+VIGIL_DIR = get_hermes_home().resolve()
 # These constants remain the default-profile fallback and a compatibility
 # surface for existing callers/tests. Cross-profile callers must scope paths
 # with use_cron_store() instead of mutating them process-wide.
-CRON_DIR = HERMES_DIR / "cron"
+CRON_DIR = VIGIL_DIR / "cron"
 JOBS_FILE = CRON_DIR / "jobs.json"
 # Heartbeat file the in-process ticker touches on every loop iteration. The
-# gateway process and the (separate) ``hermes cron status`` process share it
+# gateway process and the (separate) ``vigil cron status`` process share it
 # so status can tell whether the ticker THREAD is alive, not just whether the
 # gateway PROCESS exists — a ticker that dies silently inside a live gateway
 # would otherwise report healthy (#32612, #32895).
@@ -94,7 +94,7 @@ TICKER_HEARTBEAT_FILE = CRON_DIR / "ticker_heartbeat"
 TICKER_SUCCESS_FILE = CRON_DIR / "ticker_last_success"
 # Default ticker loop interval (seconds). The single source of truth shared by
 # the in-process ticker (cron/scheduler_provider.py) and the staleness
-# threshold in `hermes cron status` (hermes_cli/cron.py), so the two never
+# threshold in `vigil cron status` (hermes_cli/cron.py), so the two never
 # drift apart.
 TICKER_INTERVAL_SECONDS = 60
 
@@ -146,8 +146,8 @@ def _current_cron_store() -> _CronStorePaths:
        OUTPUT_DIR no longer match their import-time values, someone chose
        the documented process-wide compatibility surface; honor it;
     3. the ACTIVE profile home, resolved fresh via get_hermes_home()
-       (context-local override, then the HERMES_HOME env var) — so a test
-       or embedder that re-points HERMES_HOME after this module was
+       (context-local override, then the VIGIL_HOME env var) — so a test
+       or embedder that re-points VIGIL_HOME after this module was
        imported reads/writes ITS OWN store, not whatever jobs.json the
        import happened to freeze (the filed incident: fixtures that patched
        the env too late silently rewrote the user's real jobs file);
@@ -161,7 +161,7 @@ def _current_cron_store() -> _CronStorePaths:
     if live_constants != _IMPORT_STORE:
         return live_constants
     home = get_hermes_home().resolve()
-    if home == HERMES_DIR:
+    if home == VIGIL_DIR:
         return live_constants
     cron_dir = home / "cron"
     return _CronStorePaths(cron_dir, cron_dir / "jobs.json", cron_dir / "output")
@@ -190,7 +190,7 @@ def get_cron_output_dir() -> Path:
 
 
 # Fallback stale-recovery window for a one-shot's running-claim (#59229) when
-# the cron inactivity timeout is disabled (HERMES_CRON_TIMEOUT=0 → unlimited),
+# the cron inactivity timeout is disabled (VIGIL_CRON_TIMEOUT=0 → unlimited),
 # in which case no finite run bound exists to derive from. Also acts as the
 # floor for the derived value so a very short configured timeout can't make the
 # claim expire mid-run.
@@ -198,7 +198,7 @@ ONESHOT_RUN_CLAIM_TTL_SECONDS = 1800
 
 # The derived TTL is the cron inactivity timeout times this headroom multiplier.
 # A healthy run clears its claim via mark_job_run() long before the TTL; the
-# TTL only recovers a claim left by a tick that DIED mid-run. HERMES_CRON_TIMEOUT
+# TTL only recovers a claim left by a tick that DIED mid-run. VIGIL_CRON_TIMEOUT
 # is an *inactivity* limit, not a wall-clock cap — a job that keeps producing
 # output legitimately runs past it — so the multiplier gives comfortable
 # headroom over any healthy run before we treat a claim as stale.
@@ -210,7 +210,7 @@ _DEFAULT_CRON_INACTIVITY_TIMEOUT = 600.0
 def _oneshot_run_claim_ttl_seconds() -> float:
     """Resolve the one-shot running-claim stale-recovery TTL.
 
-    Derived from ``HERMES_CRON_TIMEOUT`` (the cron inactivity timeout the
+    Derived from ``VIGIL_CRON_TIMEOUT`` (the cron inactivity timeout the
     scheduler enforces on each run) so the safety valve tracks how long a run
     is actually allowed to go quiet, instead of a magic constant:
 
@@ -220,7 +220,7 @@ def _oneshot_run_claim_ttl_seconds() -> float:
     - positive N → ``max(N * headroom, ONESHOT_RUN_CLAIM_TTL_SECONDS)`` so a
       tiny configured timeout can never expire a claim mid-run.
     """
-    raw = os.getenv("HERMES_CRON_TIMEOUT", "").strip()
+    raw = os.getenv("VIGIL_CRON_TIMEOUT", "").strip()
     timeout = _DEFAULT_CRON_INACTIVITY_TIMEOUT
     if raw:
         try:
@@ -274,7 +274,7 @@ def _jobs_lock():
     Combines the in-process threading lock (cheap mutual exclusion between
     the gateway's parallel tick threads) with a cross-process advisory file
     lock on ``<cron dir>/.jobs.lock`` (mutual exclusion between the gateway process
-    and standalone ``hermes`` CLI invocations, which previously shared no lock
+    and standalone ``vigil`` CLI invocations, which previously shared no lock
     at all — a `cron pause` could be silently clobbered by a concurrent
     gateway write, leaving a "paused" job still firing).
 
@@ -494,7 +494,7 @@ def _preserve_file_ownership(path: Path, before: Optional[os.stat_result]) -> No
 
     The atomic-write pattern (mkstemp + replace) makes the rewritten file owned
     by the *writer's* euid. When a root shell runs a state-writing cron CLI
-    command (``docker exec hermes hermes cron create ...`` — ``docker exec``
+    command (``docker exec vigil vigil cron create ...`` — ``docker exec``
     defaults to root) against a store owned by the unprivileged gateway user,
     the replace flips ``jobs.json`` to ``root:root`` mode 600 and the gateway's
     ticker (uid 1000) is silently locked out of every subsequent tick (#68483).
@@ -620,7 +620,7 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
             # Make naive timestamps timezone-aware at parse time so the stored
             # value doesn't depend on the system timezone matching at check time.
             #
-            # Anchor to the CONFIGURED Hermes timezone, not the server's local
+            # Anchor to the CONFIGURED Vigil timezone, not the server's local
             # timezone. The due-check (`get_due_jobs`) compares `next_run_at`
             # against `hermes_time.now()`, which uses the configured zone. If a
             # naive "20:07" were interpreted as server-local (e.g. UTC) while
@@ -662,13 +662,13 @@ def parse_schedule(schedule: str) -> Dict[str, Any]:
 
 
 def _ensure_aware(dt: datetime) -> datetime:
-    """Return a timezone-aware datetime in Hermes configured timezone.
+    """Return a timezone-aware datetime in Vigil configured timezone.
 
     Backward compatibility:
     - Older stored timestamps may be naive.
     - Naive values are interpreted as *system-local wall time* (the timezone
       `datetime.now()` used when they were created), then converted to the
-      configured Hermes timezone.
+      configured Vigil timezone.
 
     This preserves relative ordering for legacy naive timestamps across
     timezone changes and avoids false not-due results.
@@ -695,7 +695,7 @@ def _timezone_offset_mismatch(stored: datetime, current: datetime) -> bool:
 def _stored_wall_clock_is_future(stored: datetime, current: datetime) -> bool:
     """Return True when the stored local wall-clock time has not arrived yet.
 
-    Cron schedules express local wall-clock intent. If Hermes/system local time
+    Cron schedules express local wall-clock intent. If Vigil/system local time
     changes after next_run_at was persisted, an old offset can make a future
     wall-clock run look due at the converted absolute time (for example
     21:00+10 becomes 13:00+02). Comparing naive wall-clock values lets us
@@ -832,7 +832,7 @@ def compute_next_run(schedule: Dict[str, Any], last_run_at: Optional[str] = None
 
 
 # =============================================================================
-# Ticker heartbeat (liveness signal for `hermes cron status`)
+# Ticker heartbeat (liveness signal for `vigil cron status`)
 # =============================================================================
 
 def _atomic_write_epoch(path: Path) -> None:
@@ -840,7 +840,7 @@ def _atomic_write_epoch(path: Path) -> None:
 
     Delegates to :func:`utils.atomic_write_text` (tmpfile + fsync +
     ``atomic_replace``, same pattern as ``save_jobs``) so a concurrent reader
-    in another process (``hermes cron status``) never sees a torn/truncated
+    in another process (``vigil cron status``) never sees a torn/truncated
     file. Best-effort: failures are swallowed by callers.
     """
     ensure_dirs()
@@ -870,7 +870,7 @@ def record_ticker_heartbeat(success: bool = False) -> None:
 
     The ticker calls this once per loop iteration. ``success=True`` additionally
     bumps the *last successful tick* marker. We track two distinct signals so
-    `hermes cron status` can tell a thread that is merely *alive and looping*
+    `vigil cron status` can tell a thread that is merely *alive and looping*
     (heartbeat fresh, success stale) from one that is actually *firing jobs*
     (both fresh) — a ticker stuck failing every tick would otherwise keep the
     plain heartbeat fresh and falsely report healthy (#32612, #32895).
@@ -909,7 +909,7 @@ def get_ticker_heartbeat_age() -> Optional[float]:
 
     Resolution uses ``_current_cron_store()`` so the heartbeat is correctly
     scoped to the active profile — critical under multiplex_profiles where
-    ``hermes cron status`` must report per-profile liveness (#69377).
+    ``vigil cron status`` must report per-profile liveness (#69377).
     """
     store = _current_cron_store()
     return _epoch_file_age(store.cron_dir / "ticker_heartbeat")
@@ -920,7 +920,7 @@ def get_ticker_success_age() -> Optional[float]:
 
     Resolution uses ``_current_cron_store()`` so the heartbeat is correctly
     scoped to the active profile — critical under multiplex_profiles where
-    ``hermes cron status`` must report per-profile liveness (#69377).
+    ``vigil cron status`` must report per-profile liveness (#69377).
     """
     store = _current_cron_store()
     return _epoch_file_age(store.cron_dir / "ticker_last_success")
@@ -942,7 +942,7 @@ def record_catch_up_occurrence() -> None:
 def record_ticker_error(message: str) -> None:
     """Persist the most recent tick failure so other processes can surface it.
 
-    The ticker thread lives inside the gateway process; ``hermes cron
+    The ticker thread lives inside the gateway process; ``vigil cron
     status``/``list`` run in a separate process and previously could only
     infer "ticks may be failing" from marker staleness, with no clue WHY.
     A root-owned ``jobs.json`` (#68483) failed every tick for ~14h with the
@@ -1283,7 +1283,7 @@ def create_job(
                 delivered verbatim. Without ``no_agent``, its stdout is
                 injected into the agent's prompt as context (data-collection /
                 change-detection pattern). Paths resolve under
-                ~/.hermes/scripts/; ``.sh`` / ``.bash`` files run via bash,
+                ~/.vigil/scripts/; ``.sh`` / ``.bash`` files run via bash,
                 anything else via Python.
         context_from: Optional job ID (or list of job IDs) whose most recent output
                       is injected into the prompt as context before each run.
@@ -1361,7 +1361,7 @@ def create_job(
     # agent-driven SIGTERM-respawn loops under launchd/systemd KeepAlive
     # (#30719). Enforced here (not only in the CLI layer) so the agent's
     # `cronjob` model tool — which calls create_job directly — is also
-    # covered, not just `hermes cron create`.
+    # covered, not just `vigil cron create`.
     from cron.lifecycle_guard import check_gateway_lifecycle
     check_gateway_lifecycle(prompt_text, normalized_script)
 
@@ -2007,10 +2007,10 @@ def advance_next_run(job_id: str) -> bool:
 def _machine_id() -> str:
     """Stable-ish identifier for claim attribution/debugging (NOT correctness).
 
-    Uses ``HERMES_MACHINE_ID`` if set, else hostname + pid. The CAS correctness
+    Uses ``VIGIL_MACHINE_ID`` if set, else hostname + pid. The CAS correctness
     comes from the file lock + the fresh-claim check, not from this value.
     """
-    explicit = os.getenv("HERMES_MACHINE_ID", "").strip()
+    explicit = os.getenv("VIGIL_MACHINE_ID", "").strip()
     if explicit:
         return explicit
     try:
@@ -2268,7 +2268,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                 needs_save = True
 
     # Resolve the one-shot running-claim stale-recovery TTL once per scan
-    # (derived from HERMES_CRON_TIMEOUT). See _oneshot_run_claim_ttl_seconds.
+    # (derived from VIGIL_CRON_TIMEOUT). See _oneshot_run_claim_ttl_seconds.
     _run_claim_ttl = _oneshot_run_claim_ttl_seconds()
 
     # Retention sweep: completed one-shots are retained (so their final
@@ -2484,7 +2484,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
 
                 # Durably claim a one-shot for the DURATION of its run before
                 # returning it as due, so a second scheduler process (gateway +
-                # desktop both run in-process 60s tickers on one HERMES_HOME)
+                # desktop both run in-process 60s tickers on one VIGIL_HOME)
                 # cannot re-dispatch it while the first run is still in flight
                 # (#59229). A plain one-shot's due-state is not resolved until
                 # mark_job_run() completes it minutes later, so advancing
@@ -2496,7 +2496,7 @@ def _get_due_jobs_locked() -> List[Dict[str, Any]]:
                 # this loop). mark_job_run() clears the claim on completion. The TTL
                 # is only a safety valve: a claiming tick that DIES mid-run leaves a
                 # stale claim that expires after the resolved run-claim TTL
-                # (_oneshot_run_claim_ttl_seconds, derived from HERMES_CRON_TIMEOUT),
+                # (_oneshot_run_claim_ttl_seconds, derived from VIGIL_CRON_TIMEOUT),
                 # so the job is re-dispatched rather than wedged forever.
                 if kind == "once":
                     claim = {"at": now.isoformat(), "by": _machine_id()}

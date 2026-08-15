@@ -8,7 +8,7 @@ description: >
   between Teams chats (personal DMs, group chats, channel posts) and
   the Hermes agent. Supports Adaptive Card approval prompts.
 author: Aamir Jawaid
-# ``requires_env`` entries are surfaced in ``hermes config`` UI via the
+# ``requires_env`` entries are surfaced in ``vigil config`` UI via the
 # platform-plugin env var injector in ``hermes_cli/config.py``.
 requires_env:
   - name: TEAMS_CLIENT_ID

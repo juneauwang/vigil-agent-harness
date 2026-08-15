@@ -2571,7 +2571,7 @@ class TestFTS5ToolCallMigration:
         try:
             assert session_db.fts_optimize_available() is True
 
-            # `hermes db optimize` performs the v23 transition; afterwards the
+            # `vigil db optimize` performs the v23 transition; afterwards the
             # tool fields are searchable.
             result = session_db.optimize_fts_storage(vacuum=False)
             assert result["ok"] is True
@@ -4223,7 +4223,7 @@ class TestPerformancePragmasEndToEnd:
         )
         home = tmp_path / "hermes_home"
         home.mkdir()
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         if config_text is not None:
             (home / "config.yaml").write_text(config_text)
         return home

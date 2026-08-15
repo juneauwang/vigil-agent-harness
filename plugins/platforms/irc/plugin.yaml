@@ -8,7 +8,7 @@ description: >
   (or DMs) and the Hermes agent.  No external dependencies — uses
   Python's stdlib asyncio for the IRC protocol.
 author: Nous Research
-# ``requires_env`` entries are surfaced in ``hermes config`` UI via the
+# ``requires_env`` entries are surfaced in ``vigil config`` UI via the
 # platform-plugin env var injector in ``hermes_cli/config.py``.
 requires_env:
   - name: IRC_SERVER
@@ -16,7 +16,7 @@ requires_env:
     prompt: "IRC server"
     password: false
   - name: IRC_CHANNEL
-    description: "Channel to join (e.g. #hermes — comma-separate for multiple)"
+    description: "Channel to join (e.g. #vigil — comma-separate for multiple)"
     prompt: "IRC channel"
     password: false
   - name: IRC_NICKNAME

@@ -87,7 +87,7 @@ class TestMissingProfileWarning:
                         with caplog.at_level(logging.WARNING):
                             result = mock_runner._resolve_profile_home_for_source(discord_source)
                             
-                            # Should fall back to global HERMES_HOME
+                            # Should fall back to global VIGIL_HOME
                             assert result == Path("/hermes")
                             
                             # Should have logged a warning
@@ -115,7 +115,7 @@ class TestExceptionHandling:
                     with caplog.at_level(logging.WARNING):
                         result = mock_runner._resolve_profile_home_for_source(discord_source)
                         
-                        # Should fall back to global HERMES_HOME
+                        # Should fall back to global VIGIL_HOME
                         assert result == Path("/hermes")
                         
                         # Should have logged a warning with exception info

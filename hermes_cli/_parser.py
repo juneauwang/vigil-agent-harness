@@ -14,7 +14,7 @@ import argparse
 
 
 # `--profile` / `-p` is consumed by ``main._apply_profile_override`` before
-# argparse runs (it sets ``HERMES_HOME`` and strips itself from ``sys.argv``),
+# argparse runs (it sets ``VIGIL_HOME`` and strips itself from ``sys.argv``),
 # so it isn't on the parser. Listed here so all "carry over on relaunch"
 # metadata lives in one file.
 PRE_ARGPARSE_INHERITED_FLAGS: list[tuple[str, bool]] = [
@@ -51,7 +51,7 @@ For more help on a command:
 """
 
 
-# Vigil 运维命令（E1 分组）：醒目在前；其余为 hermes 继承命令，折叠显示。
+# Vigil 运维命令（E1 分组）：醒目在前；其余为 vigil 继承命令，折叠显示。
 # 只是 help 展示层分组——不改变 argparse 解析，所有子命令仍可正常调用。
 _VIGIL_COMMANDS = frozenset({
     "chat", "setup", "config", "model", "version", "status",
@@ -91,13 +91,13 @@ class _GroupedHelpFormatter(argparse.RawDescriptionHelpFormatter):
             # --help-all：继承命令同样逐条完整展开（分组可读，不折叠）。
             rows = self._inherited_rows(action, by_name, inherited)
             parts.append("%*s%s\n" % (self._current_indent, "",
-                                      f"继承命令（来自 hermes，{len(rows)} 个）："))
+                                      f"继承命令（来自上游，{len(rows)} 个）："))
             self._indent()
             for pa in rows:
                 parts.append(self._format_action(pa))
             self._dedent()
         else:
-            names_line = f"继承命令（来自 hermes，{len(inherited)} 个）：{' '.join(inherited)}"
+            names_line = f"继承命令（来自上游，{len(inherited)} 个）：{' '.join(inherited)}"
             for line in self._split_lines(names_line, self._width - self._current_indent):
                 parts.append("%*s%s\n" % (self._current_indent, "", line))
             parts.append("%*s%s\n" % (self._current_indent, "",
@@ -161,7 +161,7 @@ def build_top_level_parser():
     parser.add_argument(
         "--help-all",
         action="store_true",
-        help="Show ALL subcommands including inherited hermes commands (grouped help folds them)",
+        help="Show ALL subcommands including inherited vigil commands (grouped help folds them)",
     )
     parser.add_argument(
         "-z",
@@ -190,7 +190,7 @@ def build_top_level_parser():
     # --model / --provider are accepted at the top level so they can pair
     # with -z without needing the `chat` subcommand.  If neither -z nor a
     # subcommand consumes them, they fall through harmlessly as None.
-    # Mirrors `hermes chat --model ... --provider ...` semantics.
+    # Mirrors `vigil chat --model ... --provider ...` semantics.
     _inherited_flag(
         parser,
         "-m",
@@ -198,7 +198,7 @@ def build_top_level_parser():
         default=None,
         help=(
             "Model override for this invocation (e.g. anthropic/claude-sonnet-4.6). "
-            "Applies to -z/--oneshot and --tui. Also settable via HERMES_INFERENCE_MODEL env var."
+            "Applies to -z/--oneshot and --tui. Also settable via VIGIL_INFERENCE_MODEL env var."
         ),
     )
     _inherited_flag(
@@ -266,7 +266,7 @@ def build_top_level_parser():
         default=False,
         help=(
             "Auto-approve any unseen shell hooks declared in config.yaml "
-            "without a TTY prompt.  Equivalent to HERMES_ACCEPT_HOOKS=1 or "
+            "without a TTY prompt.  Equivalent to VIGIL_ACCEPT_HOOKS=1 or "
             "hooks_auto_accept: true in config.yaml.  Use on CI / headless "
             "runs that can't prompt."
         ),
@@ -355,7 +355,7 @@ def build_top_level_parser():
         "--image", help="Optional local image path to attach to a single query"
     )
     # `default=argparse.SUPPRESS` on flags that are ALSO declared on the
-    # top-level parser: when the user writes `hermes -m foo chat`, argparse
+    # top-level parser: when the user writes `vigil -m foo chat`, argparse
     # first sets `args.model = "foo"` from the top-level parser, then
     # dispatches to the chat subparser. Without SUPPRESS the chat subparser's
     # own default (`None`) would silently clobber the top-level value because
@@ -455,7 +455,7 @@ def build_top_level_parser():
         default=argparse.SUPPRESS,
         help=(
             "Auto-approve any unseen shell hooks declared in config.yaml "
-            "without a TTY prompt (see also HERMES_ACCEPT_HOOKS env var and "
+            "without a TTY prompt (see also VIGIL_ACCEPT_HOOKS env var and "
             "hooks_auto_accept: in config.yaml)."
         ),
     )

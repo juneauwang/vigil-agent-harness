@@ -44,9 +44,9 @@ def _load_plugin_router():
 
 @pytest.fixture
 def kanban_home(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     kb.init_db()
     return home
@@ -123,7 +123,7 @@ def test_attachments_root_is_per_board(kanban_home, monkeypatch):
     default_root = kb.attachments_root(board="default")
     assert default_root.name == "attachments"
     # a named board nests under its board dir
-    monkeypatch.delenv("HERMES_KANBAN_ATTACHMENTS_ROOT", raising=False)
+    monkeypatch.delenv("VIGIL_KANBAN_ATTACHMENTS_ROOT", raising=False)
     named = kb.attachments_root(board="default")
     assert named == default_root
 
@@ -252,7 +252,7 @@ def test_store_attachment_bytes_roundtrip(kanban_home):
 
 
 # ---------------------------------------------------------------------------
-# CLI — hermes kanban attach / attachments / attach-rm
+# CLI — vigil kanban attach / attachments / attach-rm
 # ---------------------------------------------------------------------------
 
 

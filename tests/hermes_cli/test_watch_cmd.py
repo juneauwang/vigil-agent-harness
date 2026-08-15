@@ -17,13 +17,13 @@ import hermes_cli.watch as watch_mod
 
 @pytest.fixture
 def fake_env(tmp_path, monkeypatch):
-    """临时 HOME（unit 落盘）+ 临时 HERMES_HOME（watch 数据）。"""
+    """临时 HOME（unit 落盘）+ 临时 VIGIL_HOME（watch 数据）。"""
     home = tmp_path / "home"
     home.mkdir(parents=True)
     hermes_home = tmp_path / "hermes_home"
     hermes_home.mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
     return home, hermes_home
 
 
@@ -59,7 +59,7 @@ class TestWatchInstall:
         # 服务名固定 vigil-watch（硬约束 7：与 upstream hermes-gateway 无关联）
         assert "vigil-watch.service" in str(unit)
         assert "hermes-gateway" not in str(unit)
-        assert f"Environment=HERMES_HOME={hermes_home}" in text
+        assert f"Environment=VIGIL_HOME={hermes_home}" in text
         # ExecStart 指向 venv python + watch_collect_loop
         assert "-m hermes_cli.watch_collect_loop" in text
         assert text.startswith("[Unit]")

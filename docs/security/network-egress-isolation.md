@@ -1,6 +1,6 @@
 # Network Egress Isolation for Docker Deployments
 
-When running Hermes inside Docker, the default `network_mode: host` gives the
+When running Vigil inside Docker, the default `network_mode: host` gives the
 agent process unrestricted outbound network access. This guide shows how to
 segment traffic so the agent core can only reach the services it needs, while
 blocking arbitrary outbound connections.
@@ -11,7 +11,7 @@ commands.
 
 ## Threat Model
 
-The Hermes [SECURITY.md](../../SECURITY.md) §2 defines the trust model. The
+The Vigil [SECURITY.md](../../SECURITY.md) §2 defines the trust model. The
 terminal backend is the primary execution boundary. However, when running with
 `network_mode: host`, any command the agent executes can reach any endpoint on
 the network, including external ones.
@@ -69,7 +69,7 @@ Override the default `docker-compose.yml` with a
 # Network egress isolation for production deployments.
 #
 # Usage:
-#   HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose up -d
+#   VIGIL_UID=$(id -u) VIGIL_GID=$(id -g) docker compose up -d
 #
 # This overrides network_mode: host with isolated Docker networks.
 
@@ -119,7 +119,7 @@ services:
     environment:
       - HTTP_PROXY=http://egress-proxy:3128
       - HTTPS_PROXY=http://egress-proxy:3128
-      - NO_PROXY=hermes,hermes-dashboard,localhost
+      - NO_PROXY=vigil,hermes-dashboard,localhost
 
   dashboard:
     network_mode: ""
@@ -190,6 +190,6 @@ docker compose exec gateway \
 
 ## Related
 
-- [SECURITY.md](../../SECURITY.md) — Hermes trust model and vulnerability reporting
+- [SECURITY.md](../../SECURITY.md) — Vigil trust model and vulnerability reporting
 - [Terminal backends](../../README.md) — sandboxed execution targets
 - [docker-compose.yml](../../docker-compose.yml) — default compose configuration

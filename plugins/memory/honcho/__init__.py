@@ -8,7 +8,7 @@ Five tools (profile, search, reasoning, context, conclude) are exposed
 through the MemoryProvider interface.
 
 Config: Uses the existing Honcho config chain:
-  1. $HERMES_HOME/honcho.json (profile-scoped)
+  1. $VIGIL_HOME/honcho.json (profile-scoped)
   2. ~/.honcho/config.json (legacy global)
   3. Environment variables
 """
@@ -309,7 +309,7 @@ class HonchoMemoryProvider(MemoryProvider):
             return False
 
     def save_config(self, values, hermes_home):
-        """Write config to $HERMES_HOME/honcho.json (Honcho SDK native format)."""
+        """Write config to $VIGIL_HOME/honcho.json (Honcho SDK native format)."""
         import json
         import os
         from pathlib import Path
@@ -421,7 +421,7 @@ class HonchoMemoryProvider(MemoryProvider):
     def _start_session_init_background(self, *, wait_timeout: float = 0.0) -> None:
         """Start Honcho session initialization in a daemon thread.
 
-        This keeps Hermes CLI/gateway startup responsive when Honcho is down,
+        This keeps Vigil CLI/gateway startup responsive when Honcho is down,
         slow, or its database is unhealthy. The thread may still take the SDK
         timeout path, but it cannot block agent construction or first prompt
         assembly. ``wait_timeout`` lets fast/mock initializations finish before
@@ -488,7 +488,7 @@ class HonchoMemoryProvider(MemoryProvider):
         # not treat that partially initialized state as usable.
         session = self._manager.get_or_create(self._session_key)
 
-        # Skip under per-session strategy: every Hermes run creates a fresh
+        # Skip under per-session strategy: every Vigil run creates a fresh
         # Honcho session by design, so uploading MEMORY.md/USER.md/SOUL.md to
         # each one would flood the backend with short-lived duplicates instead
         # of performing a one-time migration.

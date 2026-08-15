@@ -1,6 +1,6 @@
 """Pet generation — base-draft → hatch pipeline.
 
-Public surface used by the gateway RPCs, the CLI ``hermes pets generate``
+Public surface used by the gateway RPCs, the CLI ``vigil pets generate``
 command, and tests:
 
 - :func:`generate_base_drafts` / :func:`hatch_pet` — the two-step flow.

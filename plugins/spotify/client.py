@@ -1,4 +1,4 @@
-"""Thin Spotify Web API helper used by Hermes native tools."""
+"""Thin Spotify Web API helper used by Vigil native tools."""
 
 from __future__ import annotations
 

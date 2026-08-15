@@ -1,12 +1,12 @@
 """Derive ACP session-provenance metadata from the existing compression chain.
 
-This is an additive Hermes extension surfaced under ACP ``_meta.hermes`` so
+This is an additive Vigil extension surfaced under ACP ``_meta.vigil`` so
 existing ACP clients ignore it. It carries no new persisted state: everything
 is derived on demand from the ``sessions`` table (``parent_session_id`` /
 ``end_reason``), which already models compression-continuation chains.
 
 The ACP/editor ``session_id`` stays the stable public handle. When context
-compression rotates the internal Hermes head, ``build_session_provenance`` lets
+compression rotates the internal Vigil head, ``build_session_provenance`` lets
 a client see the previous/current internal ids and the lineage root without
 parsing status text, guessing from token drops, or reading ``state.db``.
 """
@@ -31,13 +31,13 @@ def build_session_provenance(
     Args:
         db: A ``SessionDB`` (must expose ``get_session``).
         acp_session_id: The stable ACP/editor-facing session handle.
-        current_hermes_session_id: The live internal Hermes DB session id
+        current_hermes_session_id: The live internal Vigil DB session id
             (``state.agent.session_id``).
         previous_hermes_session_id: The internal id from before the most recent
             turn, when known. Supplied by ``prompt()`` to flag a rotation.
 
     Returns:
-        A dict suitable for ``{"hermes": {"sessionProvenance": <dict>}}`` under
+        A dict suitable for ``{"vigil": {"sessionProvenance": <dict>}}`` under
         ACP ``_meta``, or ``None`` if the session can't be read.
     """
     try:
@@ -115,7 +115,7 @@ def session_provenance_meta(
     *,
     previous_hermes_session_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Return a ready ``_meta`` payload: ``{"hermes": {"sessionProvenance": ...}}``."""
+    """Return a ready ``_meta`` payload: ``{"vigil": {"sessionProvenance": ...}}``."""
     prov = build_session_provenance(
         db,
         acp_session_id,

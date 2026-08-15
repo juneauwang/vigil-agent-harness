@@ -1,38 +1,38 @@
 """
-Hermes Desktop (Chat GUI) uninstaller.
+Vigil Desktop (Chat GUI) uninstaller.
 
 The desktop GUI ships in two shapes and this module knows how to find and
 remove the artifacts of both, on Linux, macOS, and Windows, WITHOUT touching
 the Python agent or the user's config/data:
 
-  1. Source-built GUI (``hermes desktop`` / ``hermes gui``)
-     Built inside the agent checkout under ``$HERMES_HOME/hermes-agent/``:
+  1. Source-built GUI (``vigil desktop`` / ``vigil gui``)
+     Built inside the agent checkout under ``$VIGIL_HOME/hermes-agent/``:
        - ``apps/desktop/dist``      (compiled renderer)
        - ``apps/desktop/release``   (electron-builder unpacked app + installers)
        - ``apps/desktop/node_modules`` and the workspace-root ``node_modules``
          (Electron itself, ~200MB) — only removed on a GUI uninstall because
          the agent does not need them.
-       - ``$HERMES_HOME/desktop-build-stamp.json`` (the build freshness stamp)
+       - ``$VIGIL_HOME/desktop-build-stamp.json`` (the build freshness stamp)
 
   2. Packaged distributable (DMG / NSIS / AppImage / deb / rpm)
      Installed by the OS to a standard application location and carrying its
      own bundled Electron + a per-user Electron ``userData`` directory:
        - macOS:   ``/Applications/Hermes.app`` or ``~/Applications/Hermes.app``
-       - Windows: ``%LOCALAPPDATA%\\Programs\\Hermes`` (NSIS per-user)
+       - Windows: ``%LOCALAPPDATA%\\Programs\\Vigil`` (NSIS per-user)
        - Linux:   ``~/.local/share/applications`` .desktop entry + AppImage
 
 In both shapes the Electron runtime keeps a ``userData`` directory keyed on
-the app name ("Hermes"), separate from ``$HERMES_HOME``:
-  - macOS:   ``~/Library/Application Support/Hermes``
-  - Windows: ``%APPDATA%\\Hermes``
-  - Linux:   ``$XDG_CONFIG_HOME/Hermes`` (default ``~/.config/Hermes``)
+the app name ("Vigil"), separate from ``$VIGIL_HOME``:
+  - macOS:   ``~/Library/Application Support/Vigil``
+  - Windows: ``%APPDATA%\\Vigil``
+  - Linux:   ``$XDG_CONFIG_HOME/Vigil`` (default ``~/.config/Vigil``)
 
 This holds the desktop's own ``connection.json`` / ``updates.json`` and
 Chromium cache — pure GUI state, safe to remove on a GUI uninstall.
 
 The functions here are deliberately import-light and side-effect-free at
 import time so the Electron main process can shell out to
-``hermes uninstall --gui`` (and friends) without paying for the full CLI.
+``vigil uninstall --gui`` (and friends) without paying for the full CLI.
 """
 
 import os
@@ -70,7 +70,7 @@ def _agent_root(hermes_home: Path) -> Path:
 def desktop_userdata_dir() -> Path:
     """Return the Electron ``userData`` directory for the desktop app.
 
-    Mirrors Electron's ``app.getPath('userData')`` for an app named "Hermes"
+    Mirrors Electron's ``app.getPath('userData')`` for an app named "Vigil"
     on each platform. This is GUI-only state (connection.json, updates.json,
     Chromium cache) and never holds agent config or sessions.
     """
@@ -88,7 +88,7 @@ def desktop_userdata_dir() -> Path:
 
 
 def source_built_gui_artifacts(hermes_home: Path) -> "list[Path]":
-    """GUI build artifacts produced by ``hermes desktop`` inside the checkout.
+    """GUI build artifacts produced by ``vigil desktop`` inside the checkout.
 
     These are removable on a GUI uninstall without harming the agent: the
     Python agent runs from ``hermes-agent/`` source + ``venv/`` and never
@@ -113,7 +113,7 @@ def packaged_gui_app_paths() -> "list[Path]":
 
     Returns every candidate for the current OS; the caller filters to those
     that actually exist. We never glob system-wide — only the well-known
-    electron-builder output locations for the "Hermes" product.
+    electron-builder output locations for the "Vigil" product.
     """
     home = Path.home()
     paths: list[Path] = []
@@ -126,7 +126,7 @@ def packaged_gui_app_paths() -> "list[Path]":
         local = os.environ.get("LOCALAPPDATA")
         local_base = Path(local) if local else (home / "AppData" / "Local")
         paths += [
-            # NSIS per-user install (perMachine=false → Programs\Hermes).
+            # NSIS per-user install (perMachine=false → Programs\Vigil).
             local_base / "Programs" / "Hermes",
             # Older / alternate layout some builds used.
             local_base / "hermes-desktop",
@@ -147,7 +147,7 @@ def packaged_gui_app_paths() -> "list[Path]":
         data = os.environ.get("XDG_DATA_HOME")
         data_base = Path(data) if data else (home / ".local" / "share")
         paths += [
-            # The launcher entry `hermes desktop` installs. Its icon lives
+            # The launcher entry `vigil desktop` installs. Its icon lives
             # in the checkout, not in the installed app.
             desktop_entry_path(),
             # Some packaged builds emit this casing.
@@ -157,7 +157,7 @@ def packaged_gui_app_paths() -> "list[Path]":
 
 
 def agent_is_installed(hermes_home: Path) -> bool:
-    """Return True when a usable Python agent install exists under HERMES_HOME.
+    """Return True when a usable Python agent install exists under VIGIL_HOME.
 
     Used by the desktop UI to decide which uninstall options to offer: if the
     agent isn't present (a future "lite" GUI-only client), the "remove agent"
@@ -240,7 +240,7 @@ def uninstall_gui(hermes_home: "Path | None" = None, *, remove_userdata: bool = 
       - the Electron ``userData`` directory (unless ``remove_userdata=False``)
 
     Never touches ``hermes-agent/hermes_cli`` (agent source), ``venv/``, or any
-    config / sessions / .env under ``$HERMES_HOME``.
+    config / sessions / .env under ``$VIGIL_HOME``.
 
     Returns the list of paths actually removed.
     """
@@ -282,7 +282,7 @@ def uninstall_gui(hermes_home: "Path | None" = None, *, remove_userdata: bool = 
     if sys.platform.startswith("linux"):
         # The desktop entry was removed above (it is in
         # ``packaged_gui_app_paths``), but the menu caches still list it.
-        # Reindex so Hermes disappears from the launcher.
+        # Reindex so Vigil disappears from the launcher.
         try:
             from hermes_cli.linux_desktop_entry import (
                 desktop_entry_path,

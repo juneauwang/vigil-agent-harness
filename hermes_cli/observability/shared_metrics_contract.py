@@ -1,4 +1,4 @@
-"""Bounded product contract for the first Hermes shared-metrics slice."""
+"""Bounded product contract for the first Vigil shared-metrics slice."""
 
 from __future__ import annotations
 
@@ -234,7 +234,7 @@ def client_architecture(value: Any) -> str:
 
 
 def client_install_method(value: Any) -> str:
-    """Return an allowlisted Hermes installation method."""
+    """Return an allowlisted Vigil installation method."""
     normalized = str(value or "").strip().lower()
     if normalized == "nix":
         return "nixos"
@@ -454,7 +454,7 @@ def model_call_dimensions(event: Any) -> dict[str, str] | None:
 
 
 def _auxiliary_model_call_dimensions(event: Any) -> dict[str, str] | None:
-    """Project a terminal auxiliary route from its Hermes logical scope."""
+    """Project a terminal auxiliary route from its Vigil logical scope."""
     metadata = getattr(event, "metadata", None)
     if (
         not isinstance(metadata, dict)
@@ -757,7 +757,7 @@ def task_terminal_fields(
 
 
 def task_terminal_state(kwargs: dict[str, Any]) -> tuple[str, str, str]:
-    """Map Hermes terminal state to bounded task outcome dimensions."""
+    """Map Vigil terminal state to bounded task outcome dimensions."""
     reason = str(kwargs.get("turn_exit_reason") or "").strip().lower()
     if kwargs.get("interrupted") or "interrupt" in reason or "cancel" in reason:
         return "cancelled", "user_cancelled", "user_cancelled"
@@ -807,7 +807,7 @@ def count_bucket(count: int) -> str:
 
 
 def tool_category(kwargs: dict[str, Any]) -> str:
-    """Map Hermes registry toolset metadata to a low-cardinality category."""
+    """Map Vigil registry toolset metadata to a low-cardinality category."""
     toolset = str(kwargs.get("toolset") or "").strip().lower()
     if not toolset:
         return "unknown"
@@ -839,7 +839,7 @@ def tool_category(kwargs: dict[str, Any]) -> str:
 
 
 def tool_outcome(kwargs: dict[str, Any]) -> str:
-    """Normalize the terminal Hermes tool status without inspecting its result."""
+    """Normalize the terminal Vigil tool status without inspecting its result."""
     status = str(kwargs.get("status") or "").strip().lower()
     return {
         "blocked": "blocked",
@@ -939,7 +939,7 @@ def _non_negative_number(value: Any) -> float | None:
 
 
 def model_call_fields(kwargs: dict[str, Any]) -> dict[str, str]:
-    """Return the terminal model identity and provider route known to Hermes."""
+    """Return the terminal model identity and provider route known to Vigil."""
     model = _metric_identifier(
         kwargs.get("response_model"),
         max_length=MODEL_IDENTIFIER_MAX_LENGTH,

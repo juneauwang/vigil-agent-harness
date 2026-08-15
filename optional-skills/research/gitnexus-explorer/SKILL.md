@@ -2,11 +2,11 @@
 name: gitnexus-explorer
 description: Serve an interactive codebase knowledge graph web UI.
 version: 1.0.0
-author: Hermes Agent + Teknium
+author: Vigil + Teknium
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  vigil:
     tags: [gitnexus, code-intelligence, knowledge-graph, visualization]
     related_skills: [hermes-agent, codebase-inspection]
 ---

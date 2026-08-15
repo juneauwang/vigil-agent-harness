@@ -10,7 +10,7 @@
 #   reps           repetitions per cell (default 3)
 #   model ...      models to test (default: the Aug 2026 pair)
 #
-# Requires: ABEVAL_HOME pointing at a configured Hermes home (see README.md),
+# Requires: ABEVAL_HOME pointing at a configured Vigil home (see README.md),
 # and this script run with the python that has hermes-agent's deps installed.
 set -euo pipefail
 

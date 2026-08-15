@@ -1,4 +1,4 @@
-"""Tests for ``hermes dashboard register``.
+"""Tests for ``vigil dashboard register``.
 
 Covers the CLI half of self-hosted dashboard registration:
   - Docker-style auto-name generation
@@ -99,11 +99,11 @@ class TestHappyPath:
             saved[key] = value
 
         # get_env_value is consulted twice: once for the stored client_id
-        # (idempotency key) and once for HERMES_DASHBOARD_PORTAL_URL. Route by
+        # (idempotency key) and once for VIGIL_DASHBOARD_PORTAL_URL. Route by
         # key so a test can seed a prior client_id while keeping the portal
         # unset (the default-portal-not-persisted path).
         def fake_get_env(key):
-            if key == "HERMES_DASHBOARD_OAUTH_CLIENT_ID":
+            if key == "VIGIL_DASHBOARD_OAUTH_CLIENT_ID":
                 return existing_client_id
             return None
 
@@ -132,8 +132,8 @@ class TestHappyPath:
         assert "custom_redirect_uri" not in captured["body"]
 
         # env write: client_id present, portal URL NOT written (default portal)
-        assert saved["HERMES_DASHBOARD_OAUTH_CLIENT_ID"] == "agent:selfhost-1"
-        assert "HERMES_DASHBOARD_PORTAL_URL" not in saved
+        assert saved["VIGIL_DASHBOARD_OAUTH_CLIENT_ID"] == "agent:selfhost-1"
+        assert "VIGIL_DASHBOARD_PORTAL_URL" not in saved
 
         out = capsys.readouterr().out
         assert "Registered dashboard" in out
@@ -149,7 +149,7 @@ class TestIdempotentRerun(TestHappyPath):
     """Re-running with a stored client_id updates instead of creating.
 
     Inherits ``_run`` from TestHappyPath; the only new lever is
-    ``existing_client_id`` (the HERMES_DASHBOARD_OAUTH_CLIENT_ID a prior run
+    ``existing_client_id`` (the VIGIL_DASHBOARD_OAUTH_CLIENT_ID a prior run
     persisted), which the CLI re-sends so the portal updates that row.
     """
 
@@ -181,7 +181,7 @@ class TestIdempotentRerun(TestHappyPath):
         out = capsys.readouterr().out
         assert "Registered dashboard" in out
         assert "Updated dashboard" not in out
-        assert saved["HERMES_DASHBOARD_OAUTH_CLIENT_ID"] == "agent:selfhost-new"
+        assert saved["VIGIL_DASHBOARD_OAUTH_CLIENT_ID"] == "agent:selfhost-new"
 
     def test_blank_stored_client_id_treated_as_first_run(self, capsys):
         # A blank/whitespace stored value is not a usable key: treat as a
@@ -197,7 +197,7 @@ class TestIdempotentRerun(TestHappyPath):
 
 
 class TestCustomPortalPersistence:
-    """`--portal-url` / HERMES_DASHBOARD_PORTAL_URL is persisted to .env.
+    """`--portal-url` / VIGIL_DASHBOARD_PORTAL_URL is persisted to .env.
 
     An *explicitly supplied* custom portal URL is an intentional choice the
     user wants to survive across sessions, so it's always written (updating an
@@ -211,7 +211,7 @@ class TestCustomPortalPersistence:
         """Drive cmd_dashboard_register, capturing save_env_value calls.
 
         `existing_portal` is what get_env_value returns for
-        HERMES_DASHBOARD_PORTAL_URL (None = not present in .env).
+        VIGIL_DASHBOARD_PORTAL_URL (None = not present in .env).
         """
         response = {
             "client_id": "agent:selfhost-1",
@@ -228,7 +228,7 @@ class TestCustomPortalPersistence:
             saved[key] = value
 
         def fake_get_env_value(key, *a, **kw):
-            if key == "HERMES_DASHBOARD_PORTAL_URL":
+            if key == "VIGIL_DASHBOARD_PORTAL_URL":
                 return existing_portal
             return None
 
@@ -245,10 +245,10 @@ class TestCustomPortalPersistence:
         ), patch.object(
             dr.urllib.request, "urlopen", return_value=_fake_http_ok(response)
         ):
-            # The ambient process env may carry HERMES_DASHBOARD_PORTAL_URL
+            # The ambient process env may carry VIGIL_DASHBOARD_PORTAL_URL
             # (e.g. staging dev shells); drop it so `custom_portal_supplied`
             # is driven solely by the args.portal_url under test.
-            dr.os.environ.pop("HERMES_DASHBOARD_PORTAL_URL", None)
+            dr.os.environ.pop("VIGIL_DASHBOARD_PORTAL_URL", None)
             dr.cmd_dashboard_register(args)
         return saved
 
@@ -260,18 +260,18 @@ class TestCustomPortalPersistence:
             portal="https://portal.nousresearch.com",
             existing_portal=None,
         )
-        assert "HERMES_DASHBOARD_PORTAL_URL" not in saved
+        assert "VIGIL_DASHBOARD_PORTAL_URL" not in saved
 
 
 class TestPublicUrlPersistence:
-    """`--redirect-uri` derives & persists HERMES_DASHBOARD_PUBLIC_URL in .env.
+    """`--redirect-uri` derives & persists VIGIL_DASHBOARD_PUBLIC_URL in .env.
 
     --redirect-uri is the full public callback (e.g.
     https://hermes.example.com/auth/callback). At serve time the dashboard auth
     layer reconstructs that callback by appending "/auth/callback" to
-    HERMES_DASHBOARD_PUBLIC_URL, so the value that's actually consumed is the
+    VIGIL_DASHBOARD_PUBLIC_URL, so the value that's actually consumed is the
     ORIGIN (scheme://host). We derive the origin from the supplied redirect URI
-    and persist THAT as HERMES_DASHBOARD_PUBLIC_URL — the var the runtime reads
+    and persist THAT as VIGIL_DASHBOARD_PUBLIC_URL — the var the runtime reads
     — so the public-URL override is genuinely wired, not just stored.
 
     An explicitly supplied value is always written (updating an existing entry
@@ -283,7 +283,7 @@ class TestPublicUrlPersistence:
         """Drive cmd_dashboard_register, capturing save_env_value calls.
 
         `existing_public` is what get_env_value returns for
-        HERMES_DASHBOARD_PUBLIC_URL (None = not present in .env).
+        VIGIL_DASHBOARD_PUBLIC_URL (None = not present in .env).
         """
         response = {
             "client_id": "agent:selfhost-1",
@@ -300,7 +300,7 @@ class TestPublicUrlPersistence:
             saved[key] = value
 
         def fake_get_env_value(key, *a, **kw):
-            if key == "HERMES_DASHBOARD_PUBLIC_URL":
+            if key == "VIGIL_DASHBOARD_PUBLIC_URL":
                 return existing_public
             return None
 
@@ -317,7 +317,7 @@ class TestPublicUrlPersistence:
         ), patch.object(
             dr.urllib.request, "urlopen", return_value=_fake_http_ok(response)
         ):
-            dr.os.environ.pop("HERMES_DASHBOARD_PORTAL_URL", None)
+            dr.os.environ.pop("VIGIL_DASHBOARD_PORTAL_URL", None)
             dr.cmd_dashboard_register(args)
         return saved
 
@@ -329,7 +329,7 @@ class TestPublicUrlPersistence:
             args=_ns(),
             existing_public="https://already-set.example.com",
         )
-        assert "HERMES_DASHBOARD_PUBLIC_URL" not in saved
+        assert "VIGIL_DASHBOARD_PUBLIC_URL" not in saved
 
     def test_non_http_redirect_not_persisted(self, capsys):
         # A malformed / non-http(s) redirect yields no derivable origin → skip.
@@ -337,7 +337,7 @@ class TestPublicUrlPersistence:
             args=_ns(redirect_uri="not-a-url"),
             existing_public=None,
         )
-        assert "HERMES_DASHBOARD_PUBLIC_URL" not in saved
+        assert "VIGIL_DASHBOARD_PUBLIC_URL" not in saved
 
     def test_public_url_persisted_alongside_portal_url(self, capsys):
         # Both --portal-url and --redirect-uri supplied → portal_url AND the
@@ -369,15 +369,15 @@ class TestPublicUrlPersistence:
         ), patch.object(
             dr.urllib.request, "urlopen", return_value=_fake_http_ok(response)
         ):
-            dr.os.environ.pop("HERMES_DASHBOARD_PORTAL_URL", None)
+            dr.os.environ.pop("VIGIL_DASHBOARD_PORTAL_URL", None)
             dr.cmd_dashboard_register(
                 _ns(
                     portal_url="https://preview.example.com",
                     redirect_uri="https://hermes.example.com/auth/callback",
                 )
             )
-        assert saved["HERMES_DASHBOARD_PORTAL_URL"] == "https://preview.example.com"
-        assert saved["HERMES_DASHBOARD_PUBLIC_URL"] == "https://hermes.example.com"
+        assert saved["VIGIL_DASHBOARD_PORTAL_URL"] == "https://preview.example.com"
+        assert saved["VIGIL_DASHBOARD_PUBLIC_URL"] == "https://hermes.example.com"
 
 
 class TestPortalResolution:

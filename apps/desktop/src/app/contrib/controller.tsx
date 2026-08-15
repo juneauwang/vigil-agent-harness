@@ -251,7 +251,7 @@ registry.registerMany([
     get: () => $layoutEditMode.get(),
     set: enabled => $layoutEditMode.set(enabled)
   }),
-  // The agent's write -> see loop: rescan <hermes home>/desktop-plugins
+  // The agent's write -> see loop: rescan <vigil home>/desktop-plugins
   // without relaunching (same-id reloads dispose the previous incarnation).
   {
     id: 'plugins.reload',

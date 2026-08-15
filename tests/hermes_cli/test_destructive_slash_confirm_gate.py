@@ -34,7 +34,7 @@ class TestUserConfigMerge:
     def test_existing_user_config_without_key_gets_default(self, tmp_path, monkeypatch):
         import yaml
 
-        home = tmp_path / ".hermes"
+        home = tmp_path / ".vigil"
         home.mkdir()
         cfg_path = home / "config.yaml"
         legacy = {
@@ -42,7 +42,7 @@ class TestUserConfigMerge:
         }
         cfg_path.write_text(yaml.safe_dump(legacy))
 
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         import importlib
         import hermes_cli.config as cfg_mod
         importlib.reload(cfg_mod)

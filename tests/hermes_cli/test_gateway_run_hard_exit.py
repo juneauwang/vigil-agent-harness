@@ -1,6 +1,6 @@
 """Regression tests for CLI gateway run exit behavior.
 
-``hermes gateway run`` enters through hermes_cli.gateway, not gateway.run.main().
+``vigil gateway run`` enters through hermes_cli.gateway, not gateway.run.main().
 After graceful teardown it must use the same hard-exit backstop as gateway.run.main()
 so Python finalization does not wait on non-daemon worker threads (for example
 in-flight cron ThreadPoolExecutor jobs) and delay service-managed restarts.
@@ -29,7 +29,7 @@ def _prepare(monkeypatch):
     monkeypatch.setattr(gateway_cli, "_guard_existing_gateway_process_conflict", lambda replace=False: None)
     monkeypatch.setattr(gateway_cli, "supports_systemd_services", lambda: False)
     monkeypatch.setattr(gateway_cli.sys, "stdin", types.SimpleNamespace(isatty=lambda: False))
-    monkeypatch.setenv("HERMES_GATEWAY_EXIT_DIAG", "0")
+    monkeypatch.setenv("VIGIL_GATEWAY_EXIT_DIAG", "0")
 
     async def _start_gateway(*args, **kwargs):  # pragma: no cover - never awaited by fake run
         return True

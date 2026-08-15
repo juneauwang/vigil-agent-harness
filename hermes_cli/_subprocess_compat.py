@@ -1,6 +1,6 @@
 """Windows subprocess compatibility helpers.
 
-Hermes is developed on Linux / macOS and tested natively on Windows too.
+Vigil is developed on Linux / macOS and tested natively on Windows too.
 Several common subprocess patterns break silently-or-loudly on Windows:
 
 * ``["npm", "install", ...]`` — on Windows ``npm`` is ``npm.cmd``, a batch
@@ -127,7 +127,7 @@ _CREATE_NO_WINDOW = 0x08000000
 # "detached" child with it. Critical for the post-update gateway watcher:
 # Electron spawns the Tauri updater inside its own job, the updater spawns
 # the watcher subprocess; without BREAKAWAY the watcher dies the instant
-# Electron exits, so the gateway never gets respawned after a `hermes
+# Electron exits, so the gateway never gets respawned after a `vigil
 # update` triggered from the GUI. See fix/windows-gateway-reliability.
 _CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 
@@ -248,7 +248,7 @@ def suppress_platform_ver_console() -> None:
     CPython 3.11 (``platform()`` → ``Windows-10-10.0.xxxxx-SP0`` either way).
 
     Call early, before heavyweight imports — the flash typically happens
-    during a dependency's import, not from Hermes' own code.
+    during a dependency's import, not from Vigil' own code.
     """
     if not IS_WINDOWS:
         return
@@ -309,7 +309,7 @@ def noninteractive_git_env(
 ) -> dict[str, str]:
     """Environment for *internal* git invocations that must never prompt.
 
-    Hermes shells out to git from many non-interactive contexts — MCP catalog
+    Vigil shells out to git from many non-interactive contexts — MCP catalog
     installs, plugin install/update, profile distribution staging, worktree
     base fetches, desktop review-pane fetch/push. When the remote is private,
     misconfigured, or requires auth, git's default behavior is to prompt on

@@ -1,12 +1,12 @@
-"""hermes webhook — manage dynamic webhook subscriptions from the CLI.
+"""vigil webhook — manage dynamic webhook subscriptions from the CLI.
 
 Usage:
-    hermes webhook subscribe <name> [options]
-    hermes webhook list
-    hermes webhook remove <name>
-    hermes webhook test <name> [--payload '{"key": "value"}']
+    vigil webhook subscribe <name> [options]
+    vigil webhook list
+    vigil webhook remove <name>
+    vigil webhook test <name> [--payload '{"key": "value"}']
 
-Subscriptions persist to ~/.hermes/webhook_subscriptions.json and are
+Subscriptions persist to ~/.vigil/webhook_subscriptions.json and are
 hot-reloaded by the webhook adapter without a gateway restart.
 """
 
@@ -138,7 +138,7 @@ def _require_webhook_enabled() -> bool:
 
 
 def webhook_command(args):
-    """Entry point for 'hermes webhook' subcommand."""
+    """Entry point for 'vigil webhook' subcommand."""
     sub = getattr(args, "webhook_action", None)
 
     if not sub:

@@ -20,7 +20,7 @@ from tools.watch_tools import check_watch_requirements, watch_digest
 def watch_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes_home"
     (home / "watch" / "inbox").mkdir(parents=True)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
 
     def _write(ops: dict):

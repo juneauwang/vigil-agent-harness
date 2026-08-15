@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { QUICK_REACTIONS } from '@/store/reactions'
 import type { MessageReaction } from '@/types/hermes'
 
-// Served from the app's own origin (vite.config.ts `hermes:emojibase-assets`
+// Served from the app's own origin (vite.config.ts `vigil:emojibase-assets`
 // plugin bundles emojibase-data): Electron must work offline, and the app
 // should never phone a CDN to draw a picker.
 const EMOJIBASE_URL = './emojibase'

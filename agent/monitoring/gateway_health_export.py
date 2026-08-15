@@ -94,7 +94,7 @@ def _diagnostic_log_attributes(event: Dict[str, Any]) -> Dict[str, Any]:
         value = event.get(key)
         if value is None:
             continue
-        attrs[f"hermes.{key}"] = _redact_string(value) if isinstance(value, str) else value
+        attrs[f"vigil.{key}"] = _redact_string(value) if isinstance(value, str) else value
     return attrs
 
 

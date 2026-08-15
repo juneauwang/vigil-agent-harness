@@ -46,13 +46,13 @@ class TestNewFilterCrossPlatform:
 
     def test_hub_quarantine_filtered(self, tmp_path):
         """A SKILL.md inside .hub/quarantine/ must be filtered out."""
-        p = tmp_path / ".hermes" / "skills" / ".hub" / "quarantine" / "evil" / "SKILL.md"
+        p = tmp_path / ".vigil" / "skills" / ".hub" / "quarantine" / "evil" / "SKILL.md"
         assert _new_filter_matches(p) is True
 
 
     def test_dot_prefix_not_false_positive(self, tmp_path):
         """A skill dir starting with dot but not in the filter list passes."""
-        p = tmp_path / ".hermes" / "skills" / ".my-hidden-skill" / "SKILL.md"
+        p = tmp_path / ".vigil" / "skills" / ".my-hidden-skill" / "SKILL.md"
         assert _new_filter_matches(p) is False
 
 

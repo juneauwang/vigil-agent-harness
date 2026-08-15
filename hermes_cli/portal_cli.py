@@ -1,10 +1,10 @@
-"""``hermes portal`` — the human-readable entry point for Nous Portal.
+"""``vigil portal`` — the human-readable entry point for Nous Portal.
 
-Running ``hermes portal`` with no subcommand performs the one-shot Portal
+Running ``vigil portal`` with no subcommand performs the one-shot Portal
 onboarding: OAuth login, pick a Nous model, switch the inference provider to
 Nous, and offer to enable the Tool Gateway. It is the friendly alias for
-``hermes auth add nous --type oauth`` (which still works), is identical to
-``hermes setup --portal``, and runs the same Nous flow as the first-time quick
+``vigil auth add nous --type oauth`` (which still works), is identical to
+``vigil setup --portal``, and runs the same Nous flow as the first-time quick
 setup.
 
 Subcommands:
@@ -15,7 +15,7 @@ Subcommands:
   tools    List Tool Gateway tools and which are active in the current config.
 
 This command is intentionally minimal — it does not duplicate functionality
-already in ``hermes auth`` or ``hermes tools``. It's the onboarding + discovery
+already in ``vigil auth`` or ``vigil tools``. It's the onboarding + discovery
 surface for the Portal subscription itself.
 """
 from __future__ import annotations
@@ -28,7 +28,7 @@ from hermes_cli.config import load_config
 
 DEFAULT_PORTAL_URL = "https://portal.nousresearch.com"
 SUBSCRIPTION_URL = "https://portal.nousresearch.com/manage-subscription"
-DOCS_URL = "https://hermes-agent.nousresearch.com/docs/user-guide/features/tool-gateway"
+DOCS_URL = "https://github.com/juneauwang/vigil-agent-harness"
 
 
 def _cmd_status(args) -> int:
@@ -171,8 +171,8 @@ def _cmd_tools(args) -> int:
 def _cmd_login(args) -> int:
     """Run the one-shot Nous Portal onboarding (login + model + provider + tools).
 
-    This is the human-readable front door for `hermes auth add nous --type
-    oauth`. It reuses the exact wiring behind `hermes setup --portal` (which in
+    This is the human-readable front door for `vigil auth add nous --type
+    oauth`. It reuses the exact wiring behind `vigil setup --portal` (which in
     turn runs the same Nous flow as the first-time quick setup), so the
     commands stay in lockstep: device-code login, pick a Nous model, switch the
     inference provider to Nous, then offer the Tool Gateway opt-in.
@@ -190,12 +190,12 @@ def _cmd_login(args) -> int:
 
 
 def portal_command(args) -> int:
-    """Top-level dispatch for `hermes portal <subcommand>`."""
+    """Top-level dispatch for `vigil portal <subcommand>`."""
     sub = getattr(args, "portal_command", None)
     if sub in {None, "", "login"}:
-        # Default to the one-shot onboarding — `hermes portal` is the
-        # human-readable alias for `hermes auth add nous --type oauth` /
-        # `hermes setup --portal`.
+        # Default to the one-shot onboarding — `vigil portal` is the
+        # human-readable alias for `vigil auth add nous --type oauth` /
+        # `vigil setup --portal`.
         return _cmd_login(args)
     if sub in {"info", "status"}:
         # `status` kept as a back-compat alias for the prior default.
@@ -210,7 +210,7 @@ def portal_command(args) -> int:
 
 
 def add_parser(subparsers) -> None:
-    """Register `hermes portal` on the given argparse subparsers object."""
+    """Register `vigil portal` on the given argparse subparsers object."""
     portal_parser = subparsers.add_parser(
         "portal",
         help="Set up Nous Portal (login, model pick, Tool Gateway); see also `portal info`",

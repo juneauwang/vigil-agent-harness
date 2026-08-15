@@ -35,7 +35,7 @@ class TestResolveAutoMainFirst:
         """
         import yaml
 
-        home = tmp_path / ".hermes"
+        home = tmp_path / ".vigil"
         home.mkdir()
         (home / "config.yaml").write_text(
             yaml.safe_dump(
@@ -53,7 +53,7 @@ class TestResolveAutoMainFirst:
                 }
             )
         )
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setenv("VIGIL_HOME", str(home))
 
         with patch(
             "agent.auxiliary_client.resolve_provider_client"

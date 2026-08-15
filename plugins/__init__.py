@@ -1,1 +1,1 @@
-# Hermes plugins package
+# Vigil plugins package

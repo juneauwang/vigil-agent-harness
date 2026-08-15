@@ -191,7 +191,7 @@ class TestFeishuAdapterMessaging(unittest.TestCase):
 
         Without this UA tag the Feishu server does not push group @mention
         events over the WebSocket transport.  See
-        https://github.com/NousResearch/hermes-agent/issues/50656
+        https://github.com/juneauwang/vigil-agent-harness
         """
         from gateway.config import PlatformConfig
         from plugins.platforms.feishu.adapter import FeishuAdapter
@@ -650,11 +650,11 @@ class TestAdapterBehavior(unittest.TestCase):
         # Case 1: bot has only a name (open_id not hydrated / not configured).
         # Name fallback is the only available signal for any mention.
         adapter = FeishuAdapter(PlatformConfig())
-        adapter._bot_name = "Hermes Bot"
+        adapter._bot_name = "Vigil Bot"
         sender_id = SimpleNamespace(open_id="ou_any", user_id=None)
 
         name_only_mention = SimpleNamespace(
-            name="Hermes Bot",
+            name="Vigil Bot",
             id=SimpleNamespace(open_id=None, user_id=None),
         )
         different_mention = SimpleNamespace(
@@ -673,14 +673,14 @@ class TestAdapterBehavior(unittest.TestCase):
         # open_id must NOT admit (IDs override names).
         adapter2 = FeishuAdapter(PlatformConfig())
         adapter2._bot_open_id = "ou_bot"
-        adapter2._bot_name = "Hermes Bot"
+        adapter2._bot_name = "Vigil Bot"
 
         same_name_other_id_mention = SimpleNamespace(
-            name="Hermes Bot",
+            name="Vigil Bot",
             id=SimpleNamespace(open_id="ou_other", user_id="u_other"),
         )
         bot_mention = SimpleNamespace(
-            name="Hermes Bot",
+            name="Vigil Bot",
             id=SimpleNamespace(open_id="ou_bot", user_id=None),
         )
 
@@ -954,7 +954,7 @@ class TestAdapterBehavior(unittest.TestCase):
     @patch.dict(
         os.environ,
         {
-            "HERMES_FEISHU_TEXT_BATCH_MAX_MESSAGES": "2",
+            "VIGIL_FEISHU_TEXT_BATCH_MAX_MESSAGES": "2",
         },
         clear=True,
     )
@@ -1095,7 +1095,7 @@ class TestAdapterBehavior(unittest.TestCase):
                 return _FakeResponse()
 
         with tempfile.TemporaryDirectory() as tmp:
-            with patch.dict(os.environ, {"HERMES_HOME": tmp}, clear=False):
+            with patch.dict(os.environ, {"VIGIL_HOME": tmp}, clear=False):
                 adapter = FeishuAdapter(PlatformConfig())
 
                 async def _run() -> tuple[str, str]:
@@ -1184,7 +1184,7 @@ class TestAdapterBehavior(unittest.TestCase):
         from plugins.platforms.feishu.adapter import FeishuAdapter
 
         with tempfile.TemporaryDirectory() as temp_home:
-            with patch.dict(os.environ, {"HERMES_HOME": temp_home}, clear=False):
+            with patch.dict(os.environ, {"VIGIL_HOME": temp_home}, clear=False):
                 first = FeishuAdapter(PlatformConfig())
                 self.assertFalse(first._is_duplicate("om_same"))
                 second = FeishuAdapter(PlatformConfig())
@@ -1395,7 +1395,7 @@ class TestHydrateBotIdentity(unittest.TestCase):
             {
                 "code": 0,
                 "bot": {
-                    "bot_name": "Hermes Bot",
+                    "bot_name": "Vigil Bot",
                     "open_id": "ou_hermes_hydrated",
                 },
             }
@@ -1406,13 +1406,13 @@ class TestHydrateBotIdentity(unittest.TestCase):
         asyncio.run(adapter._hydrate_bot_identity())
 
         self.assertEqual(adapter._bot_open_id, "ou_hermes_hydrated")
-        self.assertEqual(adapter._bot_name, "Hermes Bot")
+        self.assertEqual(adapter._bot_name, "Vigil Bot")
 
     @patch.dict(
         os.environ,
         {
             "FEISHU_BOT_OPEN_ID": "ou_env",
-            "FEISHU_BOT_NAME": "Env Hermes",
+            "FEISHU_BOT_NAME": "Env Vigil",
         },
         clear=True,
     )
@@ -1423,7 +1423,7 @@ class TestHydrateBotIdentity(unittest.TestCase):
             {
                 "code": 0,
                 "bot": {
-                    "bot_name": "Hydrated Hermes",
+                    "bot_name": "Hydrated Vigil",
                     "open_id": "ou_hydrated",
                 },
             }
@@ -1437,7 +1437,7 @@ class TestHydrateBotIdentity(unittest.TestCase):
         # from an old app registration doesn't break @mention gating.
         adapter._client.request.assert_called_once()
         self.assertEqual(adapter._bot_open_id, "ou_hydrated")
-        self.assertEqual(adapter._bot_name, "Hydrated Hermes")
+        self.assertEqual(adapter._bot_name, "Hydrated Vigil")
 
 
 @unittest.skipUnless(_HAS_LARK_OAPI, "lark-oapi not installed")
@@ -1636,7 +1636,7 @@ class TestDedupTTL(unittest.TestCase):
         from plugins.platforms.feishu.adapter import FeishuAdapter
 
         with tempfile.TemporaryDirectory() as temp_home:
-            with patch.dict(os.environ, {"HERMES_HOME": temp_home}, clear=True):
+            with patch.dict(os.environ, {"VIGIL_HOME": temp_home}, clear=True):
                 adapter = FeishuAdapter(PlatformConfig())
                 adapter._dedup_state_path.parent.mkdir(parents=True, exist_ok=True)
                 adapter._dedup_state_path.write_text(
@@ -1936,11 +1936,11 @@ class TestFeishuMentionMap(unittest.TestCase):
         human_with_same_name = SimpleNamespace(
             key="@_user_1",
             id=SimpleNamespace(open_id="ou_human", user_id=""),
-            name="Hermes Bot",
+            name="Vigil Bot",
         )
         result = _build_mentions_map(
             [human_with_same_name],
-            _FeishuBotIdentity(open_id="ou_bot", name="Hermes Bot"),
+            _FeishuBotIdentity(open_id="ou_bot", name="Vigil Bot"),
         )
         self.assertFalse(result["@_user_1"].is_self)
 
@@ -1954,12 +1954,12 @@ class TestFeishuMentionMap(unittest.TestCase):
         bot_mention = SimpleNamespace(
             key="@_user_1",
             id=SimpleNamespace(open_id="ou_bot_actual", user_id=""),
-            name="Hermes Bot",
+            name="Vigil Bot",
         )
         # Bot identity has name but no open_id yet (hydration pending).
         result = _build_mentions_map(
             [bot_mention],
-            _FeishuBotIdentity(open_id="", name="Hermes Bot"),
+            _FeishuBotIdentity(open_id="", name="Vigil Bot"),
         )
         self.assertTrue(result["@_user_1"].is_self)
 
@@ -2441,8 +2441,8 @@ class TestFeishuMentionEndToEnd(unittest.TestCase):
         event = adapter._dispatch_inbound_event.call_args.args[0]
         # Hint surfaces Alice; bot excluded because is_self=True.
         self.assertIn("[Mentioned: Alice (open_id=ou_alice)]", event.text)
-        self.assertNotIn("Hermes (open_id=", event.text)
-        # Body: leading @Hermes stripped, Alice preserved, trailing text intact.
+        self.assertNotIn("Vigil (open_id=", event.text)
+        # Body: leading @Vigil stripped, Alice preserved, trailing text intact.
         self.assertIn("@Alice review the spec with Alice", event.text)
         self.assertNotIn("@Hermes @Alice", event.text)
 

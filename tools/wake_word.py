@@ -1,15 +1,15 @@
-"""Wake-word ("Hey Hermes") detection — hands-free session trigger.
+"""Wake-word ("Hey Vigil") detection — hands-free session trigger.
 
 A lightweight, always-on hotword listener that fires a callback when a wake
 phrase is spoken — the "Hey Siri" / "Alexa" pattern. Shared by the CLI, TUI, and
 desktop GUI (one of them owns it, gated by ``wake_surface_enabled``): say the
-wake word, Hermes opens a fresh session and captures voice via the existing
+wake word, Vigil opens a fresh session and captures voice via the existing
 pipeline, then answers.
 
 Three engines, all fully on-device (no audio leaves the machine for detection):
 
 * **openwakeword** (default, free, no API key) — loads an ONNX model. Defaults
-  to the bundled "hey hermes" model (``tools/wakewords/``) so the wake word
+  to the bundled "hey vigil" model (``tools/wakewords/``) so the wake word
   works out of the box; or point ``wake_word.openwakeword.model`` at a built-in
   name (``hey_jarvis``, ``alexa``, …) or a custom ``.onnx`` for another phrase.
 * **sherpa** (free, no API key, open vocabulary) — sherpa-onnx keyword
@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # 16 kHz mono int16 — Whisper-native and what both engines expect.
 SAMPLE_RATE = 16000
 
-# Minimum gap between two consecutive wake fires, so one "hey hermes" can't
+# Minimum gap between two consecutive wake fires, so one "hey vigil" can't
 # retrigger across several frames while the caller is still reacting.
 _FIRE_COOLDOWN_SECONDS = 2.0
 _START_TIMEOUT_SECONDS = 5.0
@@ -82,16 +82,16 @@ _DEFAULTS: Dict[str, Any] = {
     #   "auto"   — local when a device exists, else client capture
     "capture": "auto",
     "provider": "openwakeword",
-    "phrase": "hey hermes",
+    "phrase": "hey vigil",
     "sensitivity": 0.6,
     "confirmation_frames": _DEFAULT_CONFIRMATION_FRAMES,
     "start_new_session": True,
 }
 
-# Bundled "hey hermes" model (tools/wakewords/) — the default, so the wake word
+# Bundled "hey vigil" model (tools/wakewords/) — the default, so the wake word
 # works out of the box. Config names in _ALIASES resolve to it, not a built-in.
 _BUNDLED_MODEL_NAME = "hey_hermes"
-_BUNDLED_MODEL_ALIASES = frozenset({"", "hey_hermes", "hey hermes", "hermes"})
+_BUNDLED_MODEL_ALIASES = frozenset({"", "hey_hermes", "hey vigil", "hermes"})
 
 
 def _bundled_wakeword_path(framework: str = "onnx") -> str:
@@ -246,7 +246,7 @@ def _confirmation_frames(cfg: Dict[str, Any]) -> int:
 def wake_phrase(cfg: Optional[Dict[str, Any]] = None) -> str:
     """Human-facing wake phrase label (purely cosmetic; engine keys detection)."""
     cfg = cfg if cfg is not None else load_wake_word_config()
-    return str(_get(cfg, "phrase")) or "hey hermes"
+    return str(_get(cfg, "phrase")) or "hey vigil"
 
 
 def resolve_capture_mode(
@@ -442,7 +442,7 @@ def silent_audio_hint(details: Dict[str, Any]) -> str:
     """Platform-specific remediation for an armed stream delivering silence."""
     if sys.platform == "darwin":
         return (
-            "Microphone delivers only silence. Grant the Hermes backend "
+            "Microphone delivers only silence. Grant the Vigil backend "
             "microphone access in System Settings > Privacy & Security > "
             "Microphone, then toggle the wake word."
         )
@@ -586,7 +586,7 @@ class _OpenWakeWordEngine(_Engine):
 
 # sherpa-onnx open-vocabulary KWS model: a small streaming zipformer
 # transducer. English (GigaSpeech); one-time download, cached under
-# HERMES_HOME. Keywords are typed phrases tokenized at RUNTIME — no
+# VIGIL_HOME. Keywords are typed phrases tokenized at RUNTIME — no
 # training step, unlike openWakeWord/Porcupine custom models.
 _SHERPA_KWS_MODEL_URL = (
     "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/"
@@ -626,7 +626,7 @@ class _SherpaKwsEngine(_Engine):
     """sherpa-onnx open-vocabulary keyword spotting — any typed phrase, zero training.
 
     The configured ``wake_word.phrase`` is BPE-tokenized at runtime against the
-    model's vocabulary, so "hey hermes", "hey coder", or any other phrase works
+    model's vocabulary, so "hey vigil", "hey coder", or any other phrase works
     immediately. Here ``phrase`` is DETECTION config, not a cosmetic label.
     """
 
@@ -650,9 +650,9 @@ class _SherpaKwsEngine(_Engine):
 
         # Phrase set: this profile's own phrase, plus — when profile routing is
         # on — every other wake-enabled profile's phrase, so ONE listener can
-        # wake any profile ("hey hermes" / "hey coder" / ...). display-name →
+        # wake any profile ("hey vigil" / "hey coder" / ...). display-name →
         # profile is kept for routing the match back.
-        phrase = str(_get(cfg, "phrase") or "hey hermes").strip()
+        phrase = str(_get(cfg, "phrase") or "hey vigil").strip()
         own_profile = _active_profile_name()
         phrase_map: Dict[str, str] = {phrase: own_profile}
         if bool(cfg.get("profile_routing", True)):

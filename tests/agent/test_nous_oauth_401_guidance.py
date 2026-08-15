@@ -9,7 +9,7 @@ Regression context: ashh hit a Nous 401 (OAuth token expired / portal said
 account out of credits) plus a model slug ``deepseek/deepseek-v4-flash:free``
 that's OpenRouter syntax, not a Nous catalog name. The previous guidance
 branch only covered ``openai-codex`` and ``xai-oauth``; ``nous`` fell through
-to a generic "Your API key was rejected... run hermes setup" message, which is
+to a generic "Your API key was rejected... run vigil setup" message, which is
 the wrong advice for a pure-OAuth provider.
 """
 from __future__ import annotations

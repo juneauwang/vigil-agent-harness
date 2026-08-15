@@ -694,7 +694,7 @@ def _find_pses_bundle(ctx: ServerContext) -> Optional[str]:
        directory.  This is the documented config knob.
     2. ``init_overrides["powershell"]["bundlePath"]``.
     3. ``PSES_BUNDLE_PATH`` env var.
-    4. ``<HERMES_HOME>/lsp/PowerShellEditorServices`` staging dir (where a
+    4. ``<VIGIL_HOME>/lsp/PowerShellEditorServices`` staging dir (where a
        user-run unzip would naturally land).
 
     Returns the bundle directory containing ``PowerShellEditorServices/``,
@@ -752,7 +752,7 @@ def _spawn_powershell_es(root: str, ctx: ServerContext) -> Optional[SpawnSpec]:
                 "https://github.com/PowerShell/PowerShellEditorServices/releases, "
                 "extract it, and either set lsp.servers.powershell.command "
                 "to the bundle path or unzip it to "
-                "<HERMES_HOME>/lsp/PowerShellEditorServices."
+                "<VIGIL_HOME>/lsp/PowerShellEditorServices."
             )
         return None
     start_script = os.path.join(
@@ -769,7 +769,7 @@ def _spawn_powershell_es(root: str, ctx: ServerContext) -> Optional[SpawnSpec]:
         f"-LogPath '{log_path}' "
         f"-SessionDetailsPath '{session_path}' "
         f"-FeatureFlags @() -AdditionalModules @() "
-        f"-HostName Hermes -HostProfileId hermes -HostVersion 1.0.0 "
+        f"-HostName Vigil -HostProfileId vigil -HostVersion 1.0.0 "
         f"-Stdio -LogLevel Normal"
     )
     return SpawnSpec(

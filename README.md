@@ -9,7 +9,7 @@
 
 Vigil 是一个**面向运维场景的 AI agent harness**：让 agent 在真实服务器环境里干活时，
 既「记得住整个平台」，又「动得安全」。Vigil 完全 fork 自
-[Hermes Agent](https://hermes-agent.nousresearch.com/)（MIT License），
+[Hermes Agent](https://github.com/juneauwang/vigil-agent-harness)（MIT License），
 保留其成熟的 agent 内核（终端、工具调用、会话、记忆、插件），独立演进出面向
 生产运维的三层核心能力。
 
@@ -168,10 +168,8 @@ uv venv --python 3.12 .venv && source .venv/bin/activate
 pip install vigil-agent-harness -i https://pypi.org/simple/
 ```
 
-**旧数据还在 ~/.hermes？**
-Vigil 的数据目录已独立为 `~/.vigil`（可用 `VIGIL_HOME` 覆盖）。`~/.vigil`
-不存在时自动沿用旧 `~/.hermes` 布局，无需手动迁移；想搬过去：
-`mv ~/.hermes ~/.vigil`（或 `export VIGIL_HOME=~/.vigil`）。
+**数据目录**
+Vigil 的数据目录为 `~/.vigil`（可用 `VIGIL_HOME` 覆盖）。
 
 ## 一次会话长什么样
 
@@ -223,8 +221,8 @@ Vigil：先确认目标身份 → topo_query node2 → runbook_load 匹配
 - [x] 反馈闭环（`runbook_create`：跑通的任务沉淀为结构化 runbook）
 - [ ] 同步 adapter（terraform.tfstate / k8s API）
 - [ ] 拓扑体检 cron（自动检查实体 freshness）
-- [x] 数据目录独立（默认 `~/.vigil`，`VIGIL_HOME` 可覆盖；旧 `~/.hermes` 自动回退）
+- [x] 数据目录独立（默认 `~/.vigil`，`VIGIL_HOME` 可覆盖）
 
 ## License
 
-MIT。Vigil 是 [Hermes Agent](https://hermes-agent.nousresearch.com/) 的独立 fork，版权声明见 [LICENSE](LICENSE)。
+MIT。Vigil 是 [Hermes Agent](https://github.com/juneauwang/vigil-agent-harness) 的独立 fork，版权声明见 [LICENSE](LICENSE)。

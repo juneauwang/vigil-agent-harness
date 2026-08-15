@@ -35,7 +35,7 @@ class TestGetHermesHome:
     def test_default_path(self, tmp_path, monkeypatch):
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         with patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("HERMES_HOME", None)
+            os.environ.pop("VIGIL_HOME", None)
             os.environ.pop("VIGIL_HOME", None)
             home = get_hermes_home()
             assert home == tmp_path / ".vigil"
@@ -106,7 +106,7 @@ class TestEnsureHermesHomeFirstRunConfigTemplate:
             mtime = config_path.stat().st_mtime_ns
             # 清掉进程内 memoization，强制完整重走 ensure 的目录骨架流程。
             from hermes_cli import config as _cfg
-            _cfg._HERMES_HOME_ENSURED.discard(str(fresh))
+            _cfg._VIGIL_HOME_ENSURED.discard(str(fresh))
             ensure_hermes_home()
             assert config_path.read_bytes() == first     # 内容不重复写
             assert config_path.stat().st_mtime_ns == mtime
@@ -138,7 +138,7 @@ class TestLoadConfigParseFailure:
     Before issue #23570 this was a single ``print(...)`` that scrolled past
     on the first invocation — users saw aux-fallback misbehavior with no clue
     their config.yaml was being ignored. The helper must:
-      * log at WARNING (so ``hermes logs`` surfaces it)
+      * log at WARNING (so ``vigil logs`` surfaces it)
       * also write to stderr (so it's visible at startup even before
         ``setup_logging()`` has wired up file handlers)
       * dedup on (path, mtime_ns, size) so concurrent loads don't spam
@@ -563,16 +563,16 @@ class TestOptionalEnvVarsRegistry:
         assert "TAVILY_API_KEY" in all_vars
 
     def test_max_iterations_not_offered_as_env_var(self):
-        """HERMES_MAX_ITERATIONS must NOT be in OPTIONAL_ENV_VARS (issue #17534).
+        """VIGIL_MAX_ITERATIONS must NOT be in OPTIONAL_ENV_VARS (issue #17534).
 
-        Offering it as an editable env var (dashboard, `hermes setup`) lets a
+        Offering it as an editable env var (dashboard, `vigil setup`) lets a
         user write it to .env, recreating the stale ghost that shadows
         config.yaml's agent.max_turns. The iteration budget is configured ONLY
-        via config.yaml; HERMES_MAX_ITERATIONS remains a read-only backward-compat
+        via config.yaml; VIGIL_MAX_ITERATIONS remains a read-only backward-compat
         fallback in the gateway/CLI, never a promoted write target.
         """
         from hermes_cli.config import OPTIONAL_ENV_VARS
-        assert "HERMES_MAX_ITERATIONS" not in OPTIONAL_ENV_VARS
+        assert "VIGIL_MAX_ITERATIONS" not in OPTIONAL_ENV_VARS
 
     def test_nous_gateway_residual_keys_removed(self):
         """批次十三 D2：NOUS_BASE_URL / FIRECRAWL_GATEWAY_URL / TOOL_GATEWAY_*
@@ -588,7 +588,7 @@ class TestOptionalEnvVarsRegistry:
             assert key not in OPTIONAL_ENV_VARS, f"{key} 不应出现在 OPTIONAL_ENV_VARS"
 
     def test_gateway_env_keys_not_routed_as_env_config_keys(self):
-        """批次十三 D2：这些残留键不再被 `hermes config set/get` 特殊路由为 .env 键。"""
+        """批次十三 D2：这些残留键不再被 `vigil config set/get` 特殊路由为 .env 键。"""
         from hermes_cli.config import _is_env_config_key
         for key in ("FIRECRAWL_GATEWAY_URL", "TOOL_GATEWAY_DOMAIN", "TOOL_GATEWAY_SCHEME"):
             assert _is_env_config_key(key) is False, key
@@ -604,7 +604,7 @@ class TestOptionalEnvVarsRegistry:
 class TestMemoryProviderEnvVarsRegistry:
     """Every memory provider that reads an API key from the environment must
     have that key catalogued in OPTIONAL_ENV_VARS so the dashboard Keys page
-    and `hermes setup` surface it (previously only Honcho was listed, leaving
+    and `vigil setup` surface it (previously only Honcho was listed, leaving
     Hindsight/Supermemory/Mem0/RetainDB/ByteRover/OpenViking invisible).
 
     This is a behavior contract, not a snapshot: it asserts each provider's
@@ -1109,13 +1109,13 @@ class TestDiscordChannelPromptsConfig:
 class TestEnvWriteDenylist:
     """``save_env_value`` refuses to persist env-var names that
     influence how subprocesses execute — ``LD_PRELOAD``, ``PYTHONPATH``,
-    ``PATH``, ``EDITOR``, etc. — or any ``HERMES_*`` runtime flag.
+    ``PATH``, ``EDITOR``, etc. — or any ``VIGIL_*`` runtime flag.
 
     The dashboard exposes ``PUT /api/env`` to any authed caller (and
     the session token lives in the SPA's HTML where any future plugin
     XSS or local process could exfiltrate it). Without this gate, an
     attacker who steals the token could plant
-    ``LD_PRELOAD=/tmp/evil.so`` in ``.env`` and own the next Hermes
+    ``LD_PRELOAD=/tmp/evil.so`` in ``.env`` and own the next Vigil
     process on next startup via the dotenv → ``os.environ`` chain in
     ``hermes_cli/env_loader.py``.
 
@@ -1132,16 +1132,16 @@ class TestEnvWriteDenylist:
     @pytest.mark.parametrize(
         "allowed_key",
         [
-            "HERMES_LANGFUSE_PUBLIC_KEY",
-            "HERMES_SPOTIFY_CLIENT_ID",
-            "HERMES_QWEN_BASE_URL",
-            "HERMES_MAX_ITERATIONS",
+            "VIGIL_LANGFUSE_PUBLIC_KEY",
+            "VIGIL_SPOTIFY_CLIENT_ID",
+            "VIGIL_QWEN_BASE_URL",
+            "VIGIL_MAX_ITERATIONS",
         ],
     )
     def test_hermes_integration_keys_still_writable(self, allowed_key):
-        """``HERMES_*`` overall is NOT blocked — only the four runtime
+        """``VIGIL_*`` overall is NOT blocked — only the four runtime
         location names (HOME/PROFILE/CONFIG/ENV) are. Integration
-        credentials following the ``HERMES_*`` convention must keep
+        credentials following the ``VIGIL_*`` convention must keep
         working or we'd regress every provider setup wizard that
         currently writes one of these (auth.py, Spotify, Langfuse, …)."""
         save_env_value(allowed_key, "test-value-123")

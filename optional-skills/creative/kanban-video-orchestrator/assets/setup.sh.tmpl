@@ -23,7 +23,7 @@ check_key() {
     local var="$1"
     local kc_account="${2:-hermes}"
     local kc_service="${3:-$1}"
-    local _hermes_env="${HERMES_HOME:-$HOME/.hermes}/.env"
+    local _hermes_env="${VIGIL_HOME:-$HOME/.vigil}/.env"
     if grep -q "^${var}=" "$_hermes_env" 2>/dev/null && \
        [ -n "$(grep "^${var}=" "$_hermes_env" | cut -d= -f2-)" ]; then
         echo "  ✓ ${var} (env)"
@@ -50,7 +50,7 @@ mkdir -p "$WORKSPACE"/{taste,audio/{voiceover,sfx},assets,scenes,checkpoints,too
 echo "  ✓ $WORKSPACE"
 
 # ─────────────────────────────────────────────────────────────────────
-# 3. Create Hermes profiles
+# 3. Create Vigil profiles
 # ─────────────────────────────────────────────────────────────────────
 echo "═══ Creating Hermes profiles ═══"
 
@@ -83,7 +83,7 @@ profile, toolsets_json, skills_json, workspace = sys.argv[1:5]
 toolsets = json.loads(toolsets_json)
 skills = json.loads(skills_json)
 
-p = os.path.expanduser(f"~/.hermes/profiles/{profile}/config.yaml")
+p = os.path.expanduser(f"~/.vigil/profiles/{profile}/config.yaml")
 if not os.path.exists(p):
     print(f"  ✗ profile config not found: {p}", file=sys.stderr)
     sys.exit(1)
@@ -98,7 +98,7 @@ cfg["skills"]["always_load"] = skills
 
 # Note: we do NOT touch cfg["approvals"] — that's a security-sensitive
 # setting (manual confirmation of tool calls). Workspace cwd is overridden
-# per-task by `--workspace dir:<path>` on `hermes kanban create`, so we
+# per-task by `--workspace dir:<path>` on `vigil kanban create`, so we
 # don't need to mutate cfg["terminal"]["cwd"] either.
 
 with open(p, "w") as f:

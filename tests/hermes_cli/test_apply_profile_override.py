@@ -1,10 +1,10 @@
-"""Regression tests for _apply_profile_override HERMES_HOME guard (issue #22502).
+"""Regression tests for _apply_profile_override VIGIL_HOME guard (issue #22502).
 
-When HERMES_HOME is set to the hermes root (e.g. systemd hardcodes
-HERMES_HOME=/root/.hermes), _apply_profile_override must still read
-active_profile and update HERMES_HOME to the profile directory.
+When VIGIL_HOME is set to the vigil root (e.g. systemd hardcodes
+VIGIL_HOME=/root/.vigil), _apply_profile_override must still read
+active_profile and update VIGIL_HOME to the profile directory.
 
-When HERMES_HOME is already a profile directory (.../profiles/<name>),
+When VIGIL_HOME is already a profile directory (.../profiles/<name>),
 _apply_profile_override must trust it and return without re-reading
 active_profile (child-process inheritance contract).
 """
@@ -23,10 +23,10 @@ def _run_apply_profile_override(
 ):
     """Run _apply_profile_override in isolation.
 
-    Returns the value of os.environ["HERMES_HOME"] after the call,
+    Returns the value of os.environ["VIGIL_HOME"] after the call,
     or None if unset.
     """
-    hermes_root = tmp_path / ".hermes"
+    hermes_root = tmp_path / ".vigil"
     hermes_root.mkdir(parents=True, exist_ok=True)
 
     if active_profile is not None:
@@ -37,37 +37,37 @@ def _run_apply_profile_override(
 
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     if hermes_home is not None:
-        monkeypatch.setenv("HERMES_HOME", hermes_home)
+        monkeypatch.setenv("VIGIL_HOME", hermes_home)
     else:
-        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
 
     monkeypatch.setattr(sys, "argv", argv or ["hermes", "gateway", "start"])
 
     from hermes_cli.main import _apply_profile_override
     _apply_profile_override()
 
-    return os.environ.get("HERMES_HOME")
+    return os.environ.get("VIGIL_HOME")
 
 
 class TestApplyProfileOverrideHermesHomeGuard:
     """Regression guard for issue #22502.
 
-    Verifies that HERMES_HOME pointing to the hermes root does NOT suppress
-    the active_profile check, while HERMES_HOME already pointing to a
+    Verifies that VIGIL_HOME pointing to the vigil root does NOT suppress
+    the active_profile check, while VIGIL_HOME already pointing to a
     profile directory IS trusted as-is.
     """
 
     def test_hermes_home_at_root_with_active_profile_is_redirected(
         self, tmp_path, monkeypatch
     ):
-        """HERMES_HOME=/root/.hermes + active_profile=coder must redirect
-        HERMES_HOME to .../profiles/coder.
+        """VIGIL_HOME=/root/.vigil + active_profile=coder must redirect
+        VIGIL_HOME to .../profiles/coder.
 
-        Bug scenario from #22502: systemd sets HERMES_HOME to the hermes root
-        and the user switches to a profile via `hermes profile use`.
+        Bug scenario from #22502: systemd sets VIGIL_HOME to the vigil root
+        and the user switches to a profile via `vigil profile use`.
         Before the fix, the guard returned early and active_profile was ignored.
         """
-        hermes_root = tmp_path / ".hermes"
+        hermes_root = tmp_path / ".vigil"
         hermes_root.mkdir(parents=True, exist_ok=True)
 
         result = _run_apply_profile_override(
@@ -77,12 +77,12 @@ class TestApplyProfileOverrideHermesHomeGuard:
             active_profile="coder",
         )
 
-        assert result is not None, "HERMES_HOME must be set after profile redirect"
+        assert result is not None, "VIGIL_HOME must be set after profile redirect"
         assert "profiles" in result, (
-            f"Expected HERMES_HOME to point into profiles/ dir, got: {result!r}"
+            f"Expected VIGIL_HOME to point into profiles/ dir, got: {result!r}"
         )
         assert result.endswith("coder"), (
-            f"Expected HERMES_HOME to end with 'coder', got: {result!r}"
+            f"Expected VIGIL_HOME to end with 'coder', got: {result!r}"
         )
 
 
@@ -90,13 +90,13 @@ class TestApplyProfileOverrideHermesHomeGuard:
         """sudo elias ... should resolve `-p elias` under SUDO_USER, not root."""
         root_home = tmp_path / "root"
         user_home = tmp_path / "home" / "hermes"
-        profile_dir = user_home / ".hermes" / "profiles" / "elias"
+        profile_dir = user_home / ".vigil" / "profiles" / "elias"
         profile_dir.mkdir(parents=True, exist_ok=True)
-        (root_home / ".hermes").mkdir(parents=True, exist_ok=True)
+        (root_home / ".vigil").mkdir(parents=True, exist_ok=True)
 
         monkeypatch.setattr(Path, "home", lambda: root_home)
         monkeypatch.setenv("SUDO_USER", "hermes")
-        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
         monkeypatch.setattr(sys, "argv", ["hermes", "-p", "elias", "gateway", "install", "--system"])
 
@@ -107,7 +107,7 @@ class TestApplyProfileOverrideHermesHomeGuard:
         from hermes_cli.main import _apply_profile_override
         _apply_profile_override()
 
-        assert os.environ.get("HERMES_HOME") == str(profile_dir)
+        assert os.environ.get("VIGIL_HOME") == str(profile_dir)
         assert sys.argv == ["hermes", "gateway", "install", "--system"]
 
 
@@ -117,8 +117,8 @@ class TestSupervisedChildIgnoresStickyProfile:
     """The reserved default gateway s6 slot must not follow active_profile.
 
     Inside the Docker s6 image the ``gateway-default`` service slot runs a
-    bare ``hermes gateway run`` (no ``-p``) to mean "the root HERMES_HOME
-    profile". The run-script exports ``HERMES_S6_SUPERVISED_CHILD=1``.
+    bare ``vigil gateway run`` (no ``-p``) to mean "the root VIGIL_HOME
+    profile". The run-script exports ``VIGIL_S6_SUPERVISED_CHILD=1``.
     Without a guard, ``_apply_profile_override`` would read the sticky
     ``active_profile`` file (set by e.g. the dashboard profile switcher) and
     redirect the reserved default gateway into that profile — producing a
@@ -129,7 +129,7 @@ class TestSupervisedChildIgnoresStickyProfile:
     def test_non_supervised_run_still_follows_active_profile(
         self, tmp_path, monkeypatch
     ):
-        """Without the sentinel, a normal `hermes gateway run` still honors
+        """Without the sentinel, a normal `vigil gateway run` still honors
         active_profile — the guard is scoped strictly to supervised children."""
         result = _run_apply_profile_override(
             tmp_path,
@@ -146,21 +146,21 @@ class TestSupervisedChildIgnoresStickyProfile:
         """A supervised named-profile slot passes ``-p <name>`` explicitly;
         that must still resolve (the sentinel guard only skips the sticky
         active_profile fallback, never an explicit flag)."""
-        hermes_root = tmp_path / ".hermes"
+        hermes_root = tmp_path / ".vigil"
         hermes_root.mkdir(parents=True, exist_ok=True)
         (hermes_root / "active_profile").write_text("briefer")
         (hermes_root / "profiles" / "briefer").mkdir(parents=True, exist_ok=True)
         (hermes_root / "profiles" / "coder").mkdir(parents=True, exist_ok=True)
 
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.delenv("HERMES_HOME", raising=False)
-        monkeypatch.setenv("HERMES_S6_SUPERVISED_CHILD", "1")
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
+        monkeypatch.setenv("VIGIL_S6_SUPERVISED_CHILD", "1")
         monkeypatch.setattr(sys, "argv", ["hermes", "-p", "coder", "gateway", "run"])
 
         from hermes_cli.main import _apply_profile_override
         _apply_profile_override()
 
-        result = os.environ.get("HERMES_HOME")
+        result = os.environ.get("VIGIL_HOME")
         assert result is not None
         assert result.endswith("coder")
 

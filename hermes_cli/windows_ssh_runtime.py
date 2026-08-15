@@ -52,7 +52,7 @@ def _root() -> Path:
     # The helper uploads the token before the child applies `--profile`, while
     # read_token() runs after profile activation. Anchor both processes to the
     # machine root so a named profile cannot move the reader away from the
-    # helper's token, including custom HERMES_HOME layouts.
+    # helper's token, including custom VIGIL_HOME layouts.
     return get_default_hermes_root() / "desktop-ssh"
 
 
@@ -309,7 +309,7 @@ def process_state(pid: int, creation_time_ns: int, hermes_path: str, spawn_nonce
         return {"alive": True, "owned": False, "indeterminate": True, "reason": "argv-unavailable"}
     expected = os.path.normcase(os.path.abspath(hermes_path))
     arg0 = os.path.normcase(os.path.abspath(argv[0]))
-    # argv[0] is either the hermes exe directly, or (normal case) the base Python
+    # argv[0] is either the vigil exe directly, or (normal case) the base Python
     # interpreter -- its exact path varies by venv/uv layout, so match on "a python
     # running our module". We launch via `-c` bootstrap, so it shows as
     # `-c <bootstrap that runs hermes_cli.main>`; also accept a plain `-m` launch.
@@ -390,7 +390,7 @@ def spawn_backend(payload: dict[str, Any]) -> dict[str, Any]:
     spawn_nonce = _nonce(str(payload["spawnNonce"]))
     configured_path = str(payload["hermesPath"])
     if not os.path.isabs(configured_path):
-        raise ValueError("Hermes path must be absolute")
+        raise ValueError("Vigil path must be absolute")
     hermes_path = os.path.abspath(configured_path)
     token_path = str(_token_path(ownership_id, spawn_nonce))
     log_path = _log_path(ownership_id, spawn_nonce)
@@ -400,7 +400,7 @@ def spawn_backend(payload: dict[str, Any]) -> dict[str, Any]:
     venv_dir = os.path.dirname(hermes_path)
     python_entry = os.path.join(venv_dir, "python.exe")
     if not os.path.isfile(python_entry):
-        raise ValueError("Hermes Python runtime was not found")
+        raise ValueError("Vigil Python runtime was not found")
     base_python, sys_path = _resolve_direct_interpreter(python_entry)
     # Seed sys.path IN-PROCESS via a -c bootstrap rather than exporting PYTHONPATH:
     # PYTHONPATH would be inherited by every subprocess the running backend spawns
@@ -439,7 +439,7 @@ def spawn_backend(payload: dict[str, Any]) -> dict[str, Any]:
 def inspect_hermes(hermes_path: str) -> dict[str, Any]:
     path = os.path.abspath(hermes_path)
     if not os.path.isabs(hermes_path) or not os.path.isfile(path):
-        raise ValueError("Hermes path is not an executable file")
+        raise ValueError("Vigil path is not an executable file")
     version = subprocess.run([path, "--version"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
     help_result = subprocess.run([path, "serve", "--help"], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=20)
     help_text = help_result.stdout + help_result.stderr

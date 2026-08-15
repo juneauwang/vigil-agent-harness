@@ -13,7 +13,7 @@ or a linked OpenViking CLI config:
   OPENVIKING_API_KEY   — API key (required for authenticated servers)
   OPENVIKING_ACCOUNT   — Tenant account for local/trusted mode (default: default)
   OPENVIKING_USER      — Tenant user for local/trusted mode (default: default)
-  OPENVIKING_AGENT     — Hermes peer ID in OpenViking (default: hermes)
+  OPENVIKING_AGENT     — Vigil peer ID in OpenViking (default: vigil)
 
 Capabilities:
   - Automatic memory extraction on session commit (6 categories)
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 _DEFAULT_ENDPOINT = "http://127.0.0.1:1933"
 _OPENVIKING_SERVICE_ENDPOINT = "https://api.vikingdb.cn-beijing.volces.com/openviking"
 _DEFAULT_AGENT = "hermes"
-_AGENT_PROMPT_LABEL = "Hermes peer ID in OpenViking"
+_AGENT_PROMPT_LABEL = "Vigil peer ID in OpenViking"
 _OVCLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"
 _OVCLI_DEFAULT_RELATIVE_PATH = ".openviking/ovcli.conf"
 _OVCLI_SAVED_PREFIX = "ovcli.conf."
@@ -81,7 +81,7 @@ _SESSION_DRAIN_TIMEOUT = 10.0
 _DEFERRED_COMMIT_TIMEOUT = (_TIMEOUT * 2) + 5.0
 _SESSION_MESSAGE_BATCH_LIMIT = 100
 _REMOTE_RESOURCE_PREFIXES = ("http://", "https://", "git@", "ssh://", "git://")
-_SYNC_TRACE_ENV = "HERMES_OPENVIKING_SYNC_TRACE"
+_SYNC_TRACE_ENV = "VIGIL_OPENVIKING_SYNC_TRACE"
 _DEFAULT_RECALL_LIMIT = 6
 _DEFAULT_RECALL_SCORE_THRESHOLD = 0.15
 _DEFAULT_RECALL_MAX_INJECTED_CHARS = 4000
@@ -218,7 +218,7 @@ def _format_openviking_exception(error: Exception) -> str:
 
 
 def _derive_openviking_user_text(content: Any) -> str:
-    """Strip Hermes slash-skill scaffolding before sending content to OpenViking.
+    """Strip Vigil slash-skill scaffolding before sending content to OpenViking.
 
     Defense-in-depth: MemoryManager already strips skill scaffolding for the
     whole provider fan-out (see ``MemoryManager._strip_skill_scaffolding``), so
@@ -896,7 +896,7 @@ def _normalize_openviking_url(url: str) -> str:
     # Local / LAN self-host remains allowed; reject cloud-metadata and other
     # always-blocked floors so a poisoned endpoint cannot SSRF via memory sync.
     # Never silently replace an explicitly unsafe endpoint with localhost: that
-    # could attach Hermes to an unrelated deployment and forward credentials to
+    # could attach Vigil to an unrelated deployment and forward credentials to
     # a destination the user did not configure.
     try:
         check_url = candidate
@@ -910,7 +910,7 @@ def _normalize_openviking_url(url: str) -> str:
     except Exception as exc:
         logger.debug("OpenViking endpoint safety validation failed", exc_info=True)
         raise _OpenVikingEndpointError(
-            "OpenViking endpoint safety validation failed; Hermes refused the connection."
+            "OpenViking endpoint safety validation failed; Vigil refused the connection."
         ) from exc
 
     return candidate
@@ -1408,7 +1408,7 @@ def _openviking_server_log_path() -> Path:
         from hermes_constants import get_hermes_home
         home = get_hermes_home()
     except Exception:
-        home = Path(os.environ.get("HERMES_HOME", "")).expanduser() if os.environ.get("HERMES_HOME") else Path.home() / ".hermes"
+        home = Path(os.environ.get("VIGIL_HOME", "")).expanduser() if os.environ.get("VIGIL_HOME") else Path.home() / ".vigil"
     return home / _OPENVIKING_SERVER_LOG_RELATIVE_PATH
 
 
@@ -1493,7 +1493,7 @@ def _start_local_openviking_server(endpoint: str) -> tuple[str, str]:
         listener = _describe_local_port_listener(host, port)
         return (
             _LOCAL_SERVER_OCCUPIED,
-            f"Port {host}:{port} is occupied by {listener}. Hermes did not start "
+            f"Port {host}:{port} is occupied by {listener}. Vigil did not start "
             "openviking-server because the listener has not passed OpenViking's /health check.",
         )
     server_cmd = shutil.which("openviking-server")
@@ -1615,7 +1615,7 @@ def _runtime_openviking_timeout_message(endpoint: str) -> str:
         f"Local OpenViking server at {endpoint} is not reachable. "
         "Tried to start openviking-server, but it did not become reachable "
         f"within {_LOCAL_OPENVIKING_AUTOSTART_TIMEOUT:.0f} seconds. "
-        "OpenViking memory is temporarily unavailable; Hermes will retry on a later access or when "
+        "OpenViking memory is temporarily unavailable; Vigil will retry on a later access or when "
         "the config changes."
     )
 
@@ -1997,7 +1997,7 @@ def _print_openviking_ready(message: str, path: Optional[Path] = None) -> None:
     print(f"  {message}")
     if path is not None:
         print(f"  Config file: {path}")
-    print("  Start a new Hermes session to activate.\n")
+    print("  Start a new Vigil session to activate.\n")
 
 
 def _run_existing_profile_setup(
@@ -2115,7 +2115,7 @@ def _run_create_profile_setup(
     save_choice = select(
         "  Save OpenViking config",
         [
-            ("Keep in Hermes only", "write values only to Hermes .env"),
+            ("Keep in Vigil only", "write values only to Vigil .env"),
             ("Mirror to OpenViking store", "write ~/.openviking/ovcli.conf.<name> and link it"),
         ],
         default=1,
@@ -2148,7 +2148,7 @@ def _run_create_profile_setup(
         env_path=env_path,
         values=values,
     )
-    _print_openviking_ready("Connection saved to Hermes .env.")
+    _print_openviking_ready("Connection saved to Vigil .env.")
     return True
 
 
@@ -2283,7 +2283,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
             {
                 "key": "agent",
                 "description": (
-                    "Hermes peer ID in OpenViking, sent as the actor peer and "
+                    "Vigil peer ID in OpenViking, sent as the actor peer and "
                     "used for peer-scoped memories"
                 ),
                 "default": "hermes",
@@ -2555,7 +2555,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 if not healthy:
                     warning_message = (
                         f"OpenViking server at {endpoint} is still not reachable after auto-start. "
-                        "OpenViking memory is temporarily unavailable; Hermes will retry on a later access or when "
+                        "OpenViking memory is temporarily unavailable; Vigil will retry on a later access or when "
                         "the config changes."
                     )
                 else:
@@ -2574,7 +2574,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
             except Exception as e:
                 warning_message = (
                     f"OpenViking server at {endpoint} could not be attached after auto-start: {e}. "
-                    "OpenViking memory is temporarily unavailable; Hermes will retry on a later access or when "
+                    "OpenViking memory is temporarily unavailable; Vigil will retry on a later access or when "
                     "the config changes."
                 )
 
@@ -2600,7 +2600,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         if not _is_local_openviking_url(endpoint):
             _emit_runtime_warning(
                 f"Remote OpenViking server at {endpoint} is not reachable. "
-                "OpenViking memory is temporarily unavailable; Hermes will retry on a later access or when "
+                "OpenViking memory is temporarily unavailable; Vigil will retry on a later access or when "
                 "the config changes. "
                 "Check the configured endpoint and network connectivity.",
                 warning_callback,
@@ -2626,7 +2626,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 self._runtime_start_pending = False
                 warning_message = (
                     f"Local OpenViking server at {endpoint} is not reachable. {start_message} "
-                    "OpenViking memory is temporarily unavailable; Hermes will retry on a later access or when "
+                    "OpenViking memory is temporarily unavailable; Vigil will retry on a later access or when "
                     "the config changes."
                 )
                 self._client = None
@@ -2697,7 +2697,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 from hermes_constants import get_hermes_home
                 hermes_home = str(get_hermes_home())
             except Exception:
-                hermes_home = str(Path.home() / ".hermes")
+                hermes_home = str(Path.home() / ".vigil")
         self._hermes_home = hermes_home
         self._acquire_run_lock()
         self._profile_prefetched_sessions.clear()
@@ -2731,7 +2731,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
                 elif health_state != "healthy":
                     _emit_runtime_warning(
                         f"{health_message} OpenViking memory is temporarily unavailable; "
-                        "Hermes will retry on a later access or when the config changes.",
+                        "Vigil will retry on a later access or when the config changes.",
                         warning_callback,
                     )
                     self._client = None
@@ -2754,8 +2754,8 @@ class OpenVikingMemoryProvider(MemoryProvider):
 
         ``/reload`` only refreshes ``os.environ`` — the existing provider
         instance is not re-initialized — so OPENVIKING_* values added to
-        ``~/.hermes/.env`` after startup never reach the live client and tools
-        keep running against stale auth until the user restarts hermes (#21130).
+        ``~/.vigil/.env`` after startup never reach the live client and tools
+        keep running against stale auth until the user restarts vigil (#21130).
 
         Re-resolve the connection settings on each access (same layering as
         ``initialize``) and rebuild + health-check only when a value actually
@@ -2855,7 +2855,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         self._failed_refresh = (settings_key, time.monotonic())
         if health_state == "responded":
             logger.warning(
-                "%s OpenViking memory is temporarily unavailable; Hermes will retry on a "
+                "%s OpenViking memory is temporarily unavailable; Vigil will retry on a "
                 "later access (after cooldown) or when the config changes.",
                 health_message,
             )
@@ -4211,7 +4211,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         user_content: str,
         assistant_content: str,
     ) -> List[Dict[str, Any]]:
-        """Slice the completed turn out of Hermes' full canonical transcript."""
+        """Slice the completed turn out of Vigil' full canonical transcript."""
         if not messages:
             return []
 
@@ -4330,7 +4330,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
         *,
         assistant_peer_id: str = "",
     ) -> List[Dict[str, Any]]:
-        """Convert Hermes canonical messages into OpenViking batch payloads."""
+        """Convert Vigil canonical messages into OpenViking batch payloads."""
         assistant_peer_id = str(assistant_peer_id or "").strip()
         tool_calls_by_id: Dict[str, Dict[str, Any]] = {}
         completed_tool_ids: set[str] = set()
@@ -4926,7 +4926,7 @@ class OpenVikingMemoryProvider(MemoryProvider):
     ) -> Dict[str, Any]:
         summary_level = level in {"abstract", "overview"}
         # OpenViking expects directory URIs for pseudo summary files
-        # (e.g. viking://user/hermes/.overview.md).
+        # (e.g. viking://user/vigil/.overview.md).
         resolved_uri = self._normalize_summary_uri(uri) if summary_level else uri
         used_fallback = False
 

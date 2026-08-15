@@ -185,7 +185,7 @@ def _ext_for_mime(mime: str) -> Optional[str]:
     )
 
 
-# Inbound media cache lives under the user's hermes dir so it survives
+# Inbound media cache lives under the user's vigil dir so it survives
 # restarts and gateway reloads — same convention the Baileys bridge uses.
 _INBOUND_MEDIA_CACHE = Path(get_hermes_dir("platforms/whatsapp_cloud/media", "whatsapp_cloud/media"))
 
@@ -1203,7 +1203,7 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
 
         WhatsApp renders ``audio/ogg; codecs=opus`` as the green
         voice-note bubble; other audio types (MP3, AAC, etc.) appear as
-        a generic audio attachment. Hermes TTS produces MP3, so we try
+        a generic audio attachment. Vigil TTS produces MP3, so we try
         ffmpeg conversion to opus first and fall back to sending the
         MP3 as-is when ffmpeg is unavailable.
         """
@@ -1890,7 +1890,7 @@ class WhatsAppCloudAdapter(WhatsAppBehaviorMixin, BasePlatformAdapter):
         contacts_by_waid: Dict[str, str],
         metadata: Dict[str, Any],
     ) -> Optional[MessageEvent]:
-        """Convert a Cloud-API message object into a Hermes MessageEvent.
+        """Convert a Cloud-API message object into a Vigil MessageEvent.
 
         Phase 4 expands beyond text to download inbound media (image,
         video, audio/voice, document, sticker) by ``media_id`` via the

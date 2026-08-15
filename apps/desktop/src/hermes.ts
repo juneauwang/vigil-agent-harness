@@ -77,7 +77,7 @@ import type {
 // /api/profiles runs list_profiles(), which does a recursive skill-tree walk
 // per profile — so the 15s default (DEFAULT_FETCH_TIMEOUT_MS in hardening.ts)
 // times out a backend that is alive-but-busy, surfacing as a spurious
-// "Timed out connecting to Hermes backend" that hangs the UI (#48504).
+// "Timed out connecting to Vigil backend" that hangs the UI (#48504).
 //
 // Give the boot burst a generous per-call timeout instead of raising the
 // global default: interactive/runtime calls and the liveness poll (/api/status)
@@ -242,7 +242,7 @@ export class HermesGateway extends JsonRpcGatewayClient {
 // should target. Mirrors $activeGatewayProfile, pushed in from the store via
 // setApiRequestProfile so this module needs no store import (avoids a cycle).
 // Electron main consumes request.profile to pick which backend *process* serves
-// the call; each pooled backend already has its own HERMES_HOME, so no backend
+// the call; each pooled backend already has its own VIGIL_HOME, so no backend
 // change is needed. Null → primary, so single-profile users are unaffected.
 let _apiProfile: null | string = null
 
@@ -494,7 +494,7 @@ export function resetSidebarBatchCapability() {
 // True only for "the route does not exist on this backend" shapes: the
 // backend catch-all ('404: {"detail":"No such API endpoint: ...}'), FastAPI's
 // bare 404 on headless serve (surfaces as '404: ...' directly or as
-// "Error invoking remote method 'hermes:api': Error: 404: ..." through the
+// "Error invoking remote method 'vigil:api': Error: 404: ..." through the
 // IPC bridge), and the Electron JSON-guard ("endpoint is likely missing").
 // This GET has no path params, so a 404 status can only mean route-missing —
 // but transient failures (timeouts, 5xx, connection refused) must NOT match,
@@ -1259,7 +1259,7 @@ export function setWebhookEnabled(
   })
 }
 
-// Cron jobs are stored per-profile (<HERMES_HOME>/cron/jobs.json), and the
+// Cron jobs are stored per-profile (<VIGIL_HOME>/cron/jobs.json), and the
 // backend's list endpoint defaults to 'all'. Pass a concrete profile key to
 // list just that profile's jobs, or 'all' for the unified cross-profile view.
 // Omitting the arg keeps the legacy 'all' default for non-profile callers.
@@ -1504,7 +1504,7 @@ export interface RecommendedDefaultModel {
 }
 
 // Recommended default model for a freshly-authenticated provider. Mirrors the
-// curation `hermes model` does — for Nous it honors the free/paid tier so a
+// curation `vigil model` does — for Nous it honors the free/paid tier so a
 // free user gets a free model instead of a paid default.
 export function getRecommendedDefaultModel(provider: string): Promise<RecommendedDefaultModel> {
   return window.hermesDesktop.api<RecommendedDefaultModel>({
@@ -1631,7 +1631,7 @@ export function getElevenLabsVoices(): Promise<ElevenLabsVoicesResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// Skills hub — search / preview / scan / install (parity with `hermes skills`
+// Skills hub — search / preview / scan / install (parity with `vigil skills`
 // and the dashboard's Browse-hub tab). Installs spawn background actions whose
 // logs are tailed via getActionStatus().
 // ---------------------------------------------------------------------------
@@ -1701,7 +1701,7 @@ export function updateSkillsFromHub(): Promise<ActionResponse> {
 
 // ---------------------------------------------------------------------------
 // MCP servers — structured list / test / enable toggle / catalog (parity with
-// `hermes mcp` and the dashboard MCP page). Raw JSON editing stays in
+// `vigil mcp` and the dashboard MCP page). Raw JSON editing stays in
 // config.yaml via saveHermesConfig.
 // ---------------------------------------------------------------------------
 
@@ -1742,7 +1742,7 @@ export function installMcpCatalogEntry(
 }
 
 // ---------------------------------------------------------------------------
-// Memory data + curator (parity with `hermes memory` / `hermes curator`).
+// Memory data + curator (parity with `vigil memory` / `vigil curator`).
 // ---------------------------------------------------------------------------
 
 export function getMemoryStatus(): Promise<MemoryStatusResponse> {
@@ -1787,8 +1787,8 @@ export function runCurator(): Promise<ActionResponse> {
 }
 
 // ---------------------------------------------------------------------------
-// Maintenance operations (parity with `hermes doctor` / `hermes security
-// audit` / `hermes backup` / `hermes debug share` and the dashboard System
+// Maintenance operations (parity with `vigil doctor` / `vigil security
+// audit` / `vigil backup` / `vigil debug share` and the dashboard System
 // page). All except debug share are spawn-based background actions tailed via
 // getActionStatus().
 // ---------------------------------------------------------------------------

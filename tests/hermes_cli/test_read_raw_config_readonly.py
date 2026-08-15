@@ -20,13 +20,13 @@ import yaml
 
 @pytest.fixture()
 def isolated_hermes_home():
-    """Per-test HERMES_HOME dir (already redirected by the autouse conftest
+    """Per-test VIGIL_HOME dir (already redirected by the autouse conftest
     fixture) as a Path, with the raw-config cache cleared around the test."""
     from pathlib import Path
 
     import hermes_cli.config as config_mod
 
-    home = Path(os.environ["HERMES_HOME"])
+    home = Path(os.environ["VIGIL_HOME"])
     home.mkdir(parents=True, exist_ok=True)
     config_mod._RAW_CONFIG_CACHE.clear()
     yield home

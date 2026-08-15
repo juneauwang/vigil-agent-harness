@@ -11,7 +11,7 @@
  * broken plugin can never take the app down.
  *
  * Sources today: the in-repo runtime example (`?raw`, proves the pipeline)
- * and `<hermes home>/desktop-plugins/<name>/plugin.js` on disk — the door the
+ * and `<vigil home>/desktop-plugins/<name>/plugin.js` on disk — the door the
  * agent writes through.
  *
  * SECURITY — this is NOT a capability boundary. A loaded plugin is evaluated
@@ -178,7 +178,7 @@ export async function loadRuntimePlugin(
 }
 
 // ---------------------------------------------------------------------------
-// The on-disk plugin door: `<hermes home>/desktop-plugins/<name>/plugin.js`
+// The on-disk plugin door: `<vigil home>/desktop-plugins/<name>/plugin.js`
 // (agent- or user-written). SELF-MAINTAINING — no reload ceremony:
 //  - each plugin.js is fs-watched (the preview watcher IPC, debounced in
 //    main): saving the file hot-reloads the plugin in place;

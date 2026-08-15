@@ -7,7 +7,7 @@ answers are discoverable — the Discord card asked for a home channel ID you
 need Developer Mode to copy, next to a reply-threading preference.
 
 Hiding them is a *presentation* decision only. The env vars keep working
-through ``hermes config set``, ``.env``, and ``config.yaml``; the gateway reads
+through ``vigil config set``, ``.env``, and ``config.yaml``; the gateway reads
 them exactly as before. This module just says what a new user is asked during
 setup.
 

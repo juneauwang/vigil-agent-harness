@@ -17,8 +17,8 @@ import { cn } from '@/lib/utils'
 
 import { referenceKind, referenceRe, referenceStyle, WIRE_REFERENCE_KINDS } from './reference-kinds'
 
-const HERMES_REF_TYPES = WIRE_REFERENCE_KINDS
-type HermesRefType = (typeof HERMES_REF_TYPES)[number]
+const VIGIL_REF_TYPES = WIRE_REFERENCE_KINDS
+type HermesRefType = (typeof VIGIL_REF_TYPES)[number]
 
 /** Icon glyphs come from the shared reference vocabulary, so the popover row
  *  and the chip can never drift apart. */
@@ -118,7 +118,7 @@ const DirectiveIcon: FC<{ type: string; className?: string }> = ({ type, classNa
  */
 const CANONICAL_DIRECTIVE_RE = /:([\w-]{1,64})\[([^\]\n]{1,1024})\](?:\{name=([^}\n]{1,1024})\})?/g
 
-const HERMES_DIRECTIVE_RE = referenceRe()
+const VIGIL_DIRECTIVE_RE = referenceRe()
 
 // A skill referenced in a sent message — either the invocation that opens it
 // (`/work fix the leak`, which is all a skill turn ever renders as) or one
@@ -225,7 +225,7 @@ function parseDirectiveText(text: string): Unstable_DirectiveSegment[] {
       label: match[2] || match[3] || '',
       id: match[3] || match[2] || ''
     })),
-    ...Array.from(text.matchAll(HERMES_DIRECTIVE_RE)).map(match => {
+    ...Array.from(text.matchAll(VIGIL_DIRECTIVE_RE)).map(match => {
       const id = unwrapRefValue(match[2] || '')
 
       return {
@@ -329,7 +329,7 @@ function safeDirectiveSegments(text: string): Unstable_DirectiveSegment[] {
 }
 
 /**
- * Renders text containing Hermes directives (`@file:...`, `@image:...`) as
+ * Renders text containing Vigil directives (`@file:...`, `@image:...`) as
  * inline chips. Embedded MEDIA images render below as a thumbnail row.
  */
 export function DirectiveContent({ text }: { text: string }) {

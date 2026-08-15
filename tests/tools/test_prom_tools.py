@@ -70,7 +70,7 @@ class _FakeClient:
 def prom_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes_home"
     home.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
 
     def _write(prom_cfg: dict) -> None:

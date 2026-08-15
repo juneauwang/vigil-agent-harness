@@ -2,9 +2,9 @@
 
 Source: https://docs.x.ai/developers/migration/may-15-retirement
 
-Pure logic: walks a Hermes config dict, returns issues for any reference
+Pure logic: walks a Vigil config dict, returns issues for any reference
 to a retired xAI model. No I/O, no CLI dependencies — testable in isolation
-and reusable from both `hermes doctor` and a future `hermes migrate xai`.
+and reusable from both `vigil doctor` and a future `vigil migrate xai`.
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ _RETIRED_MODELS: Dict[str, Dict[str, Optional[str]]] = {
 
 @dataclass(frozen=True)
 class RetirementIssue:
-    """A reference to a retired xAI model found in a Hermes config."""
+    """A reference to a retired xAI model found in a Vigil config."""
 
     config_path: str            # e.g. "principal.model" or "auxiliary.vision.model"
     current_model: str          # exact value found in config (preserves casing/prefix)
@@ -60,7 +60,7 @@ def _looks_like_xai(model_id: Optional[str]) -> bool:
 
 
 def find_retired_xai_refs(config: Dict[str, Any]) -> List[RetirementIssue]:
-    """Walk all model slots in a Hermes config and return retirement issues.
+    """Walk all model slots in a Vigil config and return retirement issues.
 
     Slots scanned:
       - ``principal.model``
@@ -254,7 +254,7 @@ def apply_migration(
     # SIGINT mid-write leaves config.yaml empty or half-written -- and
     # ``--no-backup`` is a documented flag, so on that path the truncated file
     # is the only copy left. The load half above returns early when ``doc is
-    # None``, so the next `hermes migrate xai` reports nothing to migrate
+    # None``, so the next `vigil migrate xai` reports nothing to migrate
     # rather than surfacing the damage. atomic_replace also keeps a symlinked
     # config.yaml (dotfiles repo / managed deployment) intact (GitHub #16743).
     buf = io.StringIO()

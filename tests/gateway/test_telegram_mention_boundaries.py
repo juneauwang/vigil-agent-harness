@@ -115,7 +115,7 @@ class TestCaseInsensitivity:
 
     def test_uppercase_mention(self):
         adapter = _make_adapter()
-        text = "hi @HERMES_BOT"
-        msg = _message(text=text, entities=[_mention_entity(text, mention="@HERMES_BOT")])
+        text = "hi @VIGIL_BOT"
+        msg = _message(text=text, entities=[_mention_entity(text, mention="@VIGIL_BOT")])
         assert adapter._message_mentions_bot(msg) is True
 

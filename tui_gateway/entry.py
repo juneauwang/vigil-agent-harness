@@ -2,7 +2,7 @@ import os
 import sys
 
 # Stop a ``utils/`` (or ``proxy/``, ``ui/``) package in the launch directory
-# from shadowing Hermes's own top-level modules.  ``hermes_bootstrap`` lives at
+# from shadowing Vigil's own top-level modules.  ``hermes_bootstrap`` lives at
 # the repo root next to this package, so importing it is safe before the guard
 # runs (its name won't collide with a user package), and it owns the canonical
 # path-hardening logic shared with the other entry points.
@@ -48,11 +48,11 @@ _mcp_discovery_enabled = False
 def _install_sidecar_publisher() -> None:
     """Mirror every dispatcher emit to the dashboard sidebar via WS.
 
-    Activated by `HERMES_TUI_SIDECAR_URL`, set by the dashboard's
+    Activated by `VIGIL_TUI_SIDECAR_URL`, set by the dashboard's
     ``/api/pty`` endpoint when a chat tab passes a ``channel`` query param.
     Best-effort: connect failure or runtime drop falls back to stdio-only.
     """
-    url = os.environ.get("HERMES_TUI_SIDECAR_URL")
+    url = os.environ.get("VIGIL_TUI_SIDECAR_URL")
 
     if not url:
         return
@@ -68,7 +68,7 @@ def _install_sidecar_publisher() -> None:
 # falling back to ``os._exit(0)`` so a wedged worker mid-flush can't
 # strand the process.  1s covers the gateway's own shutdown work
 # (thread-pool drain + session finalize) on every machine we've
-# tested; override via ``HERMES_TUI_GATEWAY_SHUTDOWN_GRACE_S`` if a
+# tested; override via ``VIGIL_TUI_GATEWAY_SHUTDOWN_GRACE_S`` if a
 # slower environment needs more headroom (e.g. encrypted disks
 # flushing checkpoints) and accept that a longer grace also means a
 # longer wait when shutdown actually deadlocks.
@@ -76,7 +76,7 @@ _DEFAULT_SHUTDOWN_GRACE_S = 1.0
 
 
 def _shutdown_grace_seconds() -> float:
-    raw = (os.environ.get("HERMES_TUI_GATEWAY_SHUTDOWN_GRACE_S") or "").strip()
+    raw = (os.environ.get("VIGIL_TUI_GATEWAY_SHUTDOWN_GRACE_S") or "").strip()
     if not raw:
         return _DEFAULT_SHUTDOWN_GRACE_S
     try:
@@ -100,7 +100,7 @@ def _log_signal(signum: int, frame) -> None:
     pool — a thread holding ``_stdout_lock`` mid-flush would block the
     interpreter shutdown indefinitely.  We now log the stack, give the
     process the configured shutdown grace
-    (``HERMES_TUI_GATEWAY_SHUTDOWN_GRACE_S``, default
+    (``VIGIL_TUI_GATEWAY_SHUTDOWN_GRACE_S``, default
     ``_DEFAULT_SHUTDOWN_GRACE_S``) to drain naturally on a background
     thread, and fall back to ``os._exit(0)`` so a wedged write/flush
     can never strand the process.
@@ -183,7 +183,7 @@ def _log_signal(signum: int, frame) -> None:
 #
 # SIGPIPE and SIGHUP don't exist on Windows; guard each installation
 # with hasattr so ``python -m tui_gateway.entry`` (spawned by
-# ``hermes --tui``) imports cleanly there.  SIGBREAK (Windows' Ctrl+Break)
+# ``vigil --tui``) imports cleanly there.  SIGBREAK (Windows' Ctrl+Break)
 # is installed when available as a weaker equivalent of SIGHUP.
 #
 # signal.signal() is only legal in the MAIN thread. On the Desktop/WebSocket
@@ -286,7 +286,7 @@ def wait_for_mcp_discovery(timeout: "float | None" = None) -> None:
     # kicks off a fresh discovery run here instead of leaving the process
     # latched MCP-less for the session. In multi-profile processes this
     # retry runs under the CALLER's profile context (agent build binds the
-    # session profile's HERMES_HOME first), so a launch profile with no
+    # session profile's VIGIL_HOME first), so a launch profile with no
     # mcp_servers no longer starves selected profiles of discovery (#67605).
     # Gated on _mcp_discovery_enabled so non-MCP sessions never pay the
     # tools.mcp_tool import on the per-agent-build wait path.
@@ -321,9 +321,9 @@ def mcp_discovery_in_flight() -> bool:
     and the banner/tool count will be stale until they arrive.
 
     There are two independent discovery-thread owners by surface: the stdio
-    ``hermes --tui`` path spawns ITS thread here (``_mcp_discovery_thread``),
+    ``vigil --tui`` path spawns ITS thread here (``_mcp_discovery_thread``),
     while the desktop app + dashboard WebSocket sidecar (``tui_gateway/ws.py``)
-    and ``hermes dashboard`` spawn theirs via
+    and ``vigil dashboard`` spawn theirs via
     ``hermes_cli.mcp_startup.start_background_mcp_discovery``. The late-refresh
     scheduler imports this function regardless of surface, so it MUST consult
     both — checking only the entry thread left the desktop/dashboard surfaces
@@ -397,7 +397,7 @@ def ensure_mcp_discovery_started() -> None:
     ``main()`` calls this for the stdio/TUI path. WebSocket/Desktop
     entrypoints can accept sessions without running ``main()``, so the
     agent-build path (``server._start_agent_build``) also calls it AFTER
-    binding the session profile's HERMES_HOME override — the shared owner in
+    binding the session profile's VIGIL_HOME override — the shared owner in
     ``hermes_cli.mcp_startup`` captures the caller's context-local override
     and propagates it into the discovery thread, so discovery reads the
     SELECTED profile's ``mcp_servers``, not the launch profile's (#67605).
@@ -452,7 +452,7 @@ def main():
         _log_exit("startup write failed (broken stdout pipe before first event)")
         sys.exit(0)
 
-    # Live-apply skins Hermes activates mid-conversation.
+    # Live-apply skins Vigil activates mid-conversation.
     server._ensure_skin_watcher()
 
     # Warm the /model picker's provider-models cache off-thread during this

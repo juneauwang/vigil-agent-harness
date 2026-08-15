@@ -103,7 +103,7 @@ class TestSecurityGating:
     def test_config_failure_fails_open(self, monkeypatch):
         # If config can't be read at all, we ALLOW installs rather than
         # blocking the user out of their own backends.
-        monkeypatch.delenv("HERMES_DISABLE_LAZY_INSTALLS", raising=False)
+        monkeypatch.delenv("VIGIL_DISABLE_LAZY_INSTALLS", raising=False)
         monkeypatch.setattr(
             "hermes_cli.config.load_config",
             lambda: (_ for _ in ()).throw(RuntimeError("config broken")),
@@ -215,7 +215,7 @@ class TestIsSatisfiedVersionAware:
         huggingface-hub arrives in the venv via the core lock (transformers /
         sentence-transformers for local Hindsight, faster-whisper, tokenizers).
         With the LAZY_DEPS pin held in lockstep with uv.lock, the version the
-        core installs satisfies the trace-upload spec, so the `hermes update`
+        core installs satisfies the trace-upload spec, so the `vigil update`
         lazy-refresh pass reports "current" instead of reinstalling — the
         downgrade that used to break the Hindsight daemon can't happen.
         """
@@ -280,7 +280,7 @@ class TestIsSatisfiedVersionAware:
 
 
 # ---------------------------------------------------------------------------
-# active_features + refresh_active_features (Piece A — hermes update wiring)
+# active_features + refresh_active_features (Piece A — vigil update wiring)
 # ---------------------------------------------------------------------------
 
 
@@ -292,7 +292,7 @@ class TestActiveFeatures:
 
     def test_shared_dependency_does_not_activate_feature(self, monkeypatch):
         # asyncpg is a generic dependency that may be installed for unrelated
-        # reasons. It must not make hermes update try to refresh Matrix unless
+        # reasons. It must not make vigil update try to refresh Matrix unless
         # the Matrix anchor package (mautrix) is present.
         monkeypatch.setattr(
             ld, "_is_present",
@@ -308,7 +308,7 @@ class TestRefreshActiveFeatures:
 
     def test_windows_matrix_refresh_is_skipped_before_pip(self, monkeypatch):
         # Matrix E2EE pulls python-olm, which has no native Windows wheel/build
-        # path. `hermes update` must not retry that doomed install every run.
+        # path. `vigil update` must not retry that doomed install every run.
         monkeypatch.setattr(ld.sys, "platform", "win32")
         monkeypatch.setattr(ld, "active_features", lambda: ["platform.matrix"])
         monkeypatch.setattr(ld, "_is_satisfied", lambda spec: False)
@@ -401,7 +401,7 @@ class TestInstallSpecs:
 
 
     def test_never_raises_on_unexpected_error(self, monkeypatch):
-        monkeypatch.delenv("HERMES_DISABLE_LAZY_INSTALLS", raising=False)
+        monkeypatch.delenv("VIGIL_DISABLE_LAZY_INSTALLS", raising=False)
         monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
         monkeypatch.setattr(
             "hermes_cli.config.load_config", lambda: {}, raising=False

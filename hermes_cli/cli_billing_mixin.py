@@ -30,7 +30,7 @@ class CLIBillingMixin:
         model is unavailable. Agent-independent (a portal fetch gated on "a Nous
         account is logged in"), so /usage shows the block even in the TUI
         slash-worker subprocess that resumes WITHOUT a live agent. Fail-open and
-        wall-clock-bounded; honors HERMES_DEV_CREDITS_FIXTURE for offline testing.
+        wall-clock-bounded; honors VIGIL_DEV_CREDITS_FIXTURE for offline testing.
         """
         from cli import _cprint, _b, _d
 

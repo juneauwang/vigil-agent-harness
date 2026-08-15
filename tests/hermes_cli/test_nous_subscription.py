@@ -169,7 +169,7 @@ def test_apply_nous_managed_defaults_writes_video_gen_config(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# ensure_nous_portal_access — inline login gate for `hermes tools`
+# ensure_nous_portal_access — inline login gate for `vigil tools`
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +208,7 @@ def _stt_features_stub(*, account_info):
 
 
 def test_has_agent_browser_resolves_via_hermes_managed_node_path(monkeypatch, tmp_path):
-    """The managed-Node rung: a runnable agent-browser under the Hermes Node
+    """The managed-Node rung: a runnable agent-browser under the Vigil Node
     dir must count even when it's absent from the probe process's PATH (the
     Windows installer shape — install succeeded, GUI still said needs setup)."""
     import shutil as _shutil

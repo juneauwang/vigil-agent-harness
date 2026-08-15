@@ -1,19 +1,19 @@
 # NeMo Relay Observability
 
-Optional Hermes observability plugin that configures exporters and maps
-Hermes-specific observer hooks to NeMo Relay marks and ATIF state. Hermes core
+Optional Vigil observability plugin that configures exporters and maps
+Hermes-specific observer hooks to NeMo Relay marks and ATIF state. Vigil core
 owns Relay session, turn, LLM, and tool execution scopes.
 
 NeMo Relay is NVIDIA's runtime layer for agent execution boundaries. It does
-not replace Hermes Agent's planner, tools, memory, model provider routing, or
-CLI UX. Hermes core emits NeMo Relay lifecycle events for provider and tool
+not replace Vigil's planner, tools, memory, model provider routing, or
+CLI UX. Vigil core emits NeMo Relay lifecycle events for provider and tool
 execution, while this plugin enables rich exporters and observer marks for
 sessions, turns, approval prompts, and delegated subagents.
 
-With this plugin enabled, Hermes Agent can:
+With this plugin enabled, Vigil can:
 
-- Export the Relay scopes and LLM/tool lifecycles emitted by Hermes core.
-- Add Hermes session, turn, approval, and subagent mark events.
+- Export the Relay scopes and LLM/tool lifecycles emitted by Vigil core.
+- Add Vigil session, turn, approval, and subagent mark events.
 - Export raw lifecycle events as Agent Trajectory Observability Format (ATOF)
   JSONL for debugging and offline inspection.
 - Export Agent Trajectory Interchange Format (ATIF) trajectories for replay,
@@ -39,63 +39,63 @@ https://github.com/harbor-framework/harbor/blob/main/rfcs/0001-trajectory-format
 Enable the plugin before setting export options:
 
 ```bash
-hermes plugins enable observability/nemo_relay
+vigil plugins enable observability/nemo_relay
 ```
 
-The `HERMES_NEMO_RELAY_*` environment variables below only configure an
+The `VIGIL_NEMO_RELAY_*` environment variables below only configure an
 already-enabled plugin. They do not enable plugin discovery by themselves.
 
-For isolated test homes, enable the plugin in the same `HERMES_HOME` that the
+For isolated test homes, enable the plugin in the same `VIGIL_HOME` that the
 agent run will use:
 
 ```bash
-env HERMES_HOME=/tmp/hermes-nemo-relay-test \
-  hermes plugins enable observability/nemo_relay
+env VIGIL_HOME=/tmp/hermes-nemo-relay-test \
+  vigil plugins enable observability/nemo_relay
 ```
 
 Runs started with `--ignore_user_config` skip the enabled-plugin state from
-`HERMES_HOME`, so local E2E tests should omit that flag unless the test harness
+`VIGIL_HOME`, so local E2E tests should omit that flag unless the test harness
 loads `observability/nemo_relay` explicitly another way.
 
-`HERMES_HOME` is the Hermes profile/config home used by both
-`hermes plugins enable ...` and the later `hermes chat ...` run. If unset,
-Hermes uses the user's default home, usually `~/.hermes`. For isolated smoke
+`VIGIL_HOME` is the Vigil profile/config home used by both
+`vigil plugins enable ...` and the later `vigil chat ...` run. If unset,
+Vigil uses the user's default home, usually `~/.vigil`. For isolated smoke
 tests, choose any writable temporary directory and use the same value for every
 command in that test:
 
 ```bash
-export HERMES_HOME=/tmp/hermes-nemo-relay-test
-hermes plugins enable observability/nemo_relay
-hermes chat --query 'Reply exactly ok' --provider custom --model qwen3.6:35b
+export VIGIL_HOME=/tmp/hermes-nemo-relay-test
+vigil plugins enable observability/nemo_relay
+vigil chat --query 'Reply exactly ok' --provider custom --model qwen3.6:35b
 ```
 
-For source checkouts, make sure the `hermes` command you run is built from the
+For source checkouts, make sure the `vigil` command you run is built from the
 checkout that contains this plugin. A globally installed older CLI will not see
 new bundled plugins from your working tree.
 
 ```bash
 uv sync
-uv run hermes plugins enable observability/nemo_relay
-uv run hermes chat --query 'Reply exactly ok' --provider custom --model qwen3.6:35b
+uv run vigil plugins enable observability/nemo_relay
+uv run vigil chat --query 'Reply exactly ok' --provider custom --model qwen3.6:35b
 ```
 
 To ship the updated CLI into another environment, build and install a fresh
 wheel from this checkout. On platforms for which Relay publishes a native
-wheel, Hermes installs its supported NeMo Relay runtime as a normal dependency:
+wheel, Vigil installs its supported NeMo Relay runtime as a normal dependency:
 
 ```bash
 uv build --wheel
 python -m pip install --force-reinstall dist/hermes_agent-*.whl
-hermes plugins enable observability/nemo_relay
+vigil plugins enable observability/nemo_relay
 ```
 
 The plugin remains opt-in even though the runtime dependency is installed by
 default. Enabling this plugin controls rich observability and adaptive
-behavior; it does not control Hermes shared client metrics.
+behavior; it does not control Vigil shared client metrics.
 
 ## Export Configuration
 
-The plugin can configure exporters directly from `HERMES_NEMO_RELAY_*`
+The plugin can configure exporters directly from `VIGIL_NEMO_RELAY_*`
 environment variables, or delegate exporter setup to a NeMo Relay
 `plugins.toml` component config.
 
@@ -109,29 +109,29 @@ OpenInference.
 Useful local export settings after the plugin is enabled:
 
 ```bash
-export HERMES_NEMO_RELAY_ATOF_ENABLED=1
-export HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY=.nemo-relay/atof
-export HERMES_NEMO_RELAY_ATIF_ENABLED=1
-export HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY=.nemo-relay/atif
+export VIGIL_NEMO_RELAY_ATOF_ENABLED=1
+export VIGIL_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY=.nemo-relay/atof
+export VIGIL_NEMO_RELAY_ATIF_ENABLED=1
+export VIGIL_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY=.nemo-relay/atif
 ```
 
 Optional overrides:
 
-- `HERMES_NEMO_RELAY_ATOF_FILENAME`
-- `HERMES_NEMO_RELAY_ATOF_MODE` (`append` or `overwrite`)
-- `HERMES_NEMO_RELAY_ATIF_FILENAME_TEMPLATE`
-- `HERMES_NEMO_RELAY_ATIF_AGENT_NAME`
-- `HERMES_NEMO_RELAY_ATIF_AGENT_VERSION`
-- `HERMES_NEMO_RELAY_ATIF_MODEL_NAME`
-- `HERMES_NEMO_RELAY_ATIF_SUBAGENT_EXPORT_MODE` (`embedded` by default; set `all` to also write standalone child files)
+- `VIGIL_NEMO_RELAY_ATOF_FILENAME`
+- `VIGIL_NEMO_RELAY_ATOF_MODE` (`append` or `overwrite`)
+- `VIGIL_NEMO_RELAY_ATIF_FILENAME_TEMPLATE`
+- `VIGIL_NEMO_RELAY_ATIF_AGENT_NAME`
+- `VIGIL_NEMO_RELAY_ATIF_AGENT_VERSION`
+- `VIGIL_NEMO_RELAY_ATIF_MODEL_NAME`
+- `VIGIL_NEMO_RELAY_ATIF_SUBAGENT_EXPORT_MODE` (`embedded` by default; set `all` to also write standalone child files)
 
 ### NeMo Relay Component Config
 
 To initialize NeMo Relay from a component config, create a `plugins.toml` file
-and point Hermes at it:
+and point Vigil at it:
 
 ```bash
-export HERMES_NEMO_RELAY_PLUGINS_TOML=.nemo-relay/plugins.toml
+export VIGIL_NEMO_RELAY_PLUGINS_TOML=.nemo-relay/plugins.toml
 ```
 
 Minimal ATOF and ATIF config:
@@ -156,19 +156,19 @@ mode = "overwrite"
 enabled = true
 output_directory = ".nemo-relay/atif"
 filename_template = "trajectory-{session_id}.json"
-agent_name = "Hermes Agent"
+agent_name = "Vigil"
 agent_version = "local"
 ```
 
-When `HERMES_NEMO_RELAY_PLUGINS_TOML` is set and initializes successfully, NeMo
+When `VIGIL_NEMO_RELAY_PLUGINS_TOML` is set and initializes successfully, NeMo
 Relay owns exporter lifecycle through that config. The direct
-`HERMES_NEMO_RELAY_ATOF_*` fallback setup is skipped. If the same
+`VIGIL_NEMO_RELAY_ATOF_*` fallback setup is skipped. If the same
 `plugins.toml` observability config enables `atif`, the direct
-`HERMES_NEMO_RELAY_ATIF_*` fallback setup is also skipped so Hermes does not
+`VIGIL_NEMO_RELAY_ATIF_*` fallback setup is also skipped so Vigil does not
 double-export trajectories on teardown. If `plugins.toml` initialization fails,
-Hermes keeps the direct env-var fallbacks active for that run.
+Vigil keeps the direct env-var fallbacks active for that run.
 
-Hermes core routes provider and tool execution through NeMo Relay managed APIs
+Vigil core routes provider and tool execution through NeMo Relay managed APIs
 regardless of whether this plugin is enabled. To install adaptive interceptors
 on those boundaries, include an adaptive component in the same `plugins.toml`:
 
@@ -188,7 +188,7 @@ execution boundary.
 
 ### Dynamic Plugins
 
-Hermes uses the dynamic-plugin activation API available in NeMo Relay 0.6 and
+Vigil uses the dynamic-plugin activation API available in NeMo Relay 0.6 and
 later. Configure native or worker plugins with Hermes-owned
 `[[dynamic_plugins]]` entries that match the Python binding's activation-spec
 fields:
@@ -227,30 +227,30 @@ physical `plugins.toml` file.
 Relay's canonical gateway `[[plugins.dynamic]]` records are not interchangeable
 with this Hermes-owned section. The gateway combines those records with
 separate lifecycle state for enablement, trust policy, and worker environments;
-the Python binding does not yet expose that resolver. Hermes rejects
+the Python binding does not yet expose that resolver. Vigil rejects
 `[[plugins.dynamic]]` with an actionable diagnostic instead of silently
 ignoring it or bypassing lifecycle policy. Use `[[dynamic_plugins]]` until Relay
 exposes shared file-and-lifecycle resolution to embedding hosts.
 
-Hermes activates these plugins before registering its managed LLM and tool
+Vigil activates these plugins before registering its managed LLM and tool
 execution middleware and retains the activation for the runtime lifetime.
 During shutdown it closes session exporters, flushes Relay subscribers, and
 then closes the activation so callbacks are removed before plugin code is
 unloaded.
 
-For the full generic Hermes middleware contract, see
+For the full generic Vigil middleware contract, see
 [`docs/middleware/README.md`](../../../docs/middleware/README.md).
 
 ## Canonical Local Examples
 
 The observe-only examples in this section use the NeMo Relay runtime installed
-with Hermes and a local Ollama model served through the OpenAI-compatible API.
+with Vigil and a local Ollama model served through the OpenAI-compatible API.
 
 ```bash
-export HERMES_HOME=/tmp/hermes-nemo-relay-docs/hermes-home
-mkdir -p "$HERMES_HOME"
+export VIGIL_HOME=/tmp/hermes-nemo-relay-docs/hermes-home
+mkdir -p "$VIGIL_HOME"
 
-cat > "$HERMES_HOME/config.yaml" <<'YAML'
+cat > "$VIGIL_HOME/config.yaml" <<'YAML'
 model:
   provider: custom
   default: qwen3.6:35b
@@ -272,22 +272,22 @@ YAML
 
 ### Delegated Subagent Tool Call
 
-This run starts a parent Hermes session, delegates to a child subagent, has the
+This run starts a parent Vigil session, delegates to a child subagent, has the
 child call `terminal`, and writes both ATOF and ATIF.
 
 ```bash
-export HERMES_NEMO_RELAY_ATOF_ENABLED=1
-export HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/subagent/atof
-export HERMES_NEMO_RELAY_ATOF_FILENAME=nested-subagent-atof.jsonl
-export HERMES_NEMO_RELAY_ATOF_MODE=overwrite
-export HERMES_NEMO_RELAY_ATIF_ENABLED=1
-export HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/subagent/atif
-export HERMES_NEMO_RELAY_ATIF_FILENAME_TEMPLATE='nested-subagent-atif-{session_id}.json'
-export HERMES_NEMO_RELAY_ATIF_AGENT_NAME='Hermes Agent E2E'
-export HERMES_NEMO_RELAY_ATIF_AGENT_VERSION=docs-example
-export HERMES_NEMO_RELAY_ATIF_SUBAGENT_EXPORT_MODE=all
+export VIGIL_NEMO_RELAY_ATOF_ENABLED=1
+export VIGIL_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/subagent/atof
+export VIGIL_NEMO_RELAY_ATOF_FILENAME=nested-subagent-atof.jsonl
+export VIGIL_NEMO_RELAY_ATOF_MODE=overwrite
+export VIGIL_NEMO_RELAY_ATIF_ENABLED=1
+export VIGIL_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/subagent/atif
+export VIGIL_NEMO_RELAY_ATIF_FILENAME_TEMPLATE='nested-subagent-atif-{session_id}.json'
+export VIGIL_NEMO_RELAY_ATIF_AGENT_NAME='Vigil E2E'
+export VIGIL_NEMO_RELAY_ATIF_AGENT_VERSION=docs-example
+export VIGIL_NEMO_RELAY_ATIF_SUBAGENT_EXPORT_MODE=all
 
-hermes chat \
+vigil chat \
   --query 'Use delegate_task exactly once. Ask the child subagent to use the terminal tool exactly once to run printf docs_nested_leaf_function. After the child returns, reply with exactly: parent received nested subagent result.' \
   --provider custom \
   --model qwen3.6:35b \
@@ -319,7 +319,7 @@ Sanitized ATIF excerpt:
 {
   "schema_version": "ATIF-v1.7",
   "session_id": "docs-parent-session",
-  "agent": {"name": "Hermes Agent E2E", "version": "docs-example", "model_name": "qwen3.6:35b"},
+  "agent": {"name": "Vigil E2E", "version": "docs-example", "model_name": "qwen3.6:35b"},
   "steps": [
     {
       "source": "agent",
@@ -353,7 +353,7 @@ Sanitized ATIF excerpt:
 ### Parallel Tool Calls
 
 This run asks the model to emit two `read_file` tool calls in the same assistant
-message. Hermes dispatches the read-only tools as one batch, and NeMo Relay
+message. Vigil dispatches the read-only tools as one batch, and NeMo Relay
 records both tool invocations.
 
 ```bash
@@ -362,17 +362,17 @@ printf 'docs_parallel_alpha_function\n' > /tmp/hermes-nemo-relay-docs/workdir/al
 printf 'docs_parallel_beta_function\n' > /tmp/hermes-nemo-relay-docs/workdir/beta.txt
 cd /tmp/hermes-nemo-relay-docs/workdir
 
-export HERMES_NEMO_RELAY_ATOF_ENABLED=1
-export HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/parallel/atof
-export HERMES_NEMO_RELAY_ATOF_FILENAME=parallel-tools-atof.jsonl
-export HERMES_NEMO_RELAY_ATOF_MODE=overwrite
-export HERMES_NEMO_RELAY_ATIF_ENABLED=1
-export HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/parallel/atif
-export HERMES_NEMO_RELAY_ATIF_FILENAME_TEMPLATE='parallel-tools-atif-{session_id}.json'
-export HERMES_NEMO_RELAY_ATIF_AGENT_NAME='Hermes Agent E2E'
-export HERMES_NEMO_RELAY_ATIF_AGENT_VERSION=docs-example
+export VIGIL_NEMO_RELAY_ATOF_ENABLED=1
+export VIGIL_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/parallel/atof
+export VIGIL_NEMO_RELAY_ATOF_FILENAME=parallel-tools-atof.jsonl
+export VIGIL_NEMO_RELAY_ATOF_MODE=overwrite
+export VIGIL_NEMO_RELAY_ATIF_ENABLED=1
+export VIGIL_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY=/tmp/hermes-nemo-relay-docs/parallel/atif
+export VIGIL_NEMO_RELAY_ATIF_FILENAME_TEMPLATE='parallel-tools-atif-{session_id}.json'
+export VIGIL_NEMO_RELAY_ATIF_AGENT_NAME='Vigil E2E'
+export VIGIL_NEMO_RELAY_ATIF_AGENT_VERSION=docs-example
 
-hermes chat \
+vigil chat \
   --query 'Use exactly two read_file tool calls in the same assistant message. Read alpha.txt and beta.txt. Do not call terminal. After both tool results are available, reply with exactly: parallel tools complete.' \
   --provider custom \
   --model qwen3.6:35b \
@@ -405,7 +405,7 @@ Sanitized ATIF excerpt:
 {
   "schema_version": "ATIF-v1.7",
   "session_id": "docs-parallel-session",
-  "agent": {"name": "Hermes Agent E2E", "version": "docs-example", "model_name": "qwen3.6:35b"},
+  "agent": {"name": "Vigil E2E", "version": "docs-example", "model_name": "qwen3.6:35b"},
   "steps": [
     {
       "source": "agent",
@@ -429,9 +429,9 @@ Sanitized ATIF excerpt:
 
 The plugin keeps NeMo Relay's native event model:
 
-- Hermes sessions map to `agent` scopes.
-- Hermes core managed provider calls map to `llm` scope start/end events.
-- Hermes core managed tool calls map to `tool` scope start/end events.
+- Vigil sessions map to `agent` scopes.
+- Vigil core managed provider calls map to `llm` scope start/end events.
+- Vigil core managed tool calls map to `tool` scope start/end events.
 - Turn, approval, subagent, and diagnostic fallback events map to `mark`
   events.
 
@@ -443,9 +443,9 @@ separate trajectories.
 
 ## Adaptive Execution Example
 
-Hermes core owns the LLM and tool boundaries and enters NeMo Relay managed
+Vigil core owns the LLM and tool boundaries and enters NeMo Relay managed
 execution while a Hermes-managed Relay consumer is active. With no shared
-metrics subscriber or explicitly configured Relay plugin, Hermes calls the
+metrics subscriber or explicitly configured Relay plugin, Vigil calls the
 provider or tool directly. The `observability/nemo_relay` plugin retains the
 managed path while its adaptive components are installed on those boundaries.
 
@@ -462,22 +462,22 @@ enabled = true
 mode = "observe_only"
 ```
 
-Enable it for Hermes:
+Enable it for Vigil:
 
 ```bash
-export HERMES_NEMO_RELAY_PLUGINS_TOML=/tmp/hermes-middleware-test/plugins.toml
+export VIGIL_NEMO_RELAY_PLUGINS_TOML=/tmp/hermes-middleware-test/plugins.toml
 ```
 
 Execution follows these boundaries with or without an adaptive component:
 
 ```text
-Hermes provider call
+Vigil provider call
   -> nemo_relay.llm.execute(...)
-    -> Hermes provider adapter callback(...)
+    -> Vigil provider adapter callback(...)
 
-Hermes tool call
+Vigil tool call
   -> nemo_relay.tools.execute(...)
-    -> Hermes authorization and dispatch callback(...)
+    -> Vigil authorization and dispatch callback(...)
 ```
 
 The plugin emits observer marks for sessions, turns, approvals, and subagents.
@@ -487,15 +487,15 @@ produces one Relay lifecycle.
 ### Local Adaptive E2E
 
 This example enables both NeMo Relay observability export and adaptive execution
-middleware for a local Hermes run. This path requires a NeMo Relay runtime that
+middleware for a local Vigil run. This path requires a NeMo Relay runtime that
 supports `[components.config.tool_parallelism]`, as provided by NeMo Relay 0.6
 and later.
 
 ```bash
-export HERMES_HOME=/tmp/hermes-middleware-test/hermes-home
-mkdir -p "$HERMES_HOME" /tmp/hermes-middleware-test/nemo-relay
+export VIGIL_HOME=/tmp/hermes-middleware-test/hermes-home
+mkdir -p "$VIGIL_HOME" /tmp/hermes-middleware-test/nemo-relay
 
-cat > "$HERMES_HOME/config.yaml" <<'YAML'
+cat > "$VIGIL_HOME/config.yaml" <<'YAML'
 model:
   provider: custom
   default: qwen3.6:35b
@@ -526,7 +526,7 @@ mode = "overwrite"
 enabled = true
 output_directory = "/tmp/hermes-middleware-test/atif"
 filename_template = "middleware-trajectory-{session_id}.json"
-agent_name = "Hermes Middleware E2E"
+agent_name = "Vigil Middleware E2E"
 agent_version = "local"
 
 [[components]]
@@ -537,9 +537,9 @@ enabled = true
 mode = "observe_only"
 TOML
 
-export HERMES_NEMO_RELAY_PLUGINS_TOML=/tmp/hermes-middleware-test/nemo-relay/plugins.toml
+export VIGIL_NEMO_RELAY_PLUGINS_TOML=/tmp/hermes-middleware-test/nemo-relay/plugins.toml
 
-hermes chat \
+vigil chat \
   --query 'Use the terminal tool exactly once to run printf middleware_execution_ok. Then reply with exactly the command output.' \
   --provider custom \
   --model qwen3.6:35b \
@@ -571,7 +571,7 @@ Expected ATIF shape:
   "schema_version": "ATIF-v1.7",
   "session_id": "middleware-demo-session",
   "agent": {
-    "name": "Hermes Middleware E2E",
+    "name": "Vigil Middleware E2E",
     "version": "local",
     "model_name": "qwen3.6:35b"
   },

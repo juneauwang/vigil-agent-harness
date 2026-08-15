@@ -178,8 +178,8 @@ class _FakeSDK:
 def _cwd_result(body: str = "", *, cwd: str = "/vercel/sandbox", exit_code: int = 0):
     def _result(_cmd: str, args: list[str], _kwargs: dict):
         script = args[1] if len(args) > 1 else ""
-        match = re.search(r"__HERMES_CWD_[A-Za-z0-9]+__", script)
-        marker = match.group(0) if match else "__HERMES_CWD_MISSING__"
+        match = re.search(r"__VIGIL_CWD_[A-Za-z0-9]+__", script)
+        marker = match.group(0) if match else "__VIGIL_CWD_MISSING__"
         prefix = f"{body}\n\n" if body else "\n"
         return _FakeRunResult(f"{prefix}{marker}{cwd}{marker}\n", exit_code)
 
@@ -332,7 +332,7 @@ class TestFileSync:
 
         env = make_env()
         src.write_text("updated-secret-token")
-        monkeypatch.setenv("HERMES_FORCE_FILE_SYNC", "1")
+        monkeypatch.setenv("VIGIL_FORCE_FILE_SYNC", "1")
         vercel_sdk.current.run_command_side_effects.append(_cwd_result("hello"))
 
         result = env.execute("echo hello")
@@ -348,8 +348,8 @@ class TestFileSync:
     def test_cleanup_syncs_back_snapshots_closes_and_is_idempotent(
         self, make_env, vercel_module, vercel_sdk, monkeypatch, tmp_path
     ):
-        hermes_home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        hermes_home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         src = tmp_path / "token.txt"
         src.write_text("host-token")
         monkeypatch.setattr(
@@ -521,8 +521,8 @@ class TestSnapshotPersistence:
     def test_create_restores_from_saved_snapshot(
         self, make_env, vercel_module, vercel_sdk, monkeypatch, tmp_path
     ):
-        hermes_home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        hermes_home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         vercel_module._store_snapshot("task-123", "snap_saved")
         restored = _FakeSandbox(cwd="/restored")
         vercel_sdk.create_side_effects.append(restored)
@@ -539,8 +539,8 @@ class TestSnapshotPersistence:
     def test_restore_failure_prunes_snapshot_and_falls_back_to_fresh_sandbox(
         self, make_env, vercel_module, vercel_sdk, monkeypatch, tmp_path
     ):
-        hermes_home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        hermes_home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         vercel_module._store_snapshot("task-123", "snap_stale")
         fresh = _FakeSandbox(cwd="/fresh")
         vercel_sdk.create_side_effects.extend(
@@ -560,8 +560,8 @@ class TestSnapshotPersistence:
     def test_cleanup_stops_when_snapshot_fails_without_storing_metadata(
         self, make_env, vercel_module, vercel_sdk, monkeypatch, tmp_path
     ):
-        hermes_home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        hermes_home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         env = make_env()
         sandbox = vercel_sdk.current
         sandbox.snapshot_side_effects.append(RuntimeError("snapshot failed"))
@@ -576,8 +576,8 @@ class TestSnapshotPersistence:
     def test_non_persistent_cleanup_stops_without_snapshot(
         self, make_env, vercel_module, vercel_sdk, monkeypatch, tmp_path
     ):
-        hermes_home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        hermes_home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         env = make_env(persistent_filesystem=False)
         sandbox = vercel_sdk.current
 
@@ -591,8 +591,8 @@ class TestSnapshotPersistence:
     def test_persistent_cleanup_without_task_id_stops_without_snapshot(
         self, make_env, vercel_module, vercel_sdk, monkeypatch, tmp_path
     ):
-        hermes_home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        hermes_home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         env = make_env(task_id="")
         sandbox = vercel_sdk.current
 

@@ -34,10 +34,10 @@ scanning and submitting with native tools (`web_extract`, `browser_*`, email, `c
 ## Install
 
 ```bash
-hermes skills install official/security/unbroker
+vigil skills install official/security/unbroker
 ```
 
-Then start a new Hermes session and drive it (below). The skill works zero-config; a few optional
+Then start a new Vigil session and drive it (below). The skill works zero-config; a few optional
 env vars unlock more automation (all documented in `SKILL.md` under Prerequisites):
 
 - `BROWSERBASE_API_KEY`: the recommended default browser. A real residential-IP cloud browser that
@@ -52,7 +52,7 @@ env vars unlock more automation (all documented in `SKILL.md` under Prerequisite
 
 ## Usage
 
-Drive it from a Hermes session:
+Drive it from a Vigil session:
 
 > "Use the unbroker skill to remove my data from data brokers. Here is my consent. Run it hands-off
 > and show me the human-task digest at the end."
@@ -140,7 +140,7 @@ python3 tests/skills/test_unbroker_skill.py                        # dependency-
 - **Least-disclosure and honest reporting.** The skill submits only what a broker requires. "Hidden
   from free search" is never reported as "deleted", and residual exposure (public records, paid-tier
   retention) is disclosed.
-- **PII handling.** Dossiers live under the Hermes home directory (`0600`, optionally
+- **PII handling.** Dossiers live under the Vigil home directory (`0600`, optionally
   `age`-encrypted), with opaque ids.
 
 ## Status

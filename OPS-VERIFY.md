@@ -9,7 +9,7 @@
 ```bash
 cd /home/your-name/projects/vigil-agent
 source .venv/bin/activate
-vigil ops-init                        # 默认写到 ~/.hermes/profiles/ops（旧入口：python3 scripts/ops_init.py 同效）
+vigil ops-init                        # 默认写到 ~/.vigil/profiles/ops（旧入口：python3 scripts/ops_init.py 同效）
 ```
 
 输出应包含：创建 profile、写入 config.yaml、写入 topology.yaml（schema v0.2 第一层：
@@ -17,16 +17,16 @@ hosts + cross_host）、写入 hosts/（第二层服务索引）、写入 entiti
 写入 runbooks/（3 个 runbook）。
 想装到别处用 `--root <path>`；初始权限环境默认 `test`（安全默认），可用 `--env prod` 覆盖。
 
-确认 `hermes` 可用（不在 PATH 就用 `./hermes`）：
+确认 `vigil` 可用（不在 PATH 就用 `./hermes`）：
 
 ```bash
-hermes --version   # 或：./hermes --version
+vigil --version   # 或：./hermes --version
 ```
 
 ## 1. 起 session，看 TOPO 段
 
 ```bash
-hermes -p ops chat
+vigil -p ops chat
 ```
 
 第一句话：
@@ -44,7 +44,7 @@ hermes -p ops chat
 可选硬校验（不依赖 LLM，直接渲染 TOPO 段）：
 
 ```bash
-HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
+VIGIL_HOME=$HOME/.vigil/profiles/ops .venv/bin/python -c \
   "import sys; sys.path.insert(0,'.'); from pathlib import Path; \
    from plugins.memory.topo import render_topo_block; \
    print(render_topo_block(Path.home()/'.hermes/profiles/ops'))"
@@ -86,7 +86,7 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
    > 用 topo_update 把 test-web 的 status 改成 degraded，reason 写「验证」。
 
    **预期**：返回 `source=agent`、`last_verified=今天`；打开
-   `~/.hermes/profiles/ops/entities/test-web.yaml` 能看到 `status: degraded` +
+   `~/.vigil/profiles/ops/entities/test-web.yaml` 能看到 `status: degraded` +
    `source: agent` + `last_verified: 2026-08-06`（test 环境不弹审批）。
 
 2. **prod 实体，必须审批**
@@ -142,13 +142,13 @@ HERMES_HOME=$HOME/.hermes/profiles/ops .venv/bin/python -c \
 已有 ops profile 需要先补上新配置，二选一：
 
 - 没改过样例拓扑：`vigil ops-init --force`（重铺 config/拓扑/runbooks 样例）。
-- 改过拓扑/实体（保留你的修改）：手工在 `~/.hermes/profiles/ops/config.yaml` 加两处——
+- 改过拓扑/实体（保留你的修改）：手工在 `~/.vigil/profiles/ops/config.yaml` 加两处——
   `platform_toolsets.cli` 改为 `[hermes-cli, topo, runbook]`，并在 `ops:` 下加
   `runbooks: {enabled: true}`（OPS-DELTA #1 起可选：新版本 runbook 工具默认按
   `runbooks/` 数据存在性启用，`enabled` 只是显式声明/关闭开关）；然后
   `vigil ops-init`（不带 --force，会自动铺缺失的 runbooks/）。
 
-重新 `hermes -p ops chat`，依次验证：
+重新 `vigil -p ops chat`，依次验证：
 
 1. **列表**：问「列出可用的 runbook」。**预期**：`runbook_load` 返回 3 个——
    `harbor-restart`、`gateway-svc-restart`（事故）+ `deploy-gateway-svc`（L4 部署 checklist）。

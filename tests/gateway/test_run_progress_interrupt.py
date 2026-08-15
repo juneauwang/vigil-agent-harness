@@ -97,7 +97,7 @@ class InterruptedAgent:
     def run_conversation(self, message, conversation_history=None, task_id=None):
         # Parallel tool batch — in production these come from one LLM
         # response with 5 tool_calls.  All are post-interrupt.
-        self.tool_progress_callback("tool.started", "web_search", "cognee hermes", {})
+        self.tool_progress_callback("tool.started", "web_search", "cognee vigil", {})
         self.tool_progress_callback("tool.started", "web_search", "McBee deer hunting", {})
         self.tool_progress_callback("tool.started", "web_search", "kuzu graph db", {})
         self.tool_progress_callback("tool.started", "web_search", "moonshot kimi api", {})
@@ -154,7 +154,7 @@ def _make_runner(adapter):
 
 
 async def _run_once(monkeypatch, tmp_path, agent_cls, session_id):
-    monkeypatch.setenv("HERMES_TOOL_PROGRESS_MODE", "all")
+    monkeypatch.setenv("VIGIL_TOOL_PROGRESS_MODE", "all")
 
     fake_dotenv = types.ModuleType("dotenv")
     fake_dotenv.load_dotenv = lambda *args, **kwargs: None
@@ -239,7 +239,7 @@ async def test_progress_suppressed_when_agent_is_interrupted(monkeypatch, tmp_pa
 
     # None of the post-interrupt queries should appear.
     for leaked_query in (
-        "cognee hermes",
+        "cognee vigil",
         "McBee deer hunting",
         "kuzu graph db",
         "moonshot kimi api",

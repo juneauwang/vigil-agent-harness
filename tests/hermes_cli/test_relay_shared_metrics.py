@@ -1,4 +1,4 @@
-"""Focused tests for the Hermes shared-metrics durable store."""
+"""Focused tests for the Vigil shared-metrics durable store."""
 
 from __future__ import annotations
 

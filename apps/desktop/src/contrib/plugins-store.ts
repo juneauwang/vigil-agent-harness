@@ -1,7 +1,7 @@
 /**
  * PLUGIN INVENTORY — the reactive record of every desktop plugin the app
  * knows about (bundled `src/plugins/*`, the in-repo runtime example, the
- * `<hermes home>/desktop-plugins/*` disk door — incl. agent-written ones),
+ * `<vigil home>/desktop-plugins/*` disk door — incl. agent-written ones),
  * plus the persisted DISABLED set. The settings "Plugins" page renders this;
  * the loaders publish into it and consult the disabled set before
  * registering. Enable/disable is live: each record carries the loader's own

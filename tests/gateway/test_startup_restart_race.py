@@ -169,7 +169,7 @@ async def test_startup_aborts_when_restart_begins_during_platform_connect(tmp_pa
 
 @pytest.mark.asyncio
 async def test_start_gateway_does_not_start_cron_after_aborted_startup(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     cron_started = False
     export_shutdown_calls = 0
 

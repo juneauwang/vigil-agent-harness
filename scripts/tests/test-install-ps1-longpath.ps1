@@ -116,7 +116,7 @@ function Invoke-Normalization {
         LOCALAPPDATA = (Join-Parts @($root, 'AppData', 'Local'))
         APPDATA      = (Join-Parts @($root, 'AppData', 'Roaming'))
         USERPROFILE  = $root
-        HERMES_HOME  = ''
+        VIGIL_HOME  = ''
     }
     foreach ($key in $Environment.Keys) { $env0[$key] = $Environment[$key] }
 
@@ -141,7 +141,7 @@ function Invoke-Normalization {
         # record into this script's error stream, which fails the 5.1 lane even
         # under 'Continue'. Merging with 2>&1 keeps the bytes and produces no
         # error record. The installer's stdout here is a single JSON object and
-        # its diagnostics are all `[hermes] `-prefixed, so the two separate
+        # its diagnostics are all `[vigil] `-prefixed, so the two separate
         # cleanly on the way back out.
         $prevEAP = $ErrorActionPreference
         $ErrorActionPreference = 'Continue'

@@ -206,7 +206,7 @@ def _build_probe_line() -> str:
     # Bare which() is correct here, unlike Vigil's own uv call sites: this
     # reports the environment *the model will see* in the terminal tool, and
     # what the model can type is exactly what is on that subshell's PATH.
-    # local.py puts the Vigil-managed $HERMES_HOME/bin there, so a managed-only
+    # local.py puts the Vigil-managed $VIGIL_HOME/bin there, so a managed-only
     # install answers yes — without that, claiming uv the model cannot invoke
     # would be worse than claiming none.
     has_uv = shutil.which("uv") is not None

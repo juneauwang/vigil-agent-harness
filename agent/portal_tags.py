@@ -1,9 +1,9 @@
 """Centralized Nous Portal request tags.
 
-Every Hermes request that hits the Nous Portal — main agent loop, auxiliary
+Every Vigil request that hits the Nous Portal — main agent loop, auxiliary
 client (compression / titles / vision / web_extract / session_search / etc.),
 and any future code path — must carry the same product-attribution tags so
-Nous can attribute usage to Hermes Agent and bucket it by client release.
+Nous can attribute usage to Vigil Agent and bucket it by client release.
 
 Tag shape (sent in OpenAI-compatible ``extra_body['tags']``):
 
@@ -83,7 +83,7 @@ def get_conversation_context() -> Optional[str]:
 
 
 def _hermes_version() -> str:
-    """Return the current Hermes release version, e.g. ``"0.13.0"``.
+    """Return the current Vigil release version, e.g. ``"0.13.0"``.
 
     Falls back to ``"unknown"`` if ``hermes_cli`` cannot be imported (should
     never happen in a real install — guarded for defensive testing).
@@ -104,11 +104,11 @@ def hermes_client_tag() -> str:
 
 
 def conversation_tag(session_id: str) -> str:
-    """Return the ``conversation=...`` tag for a Hermes session/conversation.
+    """Return the ``conversation=...`` tag for a Vigil session/conversation.
 
     Format: ``conversation=<session_id>``. ``session_id`` is the canonical
-    Hermes conversation identifier (``AIAgent.session_id``) — the same value
-    used for ``~/.hermes/sessions/`` storage, session logs, and lineage.
+    Vigil conversation identifier (``AIAgent.session_id``) — the same value
+    used for ``~/.vigil/sessions/`` storage, session logs, and lineage.
 
     Unlike the product/client tags this is high-cardinality (one value per
     conversation), so it is only appended when a session id is actually
@@ -124,7 +124,7 @@ def nous_portal_tags(session_id: str | None = None) -> List[str]:
     (e.g. ``merged_extra.setdefault("tags", []).extend(nous_portal_tags())``).
 
     When ``session_id`` is provided, a ``conversation=<session_id>`` tag is
-    appended so Portal usage can be attributed to a specific Hermes
+    appended so Portal usage can be attributed to a specific Vigil
     conversation. When it is omitted, the ambient conversation context
     (``set_conversation_context``, published by the agent loop at turn
     entry) is used instead — this is how auxiliary calls (compression,

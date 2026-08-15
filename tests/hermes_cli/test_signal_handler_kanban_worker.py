@@ -2,7 +2,7 @@
 
 The single-query signal handler in cli.py (``_signal_handler_q``) raises
 ``KeyboardInterrupt`` to unwind the main thread on SIGTERM/SIGHUP. That works
-for interactive ``hermes chat -q`` invocations, but kanban workers spawned by
+for interactive ``vigil chat -q`` invocations, but kanban workers spawned by
 the dispatcher are likely to have a non-daemon thread alive (terminal_tool's
 ``_wait_for_process``, custom plugin background workers, etc.). With
 ``KeyboardInterrupt`` only the main thread unwinds; the non-daemon thread
@@ -10,7 +10,7 @@ keeps the process alive after the gateway has already restarted, the kanban
 dispatcher's ``_pid_alive`` check returns True forever, and the task stays
 ``running`` indefinitely.
 
-The fix: when the process is a dispatcher-spawned worker (``HERMES_KANBAN_TASK``
+The fix: when the process is a dispatcher-spawned worker (``VIGIL_KANBAN_TASK``
 env var set), flush logging + stdout/stderr and call ``os._exit(0)`` instead.
 The kernel reclaims the PID immediately, and ``detect_crashed_workers``
 reclaims the stale claim on the next dispatcher tick.
@@ -56,7 +56,7 @@ def _synthetic_worker_script() -> str:
                 time.sleep(0.05)
             except Exception:
                 pass
-            if os.environ.get("HERMES_KANBAN_TASK"):
+            if os.environ.get("VIGIL_KANBAN_TASK"):
                 try:
                     if hasattr(signal, "SIGALRM"):
                         signal.signal(signal.SIGALRM, lambda *_: os._exit(0))
@@ -159,9 +159,9 @@ def _cleanup(proc: subprocess.Popen) -> None:
     reason="SIGTERM semantics differ on Windows; kanban dispatcher is POSIX-only",
 )
 def test_sigterm_with_kanban_task_env_terminates_quickly():
-    """With HERMES_KANBAN_TASK set, SIGTERM should kill the process in <2s
+    """With VIGIL_KANBAN_TASK set, SIGTERM should kill the process in <2s
     even when a non-daemon thread is still alive."""
-    proc = _spawn_synthetic({"HERMES_KANBAN_TASK": "t_test_28181"})
+    proc = _spawn_synthetic({"VIGIL_KANBAN_TASK": "t_test_28181"})
     try:
         t0 = time.time()
         os.kill(proc.pid, signal.SIGTERM)
@@ -176,7 +176,7 @@ def test_sigterm_with_kanban_task_env_terminates_quickly():
                 return
             time.sleep(0.02)
         pytest.fail(
-            "process still alive 2s after SIGTERM with HERMES_KANBAN_TASK set "
+            "process still alive 2s after SIGTERM with VIGIL_KANBAN_TASK set "
             "(dispatcher would keep extending claim) — fix regressed"
         )
     finally:
@@ -188,10 +188,10 @@ def test_sigterm_with_kanban_task_env_terminates_quickly():
     reason="SIGTERM semantics differ on Windows; kanban dispatcher is POSIX-only",
 )
 def test_sigterm_without_kanban_task_env_uses_keyboard_interrupt_path():
-    """Without HERMES_KANBAN_TASK, the original KeyboardInterrupt path runs.
+    """Without VIGIL_KANBAN_TASK, the original KeyboardInterrupt path runs.
 
     This is the contrast case proving the fix is gated on the env var: in
-    interactive ``hermes chat -q`` (no env var), behavior is unchanged. The
+    interactive ``vigil chat -q`` (no env var), behavior is unchanged. The
     process MAY hang under non-daemon threads, but that's not a kanban-worker
     concern. We just verify the handler logs the KeyboardInterrupt branch
     rather than os._exit'ing.

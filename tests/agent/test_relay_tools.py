@@ -1,4 +1,4 @@
-"""Tests for the core Relay-managed Hermes tool adapter."""
+"""Tests for the core Relay-managed Vigil tool adapter."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from agent import relay_runtime, relay_tools
 
 @pytest.fixture()
 def relay_turn(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "profile"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "profile"))
     relay_runtime._reset_for_tests()
     lease = relay_runtime.SESSION_COORDINATOR.acquire_conversation(
         profile_key=relay_runtime.current_profile_key(),

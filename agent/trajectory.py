@@ -91,7 +91,7 @@ _truncated_sessions = set()
 
 
 def get_trajectory_dir() -> Path:
-    """轨迹事件目录：<数据根>/trajectory/（随 HERMES_HOME/profile 语义）。"""
+    """轨迹事件目录：<数据根>/trajectory/（随 VIGIL_HOME/profile 语义）。"""
     from hermes_constants import get_hermes_home
     return Path(get_hermes_home()).expanduser() / _TRAJECTORY_DIR_NAME
 

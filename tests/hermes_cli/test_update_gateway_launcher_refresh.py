@@ -8,7 +8,7 @@ forever" gap:
    to the sibling console ``python.exe`` so respawns and regenerated
    launchers use the hidden-console design (#54220/#56747) and don't die
    with ``RuntimeError: sys.stderr is None`` (#71671).
-2. ``hermes_cli.main._refresh_windows_gateway_launchers`` — ``hermes
+2. ``hermes_cli.main._refresh_windows_gateway_launchers`` — ``vigil
    update`` regenerates the installed Scheduled Task / Startup launcher
    scripts instead of leaving install-time artifacts stale forever.
 
@@ -79,7 +79,7 @@ def test_restart_spec_normalizes_legacy_pythonw_argv(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# _refresh_windows_gateway_launchers: hermes update regenerates launchers
+# _refresh_windows_gateway_launchers: vigil update regenerates launchers
 # ---------------------------------------------------------------------------
 
 

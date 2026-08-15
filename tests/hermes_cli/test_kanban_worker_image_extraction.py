@@ -5,7 +5,7 @@ image URL, the worker must surface that image to the model on its first
 user turn — matching the CLI/gateway behaviour for inbound images.
 
 The dispatcher spawns the worker as
-``hermes -p <profile> chat -q "work kanban task <id>"``. The task body
+``vigil -p <profile> chat -q "work kanban task <id>"``. The task body
 itself never appears in argv; the worker has to read it from the kanban
 DB during startup. These tests cover the round-trip:
 
@@ -36,10 +36,10 @@ _PNG = base64.b64decode(
 
 @pytest.fixture
 def kanban_home(tmp_path: Path, monkeypatch):
-    """Isolated HERMES_HOME with a fresh kanban DB for each test."""
-    home = tmp_path / ".hermes"
+    """Isolated VIGIL_HOME with a fresh kanban DB for each test."""
+    home = tmp_path / ".vigil"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     kb.init_db()
     return home

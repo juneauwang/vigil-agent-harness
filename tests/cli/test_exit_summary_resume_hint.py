@@ -21,7 +21,7 @@ def _make_cli(session_id="20260524_000001_abc123"):
 class TestExitSummaryResumeHint:
     """The exit-line ``Resume this session with:`` hint must include the
     active profile (`-p <name>`) so session IDs round-trip across
-    profile boundaries — sessions live under `~/.hermes-profiles/<profile>/`,
+    profile boundaries — sessions live under `~/.vigil-profiles/<profile>/`,
     so a hint copied without `-p` from a non-default profile won't find
     the session.
     """
@@ -40,7 +40,7 @@ class TestExitSummaryResumeHint:
         with patch("hermes_cli.profiles.get_active_profile_name", return_value="custom"):
             cli_obj._print_exit_summary()
         out = capsys.readouterr().out
-        # "custom" is the standard HERMES_HOME indicator — no -p needed.
+        # "custom" is the standard VIGIL_HOME indicator — no -p needed.
         assert "vigil --resume 20260524_000001_abc123" in out
         assert " -p " not in out
 
@@ -68,7 +68,7 @@ class TestExitSummaryResumeHint:
 
     def test_resume_hint_falls_back_when_profile_lookup_fails(self, capsys):
         """If `get_active_profile_name` raises (e.g. profiles module
-        missing during ``hermes update`` mid-flight), fall back to no
+        missing during ``vigil update`` mid-flight), fall back to no
         flag rather than crashing the exit summary.
         """
         cli_obj = _make_cli()

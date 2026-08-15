@@ -1,7 +1,7 @@
 # Gateway Monitoring
 
 Service health monitoring plus structured operational diagnostics for the
-Hermes gateway daemon, exported over OTLP/HTTP to an operator-configured
+Vigil gateway daemon, exported over OTLP/HTTP to an operator-configured
 endpoint (OpenTelemetry Collector, DataDog, or any OTLP receiver).
 
 This plane is content-free by construction. It exports gateway and cron
@@ -57,7 +57,7 @@ monitoring:
 Check the posture any time:
 
 ```bash
-hermes monitoring status
+vigil monitoring status
 ```
 
 The OpenTelemetry SDK is an optional extra (`pip install 'hermes-agent[otlp]'`),
@@ -67,7 +67,7 @@ off the hot path, while terminal cron events make one bounded fail-open flush
 attempt of up to one second so the final state is less likely to be lost.
 
 Works identically under systemd/launchd/s6 supervision, containers, tmux, or
-a plain `hermes gateway run`: the exporter lives in the gateway process, so
+a plain `vigil gateway run`: the exporter lives in the gateway process, so
 no sidecar, agent, or collector is required on the host.
 
 ## Collecting into DataDog
@@ -171,7 +171,7 @@ collector and backend:
 5. **Killed gateway:** terminate one canary, verify missing-series detection,
    restart it, and confirm the same opaque instance identity returns.
 
-Hermes Agent-owned Relay transport health remains in scope. A separate gateway
+Vigil-owned Relay transport health remains in scope. A separate gateway
 or connector service remains authoritative for any shared connected-platform
 state that it owns and should export that state through its own telemetry path.
 
@@ -280,7 +280,7 @@ emitter attribute allowlist, and any collector allowlist each drop unlisted
 values with no error:
 
 ```bash
-hermes monitoring status                 # posture
+vigil monitoring status                 # posture
 python scripts/observability/gateway_health_export_probe.py \
   --endpoint http://127.0.0.1:4318/v1/traces \
   --log /tmp/cap.jsonl --wait 8          # drive the real exporter
@@ -292,9 +292,9 @@ allowlist entries and re-verify against the backend, not just the local capture.
 
 ## Boundaries and roadmap
 
-The `hermes monitoring` CLI intentionally exposes `status` only. This first
-release covers only Hermes Agent-owned service-health and operational-diagnostic
-signals, including Hermes Agent-owned Relay transport health. Team Gateway's
+The `vigil monitoring` CLI intentionally exposes `status` only. This first
+release covers only Vigil-owned service-health and operational-diagnostic
+signals, including Vigil-owned Relay transport health. Team Gateway's
 authoritative shared connector/platform state is explicitly out of scope, as
 are product analytics, audit/quality reporting, and detailed execution traces.
 Shared client usage metrics and enterprise trace telemetry are being designed on

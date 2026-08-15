@@ -3,7 +3,7 @@
 Build the real image and verify the actual runtime behavior:
 
   1. Root-owned top-level state files (auth.json, state.db, gateway.lock,
-     gateway_state.json) are chowned to hermes on boot
+     gateway_state.json) are chowned to vigil on boot
   2. Non-allowlisted host-owned files are NOT touched (targeted, not
      blanket find -user root sweep)
   3. Symlinked allowlisted files are NOT chowned through the symlink
@@ -33,7 +33,7 @@ ALLOWLISTED_FILES = ("auth.json", "state.db", "gateway.lock", "gateway_state.jso
 def test_root_owned_state_files_repaired_on_boot(
     built_image: str, container_name: str,
 ) -> None:
-    """Root-owned top-level state files must be chowned to hermes on boot."""
+    """Root-owned top-level state files must be chowned to vigil on boot."""
     start_container(built_image, container_name)
 
     # Create root-owned state files to simulate docker exec (root) writes
@@ -72,7 +72,7 @@ def test_non_allowlisted_host_file_not_touched(
 ) -> None:
     """A non-allowlisted host-owned file must NOT be chowned, even if
     root-owned. Regression guard for #19788 / #19795: a bind-mounted
-    $HERMES_HOME may contain host-owned files Hermes does not manage."""
+    $VIGIL_HOME may contain host-owned files Vigil does not manage."""
     start_container(built_image, container_name)
 
     # Create a non-allowlisted file as root

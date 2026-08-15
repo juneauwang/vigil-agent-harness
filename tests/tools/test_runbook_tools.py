@@ -89,7 +89,7 @@ def test_load_list(rb_home):
 def test_load_unknown_and_empty_dir(tmp_path, monkeypatch):
     home = tmp_path / "empty"
     (home / "runbooks").mkdir(parents=True)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         result = runbook_load(runbook="nope", home=home)

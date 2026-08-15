@@ -4,7 +4,7 @@ _ALLOWED_NOUS_INFERENCE_HOSTS treatment.
 
 Real incident (2026-07): a hosted agent provisioned by nous-account-service
 on the `staging` Vercel environment is stamped with
-``HERMES_PORTAL_BASE_URL=https://portal.staging-nousresearch.com`` in its
+``VIGIL_PORTAL_BASE_URL=https://portal.staging-nousresearch.com`` in its
 container env (the documented dev/staging override), while its bootstrap
 ``auth.json`` ALSO persists ``portal_base_url`` to the same staging host.
 
@@ -40,7 +40,7 @@ from hermes_cli.auth import (
 
 class TestPortalEnvOverrideHelper:
     def test_none_when_unset(self, monkeypatch):
-        monkeypatch.delenv("HERMES_PORTAL_BASE_URL", raising=False)
+        monkeypatch.delenv("VIGIL_PORTAL_BASE_URL", raising=False)
         monkeypatch.delenv("NOUS_PORTAL_BASE_URL", raising=False)
         assert _nous_portal_env_override() is None
 
@@ -50,7 +50,7 @@ class TestPortalEnvOverrideHelper:
         _NOUS_PORTAL_ALLOWED_HOSTS, and the helper must return it anyway —
         gating happens only for network-provenance values."""
         monkeypatch.setenv(
-            "HERMES_PORTAL_BASE_URL", "https://portal.staging-nousresearch.com"
+            "VIGIL_PORTAL_BASE_URL", "https://portal.staging-nousresearch.com"
         )
         assert "portal.staging-nousresearch.com" not in _NOUS_PORTAL_ALLOWED_HOSTS
         assert (
@@ -117,14 +117,14 @@ class TestResolveAccessTokenEnvOverrideWins:
         self, monkeypatch, tmp_path
     ):
         """The real incident: state ALSO has the staging host stored (from
-        a prior HERMES_AUTH_JSON_BOOTSTRAP seed), and the env var is set to
+        a prior VIGIL_AUTH_JSON_BOOTSTRAP seed), and the env var is set to
         the same staging host. Both must resolve to staging, and the
         allowlist-rejection warning must never fire."""
         import hermes_cli.auth as auth
 
         staging_portal = "https://portal.staging-nousresearch.com"
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        monkeypatch.setenv("HERMES_PORTAL_BASE_URL", staging_portal)
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_PORTAL_BASE_URL", staging_portal)
         self._write_auth_file(tmp_path, stored_portal_url=staging_portal)
 
         seen_portal_urls, records = self._run_and_capture(monkeypatch, auth)
@@ -143,8 +143,8 @@ class TestResolveAccessTokenEnvOverrideWins:
         allowlist never even logs a warning (nothing was rejected)."""
         import hermes_cli.auth as auth
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        monkeypatch.delenv("HERMES_PORTAL_BASE_URL", raising=False)
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        monkeypatch.delenv("VIGIL_PORTAL_BASE_URL", raising=False)
         monkeypatch.delenv("NOUS_PORTAL_BASE_URL", raising=False)
         self._write_auth_file(tmp_path, stored_portal_url=DEFAULT_NOUS_PORTAL_URL)
 

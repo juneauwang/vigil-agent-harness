@@ -1,7 +1,7 @@
 """Regression tests for #25106: CLI `/model <name> --global` never persisted
 ``model.base_url``/``model.api_mode`` to config.yaml, so a global provider
 switch left the PREVIOUS provider's endpoint/wire-protocol on disk. The next
-`hermes` launch re-read the stale base_url and routed the new model at the
+`vigil` launch re-read the stale base_url and routed the new model at the
 old host.
 
 Both ``_handle_model_switch`` (typed ``/model <name>``) and

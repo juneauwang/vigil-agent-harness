@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// set-exe-identity.mjs — stamp the Hermes icon + version metadata onto the
+// set-exe-identity.mjs — stamp the Vigil icon + version metadata onto the
 // built Hermes.exe using rcedit, completely decoupled from electron-builder's
 // signing path.
 //
@@ -21,10 +21,10 @@
 // HOW IT RUNS
 // -----------
 // Primarily as an electron-builder `afterPack` hook (scripts/after-pack.mjs),
-// so EVERY packed build — first install, `hermes desktop`, the installer's
+// so EVERY packed build — first install, `vigil desktop`, the installer's
 // --update rebuild, or a dev's manual `npm run pack` — gets a branded exe from
 // one place. Previously this stamp lived only in install.ps1, so the update
-// path (which rebuilds via `hermes desktop --build-only`, never install.ps1)
+// path (which rebuilds via `vigil desktop --build-only`, never install.ps1)
 // shipped a stock "Electron" exe. Keeping it in afterPack closes that gap.
 //
 // Also runnable standalone for ad-hoc re-stamping:
@@ -42,7 +42,7 @@ import { rcedit } from 'rcedit'
 
 import { isMain } from './utils.mjs'
 
-// Stamp the Hermes icon + identity onto `exe`. Resolves on success, throws on
+// Stamp the Vigil icon + identity onto `exe`. Resolves on success, throws on
 // failure. `desktopRoot` defaults to this script's package root so the icon and
 // the rcedit dependency resolve regardless of cwd.
 async function stampExeIdentity(exe, desktopRoot = resolve(import.meta.dirname, '..')) {

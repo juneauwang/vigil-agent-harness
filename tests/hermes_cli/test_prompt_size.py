@@ -1,4 +1,4 @@
-"""Tests for the ``hermes prompt-size`` diagnostic (issue #34667)."""
+"""Tests for the ``vigil prompt-size`` diagnostic (issue #34667)."""
 
 import json
 import sys
@@ -36,9 +36,9 @@ def _seed_skill(hermes_home, name, description):
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     hermes_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
     monkeypatch.chdir(tmp_path)  # avoid picking up the repo's AGENTS.md
     return hermes_home
 

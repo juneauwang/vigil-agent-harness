@@ -1,6 +1,6 @@
 """Managed-install guard in :func:`tools.lazy_deps.ensure` (#48628).
 
-A package-manager install (NixOS, and anything else shipping Hermes from a
+A package-manager install (NixOS, and anything else shipping Vigil from a
 read-only store) cannot receive lazy pip installs: the venv's site-packages
 lives in the store, so the uv -> pip -> ensurepip ladder burns ~15s
 bootstrapping ensurepip only to fail. ``ensure()`` must fail fast instead.
@@ -20,7 +20,7 @@ def _missing_and_installable(monkeypatch):
     """Reach the guard: deps missing, installs allowed, no durable target.
 
     ``_allow_lazy_installs`` is patched explicitly so the suite does not
-    depend on the host's ~/.hermes/config.yaml (a local
+    depend on the host's ~/.vigil/config.yaml (a local
     ``allow_lazy_installs: false`` otherwise short-circuits with a different
     rejection reason).
     """
@@ -74,10 +74,10 @@ def test_unmanaged_install_is_not_blocked_by_the_guard(monkeypatch):
 
 
 def test_durable_install_target_overrides_the_guard(monkeypatch, tmp_path):
-    """The container deployment sets HERMES_MANAGED *and* a writable target.
+    """The container deployment sets VIGIL_MANAGED *and* a writable target.
 
-    Dockerfile sets HERMES_LAZY_INSTALL_TARGET and the NixOS container module
-    passes HERMES_MANAGED=true; blocking there would break that deployment.
+    Dockerfile sets VIGIL_LAZY_INSTALL_TARGET and the NixOS container module
+    passes VIGIL_MANAGED=true; blocking there would break that deployment.
     """
     monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nixos")
     monkeypatch.setattr(lazy_deps, "_lazy_install_target", lambda: tmp_path)

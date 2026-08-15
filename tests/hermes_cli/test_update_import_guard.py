@@ -1,4 +1,4 @@
-"""Tests for the post-update *import* guard in ``hermes update``.
+"""Tests for the post-update *import* guard in ``vigil update``.
 
 ``_validate_critical_files_syntax`` only parses files, so it cannot detect a
 partially-updated tree: when one package is refreshed and a sibling is not,
@@ -103,7 +103,7 @@ def test_hint_fires_for_first_party_import_error():
     hint = partial_update_hint(exc)
 
     assert hint, "expected recovery guidance for a first-party ImportError"
-    assert any("hermes update" in line for line in hint)
+    assert any("vigil update" in line for line in hint)
 
 
 @pytest.mark.parametrize(
@@ -123,7 +123,7 @@ def test_hint_stays_silent_for_unrelated_failures(exc):
 
 
 def test_import_guard_prefers_the_project_venv_interpreter(monkeypatch, tmp_path):
-    """``hermes update`` can run under a different Python than the install's.
+    """``vigil update`` can run under a different Python than the install's.
 
     Probing ``sys.executable`` would then validate a tree the user never
     actually runs -- the same reasoning behind ``_venv_core_imports_healthy``.
@@ -200,7 +200,7 @@ def test_probe_and_hint_share_one_first_party_definition():
 
     These started as two hand-maintained lists and immediately diverged:
     `cli` was first-party to the hint but not the probe, and `hermesx`
-    (third-party) matched the probe's loose `startswith("hermes")`. A user
+    (third-party) matched the probe's loose `startswith("vigil")`. A user
     could get a rollback with no explanation, or an explanation with no
     detection. Both now derive from FIRST_PARTY_MODULE_ROOTS; this test
     fails if either grows a private copy.

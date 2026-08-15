@@ -219,7 +219,7 @@ export default function App() {
           {/* 待审批通知（铃铛 + 数量角标 + 下拉列表，可跳审批中心） */}
           <ApprovalBell />
 
-          {/* 设置菜单（主题 + 版本，无 Hermes 继承页入口） */}
+          {/* 设置菜单（主题 + 版本，无上游继承页入口） */}
           <SettingsMenu dark={dark} onToggleTheme={toggle} />
         </div>
       </header>
@@ -321,7 +321,7 @@ export default function App() {
   );
 }
 
-/** 顶部设置菜单：主题切换 + 版本信息（无 Hermes 继承页入口）。 */
+/** 顶部设置菜单：主题切换 + 版本信息（无上游继承页入口）。 */
 /** 待审批通知：铃铛 + 数量角标；点开下拉列出待审批项，可跳审批中心。 */
 function ApprovalBell() {
   const [open, setOpen] = useState(false);

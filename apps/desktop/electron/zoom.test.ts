@@ -184,7 +184,7 @@ test('unknown window kinds default to chat (zoom enabled)', () => {
 // The UI Scale settings control drifts out of sync after a restart when zoom
 // is applied to the window but the renderer is never told: its $zoomPercent
 // store (see store/zoom.ts) only updates from zoom.get() (once, on load) and
-// 'hermes:zoom:changed' events. applyZoomLevel is the single funnel every zoom
+// 'vigil:zoom:changed' events. applyZoomLevel is the single funnel every zoom
 // path (user set, restore-on-load, lifecycle re-assert) shares, so applying a
 // level always notifies — the regression can't come back by forgetting a send.
 function fakeWebContents() {

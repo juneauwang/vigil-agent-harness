@@ -17,7 +17,7 @@ from hermes_cli.completion import _walk, generate_bash, generate_zsh, generate_f
 # ---------------------------------------------------------------------------
 
 def _make_parser() -> argparse.ArgumentParser:
-    """Build a minimal parser that mirrors the real hermes structure."""
+    """Build a minimal parser that mirrors the real vigil structure."""
     p = argparse.ArgumentParser(prog="hermes")
     p.add_argument("--version", "-V", action="store_true")
     p.add_argument("-p", "--profile", help="Profile name")
@@ -147,7 +147,7 @@ class TestProfileCompletion:
 
 
     def test_bash_profile_actions_complete_profile_names(self):
-        """After 'hermes profile use', complete with profile names."""
+        """After 'vigil profile use', complete with profile names."""
         out = generate_bash(_make_parser())
         # The profile case should have _hermes_profiles for name-taking actions
         lines = out.split("\n")

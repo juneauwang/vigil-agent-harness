@@ -1,13 +1,13 @@
-"""Tests for HERMES_HOME credential-file read blocking in file_safety.
+"""Tests for VIGIL_HOME credential-file read blocking in file_safety.
 
-Regression for https://github.com/NousResearch/hermes-agent/issues/17656 —
-``read_file`` was previously only sandboxed against ``HERMES_HOME`` itself,
+Regression for https://github.com/juneauwang/vigil-agent-harness —
+``read_file`` was previously only sandboxed against ``VIGIL_HOME`` itself,
 which left ``auth.json`` and ``.anthropic_oauth.json`` (plaintext provider
 keys + OAuth tokens) readable by the agent. A prompt-injection reaching
 ``read_file`` could exfiltrate active credentials.
 
 These tests verify that ``get_read_block_error`` returns a denial message
-for the credential stores while leaving arbitrary ``HERMES_HOME`` files
+for the credential stores while leaving arbitrary ``VIGIL_HOME`` files
 readable, and that the existing ``skills/.hub`` deny still applies.
 """
 
@@ -47,7 +47,7 @@ def _create(home: Path, rel: str | Path) -> Path:
 
 
 def test_arbitrary_hermes_home_file_not_blocked(fake_home):
-    """Non-credential files inside HERMES_HOME stay readable."""
+    """Non-credential files inside VIGIL_HOME stay readable."""
     from agent.file_safety import get_read_block_error
 
     safe = _create(fake_home, "session_log.txt")
@@ -194,7 +194,7 @@ def test_identically_named_hermes_files_outside_home_not_blocked(
     fake_home, tmp_path
 ):
     """Hermes-specific filenames (``auth.json``, ``mcp-tokens/``, ``google_oauth.json``)
-    outside HERMES_HOME must remain readable — the gate is per-location for
+    outside VIGIL_HOME must remain readable — the gate is per-location for
     those, not per-filename. ``.env`` is the exception: it's blocked anywhere
     on disk (see test_project_local_env_blocked) because the basename always
     means \"secret-bearing environment file\" regardless of directory."""
@@ -202,11 +202,11 @@ def test_identically_named_hermes_files_outside_home_not_blocked(
 
     project = tmp_path / "myproject"
     project.mkdir()
-    # auth.json outside HERMES_HOME — readable (per-location gate).
+    # auth.json outside VIGIL_HOME — readable (per-location gate).
     p = project / "auth.json"
     p.write_text("not secret here", encoding="utf-8")
     assert get_read_block_error(str(p)) is None, (
-        "auth.json outside HERMES_HOME should NOT be blocked"
+        "auth.json outside VIGIL_HOME should NOT be blocked"
     )
 
     google_oauth = project / "auth" / "google_oauth.json"
@@ -240,7 +240,7 @@ def test_config_yaml_not_blocked(fake_home):
 
 
 def test_profile_mode_blocks_root_credentials(tmp_path, monkeypatch):
-    """Under a profile, HERMES_HOME = <root>/profiles/<name>, but
+    """Under a profile, VIGIL_HOME = <root>/profiles/<name>, but
     <root>/auth.json must ALSO be blocked — credentials at root are
     inherited by every profile."""
     import agent.file_safety as fs

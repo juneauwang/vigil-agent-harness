@@ -58,7 +58,7 @@ def env_home(tmp_path, monkeypatch):
     (tmp_path / "config.yaml").write_text(
         CONFIG_TPL.format(env="test"), encoding="utf-8"
     )
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     hc._LOAD_CONFIG_CACHE.clear()
     banner._banner_state_cache = None
     yield tmp_path

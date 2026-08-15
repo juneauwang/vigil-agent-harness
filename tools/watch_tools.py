@@ -142,7 +142,7 @@ def check_watch_requirements() -> bool:
     """watch_digest 可用性门控：``ops.watch.enabled`` 显式 false → 关闭。
 
     缺省（无该键）→ 可用（工具只读本地 inbox，零网络 footprint）；与 prom
-    toolset 同策略：不注册进 _HERMES_CORE_TOOLS，用户显式启用 toolset 才有
+    toolset 同策略：不注册进 _VIGIL_CORE_TOOLS，用户显式启用 toolset 才有
     该工具。
     """
     return watch_enabled()

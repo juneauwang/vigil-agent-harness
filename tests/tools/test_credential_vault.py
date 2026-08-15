@@ -20,7 +20,7 @@ from tools import credential_vault as cv
 
 @pytest.fixture
 def vault_home(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     hc._LOAD_CONFIG_CACHE.clear()
     with cv._REGISTERED_LOCK:
         cv._REGISTERED.clear()

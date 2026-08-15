@@ -72,7 +72,7 @@ installer). Put sandbox options first and separate installer arguments with
 Install layout: `install.sh` picks its layout from `id -u` alone, so uid is what
 separates the two real-world Linux installs. By default the sandbox runs as an
 unprivileged `hermes` user, giving the layout most people have —
-$HERMES_HOME/hermes-agent plus a ~/.local/bin launcher. Pass --root for the FHS
+$VIGIL_HOME/hermes-agent plus a ~/.local/bin launcher. Pass --root for the FHS
 one. Both are worth testing; they differ in more than paths (root also relocates
 uv's Python to /usr/local/share for world-readability).
 
@@ -87,16 +87,16 @@ non-ignored untracked changes, the sandbox warns and creates a temporary local
 commit containing them; it never stages or commits the real worktree.
 
 Environment:
-  HERMES_DEV_SANDBOX_DIR    Sandbox directory name, relative to the repo root
+  VIGIL_DEV_SANDBOX_DIR    Sandbox directory name, relative to the repo root
                             (default: .hermes-sandbox).
 
 Examples:
   # create a sandbox, install this branch as `main`, and then drop to a shell,
-  # skipping `hermes setup` & the browser tools for speed.
+  # skipping `vigil setup` & the browser tools for speed.
   scripts/dev-sandbox.sh install --persistent -- --skip-setup --skip-browser
 
   # Install the official upstream main. You're dropped into a shell where
-  # you can run `hermes update`.
+  # you can run `vigil update`.
   scripts/dev-sandbox.sh install --persistent --from-main
 
 EOF
@@ -115,7 +115,7 @@ INSTALLER_PATH=""
 # reachable from main -- so "can a user two releases back still update?" is
 # expressible. --from-main is shorthand for refs/heads/main.
 INSTALL_REF=""
-UPSTREAM_URL="${HERMES_DEV_SANDBOX_UPSTREAM:-https://github.com/NousResearch/hermes-agent.git}"
+UPSTREAM_URL="${VIGIL_DEV_SANDBOX_UPSTREAM:-https://github.com/juneauwang/vigil-agent-harness"
 
 if [ "${1:-}" = install ]; then
   INSTALL_SHORTCUT=true
@@ -180,7 +180,7 @@ for dir in "$SEED_DIR" "$HTTP_ROOT"; do
   [ -z "$dir" ] || [ -d "$dir" ] || { echo "error: directory '$dir' does not exist" >&2; exit 1; }
 done
 
-GIT_ROOT="${HERMES_SANDBOX_SOURCE_ROOT:-$(git rev-parse --show-toplevel)}"
+GIT_ROOT="${VIGIL_SANDBOX_SOURCE_ROOT:-$(git rev-parse --show-toplevel)}"
 GIT_ROOT="$(cd "$GIT_ROOT" && pwd)"
 if [ "$INSTALL_SHORTCUT" = true ] && [ -z "$INSTALL_REF" ] && [ -z "$INSTALLER_PATH" ]; then
   INSTALLER_PATH="$GIT_ROOT/scripts/install.sh"
@@ -193,7 +193,7 @@ COMMIT="$(git -C "$GIT_ROOT" rev-parse --verify 'HEAD^{commit}')" || {
   echo "error: current folder has no HEAD commit" >&2
   exit 1
 }
-SANDBOX_DIR_NAME="${HERMES_DEV_SANDBOX_DIR:-.hermes-sandbox}"
+SANDBOX_DIR_NAME="${VIGIL_DEV_SANDBOX_DIR:-.hermes-sandbox}"
 PERSISTENT_ROOT="$GIT_ROOT/$SANDBOX_DIR_NAME"
 
 if [ "$DELETE" = true ]; then
@@ -266,16 +266,16 @@ if [ -n "$HTTP_ROOT" ]; then
   cp -a "$HTTP_ROOT/." "$SANDBOX_ROOT/root/http/"
 fi
 if [ "$INSTALL_SHORTCUT" = true ]; then
-  mkdir -p "$SANDBOX_ROOT/root/http/hermes-agent.nousresearch.com"
+  mkdir -p "$SANDBOX_ROOT/root/http/github.com/juneauwang/vigil-agent-harness"
   if [ -n "$INSTALL_REF" ]; then
     git -C "$UPSTREAM_REPO" show "$UPSTREAM_COMMIT:scripts/install.sh" \
-      > "$SANDBOX_ROOT/root/http/hermes-agent.nousresearch.com/install.sh"
+      > "$SANDBOX_ROOT/root/http/github.com/juneauwang/vigil-agent-harness/install.sh"
   else
-    cp -a "$INSTALLER_PATH" "$SANDBOX_ROOT/root/http/hermes-agent.nousresearch.com/install.sh"
+    cp -a "$INSTALLER_PATH" "$SANDBOX_ROOT/root/http/github.com/juneauwang/vigil-agent-harness/install.sh"
   fi
   set -- bash -c '
     set +e
-    curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash -s -- "$@"
+    curl -fsSL https://github.com/juneauwang/vigil-agent-harness | bash -s -- "$@"
     install_status=$?
     if [ "$install_status" -eq 0 ] && [ -f /work/promote-main ]; then
       next_main=$(cat /work/promote-main)
@@ -371,8 +371,8 @@ fi
     printf '%s:x:%s:\n' "$SANDBOX_USER" "$SANDBOX_GID"
   fi
 } > "$SANDBOX_ROOT/etc/group"
-# A user-level install writes the `hermes` launcher to ~/.local/bin and the
-# checkout to $HERMES_HOME; both live under the sandbox HOME, which is bound
+# A user-level install writes the `vigil` launcher to ~/.local/bin and the
+# checkout to $VIGIL_HOME; both live under the sandbox HOME, which is bound
 # from $SANDBOX_ROOT/home. bwrap maps our real uid to $SANDBOX_UID, so the
 # host-side ownership of that directory is what the sandbox sees as its own.
 printf 'hosts: files dns\n' > "$SANDBOX_ROOT/etc/nsswitch.conf"

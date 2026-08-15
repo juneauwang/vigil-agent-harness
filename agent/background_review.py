@@ -253,7 +253,7 @@ _SKILL_REVIEW_PROMPT = (
     "If you notice two existing skills that overlap, note it in your "
     "reply — the background curator handles consolidation at scale.\n\n"
     "Protected skills (DO NOT edit these):\n"
-    "  • Bundled skills (shipped with Hermes, e.g. 'hermes-agent').\n"
+    "  • Bundled skills (shipped with Vigil, e.g. 'hermes-agent').\n"
     "  • Hub-installed skills (installed via 'vigil skills install').\n"
     "  • Skills in skills.external_dirs (externally owned).\n"
     "  • PINNED skills (marked via 'vigil curator pin'). You are an "
@@ -358,7 +358,7 @@ _COMBINED_REVIEW_PROMPT = (
     "If you notice overlapping existing skills, mention it — the "
     "background curator handles consolidation.\n\n"
     "Protected skills (DO NOT edit these):\n"
-    "  • Bundled skills (shipped with Hermes, e.g. 'hermes-agent').\n"
+    "  • Bundled skills (shipped with Vigil, e.g. 'hermes-agent').\n"
     "  • Hub-installed skills (installed via 'vigil skills install').\n"
     "  • Skills in skills.external_dirs (externally owned).\n"
     "  • PINNED skills (marked via 'vigil curator pin'). Pin blocks "
@@ -641,7 +641,7 @@ def build_memory_write_metadata(
         ),
         "session_id": agent.session_id or "",
         "parent_session_id": agent._parent_session_id or "",
-        "platform": agent.platform or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
+        "platform": agent.platform or os.environ.get("VIGIL_SESSION_SOURCE", "cli"),
         "tool_name": "memory",
     }
     if task_id:

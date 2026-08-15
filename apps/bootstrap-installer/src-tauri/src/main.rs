@@ -1,4 +1,4 @@
-// Hermes Setup — process entrypoint. All logic lives in lib.rs so it can
+// Vigil Setup — process entrypoint. All logic lives in lib.rs so it can
 // be unit-tested as a library; this file just calls into it.
 //
 // The windows_subsystem attribute MUST live here on the binary crate

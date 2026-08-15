@@ -1,4 +1,4 @@
-# nix/hermes-agent.nix — Overridable Hermes Agent package
+# nix/hermes-agent.nix — Overridable Vigil Agent package
 #
 # callPackage auto-wires nixpkgs args; flake inputs are passed explicitly.
 # Users override via:
@@ -66,7 +66,7 @@ let
   };
 
   # Optional skills are NOT in the wheel (pythonSrc excludes them, see
-  # lib.nix) — the wrapper exposes them via HERMES_OPTIONAL_SKILLS, the
+  # lib.nix) — the wrapper exposes them via VIGIL_OPTIONAL_SKILLS, the
   # same mechanism Homebrew packaging uses.
   bundledOptionalSkills = lib.cleanSourceWith {
     src = ../optional-skills;
@@ -75,20 +75,20 @@ let
 
   # Import bundled plugins (memory, context_engine, platforms/*).  Keeping
   # them out of the Python site-packages keeps import semantics identical
-  # to a dev checkout — the loader reads them from HERMES_BUNDLED_PLUGINS.
+  # to a dev checkout — the loader reads them from VIGIL_BUNDLED_PLUGINS.
   bundledPlugins = lib.cleanSourceWith {
     src = ../plugins;
     filter = path: _type: !(lib.hasInfix "/__pycache__/" path);
   };
 
   # i18n locale catalogs (locales/*.yaml). Shipped into the store and pointed
-  # at by HERMES_BUNDLED_LOCALES so the wrapped binary always resolves human
+  # at by VIGIL_BUNDLED_LOCALES so the wrapped binary always resolves human
   # strings instead of raw i18n keys (#23943 / #27632 / #35374).
   bundledLocales = lib.cleanSource ../locales;
 
   # Shipped MCP catalog (optional-mcps/<name>/manifest.yaml). Same bare-data-dir
   # case as locales: not a Python package, so it's symlinked into the store and
-  # exposed via HERMES_OPTIONAL_MCPS.
+  # exposed via VIGIL_OPTIONAL_MCPS.
   bundledOptionalMcps = lib.cleanSourceWith {
     src = ../optional-mcps;
     filter = path: _type: !(lib.hasInfix "/__pycache__/" path);
@@ -185,21 +185,21 @@ stdenv.mkDerivation (finalAttrs: {
       (name: ''
         makeWrapper ${hermesVenv}/bin/${name} $out/bin/${name} \
           --suffix PATH : "${runtimePath}" \
-          --set HERMES_BUNDLED_SKILLS $out/share/hermes-agent/skills \
-          --set HERMES_OPTIONAL_SKILLS $out/share/hermes-agent/optional-skills \
-          --set HERMES_BUNDLED_PLUGINS $out/share/hermes-agent/plugins \
-          --set HERMES_BUNDLED_LOCALES $out/share/hermes-agent/locales \
-          --set HERMES_OPTIONAL_MCPS $out/share/hermes-agent/optional-mcps \
-          --set HERMES_WEB_DIST $out/share/hermes-agent/web_dist \
-          --set HERMES_TUI_DIR $out/ui-tui \
-          --set HERMES_PYTHON ${hermesVenv}/bin/python3 \
-          --set HERMES_NODE ${lib.getExe hermesNpmLib.nodejs}${
+          --set VIGIL_BUNDLED_SKILLS $out/share/hermes-agent/skills \
+          --set VIGIL_OPTIONAL_SKILLS $out/share/hermes-agent/optional-skills \
+          --set VIGIL_BUNDLED_PLUGINS $out/share/hermes-agent/plugins \
+          --set VIGIL_BUNDLED_LOCALES $out/share/hermes-agent/locales \
+          --set VIGIL_OPTIONAL_MCPS $out/share/hermes-agent/optional-mcps \
+          --set VIGIL_WEB_DIST $out/share/hermes-agent/web_dist \
+          --set VIGIL_TUI_DIR $out/ui-tui \
+          --set VIGIL_PYTHON ${hermesVenv}/bin/python3 \
+          --set VIGIL_NODE ${lib.getExe hermesNpmLib.nodejs}${
             # Fold the line continuation INTO the optionalString: a bare
             # `\` on the line above an empty expansion would dangle onto a
             # blank line, ending the makeWrapper command early and running
             # the next flag as its own shell command (`--suffix: command
             # not found`). Only reproduces when rev == null (dirty trees).
-            lib.optionalString (rev != null) " \\\n          --set HERMES_REVISION ${rev}"
+            lib.optionalString (rev != null) " \\\n          --set VIGIL_REVISION ${rev}"
           }${
             lib.optionalString (
               extraPythonPackages != [ ]
@@ -237,8 +237,8 @@ stdenv.mkDerivation (finalAttrs: {
       # `hermesDesktop` references `finalAttrs.finalPackage` (this whole
       # derivation, after all overrides are applied) so the desktop wrapper
       # can prepend its `/bin` to PATH.  The desktop's resolver step 4
-      # ("existing hermes on PATH") then picks up the fully wrapped
-      # `hermes` binary — venv with all deps, bundled skills/plugins,
+      # ("existing vigil on PATH") then picks up the fully wrapped
+      # `vigil` binary — venv with all deps, bundled skills/plugins,
       # runtime PATH (ripgrep/git/ffmpeg/etc).  No re-implementation
       # of the agent resolution in the desktop wrapper.
       hermesDesktop = callPackage ./desktop.nix {
@@ -247,7 +247,7 @@ stdenv.mkDerivation (finalAttrs: {
       };
 
       devShellHook = ''
-        export HERMES_PYTHON=${devPython}/bin/python3
+        export VIGIL_PYTHON=${devPython}/bin/python3
       '';
 
       devDeps =
@@ -262,7 +262,7 @@ stdenv.mkDerivation (finalAttrs: {
 
   meta = with lib; {
     description = "AI agent with advanced tool-calling capabilities";
-    homepage = "https://github.com/NousResearch/hermes-agent";
+    homepage = "https://github.com/juneauwang/vigil-agent-harness";
     mainProgram = "hermes";
     license = licenses.mit;
     platforms = platforms.unix;

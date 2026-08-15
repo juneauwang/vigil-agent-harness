@@ -13,7 +13,7 @@ and simply yields no finding):
 1. Running as root (POSIX uid 0).
 2. SSH daemon present with password authentication enabled.
 3. Running inside a container with no persistent volume mount over the
-   HERMES_HOME data dir (state is ephemeral — lost on container restart).
+   VIGIL_HOME data dir (state is ephemeral — lost on container restart).
 4. A network-accessible gateway listener (dashboard / API server) with no
    authentication configured.
 
@@ -52,7 +52,7 @@ def _running_as_root() -> Optional[str]:
     return (
         "Running as ROOT. The agent's terminal/file tools execute with full "
         "root privileges — a single prompt-injection or exposed endpoint is a "
-        "full host compromise. Run Hermes as an unprivileged user (or in a "
+        "full host compromise. Run Vigil as an unprivileged user (or in a "
         "sandboxed terminal backend / container with a non-root user)."
     )
 
@@ -116,7 +116,7 @@ def _in_container() -> bool:
     """Best-effort container detection (Docker / Podman / generic OCI)."""
     if os.path.exists("/.dockerenv"):
         return True
-    if os.environ.get("HERMES_DESKTOP_CHILD_PID"):
+    if os.environ.get("VIGIL_DESKTOP_CHILD_PID"):
         return False  # desktop child, not a server container
     try:
         cgroup = Path("/proc/1/cgroup").read_text(encoding="utf-8", errors="replace")
@@ -183,7 +183,7 @@ def _container_no_volume_mount(hermes_home: Optional[Path]) -> Optional[str]:
         f"Running in a container but the data dir ({home}) is NOT on a "
         "persistent volume mount — sessions, memory, skills, and API keys are "
         "ephemeral and lost on container restart. Mount a host volume over the "
-        "HERMES_HOME data directory."
+        "VIGIL_HOME data directory."
     )
 
 

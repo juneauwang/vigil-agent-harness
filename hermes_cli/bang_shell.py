@@ -69,11 +69,11 @@ def bang_shell_enabled() -> bool:
         def env_var_enabled(name, default=""):  # type: ignore[misc]
             return str(os.getenv(name, default)).strip().lower() in {"1", "true", "yes", "on"}
 
-    if env_var_enabled("HERMES_GATEWAY_SESSION"):
+    if env_var_enabled("VIGIL_GATEWAY_SESSION"):
         return False
-    if env_var_enabled("HERMES_CRON_SESSION"):
+    if env_var_enabled("VIGIL_CRON_SESSION"):
         return False
-    if (os.getenv("HERMES_SESSION_PLATFORM") or "").strip():
+    if (os.getenv("VIGIL_SESSION_PLATFORM") or "").strip():
         return False
     return True
 
@@ -126,7 +126,7 @@ def check_bang_approval(command: str) -> dict:
 
 
 def _bang_env() -> dict:
-    """Environment for a bang command, with Hermes-managed secrets filtered.
+    """Environment for a bang command, with Vigil-managed secrets filtered.
 
     The CLI process holds every configured provider API key in ``os.environ``.
     A bang command is user-typed, but it can still be a third-party script, so
@@ -197,7 +197,7 @@ def run_bang_command(
         emit(f"!: command timed out after {timeout}s")
         return 124
     except KeyboardInterrupt:
-        # Ctrl+C interrupts the command, not the Hermes session.
+        # Ctrl+C interrupts the command, not the Vigil session.
         proc.kill()
         emit("!: interrupted")
         return 130

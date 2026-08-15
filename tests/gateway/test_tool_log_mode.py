@@ -1,7 +1,7 @@
 """Tests for the `log` tool_progress mode (salvage of #3459 / #3458).
 
 `display.tool_progress: log` keeps the chat silent and appends tool-call
-lines to ~/.hermes/logs/tool_calls.log via write_tool_log's rotating handler.
+lines to ~/.vigil/logs/tool_calls.log via write_tool_log's rotating handler.
 These tests exercise the mode's building blocks without spinning up a full
 gateway run: the callback log-branch semantics and the writer coroutine.
 """

@@ -43,7 +43,7 @@ def test_scoped_value_wins_over_environ(monkeypatch):
 def test_multiplexed_scope_miss_does_not_leak_environ(monkeypatch, tmp_path):
     """The #67027 repro: envless named profile must NOT inherit the other
     profile's credential from process environ during a multiplexed turn."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     monkeypatch.setenv("OPENAI_API_KEY", "sk-other-profile")
     with _scope({}, multiplex=True):  # profile has no .env / empty scope
         assert get_env_value("OPENAI_API_KEY") is None
@@ -70,10 +70,10 @@ def test_multiplex_active_unscoped_read_fails_closed(monkeypatch):
 
 
 def test_dotenv_fallback_still_works(monkeypatch, tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir(parents=True)
     (home / ".env").write_text("MY_TEST_KEY=from-dotenv\n", encoding="utf-8")
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.delenv("MY_TEST_KEY", raising=False)
     with _scope(None, multiplex=False):
         assert get_env_value("MY_TEST_KEY") == "from-dotenv"

@@ -37,10 +37,10 @@ def test_help_groups_vigil_commands_first():
     out = proc.stdout
 
     assert "Vigil 命令：" in out
-    assert re.search(r"继承命令（来自 hermes，\d+ 个）", out)
+    assert re.search(r"继承命令（来自上游，\d+ 个）", out)
     assert "完整列表与说明见：vigil --help-all" in out
     # 分组顺序：Vigil 组在继承折叠行之前。
-    assert out.index("Vigil 命令：") < out.index("继承命令（来自 hermes")
+    assert out.index("Vigil 命令：") < out.index("继承命令（来自上游")
     # Vigil 运维命令在组内醒目列出。
     for name in ("setup", "ops-init", "topo-discover", "vssh", "watch"):
         assert re.search(rf"^\s+{re.escape(name)}\s", out, re.M), name
@@ -56,7 +56,7 @@ def test_help_folds_inherited_descriptions():
     # 继承命令的完整说明不展开（gateway 的 description 只在 --help-all 出现）。
     assert "Messaging gateway management" not in out
     # 但命令名仍在折叠行内（功能保留，可调用）。
-    assert re.search(r"继承命令（来自 hermes，\d+ 个）：.*\bgateway\b", out)
+    assert re.search(r"继承命令（来自上游，\d+ 个）：.*\bgateway\b", out)
 
 
 def test_help_all_lists_inherited_commands():
@@ -66,7 +66,7 @@ def test_help_all_lists_inherited_commands():
     out = proc.stdout
     assert "Messaging gateway management" in out
     # 批次二十二：--help-all 与 -h 同用分组渲染，继承命令有分组标题且逐条展开。
-    assert re.search(r"继承命令（来自 hermes，\d+ 个）：", out)
+    assert re.search(r"继承命令（来自上游，\d+ 个）：", out)
     for name in ("gateway", "secrets", "egress", "cron"):
         assert re.search(rf"^\s+{re.escape(name)}\s", out, re.M), name
 

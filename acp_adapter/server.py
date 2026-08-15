@@ -191,9 +191,9 @@ def _named_custom_provider_catalogs() -> list[tuple[str, str, list[tuple[str, st
     return catalogs
 
 try:
-    from hermes_cli import __version__ as HERMES_VERSION
+    from hermes_cli import __version__ as VIGIL_VERSION
 except Exception:
-    HERMES_VERSION = "0.0.0"
+    VIGIL_VERSION = "0.0.0"
 
 # Thread pool for running AIAgent (synchronous) in parallel.
 _executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="acp-agent")
@@ -699,7 +699,7 @@ class HermesACPAgent(acp.Agent):
     def _build_model_state(self, state: SessionState) -> SessionModelState | None:
         """Return authenticated providers and their models for ACP clients.
 
-        The shared Vigil inventory is also used by ``hermes model``, the TUI,
+        The shared Vigil inventory is also used by ``vigil model``, the TUI,
         and the dashboard. Keeping ACP on that substrate prevents its selector
         from silently collapsing to the current provider's curated list.
         """
@@ -1157,7 +1157,7 @@ class HermesACPAgent(acp.Agent):
 
         return InitializeResponse(
             protocol_version=acp.PROTOCOL_VERSION,
-            agent_info=Implementation(name="hermes-agent", version=HERMES_VERSION),
+            agent_info=Implementation(name="hermes-agent", version=VIGIL_VERSION),
             agent_capabilities=AgentCapabilities(
                 load_session=True,
                 prompt_capabilities=PromptCapabilities(image=True),
@@ -1254,7 +1254,7 @@ class HermesACPAgent(acp.Agent):
         first preserved tail message's real content. Without a wire flag,
         ACP frontends render all of these as ordinary turns.
 
-        Two distinct keys under ``_meta.hermes`` (ACP's extensibility
+        Two distinct keys under ``_meta.vigil`` (ACP's extensibility
         channel), so clients cannot accidentally hide real content:
 
         * ``compactionSummary: true`` — the entire chunk is the handoff
@@ -1835,13 +1835,13 @@ class HermesACPAgent(acp.Agent):
         # thread — setting it here would write to the event-loop thread's TLS,
         # not the executor's. Interactive routing uses a contextvar in
         # tools.approval (set_hermes_interactive_context) rather than
-        # os.environ["HERMES_INTERACTIVE"], so concurrent executor workers can't
+        # os.environ["VIGIL_INTERACTIVE"], so concurrent executor workers can't
         # race on a process-global flag — one session's restore can't drop
         # another onto the non-interactive auto-approve path mid-run
         # (GHSA-96vc-wcxf-jjff). The contextvar write is isolated by the
         # contextvars.copy_context() wrapper around the executor call below.
         # ACP's conn.request_permission maps cleanly to the interactive
-        # callback shape — not the gateway-queue HERMES_EXEC_ASK path,
+        # callback shape — not the gateway-queue VIGIL_EXEC_ASK path,
         # which requires a notify_cb registered in _gateway_notify_cbs.
         previous_approval_cb = None
         interactive_token = None
@@ -1850,7 +1850,7 @@ class HermesACPAgent(acp.Agent):
 
         def _run_agent() -> dict:
             nonlocal previous_approval_cb, interactive_token, edit_approval_token, previous_session_id
-            # Bind HERMES_SESSION_KEY for this session so per-session caches
+            # Bind VIGIL_SESSION_KEY for this session so per-session caches
             # (e.g. the interactive sudo password cache in tools.terminal_tool)
             # scope to the ACP session rather than leaking across sessions
             # that land on the same reused executor thread. This call runs
@@ -1866,10 +1866,10 @@ class HermesACPAgent(acp.Agent):
                 # line reports (agent/prompt_builder.py -> resolve_agent_cwd).
                 # Without it the prompt advertises the global Vigil workspace
                 # while the tools are rooted at the client's project, so the
-                # model emits absolute paths under ~/.hermes/workspace and the
+                # model emits absolute paths under ~/.vigil/workspace and the
                 # edit silently lands outside the editor's workspace.
                 # cron_session="" explicitly marks this as a non-cron context,
-                # masking any leaked process-global HERMES_CRON_SESSION (#37968).
+                # masking any leaked process-global VIGIL_CRON_SESSION (#37968).
                 session_tokens = set_session_vars(
                     session_key=session_id, session_id=session_id, cwd=state.cwd,
                     cron_session="",
@@ -1902,8 +1902,8 @@ class HermesACPAgent(acp.Agent):
             # the new task so clients can render a per-session board). Save
             # and restore around the agent call so a re-used executor thread
             # never leaks one session's id into the next session's tools.
-            previous_session_id = os.environ.get("HERMES_SESSION_ID")
-            os.environ["HERMES_SESSION_ID"] = session_id
+            previous_session_id = os.environ.get("VIGIL_SESSION_ID")
+            os.environ["VIGIL_SESSION_ID"] = session_id
             try:
                 result = agent.run_conversation(
                     user_message=user_content,
@@ -1919,11 +1919,11 @@ class HermesACPAgent(acp.Agent):
                 # Restore the interactive contextvar for this context.
                 if interactive_token is not None:
                     reset_hermes_interactive_context(interactive_token)
-                # Restore HERMES_SESSION_ID symmetrically.
+                # Restore VIGIL_SESSION_ID symmetrically.
                 if previous_session_id is None:
-                    os.environ.pop("HERMES_SESSION_ID", None)
+                    os.environ.pop("VIGIL_SESSION_ID", None)
                 else:
-                    os.environ["HERMES_SESSION_ID"] = previous_session_id
+                    os.environ["VIGIL_SESSION_ID"] = previous_session_id
                 if approval_cb:
                     try:
                         from tools import terminal_tool as _terminal_tool
@@ -1951,7 +1951,7 @@ class HermesACPAgent(acp.Agent):
             pre_turn_hermes_id = getattr(state.agent, "session_id", None)
             # Wrap the executor call in a fresh copy of the current context so
             # concurrent ACP sessions on the shared ThreadPoolExecutor don't
-            # stomp on each other's ContextVar writes (HERMES_SESSION_KEY in
+            # stomp on each other's ContextVar writes (VIGIL_SESSION_KEY in
             # particular — used by the interactive sudo password cache scope).
             ctx = contextvars.copy_context()
             result = await loop.run_in_executor(_executor, ctx.run, _run_agent)
@@ -2433,7 +2433,7 @@ class HermesACPAgent(acp.Agent):
         return f"Queued for the next turn. ({depth} queued)"
 
     def _cmd_version(self, args: str, state: SessionState) -> str:
-        return f"Vigil v{HERMES_VERSION}"
+        return f"Vigil v{VIGIL_VERSION}"
 
     # ---- Model switching (ACP protocol method) -------------------------------
 

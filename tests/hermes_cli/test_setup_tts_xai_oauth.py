@@ -12,12 +12,12 @@ def test_run_xai_oauth_login_from_setup_does_not_hijack_active_provider(
 
     Regression: `_run_xai_oauth_login_from_setup` used to call
     `_update_config_for_provider("xai-oauth")` (and token save flipped
-    `active_provider`), so `hermes setup tts` OAuth login hijacked the main
+    `active_provider`), so `vigil setup tts` OAuth login hijacked the main
     chat provider.
     """
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
 
     auth_path = hermes_home / "auth.json"
     auth_path.write_text(

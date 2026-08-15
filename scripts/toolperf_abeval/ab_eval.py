@@ -2,7 +2,7 @@
 """Hard A/B evaluation for core-toolset changes: baseline vs fixes.
 
 Runs a battery of error-inducing tasks (each derived from a waste class
-measured in the production session DB) through `hermes chat` twice — once per
+measured in the production session DB) through `vigil chat` twice — once per
 arm — and scores every run from its NeMo Relay ATOF trace plus wall clock:
 
   - llm_calls (turns), tool_calls, tool_errors, retry_after_error
@@ -18,15 +18,15 @@ Usage:
 
 Environment:
   ABEVAL_ROOT    working/results root   (default: ./abeval-workspace)
-  ABEVAL_HOME    HERMES_HOME for runs   (default: $ABEVAL_ROOT/home)
-                 Must be a configured Hermes home with credentials for the
+  ABEVAL_HOME    VIGIL_HOME for runs   (default: $ABEVAL_ROOT/home)
+                 Must be a configured Vigil home with credentials for the
                  models under test. See README.md for a minimal setup.
 
 Results append to $ABEVAL_ROOT/results/<model>/<arm>/meta.jsonl (resume-safe:
 completed run_ids are skipped). ATOF traces land beside the meta file.
 
 This is the harness used for the August 2026 core-toolset performance batch
-(tracker: NousResearch/hermes-agent#77056).
+(tracker: juneauwang/vigil-agent-harness#77056).
 """
 import json
 import os
@@ -168,11 +168,11 @@ def run(arm: str, model: str, reps: int, pythonpath: str, only=None):
             env = dict(os.environ)
             env.update({
                 "PYTHONPATH": pythonpath,
-                "HERMES_HOME": str(HOME),
-                "HERMES_NEMO_RELAY_ATOF_ENABLED": "1",
-                "HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY": str(atof.parent),
-                "HERMES_NEMO_RELAY_ATOF_FILENAME": atof.name,
-                "HERMES_NEMO_RELAY_ATOF_MODE": "overwrite",
+                "VIGIL_HOME": str(HOME),
+                "VIGIL_NEMO_RELAY_ATOF_ENABLED": "1",
+                "VIGIL_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY": str(atof.parent),
+                "VIGIL_NEMO_RELAY_ATOF_FILENAME": atof.name,
+                "VIGIL_NEMO_RELAY_ATOF_MODE": "overwrite",
             })
             q = TASKS[name].replace("{WORK}", str(work))
             t0 = time.time()

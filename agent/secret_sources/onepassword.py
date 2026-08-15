@@ -2,7 +2,7 @@
 
 Resolve provider credentials from 1Password ``op://vault/item/field``
 references at process startup so they don't have to live in plaintext in
-``~/.hermes/.env``.
+``~/.vigil/.env``.
 
 Design summary
 --------------
@@ -22,17 +22,17 @@ Design summary
   same point in startup as the Bitwarden source).
 * Authentication is whatever the user's ``op`` CLI already uses — a
   service-account token (``OP_SERVICE_ACCOUNT_TOKEN``) for headless boxes,
-  or a desktop/interactive session (``OP_SESSION_*``).  Hermes never
+  or a desktop/interactive session (``OP_SESSION_*``).  Vigil never
   authenticates on the user's behalf; it shells out to an already-trusted,
   already-authenticated CLI.
 * Failures NEVER block startup.  A missing ``op`` binary, expired auth, a
   bad reference, or a permission error each surface a one-line warning and
-  Hermes continues with whatever credentials ``.env`` already had.
+  Vigil continues with whatever credentials ``.env`` already had.
 
 The atomic-write / ``0600`` / TTL cache mechanics are shared with the other
 backends via :mod:`agent.secret_sources._cache` — successful, complete pulls
 are cached in-process and on disk under ``<hermes_home>/cache/op_cache.json``
-so back-to-back short-lived ``hermes`` invocations don't re-shell ``op`` for
+so back-to-back short-lived ``vigil`` invocations don't re-shell ``op`` for
 every reference.  The disk file holds only resolved secret *values*; auth
 material is fingerprinted, never stored.
 """
@@ -108,7 +108,7 @@ _OP_ENV_ALLOWLIST = (
 # Cache
 # ---------------------------------------------------------------------------
 
-# In-process cache.  The key folds in str(home_path) so a HERMES_HOME switch
+# In-process cache.  The key folds in str(home_path) so a VIGIL_HOME switch
 # inside one long-lived process (e.g. the gateway) can't return another
 # profile's secrets from L1.  The disk layer omits home from its serialized
 # key because the file already lives under the home dir (see _disk_key_str).
@@ -251,7 +251,7 @@ def _op_child_env(token_value: str) -> Dict[str, str]:
         if key.startswith("OP_SESSION_"):
             env[key] = val
     # `op` reads OP_SERVICE_ACCOUNT_TOKEN regardless of which env var the user
-    # configured Hermes to source it from, so normalize to that name here.
+    # configured Vigil to source it from, so normalize to that name here.
     if token_value:
         env["OP_SERVICE_ACCOUNT_TOKEN"] = token_value
     env["NO_COLOR"] = "1"
@@ -665,7 +665,7 @@ def _classify_op_error(message: str) -> ErrorKind:
 def clear_caches(home_path: Optional[Path] = None) -> None:
     """Drop in-process AND disk caches.
 
-    Used after a token rotation (`hermes secrets onepassword token`) so
+    Used after a token rotation (`vigil secrets onepassword token`) so
     the next startup resolves fresh with the new credential instead of
     serving values cached under the old token's fingerprint.
     """

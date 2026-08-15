@@ -7,7 +7,7 @@ from types import SimpleNamespace
 def test_postprocess_adds_agent_visible_image_for_active_ssh_env(monkeypatch, tmp_path):
     from tools import image_generation_tool
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     image_dir = hermes_home / "cache" / "images"
     image_dir.mkdir(parents=True)
     image_path = image_dir / "xai_grok-imagine-image_test.jpg"
@@ -24,7 +24,7 @@ def test_postprocess_adds_agent_visible_image_for_active_ssh_env(monkeypatch, tm
         _sync_manager=FakeSyncManager(),
     )
 
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
     monkeypatch.setattr(image_generation_tool, "_active_terminal_env", lambda task_id: env)
 
     raw = json.dumps({"success": True, "image": str(image_path)})
@@ -44,7 +44,7 @@ def test_concurrent_image_results_preserve_shared_remote_sync_state(monkeypatch,
     from tools import image_generation_tool
     from tools.environments import file_sync
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     image_dir = hermes_home / "cache" / "images"
     image_dir.mkdir(parents=True)
     first_image = image_dir / "first.png"
@@ -81,7 +81,7 @@ def test_concurrent_image_results_preserve_shared_remote_sync_state(monkeypatch,
         _sync_manager=sync_manager,
     )
 
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
     monkeypatch.setattr(file_sync, "_credential_host_paths", lambda: set())
     monkeypatch.setattr(image_generation_tool, "_active_terminal_env", lambda _task_id: env)
 
@@ -116,7 +116,7 @@ def test_concurrent_image_results_preserve_shared_remote_sync_state(monkeypatch,
 def test_handle_image_generate_postprocesses_plugin_result(monkeypatch, tmp_path):
     from tools import image_generation_tool
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     image_dir = hermes_home / "cache" / "images"
     image_dir.mkdir(parents=True)
     image_path = image_dir / "plugin.png"
@@ -130,7 +130,7 @@ def test_handle_image_generate_postprocesses_plugin_result(monkeypatch, tmp_path
         seen_task_ids.append(task_id)
         return env
 
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
     monkeypatch.setattr(image_generation_tool, "_active_terminal_env", fake_active_env)
     monkeypatch.setattr(
         image_generation_tool,

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Let the agent react to a message with an emoji in the Hermes desktop app.
+"""Let the agent react to a message with an emoji in the Vigil desktop app.
 
 The conversational counterpart to the user's tapback: the same reaction store,
 the same one-per-author semantics, just written with ``author="agent"``.
 
-Gated on ``HERMES_DESKTOP`` (like the other GUI affordances) so it costs nothing
+Gated on ``VIGIL_DESKTOP`` (like the other GUI affordances) so it costs nothing
 on every other surface — the platform adapters already expose reactions through
 ``send_message(action="react")``, and this is the desktop's equivalent.
 
@@ -34,8 +34,8 @@ def _open_session_db():
 def react_to_message_tool(emoji: str, message_row_id=None, messages_back=None) -> str:
     """Attach (or with an empty ``emoji`` retract) the agent's reaction."""
     emoji = (emoji or "").strip()
-    session_key = get_session_env("HERMES_SESSION_KEY", "") or get_session_env(
-        "HERMES_SESSION_ID", ""
+    session_key = get_session_env("VIGIL_SESSION_KEY", "") or get_session_env(
+        "VIGIL_SESSION_ID", ""
     )
 
     if not session_key:
@@ -92,11 +92,11 @@ def react_to_message_tool(emoji: str, message_row_id=None, messages_back=None) -
 def check_react_requirements() -> bool:
     """Desktop GUI only, and opt-in.
 
-    HERMES_DESKTOP is set on the gateway the app spawns; the feature itself is
+    VIGIL_DESKTOP is set on the gateway the app spawns; the feature itself is
     off by default and enabled from Settings → Appearance (the desktop mirrors
     the toggle into ``display.message_reactions``).
     """
-    if not env_var_enabled("HERMES_DESKTOP"):
+    if not env_var_enabled("VIGIL_DESKTOP"):
         return False
     try:
         from hermes_cli.config import load_config_readonly

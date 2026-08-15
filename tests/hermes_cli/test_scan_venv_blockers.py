@@ -99,7 +99,7 @@ def test_redact_short_flags_not_redacted() -> None:
 # ---------------------------------------------------------------------------
 # _is_pausable_gateway — the gateway exemption
 #
-# `hermes-setup` always invokes `hermes update --yes --gateway`, whose
+# `hermes-setup` always invokes `vigil update --yes --gateway`, whose
 # `_pause_windows_gateways_for_update()` stops running gateways itself. The
 # Desktop preflight must therefore not report gateway launcher/worker chains
 # as blockers — doing so aborts the handoff before the component that can

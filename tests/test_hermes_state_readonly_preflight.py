@@ -7,7 +7,7 @@ from deep inside ``_init_schema`` — naming no file and no fix.
 
 ``preflight_db_writability`` now runs before the first connection:
 
-- files inside the Hermes home tree are repaired with ``chmod u+rw``
+- files inside the Vigil home tree are repaired with ``chmod u+rw``
   (the safe scope — chmod fails on files the user doesn't own);
 - anything else fails fast with an error naming the exact file and the
   exact ``chmod`` command;
@@ -36,10 +36,10 @@ pytestmark = [
 
 @pytest.fixture()
 def hermes_home(tmp_path, monkeypatch):
-    """Isolated HERMES_HOME so the repair scope covers tmp DBs."""
-    home = tmp_path / ".hermes"
+    """Isolated VIGIL_HOME so the repair scope covers tmp DBs."""
+    home = tmp_path / ".vigil"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     return home
 
 

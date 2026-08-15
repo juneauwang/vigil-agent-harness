@@ -22,11 +22,11 @@ The ``spectrum-ts`` SDK (run by the Node sidecar) authenticates to Spectrum
 Cloud with ``(id, projectSecret)`` — the same ``id`` used in Dashboard API
 paths — which we persist as ``PHOTON_PROJECT_ID`` for the runtime.
 
-Credential storage mirrors every other Hermes channel:
+Credential storage mirrors every other Vigil channel:
 
-    * runtime SDK creds  -> ``~/.hermes/.env``  (``PHOTON_PROJECT_ID`` =
+    * runtime SDK creds  -> ``~/.vigil/.env``  (``PHOTON_PROJECT_ID`` =
       project id, ``PHOTON_PROJECT_SECRET``) via ``save_env_value``
-    * management metadata -> ``~/.hermes/auth.json`` under
+    * management metadata -> ``~/.vigil/auth.json`` under
       ``credential_pool.photon`` (device token),
       ``credential_pool.photon_project`` (dashboard id, spectrum id, name), and
       ``credential_pool.photon_user`` (operator number + assigned text line)
@@ -50,7 +50,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 try:
     import httpx
-except ImportError:  # pragma: no cover - httpx is a hermes dependency
+except ImportError:  # pragma: no cover - httpx is a vigil dependency
     httpx = None  # type: ignore[assignment]
 
 from agent.secret_scope import UnscopedSecretError as _UnscopedSecretError
@@ -90,15 +90,15 @@ class PhotonDashboardAuthError(RuntimeError):
 # endpoint — an unregistered client_id is rejected with
 # `400 {"error":"invalid_client"}`.  Use Photon's published CLI device
 # client (matches `CLI_CLIENT_ID` in photon-hq/cli) until the dashboard API
-# registers Hermes as its own client_id.
+# registers Vigil as its own client_id.
 DEFAULT_CLIENT_ID = "photon-cli"
 DEFAULT_SCOPE = "openid profile email"
 
 DEFAULT_DASHBOARD_HOST = "https://app.photon.codes"
 DEFAULT_SPECTRUM_HOST = "https://spectrum.photon.codes"
 
-# Default name of the project Hermes provisions for the operator.
-DEFAULT_PROJECT_NAME = "Hermes Agent"
+# Default name of the project Vigil provisions for the operator.
+DEFAULT_PROJECT_NAME = "Vigil Agent"
 
 # Polling defaults per RFC 8628.  Photon overrides via `interval` /
 # `expires_in` in the device-code response — those win.
@@ -112,12 +112,12 @@ E164_RE = re.compile(r"^\+[1-9]\d{6,14}$")
 # auth.json helpers — share the file with the rest of hermes-agent.
 
 def _auth_json_path() -> Path:
-    """Resolve ``~/.hermes/auth.json`` honouring the active Hermes profile."""
+    """Resolve ``~/.vigil/auth.json`` honouring the active Vigil profile."""
     try:
         from hermes_constants import get_hermes_home
         return Path(get_hermes_home()) / "auth.json"
     except Exception:
-        return Path(os.path.expanduser("~/.hermes")) / "auth.json"
+        return Path(os.path.expanduser("~/.vigil")) / "auth.json"
 
 
 def _load_auth() -> Dict[str, Any]:
@@ -249,7 +249,7 @@ def check_photon_token_valid(token: str) -> bool:
 def load_project_credentials() -> Tuple[Optional[str], Optional[str]]:
     """Return the runtime SDK creds ``(spectrum_project_id, project_secret)``.
 
-    Precedence: process env (``~/.hermes/.env`` is loaded into the gateway's
+    Precedence: process env (``~/.vigil/.env`` is loaded into the gateway's
     environment at startup) wins, then ``auth.json`` for offline / status
     use.  This is the pair the Node sidecar feeds to ``spectrum-ts``; the id
     is the unified project id (dashboard id == spectrumProjectId).
@@ -301,7 +301,7 @@ def store_project_credentials(
 ) -> None:
     """Persist project credentials to both .env (runtime) and auth.json (mgmt).
 
-    The runtime SDK creds land in ``~/.hermes/.env`` via the same
+    The runtime SDK creds land in ``~/.vigil/.env`` via the same
     ``save_env_value`` helper every other channel uses, so the gateway picks
     them up from the environment with zero adapter changes.  A copy of the
     non-secret ids (plus the secret, for offline ``status``) is written to
@@ -354,7 +354,7 @@ def store_user_numbers(
 
 
 def _persist_runtime_env(spectrum_project_id: str, project_secret: str) -> None:
-    """Write the SDK creds to ``~/.hermes/.env`` (canonical runtime store).
+    """Write the SDK creds to ``~/.vigil/.env`` (canonical runtime store).
 
     Isolated in its own helper so the secret value flows straight into
     ``save_env_value`` without ever being bound to a printable local in a

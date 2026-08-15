@@ -166,7 +166,7 @@ class TestProdGateScenarioFlags:
             captured.update(kwargs)
             return "deny"
 
-        monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+        monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
         result = mod.check_all_command_guards(
             "systemctl restart myapp", "local",
             approval_callback=approval_callback,
@@ -190,7 +190,7 @@ class TestProdGateScenarioFlags:
             captured.update(kwargs)
             return "deny"
 
-        monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+        monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
         result = mod.check_all_command_guards(
             "git push", "local",
             approval_callback=approval_callback,

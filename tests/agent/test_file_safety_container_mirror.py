@@ -1,9 +1,9 @@
 """Tests for the container-context sandbox-mirror guard (#32049 follow-up).
 
 Brian's shape-based guard (#32213) catches paths that carry the full
-``…/sandboxes/<backend>/<task>/home/.hermes/…`` prefix. This covers the
+``…/sandboxes/<backend>/<task>/home/.vigil/…`` prefix. This covers the
 complementary inner-container case: when file tools execute inside Docker,
-the bind-mount strips that prefix and the guard sees plain ``/root/.hermes/…``.
+the bind-mount strips that prefix and the guard sees plain ``/root/.vigil/…``.
 The root:root ownership on the divergent SOUL.md in #32049 confirms this
 is the primary failure mode.
 """
@@ -20,10 +20,10 @@ class TestClassifyContainerMirrorTarget:
 
         result = classify_container_mirror_target(
             "/root/.hermes/profiles/group1/SOUL.md",
-            mirror_prefix="/root/.hermes",
+            mirror_prefix="/root/.vigil",
         )
         assert result is not None
-        assert result["mirror_root"].replace("\\", "/").endswith("root/.hermes")
+        assert result["mirror_root"].replace("\\", "/").endswith("root/.vigil")
         assert result["inner_path"] == "profiles/group1/SOUL.md"
 
     @pytest.mark.parametrize("inner", [
@@ -35,7 +35,7 @@ class TestClassifyContainerMirrorTarget:
 
         result = classify_container_mirror_target(
             f"/root/.hermes/{inner}",
-            mirror_prefix="/root/.hermes",
+            mirror_prefix="/root/.vigil",
         )
         assert result is not None
         assert result["inner_path"] == inner
@@ -48,7 +48,7 @@ class TestGetContainerMirrorWarning:
 
         warn = get_container_mirror_warning(
             "/root/.hermes/profiles/group1/SOUL.md",
-            mirror_prefix="/root/.hermes",
+            mirror_prefix="/root/.vigil",
         )
         assert warn is not None
         assert "profiles/group1/SOUL.md" in warn
@@ -65,7 +65,7 @@ class TestOrthogonality:
         path = "/root/.hermes/profiles/group1/SOUL.md"
 
         assert classify_container_mirror_target(path) is None  # no context
-        assert classify_container_mirror_target(path, mirror_prefix="/root/.hermes") is not None
+        assert classify_container_mirror_target(path, mirror_prefix="/root/.vigil") is not None
 
 
 class TestFileToolIntegration:
@@ -77,7 +77,7 @@ class TestFileToolIntegration:
         monkeypatch.setattr(
             file_tools,
             "_get_container_mirror_prefix_for_task",
-            lambda task_id: "/root/.hermes",
+            lambda task_id: "/root/.vigil",
         )
 
         warning = file_tools._check_cross_profile_path(

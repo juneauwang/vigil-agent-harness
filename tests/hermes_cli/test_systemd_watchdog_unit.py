@@ -40,7 +40,7 @@ def test_system_unit_reads_watchdog_from_target_home(tmp_path, monkeypatch):
         "gateway:\n  systemd_watchdog_seconds: 75\n",
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(caller_home))
+    monkeypatch.setenv("VIGIL_HOME", str(caller_home))
     monkeypatch.setattr(
         gateway_cli,
         "_system_service_identity",

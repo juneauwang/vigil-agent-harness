@@ -14,8 +14,8 @@ logger = logging.getLogger(__name__)
 
 _POOL_PROVIDER = "xai-oauth"
 
-# xAI's public API is OpenAI-compatible for the endpoints Hermes commonly
-# uses. The Responses endpoint is included because Hermes' native xAI runtime
+# xAI's public API is OpenAI-compatible for the endpoints Vigil commonly
+# uses. The Responses endpoint is included because Vigil' native xAI runtime
 # uses codex_responses mode.
 _ALLOWED_PATHS: FrozenSet[str] = frozenset(
     {
@@ -29,7 +29,7 @@ _ALLOWED_PATHS: FrozenSet[str] = frozenset(
 
 
 class XAIGrokAdapter(UpstreamAdapter):
-    """Proxy upstream for xAI Grok via Hermes-managed OAuth credentials."""
+    """Proxy upstream for xAI Grok via Vigil-managed OAuth credentials."""
 
     auth_hint = "vigil auth add xai-oauth --type oauth"
 

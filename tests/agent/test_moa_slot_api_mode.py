@@ -93,7 +93,7 @@ def test_run_reference_passes_slot_extra_body(monkeypatch):
 
 def test_moa_aggregator_merges_slot_extra_body_with_caller_override(tmp_path, monkeypatch):
     """Aggregator calls should merge slot defaults without duplicate kwargs."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     (home / "config.yaml").write_text(
         """
@@ -109,7 +109,7 @@ moa:
 """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
 
     from agent import moa_loop
 

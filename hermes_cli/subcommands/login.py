@@ -1,4 +1,4 @@
-"""``hermes login`` subcommand parser.
+"""``vigil login`` subcommand parser.
 
 Extracted verbatim from ``hermes_cli/main.py:main()`` (god-file Phase 2).
 Handler injected to avoid importing ``main``.
@@ -12,21 +12,21 @@ from typing import Callable
 def build_login_parser(subparsers, *, cmd_login: Callable) -> None:
     """Attach the deprecated ``login`` subcommand to ``subparsers``.
 
-    ``hermes login`` was removed in favor of ``hermes auth`` / ``hermes model``
+    ``vigil login`` was removed in favor of ``vigil auth`` / ``vigil model``
     (the runtime handler in ``hermes_cli/auth.py::login_command`` just prints a
     deprecation message and exits).  The subparser is kept registered so that
-    old scripts/aliases invoking ``hermes login [--flags]`` still receive the
+    old scripts/aliases invoking ``vigil login [--flags]`` still receive the
     actionable deprecation message rather than an argparse ``invalid choice:
     'login'`` error — but:
 
     - The subparser is registered WITHOUT a ``help=`` kwarg so the row is
-      omitted from ``hermes --help`` (argparse only lists subcommands that
+      omitted from ``vigil --help`` (argparse only lists subcommands that
       have a help string).  This hides a command that no longer works (#24756)
       without the ``help=argparse.SUPPRESS`` ``==SUPPRESS==`` leak that
       argparse emits for a top-level subparser on Python 3.12+.
     - ``--provider`` accepts ANY value (no ``choices=``) so that, e.g.,
-      ``hermes login --provider anthropic`` reaches the deprecation handler and
-      gets pointed at ``hermes model`` instead of crashing in argparse with
+      ``vigil login --provider anthropic`` reaches the deprecation handler and
+      gets pointed at ``vigil model`` instead of crashing in argparse with
       ``invalid choice: 'anthropic'`` before the handler can run.
     """
     login_parser = subparsers.add_parser(

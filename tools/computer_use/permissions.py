@@ -7,7 +7,7 @@ something different on each:
   * macOS — explicit TCC grants (Accessibility + Screen Recording). cua-driver
     reports/requests them via ``permissions status`` / ``permissions grant``.
     The grants attach to cua-driver's OWN identity (``com.trycua.driver`` /
-    the installed ``CuaDriver.app``), NOT Hermes — so no Hermes entitlement is
+    the installed ``CuaDriver.app``), NOT Vigil — so no Vigil entitlement is
     involved, and ``grant`` launches CuaDriver via LaunchServices so the macOS
     dialog is attributed correctly.
   * Windows — no TCC toggles; the UIAccess worker (``cua-driver-uia.exe``) may
@@ -18,7 +18,7 @@ something different on each:
 The universal signal on every platform is ``cua-driver doctor --json`` (binary
 integrity + platform support). ``computer_use_status`` folds that together with
 the macOS permission detail into one payload for the desktop card, the
-``hermes computer-use permissions`` CLI, and ``/api/tools/computer-use/status``.
+``vigil computer-use permissions`` CLI, and ``/api/tools/computer-use/status``.
 """
 
 from __future__ import annotations

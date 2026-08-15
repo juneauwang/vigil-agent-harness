@@ -43,7 +43,7 @@ class TestGoogleWorkspaceCredentialFiles:
         )
 
     def test_entries_are_registered_when_files_exist(self, tmp_path):
-        hermes_home = tmp_path / ".hermes"
+        hermes_home = tmp_path / ".vigil"
         hermes_home.mkdir()
         (hermes_home / "google_token.json").write_text("{}")
         (hermes_home / "google_client_secret.json").write_text("{}")
@@ -60,7 +60,7 @@ class TestGoogleWorkspaceCredentialFiles:
             fm = _parse_frontmatter(content)
             entries = fm.get("required_credential_files", [])
 
-            with patch.dict(os.environ, {"HERMES_HOME": str(hermes_home)}):
+            with patch.dict(os.environ, {"VIGIL_HOME": str(hermes_home)}):
                 missing = register_credential_files(entries)
 
             assert missing == [], f"Unexpected missing files: {missing}"

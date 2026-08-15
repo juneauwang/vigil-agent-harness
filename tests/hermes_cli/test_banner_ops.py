@@ -20,7 +20,7 @@ def _render(state=None, *, model="gpt-5", cwd="/srv/ops", session_id="ops-001"):
             ops_enabled=False, env="", matrix_enabled=False,
             topology_enabled=False, runbook_enabled=False,
             entity_count=0, runbook_count=0,
-            profile="default", home="/home/ops/.hermes",
+            profile="default", home="/home/ops/.vigil",
         )
     with (
         patch.object(banner, "_load_banner_state", return_value=state),

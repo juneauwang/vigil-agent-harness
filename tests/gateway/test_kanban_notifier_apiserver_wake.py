@@ -6,7 +6,7 @@ Covers the wrong-session-wake / silent-loss fixes:
 * api_server subscriptions wake the creator's REAL session via the
   /v1/chat/completions self-post (raw task.session_id), never via
   handle_message (which would run under a build_session_key()-derived key
-  that never matches the raw X-Hermes-Session-Id session real turns use).
+  that never matches the raw X-Vigil-Session-Id session real turns use).
 """
 
 import asyncio
@@ -105,8 +105,8 @@ def test_apiserver_sub_wakes_real_session_via_self_post(tmp_path, monkeypatch):
     """An api_server subscription wakes the creator's REAL session by
     self-posting with the task's raw session_id — never handle_message (which
     would run the wake under a build_session_key()-derived key that can't
-    match the raw X-Hermes-Session-Id session)."""
-    monkeypatch.setenv("HERMES_KANBAN_DB", str(tmp_path / "apiserver.db"))
+    match the raw X-Vigil-Session-Id session)."""
+    monkeypatch.setenv("VIGIL_KANBAN_DB", str(tmp_path / "apiserver.db"))
     kb.init_db()
     tid = _create_completed_subscription(
         "api_server", "raw-sid-123", session_id="raw-sid-123",

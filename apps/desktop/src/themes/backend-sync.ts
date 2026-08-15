@@ -1,7 +1,7 @@
 /**
- * Live skin sync from the Hermes backend.
+ * Live skin sync from the Vigil backend.
  *
- * The backend resolves the active skin (built-in or `$HERMES_HOME/skins/*.yaml`)
+ * The backend resolves the active skin (built-in or `$VIGIL_HOME/skins/*.yaml`)
  * and announces it on `gateway.ready` / `skin.changed`, and answers `config.get
  * skin` with the same payload. `ingestBackendSkin` folds that into the desktop:
  *
@@ -12,7 +12,7 @@
  *      `$pendingSkinApply`, which the ThemeProvider drains through `setTheme`.
  *
  * `gateway.ready` seeds the baseline WITHOUT applying, so a fresh connect never
- * stomps the user's persisted desktop theme; only a genuine name change (Hermes
+ * stomps the user's persisted desktop theme; only a genuine name change (Vigil
  * authoring/activating a skin from a prompt, or `/skin` elsewhere) repaints.
  */
 

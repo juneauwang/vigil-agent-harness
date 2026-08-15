@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def _get_flush_dir():
-    """Return the pending-messages flush directory under the active HERMES_HOME."""
+    """Return the pending-messages flush directory under the active VIGIL_HOME."""
     from hermes_constants import get_hermes_home
 
     flush_dir = get_hermes_home() / "pending_messages"

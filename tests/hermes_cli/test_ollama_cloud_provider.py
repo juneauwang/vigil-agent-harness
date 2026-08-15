@@ -90,7 +90,7 @@ class TestOllamaCloudModelCatalog:
         """provider_model_ids('ollama-cloud') should call fetch_ollama_cloud_models()."""
         from hermes_cli.models import provider_model_ids
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
 
         mock_mdev = {
@@ -116,7 +116,7 @@ class TestOllamaCloudModelPicker:
         """Ollama Cloud should show non-zero model count in provider picker."""
         from hermes_cli.model_switch import list_authenticated_providers
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
 
         mock_mdev = {
@@ -153,7 +153,7 @@ class TestOllamaCloudMergedDiscovery:
         """Live API models appear first, models.dev additions fill gaps."""
         from hermes_cli.models import fetch_ollama_cloud_models
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
 
         mock_mdev = {
@@ -180,7 +180,7 @@ class TestOllamaCloudMergedDiscovery:
         """Without API key, only models.dev results are returned."""
         from hermes_cli.models import fetch_ollama_cloud_models
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
 
         mock_mdev = {
@@ -267,9 +267,9 @@ class TestOllamaCloudAgentInit:
 
 class TestOllamaCloudProvidersNew:
     def test_overlay_exists(self):
-        from hermes_cli.providers import HERMES_OVERLAYS
-        assert "ollama-cloud" in HERMES_OVERLAYS
-        overlay = HERMES_OVERLAYS["ollama-cloud"]
+        from hermes_cli.providers import VIGIL_OVERLAYS
+        assert "ollama-cloud" in VIGIL_OVERLAYS
+        overlay = VIGIL_OVERLAYS["ollama-cloud"]
         assert overlay.transport == "openai_chat"
         assert overlay.base_url_env_var == "OLLAMA_BASE_URL"
 
@@ -301,7 +301,7 @@ class TestOllamaCloudSuffixStripping:
         """Live API returns clean ID; mdev has :cloud variant — result has exactly one entry."""
         from hermes_cli.models import fetch_ollama_cloud_models
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         monkeypatch.setenv("OLLAMA_API_KEY", "test-key")
 
         mock_mdev = {
@@ -325,7 +325,7 @@ class TestOllamaCloudSuffixStripping:
         """Model IDs without :cloud / -cloud suffix are passed through unchanged."""
         from hermes_cli.models import fetch_ollama_cloud_models
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
 
         mock_mdev = {

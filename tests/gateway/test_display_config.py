@@ -192,8 +192,8 @@ class TestConfigMigration:
         }
         config_path.write_text(yaml.dump(config), encoding="utf-8")
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-        # Re-import to pick up the new HERMES_HOME
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        # Re-import to pick up the new VIGIL_HOME
         import importlib
         import hermes_cli.config as cfg_mod
         importlib.reload(cfg_mod)

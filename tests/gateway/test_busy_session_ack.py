@@ -104,7 +104,7 @@ class TestBusySessionAck:
         """Rapid Telegram text follow-ups in queue mode must not merge."""
         from gateway.run import GatewayRunner
 
-        monkeypatch.setenv("HERMES_TELEGRAM_FOLLOWUP_GRACE_SECONDS", "3.0")
+        monkeypatch.setenv("VIGIL_TELEGRAM_FOLLOWUP_GRACE_SECONDS", "3.0")
 
         runner, _sentinel = _make_runner()
         runner._busy_input_mode = "queue"
@@ -194,7 +194,7 @@ class TestBusySessionAck:
         """busy_input_mode='steer' injects via agent.steer() and skips queueing."""
         import gateway.run as _gr
 
-        monkeypatch.delenv("HERMES_GATEWAY_BUSY_STEER_ACK_ENABLED", raising=False)
+        monkeypatch.delenv("VIGIL_GATEWAY_BUSY_STEER_ACK_ENABLED", raising=False)
         monkeypatch.setattr(_gr, "_load_gateway_config", lambda: {})
         runner, sentinel = _make_runner()
         runner._busy_input_mode = "steer"
@@ -230,7 +230,7 @@ class TestBusySessionAck:
         """A busy voice follow-up is transcribed and steered, never queued."""
         import gateway.run as _gr
 
-        monkeypatch.delenv("HERMES_GATEWAY_BUSY_STEER_ACK_ENABLED", raising=False)
+        monkeypatch.delenv("VIGIL_GATEWAY_BUSY_STEER_ACK_ENABLED", raising=False)
         monkeypatch.setattr(_gr, "_load_gateway_config", lambda: {})
         runner, _sentinel = _make_runner()
         runner._busy_input_mode = "steer"

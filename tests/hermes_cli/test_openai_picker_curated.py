@@ -3,7 +3,7 @@
 Bug 1 — OpenAI picker dumped the raw ``/v1/models`` catalog
     ``provider_model_ids("openai")`` hit ``api.openai.com/v1/models`` and
     returned the full 120+ entry catalog (embeddings, whisper, tts, dall-e,
-    moderation, gpt-3.5, …). The ``hermes model`` CLI shows only the curated
+    moderation, gpt-3.5, …). The ``vigil model`` CLI shows only the curated
     agentic list. The picker now intersects the live default-endpoint catalog
     with the curated list (preserving curated order) so both surfaces match.
     Custom OpenAI-compatible endpoints (proxies, gateways) keep the live list
@@ -24,13 +24,13 @@ from unittest.mock import patch
 import pytest
 
 from hermes_cli import models as M
-from hermes_cli.providers import HERMES_OVERLAYS
+from hermes_cli.providers import VIGIL_OVERLAYS
 
 
 # --- Bug 2: overlay no longer lists OPENAI_API_KEY --------------------------
 
 def test_openrouter_overlay_does_not_list_openai_api_key():
-    overlay = HERMES_OVERLAYS["openrouter"]
+    overlay = VIGIL_OVERLAYS["openrouter"]
     assert "OPENAI_API_KEY" not in overlay.extra_env_vars
 
 

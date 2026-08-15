@@ -120,7 +120,7 @@ class TestBuildAnthropicClient:
 
     def test_disables_sdk_retries_for_api_key(self):
         """#26293: the SDK's default max_retries=2 ignores Retry-After and
-        double-retries inside hermes's outer loop. We delegate retry entirely
+        double-retries inside vigil's outer loop. We delegate retry entirely
         to the outer loop, so the client must be built with max_retries=0."""
         with patch("agent.anthropic_adapter._anthropic_sdk") as mock_sdk:
             build_anthropic_client("sk-ant-api03-something")
@@ -1431,7 +1431,7 @@ class TestConvertToolsToAnthropicDedup:
 
     Anthropic rejects requests with duplicate tool names.  This guard converts
     a hard failure into a warning log.  See:
-    https://github.com/NousResearch/hermes-agent/issues/18478
+    https://github.com/juneauwang/vigil-agent-harness
     """
 
     def _make_openai_tool(self, name: str) -> dict:

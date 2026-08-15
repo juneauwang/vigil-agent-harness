@@ -1,4 +1,4 @@
-"""CLI subcommand: ``hermes pets <subcommand>``.
+"""CLI subcommand: ``vigil pets <subcommand>``.
 
 Thin shell around :mod:`agent.pet`.  Browses the public petdex gallery,
 installs pets into the profile's ``pets/`` directory, selects the active

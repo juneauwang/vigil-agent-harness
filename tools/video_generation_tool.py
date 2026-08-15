@@ -12,8 +12,8 @@ video generation provider. Mirrors the ``image_generate`` design:
 - Each provider lives under ``plugins/video_gen/<name>/``.
 
 The tool itself is intentionally backend-agnostic and ships **no in-tree
-provider** — turn on a backend by enabling a plugin (``hermes plugins
-enable video_gen/<name>``) and selecting it in ``hermes tools`` → Video
+provider** — turn on a backend by enabling a plugin (``vigil plugins
+enable video_gen/<name>``) and selecting it in ``vigil tools`` → Video
 Generation.
 
 Unified surface
@@ -413,7 +413,7 @@ def _handle_video_generate(args: Dict[str, Any], **_kw: Any) -> str:
 #
 # Memoization: model_tools.get_tool_definitions() keys its cache on
 # config.yaml mtime, so when the user changes provider/model via
-# `hermes tools` or `/skills`, the schema rebuilds automatically.
+# `vigil tools` or `/skills`, the schema rebuilds automatically.
 
 
 _GENERIC_DESCRIPTION = (

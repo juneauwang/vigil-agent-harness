@@ -43,7 +43,7 @@ def _make_fake_bundle(root) -> str:
 
 def test_spawn_builds_command_with_bundle_via_env(monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "_which", lambda *names: "/usr/bin/pwsh")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_home"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes_home"))
     bundle = _make_fake_bundle(tmp_path)
     monkeypatch.setenv("PSES_BUNDLE_PATH", bundle)
 
@@ -63,7 +63,7 @@ def test_spawn_builds_command_with_bundle_via_env(monkeypatch, tmp_path):
 
 def test_bundle_path_init_override_not_leaked_into_init_options(monkeypatch, tmp_path):
     monkeypatch.setattr(srv, "_which", lambda *names: "/usr/bin/pwsh")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_home"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes_home"))
     monkeypatch.delenv("PSES_BUNDLE_PATH", raising=False)
     bundle = _make_fake_bundle(tmp_path)
 

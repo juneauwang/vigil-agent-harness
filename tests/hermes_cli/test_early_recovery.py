@@ -76,7 +76,7 @@ def _run_lifecycle_subprocess(tmp_path: Path, *, repair: bool) -> subprocess.Com
     env = {
         **os.environ,
         "PYTHONPATH": str(REPO_ROOT),
-        "HERMES_HOME": str(hermes_home),
+        "VIGIL_HOME": str(hermes_home),
     }
     return subprocess.run(
         [sys.executable, str(script)],

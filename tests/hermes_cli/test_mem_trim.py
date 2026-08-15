@@ -162,7 +162,7 @@ def test_config_cooldown_controls_rate_limit(monkeypatch):
 def test_legacy_environment_switch_does_not_control_behavior(monkeypatch):
     trim = Mock(return_value=1)
     monkeypatch.setattr(mem_trim, "_malloc_trim", trim)
-    monkeypatch.setenv("HERMES_DISABLE_MEMORY_TRIM", "1")
+    monkeypatch.setenv("VIGIL_DISABLE_MEMORY_TRIM", "1")
     monkeypatch.setattr(
         "hermes_cli.config.load_config_readonly",
         lambda: {"context": {"memory_trim": {"enabled": True}}},

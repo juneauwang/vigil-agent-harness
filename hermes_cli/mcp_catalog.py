@@ -2,8 +2,8 @@
 
 Mirrors the optional-skills/ pattern: each catalog entry lives under
 ``optional-mcps/<name>/manifest.yaml`` and ships disabled. Users discover
-entries via ``hermes mcp catalog`` or the interactive ``hermes mcp picker``,
-and install them with ``hermes mcp install <name>`` (or by toggling in the
+entries via ``vigil mcp catalog`` or the interactive ``vigil mcp picker``,
+and install them with ``vigil mcp install <name>`` (or by toggling in the
 picker, which flows them through any required env/OAuth setup).
 
 Catalog policy:
@@ -15,9 +15,9 @@ Catalog policy:
   package launchers (``uvx pkg==X``, ``npx pkg@X``), full commit SHAs for
   git installs, and the pinned release should be at least 2 weeks old at
   pin time. MCPs are never
-  auto-updated; users explicitly re-run ``hermes mcp install <name>`` to
+  auto-updated; users explicitly re-run ``vigil mcp install <name>`` to
   pull a new manifest version after a repo update.
-- Secrets prompted at install time go to ``~/.hermes/.env`` (the
+- Secrets prompted at install time go to ``~/.vigil/.env`` (the
   .env-is-for-secrets rule). Non-secret env vars also go to .env to keep
   one credential store.
 
@@ -84,7 +84,7 @@ class TransportSpec:
     version: Optional[str] = None  # informational, pinned
     # Static environment variables for the stdio subprocess (e.g. telemetry
     # opt-outs, mode flags). NOT for secrets — credentials go through
-    # auth.env so they are prompted for and land in ~/.hermes/.env.
+    # auth.env so they are prompted for and land in ~/.vigil/.env.
     env: Dict[str, str] = field(default_factory=dict)
 
 
@@ -135,7 +135,7 @@ class CatalogError(Exception):
 
 
 def _catalog_root() -> Path:
-    """Return the optional-mcps/ directory shipped with this Hermes install."""
+    """Return the optional-mcps/ directory shipped with this Vigil install."""
     # Prefer the env-var override / packaged location; fall back to the repo's
     # optional-mcps/ next to the package (source checkout).
     return get_optional_mcps_dir(Path(__file__).parent.parent / "optional-mcps")
@@ -171,7 +171,7 @@ def _parse_manifest(path: Path) -> CatalogEntry:
     if mv != _MANIFEST_VERSION:
         raise CatalogError(
             f"{path}: manifest_version {mv!r} unsupported "
-            f"(this Hermes understands version {_MANIFEST_VERSION})"
+            f"(this Vigil understands version {_MANIFEST_VERSION})"
         )
 
     name = data.get("name") or ""
@@ -300,7 +300,7 @@ def list_catalog() -> List[CatalogEntry]:
     Invalid manifests are skipped silently (CI tests catch them at PR time).
     Manifests with a future ``manifest_version`` are also skipped, but the
     skip is surfaced via :func:`catalog_diagnostics` so the picker / catalog
-    UIs can tell the user their Hermes is out of date.
+    UIs can tell the user their Vigil is out of date.
     """
     root = _catalog_root()
     if not root.exists():
@@ -335,8 +335,8 @@ def catalog_diagnostics() -> List[tuple]:
 
     Returns a list of ``(entry_name, kind, message)`` tuples where ``kind``
     is one of:
-      - ``future_manifest`` — manifest_version is newer than this Hermes
-        understands. Update Hermes to install this entry.
+      - ``future_manifest`` — manifest_version is newer than this Vigil
+        understands. Update Vigil to install this entry.
       - ``invalid`` — manifest is malformed in some other way (caught by
         CI for shipped manifests; user-modified manifests can hit this).
     """
@@ -404,7 +404,7 @@ def _run_bootstrap(cwd: Path, commands: List[str]) -> None:
 
 
 def _do_git_install(entry: CatalogEntry) -> Path:
-    """Clone the entry's repo into ``~/.hermes/mcp-installs/<name>`` and run
+    """Clone the entry's repo into ``~/.vigil/mcp-installs/<name>`` and run
     bootstrap commands. Returns the install directory."""
     assert entry.install is not None and entry.install.type == "git"
     install = entry.install
@@ -482,7 +482,7 @@ def _expand_install_dir(value: str, install_dir: Optional[Path]) -> str:
 
 def _prompt_env_vars(specs: List[EnvVarSpec]) -> Dict[str, str]:
     """Walk the env spec list, prompting the user for each. Writes secrets and
-    non-secrets alike to ~/.hermes/.env via save_env_value()."""
+    non-secrets alike to ~/.vigil/.env via save_env_value()."""
     collected: Dict[str, str] = {}
     for spec in specs:
         existing = get_env_value(spec.name)
@@ -607,7 +607,7 @@ def _apply_tool_selection(
     Probe-fail path:
       - If manifest declares ``tools.default_enabled`` → apply directly.
       - Otherwise → leave config with no filter (all on when reachable).
-      - Either way, point the user at ``hermes mcp configure <name>``.
+      - Either way, point the user at ``vigil mcp configure <name>``.
     """
     print()
     print(color(f"  Probing '{entry.name}' for available tools...", Colors.CYAN))
@@ -701,7 +701,7 @@ def _apply_tool_selection(
         # Everything selected — clear filter for the cleanest config shape.
         # NOTE: this means any tools the server adds later (e.g. a future MCP
         # version) will also be auto-enabled. To pin to the current set,
-        # the user can re-run `hermes mcp configure <name>` and unselect a
+        # the user can re-run `vigil mcp configure <name>` and unselect a
         # tool to switch back to include-mode.
         _write_tools_include(entry.name, None)
         print(color(
@@ -756,7 +756,7 @@ def install_entry(entry: CatalogEntry, *, enable: bool = True) -> None:
     elif entry.auth.type == "oauth":
         if entry.auth.provider:
             # Case 2: provider-mediated (Google, GitHub, etc.). We rely on
-            # the existing `hermes auth <provider>` flow. Surface guidance
+            # the existing `vigil auth <provider>` flow. Surface guidance
             # here rather than auto-running it — keeps the catalog install
             # decoupled from provider-auth lifecycle.
             print(color(
@@ -797,7 +797,7 @@ def install_entry(entry: CatalogEntry, *, enable: bool = True) -> None:
     print(color(
         f"  ✓ Installed '{entry.name}' "
         f"({'enabled' if enable else 'disabled'}). "
-        f"Start a new Hermes session to load its tools.",
+        f"Start a new Vigil session to load its tools.",
         Colors.GREEN,
     ))
     if entry.post_install:

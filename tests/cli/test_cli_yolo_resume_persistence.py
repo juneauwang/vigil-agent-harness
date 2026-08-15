@@ -1,4 +1,4 @@
-"""Regression tests: YOLO mode persists across ``hermes --resume``.
+"""Regression tests: YOLO mode persists across ``vigil --resume``.
 
 Pre-fix bug: the ``/yolo`` toggle (and the process-start ``--yolo`` flag)
 lived only in the in-memory ``tools.approval._session_yolo`` set / the
@@ -33,7 +33,7 @@ SESSION_ID = "yolo_persist_session"
 
 @pytest.fixture(autouse=True)
 def _hermetic_yolo(monkeypatch):
-    monkeypatch.delenv("HERMES_YOLO_MODE", raising=False)
+    monkeypatch.delenv("VIGIL_YOLO_MODE", raising=False)
     monkeypatch.setattr(approval_module, "_YOLO_MODE_FROZEN", False)
     approval_module.clear_session(SESSION_ID)
     yield

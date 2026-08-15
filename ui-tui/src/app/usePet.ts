@@ -103,7 +103,7 @@ export interface PetRender {
  * - **cells** (everywhere else): truecolor half-block grids painted by Ink.
  *
  * A steady poll keeps it reactive to config changes made elsewhere (`/pet`, the
- * picker, `hermes pets select`) so adopting/switching/disabling takes effect
+ * picker, `vigil pets select`) so adopting/switching/disabling takes effect
  * live. The frame cache is keyed by `slug:state` so a switch re-pulls cleanly.
  */
 export function usePet(): PetRender {

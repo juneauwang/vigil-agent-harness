@@ -34,7 +34,7 @@ describe('model-status-label', () => {
     expect(formatModelStatusLabel('openai/gpt-5.5', { reasoningEffort: 'medium' })).toBe('GPT-5.5 · Med')
     expect(formatModelStatusLabel('openai/gpt-5.5')).toBe('GPT-5.5 · Med')
     // No session-level effort → the configured profile default is advertised,
-    // not Hermes' built-in medium.
+    // not Vigil' built-in medium.
     expect(formatModelStatusLabel('openai/gpt-5.5', { defaultEffort: 'high' })).toBe('GPT-5.5 · High')
     // An explicit session effort still wins over the profile default.
     expect(formatModelStatusLabel('openai/gpt-5.5', { defaultEffort: 'high', reasoningEffort: 'low' })).toBe(

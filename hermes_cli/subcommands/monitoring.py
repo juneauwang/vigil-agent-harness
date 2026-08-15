@@ -1,4 +1,4 @@
-"""``hermes monitoring`` subcommand parser.
+"""``vigil monitoring`` subcommand parser.
 
 Gateway monitoring control and inspection. ``status`` shows whether the
 gateway health & diagnostics export is enabled, where it points, and the

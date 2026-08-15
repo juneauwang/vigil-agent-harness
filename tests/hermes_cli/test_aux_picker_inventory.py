@@ -1,7 +1,7 @@
 """Auxiliary-task pickers share one provider-inventory substrate.
 
-Every aux picker (``hermes model`` → Configure auxiliary models, the
-``hermes tools`` vision picker, and any future one) must route through
+Every aux picker (``vigil model`` → Configure auxiliary models, the
+``vigil tools`` vision picker, and any future one) must route through
 ``hermes_cli.inventory.build_aux_picker_rows()`` so it shows the same
 provider universe as ``/model``.
 
@@ -51,13 +51,13 @@ CONFIG = {
 
 @pytest.fixture
 def configured_home(tmp_path, monkeypatch):
-    """A HERMES_HOME with one ``providers:`` entry and one legacy
+    """A VIGIL_HOME with one ``providers:`` entry and one legacy
     ``custom_providers:`` entry, both credentialled via env."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     (home / "config.yaml").write_text(yaml.safe_dump(CONFIG))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
     monkeypatch.setenv("MYLLM_KEY", "sk-mine")
     monkeypatch.setenv("LEGACY_KEY", "sk-legacy")

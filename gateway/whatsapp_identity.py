@@ -25,7 +25,7 @@ Public helpers:
 Plugins that need per-sender behaviour on WhatsApp (role-based routing,
 per-contact authorisation, policy gating in a gateway hook) should use
 ``canonical_whatsapp_identifier`` so their bookkeeping lines up with
-Hermes' own session keys.
+Vigil' own session keys.
 """
 
 from __future__ import annotations
@@ -122,7 +122,7 @@ def expand_whatsapp_aliases(identifier: str) -> Set[str]:
     """Resolve WhatsApp phone/LID aliases via bridge session mapping files.
 
     Returns the set of all identifiers transitively reachable through the
-    bridge's ``$HERMES_HOME/whatsapp/session/lid-mapping-*.json`` files,
+    bridge's ``$VIGIL_HOME/whatsapp/session/lid-mapping-*.json`` files,
     starting from ``identifier``. The result always includes the
     normalized input itself, so callers can safely ``in`` check against
     the return value without a separate fallback branch.
@@ -184,11 +184,11 @@ def canonical_whatsapp_identifier(identifier: str) -> str:
     (numeric-preferred) alias as the canonical identity.
     :func:`gateway.session.build_session_key` uses this for both WhatsApp
     DM chat_ids and WhatsApp group participant_ids, so callers get the
-    same session-key identity Hermes itself uses.
+    same session-key identity Vigil itself uses.
 
     Plugins that need per-sender behaviour (role-based routing,
     authorisation, per-contact policy) should use this so their
-    bookkeeping lines up with Hermes' session bookkeeping even when
+    bookkeeping lines up with Vigil' session bookkeeping even when
     the bridge reshuffles aliases.
 
     Returns an empty string if ``identifier`` normalizes to empty. If no

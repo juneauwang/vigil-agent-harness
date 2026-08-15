@@ -14,7 +14,7 @@ from gateway.session import SessionSource, build_session_key
 
 @pytest.fixture(autouse=True)
 def _isolated_active_session_registry(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
 
 
 class _FakeAdapter:
@@ -113,7 +113,7 @@ def test_new_session_gets_clean_error_at_active_session_limit(monkeypatch):
         result = asyncio.run(runner._handle_message(event))
 
     assert result == (
-        "Hermes is at the active session limit (1/1). "
+        "Vigil is at the active session limit (1/1). "
         "Try again when another session finishes."
     )
     assert new_key not in runner._running_agents

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""OpenClaw -> Hermes migration helper.
+"""OpenClaw -> Vigil migration helper.
 
 This script migrates the parts of an OpenClaw user footprint that map cleanly
-into Hermes Agent, archives selected unmapped docs for manual review, and
+into Vigil Agent, archives selected unmapped docs for manual review, and
 reports exactly what was skipped and why.
 """
 
@@ -47,7 +47,7 @@ WORKSPACE_INSTRUCTIONS_FILENAME = "AGENTS" + ".md"
 MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     "soul": {
         "label": "SOUL.md",
-        "description": "Import the OpenClaw persona file into Hermes.",
+        "description": "Import the OpenClaw persona file into Vigil.",
     },
     "workspace-agents": {
         "label": "Workspace instructions",
@@ -55,11 +55,11 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "memory": {
         "label": "MEMORY.md",
-        "description": "Import long-term memory entries into Hermes memories.",
+        "description": "Import long-term memory entries into Vigil memories.",
     },
     "user-profile": {
         "label": "USER.md",
-        "description": "Import user profile entries into Hermes memories.",
+        "description": "Import user profile entries into Vigil memories.",
     },
     "messaging-settings": {
         "label": "Messaging settings",
@@ -71,51 +71,51 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "command-allowlist": {
         "label": "Command allowlist",
-        "description": "Merge OpenClaw exec approval patterns into Hermes command_allowlist.",
+        "description": "Merge OpenClaw exec approval patterns into Vigil command_allowlist.",
     },
     "skills": {
         "label": "User skills",
-        "description": "Copy OpenClaw skills into ~/.hermes/skills/openclaw-imports/.",
+        "description": "Copy OpenClaw skills into ~/.vigil/skills/openclaw-imports/.",
     },
     "tts-assets": {
         "label": "TTS assets",
-        "description": "Copy compatible workspace TTS assets into ~/.hermes/tts/.",
+        "description": "Copy compatible workspace TTS assets into ~/.vigil/tts/.",
     },
     "discord-settings": {
         "label": "Discord settings",
-        "description": "Import Discord bot token and allowlist into Hermes .env.",
+        "description": "Import Discord bot token and allowlist into Vigil .env.",
     },
     "slack-settings": {
         "label": "Slack settings",
-        "description": "Import Slack bot/app tokens and allowlist into Hermes .env.",
+        "description": "Import Slack bot/app tokens and allowlist into Vigil .env.",
     },
     "whatsapp-settings": {
         "label": "WhatsApp settings",
-        "description": "Import WhatsApp allowlist into Hermes .env.",
+        "description": "Import WhatsApp allowlist into Vigil .env.",
     },
     "signal-settings": {
         "label": "Signal settings",
-        "description": "Import Signal account, HTTP URL, and allowlist into Hermes .env.",
+        "description": "Import Signal account, HTTP URL, and allowlist into Vigil .env.",
     },
     "provider-keys": {
         "label": "Provider API keys",
-        "description": "Import model provider API keys into Hermes .env (requires --migrate-secrets).",
+        "description": "Import model provider API keys into Vigil .env (requires --migrate-secrets).",
     },
     "model-config": {
         "label": "Default model",
-        "description": "Import the default model setting into Hermes config.yaml.",
+        "description": "Import the default model setting into Vigil config.yaml.",
     },
     "tts-config": {
         "label": "TTS configuration",
-        "description": "Import TTS provider and voice settings into Hermes config.yaml.",
+        "description": "Import TTS provider and voice settings into Vigil config.yaml.",
     },
     "shared-skills": {
         "label": "Shared skills",
-        "description": "Copy shared OpenClaw skills from ~/.openclaw/skills/ into Hermes.",
+        "description": "Copy shared OpenClaw skills from ~/.openclaw/skills/ into Vigil.",
     },
     "daily-memory": {
         "label": "Daily memory files",
-        "description": "Merge daily memory entries from workspace/memory/ into Hermes MEMORY.md.",
+        "description": "Merge daily memory entries from workspace/memory/ into Vigil MEMORY.md.",
     },
     "archive": {
         "label": "Archive unmapped docs",
@@ -123,7 +123,7 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "mcp-servers": {
         "label": "MCP servers",
-        "description": "Import MCP server definitions from OpenClaw into Hermes config.yaml.",
+        "description": "Import MCP server definitions from OpenClaw into Vigil config.yaml.",
     },
     "plugins-config": {
         "label": "Plugins configuration",
@@ -139,7 +139,7 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "agent-config": {
         "label": "Agent defaults and multi-agent setup",
-        "description": "Import agent defaults (compaction, context, thinking) into Hermes config. Archive multi-agent list.",
+        "description": "Import agent defaults (compaction, context, thinking) into Vigil config. Archive multi-agent list.",
     },
     "gateway-config": {
         "label": "Gateway configuration",
@@ -147,11 +147,11 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "session-config": {
         "label": "Session configuration",
-        "description": "Import session reset policies (daily/idle) into Hermes session_reset config.",
+        "description": "Import session reset policies (daily/idle) into Vigil session_reset config.",
     },
     "full-providers": {
         "label": "Full model provider definitions",
-        "description": "Import custom model providers (baseUrl, apiType, headers) into Hermes custom_providers.",
+        "description": "Import custom model providers (baseUrl, apiType, headers) into Vigil custom_providers.",
     },
     "deep-channels": {
         "label": "Deep channel configuration",
@@ -159,15 +159,15 @@ MIGRATION_OPTION_METADATA: Dict[str, Dict[str, str]] = {
     },
     "browser-config": {
         "label": "Browser configuration",
-        "description": "Import browser automation settings into Hermes config.yaml.",
+        "description": "Import browser automation settings into Vigil config.yaml.",
     },
     "tools-config": {
         "label": "Tools configuration",
-        "description": "Import tool settings (exec timeout, sandbox, web search) into Hermes config.yaml.",
+        "description": "Import tool settings (exec timeout, sandbox, web search) into Vigil config.yaml.",
     },
     "approvals-config": {
         "label": "Approval rules",
-        "description": "Import approval mode and rules into Hermes config.yaml approvals section.",
+        "description": "Import approval mode and rules into Vigil config.yaml approvals section.",
     },
     "memory-backend": {
         "label": "Memory backend configuration",
@@ -418,10 +418,10 @@ def dump_yaml_file(path: Path, data: Dict[str, Any]) -> None:
     cross-device handling mirrors ``utils.atomic_replace``: a plain
     ``os.replace`` onto a symlinked config.yaml would replace the *link* with a
     regular file, silently detaching managed deployments that symlink
-    ``~/.hermes/config.yaml`` into a dotfiles repo or profile package.
+    ``~/.vigil/config.yaml`` into a dotfiles repo or profile package.
     """
     if yaml is None:
-        raise RuntimeError("PyYAML is required to update Hermes config.yaml")
+        raise RuntimeError("PyYAML is required to update Vigil config.yaml")
     ensure_parent(path)
     target = os.path.realpath(str(path)) if os.path.islink(str(path)) else str(path)
     fd, tmp_path = tempfile.mkstemp(
@@ -503,17 +503,17 @@ def backup_existing(path: Path, backup_root: Path) -> Optional[Path]:
 
 
 # ── Brand rewriting ─────────────────────────────────────────
-# Replace OpenClaw brand names with Hermes in migrated text so that
+# Replace OpenClaw brand names with Vigil in migrated text so that
 # memory entries, user profiles, SOUL.md, and workspace instructions
 # read as self-referential to the new agent identity.
 #
-# Case-preserving: ``OpenClaw`` → ``Hermes`` (prose), but lowercase matches
-# like ``openclaw`` → ``hermes`` (so filesystem paths like ``~/.openclaw``
-# become ``~/.hermes`` — the real Hermes home — not the broken ``~/.Hermes``).
+# Case-preserving: ``OpenClaw`` → ``Vigil`` (prose), but lowercase matches
+# like ``openclaw`` → ``vigil`` (so filesystem paths like ``~/.openclaw``
+# become ``~/.vigil`` — the real Vigil home — not the broken ``~/.Vigil``).
 _REBRAND_PATTERNS: List[Tuple[re.Pattern, str]] = [
-    (re.compile(r'\bOpen[\s-]?Claw\b', re.IGNORECASE), 'Hermes'),
-    (re.compile(r'\bClawdBot\b', re.IGNORECASE), 'Hermes'),
-    (re.compile(r'\bMoltBot\b', re.IGNORECASE), 'Hermes'),
+    (re.compile(r'\bOpen[\s-]?Claw\b', re.IGNORECASE), 'Vigil'),
+    (re.compile(r'\bClawdBot\b', re.IGNORECASE), 'Vigil'),
+    (re.compile(r'\bMoltBot\b', re.IGNORECASE), 'Vigil'),
 ]
 
 
@@ -521,10 +521,10 @@ def _case_preserving_replacement(replacement: str):
     """Return a re.sub replacement fn that lowercases the result when the
     matched text was all-lowercase.
 
-    Keeps ``OpenClaw`` → ``Hermes`` but maps ``openclaw`` → ``hermes`` so a
+    Keeps ``OpenClaw`` → ``Vigil`` but maps ``openclaw`` → ``vigil`` so a
     filesystem path like ``~/.openclaw/config.yaml`` rewrites to
-    ``~/.hermes/config.yaml`` (the real Hermes home) instead of the broken
-    ``~/.Hermes/config.yaml``.
+    ``~/.vigil/config.yaml`` (the real Vigil home) instead of the broken
+    ``~/.Vigil/config.yaml``.
     """
     def _sub(match: "re.Match[str]") -> str:
         matched = match.group(0)
@@ -535,7 +535,7 @@ def _case_preserving_replacement(replacement: str):
 
 
 def rebrand_text(text: str) -> str:
-    """Replace OpenClaw / ClawdBot / MoltBot brand names with Hermes.
+    """Replace OpenClaw / ClawdBot / MoltBot brand names with Vigil.
 
     Preserves case so filesystem-path matches (lowercase) don't become
     capitalized directory names that don't exist.
@@ -546,7 +546,7 @@ def rebrand_text(text: str) -> str:
 
 
 def parse_existing_memory_entries(path: Path) -> List[str]:
-    """Parse a DESTINATION Hermes memory store (memories/MEMORY.md, USER.md).
+    """Parse a DESTINATION Vigil memory store (memories/MEMORY.md, USER.md).
 
     Splits on ``ENTRY_DELIMITER`` only, matching ``MemoryStore._parse_entries``
     in ``tools/memory_tool.py``: a store with no delimiter is ONE intact entry.
@@ -782,7 +782,7 @@ def write_report(output_dir: Path, report: Dict[str, Any]) -> None:
         grouped.setdefault(item["status"], []).append(item)
 
     lines = [
-        "# OpenClaw -> Hermes Migration Report",
+        "# OpenClaw -> Vigil Migration Report",
         "",
         f"- Timestamp: {redacted['timestamp']}",
         f"- Mode: {redacted['mode']}",
@@ -856,7 +856,7 @@ class Migrator:
         # Once a config.yaml write hits conflict/error mid-run, later
         # config.yaml writes are deliberately short-circuited to avoid
         # leaving config in a partially-written state.  Modelled on
-        # OpenClaw's extensions/migrate-hermes/apply.ts "blocked by earlier
+        # OpenClaw's extensions/migrate-vigil/apply.ts "blocked by earlier
         # apply conflict" sequencing.
         self._config_apply_blocked: bool = False
 
@@ -902,7 +902,7 @@ class Migrator:
     def is_selected(self, option_id: str) -> bool:
         return option_id in self.selected_options
 
-    # Option ids that mutate the Hermes config.yaml file.  Once any one of
+    # Option ids that mutate the Vigil config.yaml file.  Once any one of
     # them records a conflict/error on config.yaml, subsequent ones are
     # short-circuited to avoid partial writes.  Keep in sync with methods
     # that call load_yaml_file(target_root / "config.yaml") + dump_yaml_file.
@@ -1171,7 +1171,7 @@ class Migrator:
     def _build_warnings(self, summary: Dict[str, int]) -> List[str]:
         """Structured warnings surfaced on the report for downstream consumers.
 
-        Modelled on OpenClaw's extensions/migrate-hermes/plan.ts warnings[].
+        Modelled on OpenClaw's extensions/migrate-vigil/plan.ts warnings[].
         Keep the messages actionable — they show up in summary.md and the
         JSON report.
         """
@@ -1200,7 +1200,7 @@ class Migrator:
             warnings.append(
                 "API keys and other credentials were detected but not imported. "
                 "Re-run with --migrate-secrets to copy supported keys into the "
-                "Hermes env file."
+                "Vigil env file."
             )
         return warnings
 
@@ -1221,7 +1221,7 @@ class Migrator:
                 else "Review the migration report."
             )
             steps.append(
-                "Start a new Hermes session (or /reset) to pick up the imported config."
+                "Start a new Vigil session (or /reset) to pick up the imported config."
             )
         if summary.get("conflict", 0) > 0:
             steps.append(
@@ -1369,7 +1369,7 @@ class Migrator:
             self.record("command-allowlist", source, destination, "skipped", "No allowlist patterns found")
             return
         if not destination.exists():
-            self.record("command-allowlist", source, destination, "skipped", "Hermes config.yaml does not exist yet")
+            self.record("command-allowlist", source, destination, "skipped", "Vigil config.yaml does not exist yet")
             return
 
         config = load_yaml_file(destination)
@@ -1473,7 +1473,7 @@ class Migrator:
         if isinstance(workspace, str) and workspace.strip():
             ws_path = workspace.strip()
             # Skip if the workspace points inside the OpenClaw source directory —
-            # that path will be stale after migration and would cause the Hermes
+            # that path will be stale after migration and would cause the Vigil
             # gateway to use the old OpenClaw workspace as its cwd, picking up
             # OpenClaw's AGENTS.md, MEMORY.md, etc.
             try:
@@ -1882,7 +1882,7 @@ class Migrator:
 
         provider = tts.get("provider")
         if isinstance(provider, str) and provider in {"elevenlabs", "openai", "edge", "microsoft"}:
-            # OpenClaw renamed "edge" to "microsoft"; Hermes still uses "edge"
+            # OpenClaw renamed "edge" to "microsoft"; Vigil still uses "edge"
             tts_data["provider"] = "edge" if provider == "microsoft" else provider
 
         # TTS provider settings live under messages.tts.providers.{provider}
@@ -2209,12 +2209,12 @@ class Migrator:
         ]
         for candidate in candidates:
             if candidate:
-                self.archive_path(candidate, reason="No direct Hermes destination; archived for manual review")
+                self.archive_path(candidate, reason="No direct Vigil destination; archived for manual review")
 
         for rel in ("workspace/.learnings", "workspace/memory"):
             candidate = self.source_root / rel
             if candidate.exists():
-                self.archive_path(candidate, reason="No direct Hermes destination; archived for manual review")
+                self.archive_path(candidate, reason="No direct Vigil destination; archived for manual review")
 
         partially_extracted = [
             ("openclaw.json", "Selected Hermes-compatible values were extracted; raw OpenClaw config was not copied."),
@@ -2267,7 +2267,7 @@ class Migrator:
                 continue
             if name in existing_mcp and not self.overwrite:
                 self.record("mcp-servers", f"mcp.servers.{name}", f"mcp_servers.{name}", "conflict",
-                            "MCP server already exists in Hermes config")
+                            "MCP server already exists in Vigil config")
                 continue
 
             hermes_srv: Dict[str, Any] = {}
@@ -2452,7 +2452,7 @@ class Migrator:
             agent_cfg["verbose"] = defaults["verboseDefault"]
             changes = True
         if defaults.get("thinkingDefault"):
-            # Map OpenClaw thinking -> Hermes reasoning_effort
+            # Map OpenClaw thinking -> Vigil reasoning_effort
             thinking = defaults["thinkingDefault"]
             if thinking in {"always", "high", "xhigh"}:
                 agent_cfg["reasoning_effort"] = "high"
@@ -2523,7 +2523,7 @@ class Migrator:
                 self.maybe_backup(hermes_cfg_path)
                 dump_yaml_file(hermes_cfg_path, hermes_cfg)
             self.record("agent-config", "openclaw.json agents.defaults", "config.yaml agent/compression/terminal",
-                        "migrated", "Agent defaults mapped to Hermes config")
+                        "migrated", "Agent defaults mapped to Vigil config")
 
         # Archive multi-agent list
         if agent_list:
@@ -2563,7 +2563,7 @@ class Migrator:
         # Extract gateway auth token to .env if present
         auth = gateway.get("auth") or {}
         if auth.get("token") and self.migrate_secrets:
-            self._set_env_var("HERMES_GATEWAY_TOKEN", auth["token"], "gateway.auth.token")
+            self._set_env_var("VIGIL_GATEWAY_TOKEN", auth["token"], "gateway.auth.token")
 
     # ── Session config ────────────────────────────────────────
     def migrate_session_config(self, config: Optional[Dict[str, Any]] = None) -> None:
@@ -2753,7 +2753,7 @@ class Migrator:
                         continue
                     self._set_env_var(env_key, str(val), f"channels.{ch_name}.{oc_key}")
 
-        # Map Discord-specific settings to Hermes config
+        # Map Discord-specific settings to Vigil config
         discord_cfg = channels.get("discord") or {}
         if discord_cfg:
             hermes_cfg_path = self.target_root / "config.yaml"
@@ -2803,7 +2803,7 @@ class Migrator:
         browser_hermes = hermes_cfg.get("browser") or {}
         changed = False
 
-        # Map fields that have Hermes equivalents
+        # Map fields that have Vigil equivalents
         if browser.get("cdpUrl"):
             browser_hermes["cdp_url"] = browser["cdpUrl"]
             changed = True
@@ -2992,7 +2992,7 @@ class Migrator:
         if not self.output_dir:
             return
         notes = [
-            "# OpenClaw -> Hermes Migration Notes",
+            "# OpenClaw -> Vigil Migration Notes",
             "",
             "This document lists items that require manual attention after migration.",
             "",
@@ -3010,7 +3010,7 @@ class Migrator:
                 "## Archived Items (Manual Review Needed)",
                 "",
                 "These OpenClaw configurations were archived because they don't have a",
-                "direct 1:1 mapping in Hermes. Review each file and recreate manually:",
+                "direct 1:1 mapping in Vigil. Review each file and recreate manually:",
                 "",
             ])
             for item in archived:
@@ -3020,9 +3020,9 @@ class Migrator:
         conflicts = [i for i in self.items if i.status == "conflict"]
         if conflicts:
             notes.extend([
-                "## Conflicts (Existing Hermes Config Not Overwritten)",
+                "## Conflicts (Existing Vigil Config Not Overwritten)",
                 "",
-                "These items already existed in your Hermes config. Re-run with",
+                "These items already existed in your Vigil config. Re-run with",
                 "`--overwrite` to force, or merge manually:",
                 "",
             ])
@@ -3043,8 +3043,8 @@ class Migrator:
             "## IMPORTANT: Archive the OpenClaw Directory",
             "",
             "After migration, your OpenClaw directory still exists on disk with workspace",
-            "state files (todo.json, sessions, logs). If the Hermes agent discovers these",
-            "directories, it may read/write to them instead of the Hermes state, causing",
+            "state files (todo.json, sessions, logs). If the Vigil agent discovers these",
+            "directories, it may read/write to them instead of the Vigil state, causing",
             "confusion (e.g., cron jobs reading a different todo list than interactive sessions).",
             "",
             "**Strongly recommended:** Run `vigil claw cleanup` to rename the OpenClaw",
@@ -3096,7 +3096,7 @@ class Migrator:
 
         notes.extend([
             "- Run `vigil gateway install` if you need the gateway service",
-            "- Review `~/.hermes/config.yaml` for any adjustments",
+            "- Review `~/.vigil/config.yaml` for any adjustments",
             "",
         ])
 
@@ -3108,15 +3108,15 @@ class Migrator:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Migrate OpenClaw user state into Hermes Agent.")
+    parser = argparse.ArgumentParser(description="Migrate OpenClaw user state into Vigil Agent.")
     parser.add_argument("--source", default=str(Path.home() / ".openclaw"), help="OpenClaw home directory")
-    parser.add_argument("--target", default=os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes"), help="Hermes home directory")
+    parser.add_argument("--target", default=os.environ.get("VIGIL_HOME") or str(Path.home() / ".vigil"), help="Vigil home directory")
     parser.add_argument(
         "--workspace-target",
         help="Optional workspace root where the workspace instructions file should be copied",
     )
     parser.add_argument("--execute", action="store_true", help="Apply changes instead of reporting a dry run")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing Hermes targets after backing them up")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing Vigil targets after backing them up")
     parser.add_argument(
         "--migrate-secrets",
         action="store_true",
@@ -3194,7 +3194,7 @@ def main() -> int:
 
     print()
     print("  ╔══════════════════════════════════════════════════════╗")
-    print(f"  ║   OpenClaw -> Hermes Migration   [{mode_label:>8s}]   ║")
+    print(f"  ║   OpenClaw -> Vigil Migration   [{mode_label:>8s}]   ║")
     print("  ╠══════════════════════════════════════════════════════╣")
     print(f"  ║  Source:  {str(report['source_root'])[:42]:<42s}  ║")
     print(f"  ║  Target:  {str(report['target_root'])[:42]:<42s}  ║")
@@ -3217,7 +3217,7 @@ def main() -> int:
             seen_kinds.add(label)
             dest = item.get("destination") or ""
             if dest.startswith(str(report["target_root"])):
-                dest = "~/.hermes/" + dest[len(str(report["target_root"])) + 1:]
+                dest = "~/.vigil/" + dest[len(str(report["target_root"])) + 1:]
             meta = MIGRATION_OPTION_METADATA.get(label, {})
             display = meta.get("label", label)
             print(f"    ✔ {display:<35s} -> {dest}")
@@ -3263,7 +3263,7 @@ def main() -> int:
     if args.execute:
         print()
         print("  Next steps:")
-        print("    1. Review ~/.hermes/config.yaml")
+        print("    1. Review ~/.vigil/config.yaml")
         print("    2. Run: vigil mcp list")
         if any(i["kind"] == "cron-jobs" and i["status"] == "archived" for i in items):
             print("    3. Recreate cron jobs: vigil cron")

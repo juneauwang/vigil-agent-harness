@@ -34,7 +34,7 @@ async def test_direct_model_switch_offloads_to_thread(tmp_path, monkeypatch):
 
     from hermes_cli.model_switch import ModelSwitchResult
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     hermes_home.mkdir()
     (hermes_home / "config.yaml").write_text(
         yaml.safe_dump(

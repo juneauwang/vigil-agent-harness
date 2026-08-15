@@ -58,7 +58,7 @@ def _redirect_uri(request: Request) -> str:
 
     Three resolution tiers:
 
-      1. ``HERMES_DASHBOARD_PUBLIC_URL`` env var or
+      1. ``VIGIL_DASHBOARD_PUBLIC_URL`` env var or
          ``dashboard.public_url`` in config.yaml — when set, this is
          the complete authority (scheme + host + optional path prefix)
          and we append ``/auth/callback`` verbatim. ``X-Forwarded-Prefix``
@@ -69,7 +69,7 @@ def _redirect_uri(request: Request) -> str:
          Relief valve for deploys behind reverse proxies whose forwarded
          headers aren't reliable.
 
-      2. ``X-Forwarded-Prefix: /hermes`` (Mission Control deploys) — we
+      2. ``X-Forwarded-Prefix: /vigil`` (Mission Control deploys) — we
          prepend the prefix to the path FastAPI's ``url_for`` produces
          (it doesn't natively honour this header — it isn't part of the
          Starlette/uvicorn proxy_headers set).

@@ -2,7 +2,7 @@
 
 The slash-command worker is spawned as ``-m tui_gateway.slash_worker`` and
 inherits the user's CWD. A local package (e.g. ``utils/``) in that CWD shadows
-the installed hermes ``utils`` module and crashes the worker on ``import cli``
+the installed vigil ``utils`` module and crashes the worker on ``import cli``
 (``ImportError: cannot import name 'atomic_replace' from 'utils'``).
 
 #51693 added this guard to the sibling entrypoints ``tui_gateway/entry.py`` and
@@ -28,7 +28,7 @@ def test_slash_worker_imports_from_cwd_with_colliding_utils(tmp_path):
         (tmp_path / pkg).mkdir()
         (tmp_path / pkg / "__init__.py").write_text("")  # no atomic_replace, etc.
 
-    env = {k: v for k, v in os.environ.items() if k != "HERMES_PYTHON_SRC_ROOT"}
+    env = {k: v for k, v in os.environ.items() if k != "VIGIL_PYTHON_SRC_ROOT"}
     # Keep the source importable via PYTHONPATH; CWD ('') still precedes it on
     # sys.path for ``-c``, so the shadow (and thus the guard) is still exercised.
     env["PYTHONPATH"] = str(PROJECT_ROOT)

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read the in-app browser / preview pane in the Hermes desktop GUI.
+"""Read the in-app browser / preview pane in the Vigil desktop GUI.
 
 The preview's content lives in the desktop renderer (a sandboxed ``<webview>``
 for URL tabs), so this tool round-trips through the gateway's blocking-prompt
@@ -23,7 +23,7 @@ def read_preview_tool(
 ) -> str:
     """Return the active preview tab's contents (+ metadata) as a JSON string."""
     if callback is None:
-        return tool_error("read_preview is only available in the Hermes desktop app.")
+        return tool_error("read_preview is only available in the Vigil desktop app.")
 
     try:
         window = {
@@ -50,15 +50,15 @@ def read_preview_tool(
 
 
 def check_read_preview_requirements() -> bool:
-    """Desktop GUI only — HERMES_DESKTOP is set on the gateway the app spawns."""
-    return env_var_enabled("HERMES_DESKTOP")
+    """Desktop GUI only — VIGIL_DESKTOP is set on the gateway the app spawns."""
+    return env_var_enabled("VIGIL_DESKTOP")
 
 
 READ_PREVIEW_SCHEMA = {
     "name": "read_preview",
     "description": (
         "Read what's currently shown in the in-app browser / preview pane of the "
-        "Hermes desktop GUI (the pane open_preview opens beside this chat). Call "
+        "Vigil desktop GUI (the pane open_preview opens beside this chat). Call "
         "with no arguments for the first window of the active tab's content. "
         "Returns JSON {kind, url, title, text, start, end, total_chars, note?}: "
         "a URL (Browser) tab's text is the rendered page's visible text — page "

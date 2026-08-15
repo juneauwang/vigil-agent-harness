@@ -14,7 +14,7 @@ def test_resolve_spotify_runtime_credentials_refreshes_without_changing_active_p
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     with auth_mod._auth_store_lock():
         store = auth_mod._load_auth_store()
@@ -119,12 +119,12 @@ def test_resolve_credentials_quarantines_dead_tokens_on_terminal_refresh_failure
     last_auth_error marker so subsequent calls fail fast without a network retry.
     Mirrors Nous / xAI-OAuth / Codex-OAuth / MiniMax quarantine pattern.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     _seed_spotify_state(tmp_path, dict(_STALE_SPOTIFY_STATE))
 
     def _terminal_refresh(_state, **_kw):
         raise AuthError(
-            "Spotify token refresh failed. Run `hermes auth spotify` again.",
+            "Spotify token refresh failed. Run `vigil auth spotify` again.",
             provider="spotify",
             code="spotify_refresh_failed",
             relogin_required=True,

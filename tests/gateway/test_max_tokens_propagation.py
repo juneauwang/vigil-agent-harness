@@ -6,7 +6,7 @@ free models, Ollama Cloud, custom OpenAI-compatible endpoints) truncated long
 generations with `finish_reason="length"`.
 
 Precedence verified here:
-    HERMES_MAX_TOKENS env  >  model.max_tokens  >  per-provider
+    VIGIL_MAX_TOKENS env  >  model.max_tokens  >  per-provider
     max_output_tokens  >  None
 """
 
@@ -20,17 +20,17 @@ import pytest
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    """Isolated HERMES_HOME with a writable config.yaml and a clean module cache.
+    """Isolated VIGIL_HOME with a writable config.yaml and a clean module cache.
 
     These tests deliberately re-import ``hermes_cli`` / ``gateway`` so each
     config write is read fresh. To avoid leaking that purge into sibling test
     files in the same worker (which breaks their import-time mocks), we snapshot
     the affected modules and restore them on teardown.
     """
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     hermes_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    monkeypatch.delenv("HERMES_MAX_TOKENS", raising=False)
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
+    monkeypatch.delenv("VIGIL_MAX_TOKENS", raising=False)
 
     _saved = {
         k: v

@@ -52,7 +52,7 @@ function PermissionRow({ granted, label, hint }: { granted: boolean | null; labe
  *
  * cua-driver runs on macOS, Windows, and Linux, but readiness differs: macOS
  * needs two TCC grants (Accessibility + Screen Recording) that attach to
- * cua-driver's own `com.trycua.driver` identity — not Hermes — and are
+ * cua-driver's own `com.trycua.driver` identity — not Vigil — and are
  * requested via `cua-driver permissions grant` (dialog attributed to
  * CuaDriver). Windows/Linux have no TCC toggles, so readiness is driver health
  * from `cua-driver doctor`. The backend folds both into one `ready` signal.

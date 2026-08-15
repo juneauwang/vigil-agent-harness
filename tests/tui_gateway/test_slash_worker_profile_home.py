@@ -29,9 +29,9 @@ def test_slash_worker_accepts_profile_home():
             # Verify Popen was called
             assert mock_popen.called
             
-            # Check that HERMES_HOME was set in the environment
+            # Check that VIGIL_HOME was set in the environment
             call_kwargs = mock_popen.call_args[1]
             assert "env" in call_kwargs
-            assert call_kwargs["env"]["HERMES_HOME"] == "/home/luke/.hermes/profiles/work"
+            assert call_kwargs["env"]["VIGIL_HOME"] == "/home/luke/.hermes/profiles/work"
 
 

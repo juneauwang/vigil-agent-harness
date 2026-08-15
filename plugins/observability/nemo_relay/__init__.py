@@ -1,4 +1,4 @@
-"""nemo_relay — optional Hermes plugin for NeMo Relay observability."""
+"""nemo_relay — optional Vigil plugin for NeMo Relay observability."""
 
 from __future__ import annotations
 
@@ -55,7 +55,7 @@ class _Settings:
     atif_output_directory: str = ""
     atif_filename_template: str = "hermes-atif-{session_id}.json"
     atif_subagent_export_mode: str = "embedded"
-    atif_agent_name: str = "Hermes Agent"
+    atif_agent_name: str = "Vigil Agent"
     atif_agent_version: str = "unknown"
     atif_model_name: str = "unknown"
 
@@ -88,7 +88,7 @@ class _ProcessPluginConfiguration:
                     return True, self._activation
                 logger.warning(
                     "NeMo Relay plugin configuration is already active for another "
-                    "Hermes profile; keeping the existing process-global configuration "
+                    "Vigil profile; keeping the existing process-global configuration "
                     "and using direct observability for this profile."
                 )
                 return False, None
@@ -381,7 +381,7 @@ class _Runtime:
             metadata=rich_metadata,
         )
         if relay_session is None:
-            raise RuntimeError("Hermes core Relay session is unavailable")
+            raise RuntimeError("Vigil core Relay session is unavailable")
         state.relay_session = relay_session
         state.handle = relay_session.handle
         if subagent_context is not None:
@@ -397,7 +397,7 @@ class _Runtime:
         **kwargs: Any,
     ) -> Any:
         if state.relay_session is None:
-            raise RuntimeError("Hermes core Relay session is unavailable")
+            raise RuntimeError("Vigil core Relay session is unavailable")
         return self.host.run_in_session(
             state.relay_session,
             callback,
@@ -541,7 +541,7 @@ def register(ctx) -> None:
         _SESSION_INITIALIZER_NAME,
         _prepare_core_session,
     )
-    # Activate dynamic plugins before Hermes installs the managed execution
+    # Activate dynamic plugins before Vigil installs the managed execution
     # boundaries that invoke their interceptors.
     if _load_settings().dynamic_plugins:
         _get_runtime()
@@ -648,7 +648,7 @@ def _get_runtime(
         try:
             resolved_host = host or relay_runtime.get_runtime(profile_key=profile_key)
             if resolved_host is None:
-                raise RuntimeError("Hermes core Relay runtime is unavailable")
+                raise RuntimeError("Vigil core Relay runtime is unavailable")
             runtime = _Runtime(
                 nemo_relay=resolved_host.relay,
                 settings=_load_settings(),
@@ -663,23 +663,23 @@ def _get_runtime(
 
 
 def _load_settings() -> _Settings:
-    plugins_toml_path = _env("HERMES_NEMO_RELAY_PLUGINS_TOML")
+    plugins_toml_path = _env("VIGIL_NEMO_RELAY_PLUGINS_TOML")
     plugins_config = _load_plugins_config(plugins_toml_path)
     return _Settings(
         plugins_toml_path=plugins_toml_path,
         plugins_config=plugins_config,
         dynamic_plugins=_dynamic_plugin_specs(plugins_config, plugins_toml_path),
-        atof_enabled=_env_bool("HERMES_NEMO_RELAY_ATOF_ENABLED"),
-        atof_output_directory=_env("HERMES_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY"),
-        atof_filename=_env("HERMES_NEMO_RELAY_ATOF_FILENAME") or "hermes-atof.jsonl",
-        atof_mode=_env("HERMES_NEMO_RELAY_ATOF_MODE") or "append",
-        atif_enabled=_env_bool("HERMES_NEMO_RELAY_ATIF_ENABLED"),
-        atif_output_directory=_env("HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY"),
-        atif_filename_template=_env("HERMES_NEMO_RELAY_ATIF_FILENAME_TEMPLATE") or "hermes-atif-{session_id}.json",
+        atof_enabled=_env_bool("VIGIL_NEMO_RELAY_ATOF_ENABLED"),
+        atof_output_directory=_env("VIGIL_NEMO_RELAY_ATOF_OUTPUT_DIRECTORY"),
+        atof_filename=_env("VIGIL_NEMO_RELAY_ATOF_FILENAME") or "hermes-atof.jsonl",
+        atof_mode=_env("VIGIL_NEMO_RELAY_ATOF_MODE") or "append",
+        atif_enabled=_env_bool("VIGIL_NEMO_RELAY_ATIF_ENABLED"),
+        atif_output_directory=_env("VIGIL_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY"),
+        atif_filename_template=_env("VIGIL_NEMO_RELAY_ATIF_FILENAME_TEMPLATE") or "hermes-atif-{session_id}.json",
         atif_subagent_export_mode=_atif_subagent_export_mode(),
-        atif_agent_name=_env("HERMES_NEMO_RELAY_ATIF_AGENT_NAME") or "Hermes Agent",
-        atif_agent_version=_env("HERMES_NEMO_RELAY_ATIF_AGENT_VERSION") or "unknown",
-        atif_model_name=_env("HERMES_NEMO_RELAY_ATIF_MODEL_NAME") or "unknown",
+        atif_agent_name=_env("VIGIL_NEMO_RELAY_ATIF_AGENT_NAME") or "Vigil Agent",
+        atif_agent_version=_env("VIGIL_NEMO_RELAY_ATIF_AGENT_VERSION") or "unknown",
+        atif_model_name=_env("VIGIL_NEMO_RELAY_ATIF_MODEL_NAME") or "unknown",
     )
 
 
@@ -723,7 +723,7 @@ def _dynamic_plugin_specs(
             return []
         if plugins_section:
             logger.error(
-                "Hermes cannot activate Relay gateway [[plugins.dynamic]] records because "
+                "Vigil cannot activate Relay gateway [[plugins.dynamic]] records because "
                 "the Python binding does not expose the CLI lifecycle resolver for "
                 "enablement, trust policy, and worker environments. Use Hermes-owned "
                 "[[dynamic_plugins]] activation specs instead; no dynamic plugins will be "
@@ -872,7 +872,7 @@ def _env(name: str) -> str:
 
 
 def _atif_subagent_export_mode() -> str:
-    mode = _env("HERMES_NEMO_RELAY_ATIF_SUBAGENT_EXPORT_MODE").lower()
+    mode = _env("VIGIL_NEMO_RELAY_ATIF_SUBAGENT_EXPORT_MODE").lower()
     return "all" if mode == "all" else "embedded"
 
 

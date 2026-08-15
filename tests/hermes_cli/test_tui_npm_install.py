@@ -57,7 +57,7 @@ def test_make_tui_argv_uses_bundled_tui_when_workspace_missing(
     runnable bundled TUI on disk. The bundled shortcut must succeed without
     ever touching the (missing) ui-tui workspace or git.
     """
-    monkeypatch.delenv("HERMES_TUI_DIR", raising=False)
+    monkeypatch.delenv("VIGIL_TUI_DIR", raising=False)
     monkeypatch.setattr(main_mod, "_ensure_tui_node", lambda: None)
 
     bundled_entry = tmp_path / "bundled" / "entry.js"

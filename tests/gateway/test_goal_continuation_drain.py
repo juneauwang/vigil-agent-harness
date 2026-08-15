@@ -79,10 +79,10 @@ CONTINUATION_TEXT = "[Continuing toward your standing goal]\nGoal: ship it"
 def hermes_home(tmp_path, monkeypatch):
     from pathlib import Path
 
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
 
     from hermes_cli import goals
 

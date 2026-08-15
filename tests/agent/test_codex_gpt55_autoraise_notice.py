@@ -7,7 +7,7 @@ Covers two layers:
 2. The per-profile dedupe marker (#54432) — the notice must show at most once
    per profile/config state. Before the fix it re-fired on every agent init,
    and because the gateway rebuilds the agent per inbound message it spammed
-   Discord etc. The gate persists a marker under ``$HERMES_HOME``
+   Discord etc. The gate persists a marker under ``$VIGIL_HOME``
    (profile-scoped, isolated to a tempdir by the conftest autouse fixture)
    keyed on the model slug + displayed from→to percentages, so an unchanged
    threshold stays silent across restarts while a changed threshold (or a

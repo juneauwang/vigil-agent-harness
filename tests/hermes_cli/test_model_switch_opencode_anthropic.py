@@ -193,13 +193,13 @@ class TestStaleConfigDefaultDoesNotWedgeResolver:
         import yaml
         import importlib
 
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         monkeypatch.setenv("OPENCODE_ZEN_API_KEY", "test-key")
         (tmp_path / "config.yaml").write_text(yaml.safe_dump({
             "model": {"provider": "opencode-zen", "default": "claude-sonnet-4-6"},
         }))
 
-        # Re-import with the new HERMES_HOME so config cache is fresh.
+        # Re-import with the new VIGIL_HOME so config cache is fresh.
         import hermes_cli.config as _cfg_mod
         importlib.reload(_cfg_mod)
         import hermes_cli.runtime_provider as _rp_mod

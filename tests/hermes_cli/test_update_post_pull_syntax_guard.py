@@ -1,14 +1,14 @@
-"""Tests for the post-pull syntax guard in ``hermes update``.
+"""Tests for the post-pull syntax guard in ``vigil update``.
 
 When a bad commit lands on ``main`` with a syntax error in a critical file
 (e.g. orphan merge-conflict markers in ``hermes_cli/config.py``), the CLI
-becomes unbootable — every ``hermes`` invocation imports those files at
+becomes unbootable — every ``vigil`` invocation imports those files at
 startup. The guard validates them after ``git pull`` and rolls back to the
 pre-pull SHA on failure so the user's install stays runnable.
 
 Reference incident: PR #28452 (May 18, 2026) shipped unresolved conflict
-markers in ``hermes_cli/config.py``; users who ran ``hermes update`` in
-the 7-minute window before #28458 landed could not run any ``hermes``
+markers in ``hermes_cli/config.py``; users who ran ``vigil update`` in
+the 7-minute window before #28458 landed could not run any ``vigil``
 command afterward.
 """
 
@@ -86,7 +86,7 @@ def test_validate_critical_files_syntax_tolerates_missing_files(tmp_path):
 # ---------------------------------------------------------------------------
 # Repo invariant — the production tree itself must always pass the guard.
 # This catches the case where ``main`` ships a syntax error before the next
-# release; if a future ``hermes update`` would brick users, this test fails
+# release; if a future ``vigil update`` would brick users, this test fails
 # in CI first.
 # ---------------------------------------------------------------------------
 

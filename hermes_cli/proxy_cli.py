@@ -1,4 +1,4 @@
-"""CLI handlers for ``hermes egress ...``.
+"""CLI handlers for ``vigil egress ...``.
 
 Subcommands:
     install  — download the pinned iron-proxy binary
@@ -9,8 +9,8 @@ Subcommands:
     disable  — flip ``proxy.enabled`` to False (does not stop a running proxy)
     config   — print the generated proxy.yaml path (for debugging / external review)
 
-The top-level command is ``hermes egress``.  Note that the inbound OAuth
-reverse-proxy command (``hermes proxy``) lives elsewhere in
+The top-level command is ``vigil egress``.  Note that the inbound OAuth
+reverse-proxy command (``vigil proxy``) lives elsewhere in
 ``hermes_cli/main.py`` — different direction, different purpose.
 """
 
@@ -37,11 +37,11 @@ def register_cli(parent_parser: argparse.ArgumentParser) -> None:
     """Attach the egress subcommand tree to a parent parser.
 
     Called from ``hermes_cli.main`` as part of building the top-level
-    ``hermes egress`` parser.
+    ``vigil egress`` parser.
     """
 
     # dest='egress_command' — keeps this subparser tree disjoint from the
-    # inbound OAuth ``hermes proxy`` subparser (which uses dest='proxy_command').
+    # inbound OAuth ``vigil proxy`` subparser (which uses dest='proxy_command').
     # No runtime collision today since they live in separate parser trees,
     # but a future grep-and-refactor on ``proxy_command`` would otherwise
     # hit both handlers.
@@ -242,16 +242,16 @@ def cmd_setup(args: argparse.Namespace) -> int:
             return 1
     else:
         # Env-based discovery reads os.environ.  Operators commonly keep their
-        # provider keys only in ~/.hermes/.env (loaded automatically when the
+        # provider keys only in ~/.vigil/.env (loaded automatically when the
         # agent runs, but NOT exported into an interactive shell).  Fall back
-        # to loading that file so `hermes egress setup` finds the same keys the
+        # to loading that file so `vigil egress setup` finds the same keys the
         # agent would — otherwise a user with keys solely in .env sees a
         # confusing "no provider keys found" when the keys clearly "exist".
         loaded = _load_env_file_into_environ()
         if loaded:
             console.print(
                 f"  [dim]Loaded {loaded} provider key name(s) from "
-                f"~/.hermes/.env for discovery.[/dim]"
+                f"~/.vigil/.env for discovery.[/dim]"
             )
 
     discovered = ip.discover_provider_mappings(
@@ -259,7 +259,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     )
 
     # Preserve tokens for providers we already had unless the operator
-    # explicitly requested rotation.  This prevents re-running `hermes
+    # explicitly requested rotation.  This prevents re-running `vigil
     # egress setup` from invalidating tokens baked into already-running
     # sandboxes.
     existing = ip.load_mappings()
@@ -277,7 +277,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
         if _sys.stdin.isatty():
             console.print(
                 "[yellow]⚠[/yellow]  --rotate-tokens will invalidate proxy "
-                "tokens in every running Hermes sandbox.  They will start "
+                "tokens in every running Vigil sandbox.  They will start "
                 "401-ing against upstreams until restarted."
             )
             try:
@@ -421,7 +421,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     mappings_path = ip.write_mappings(mappings)
     # Mint (or keep) the management-API bearer key.  The generated config
     # enables a loopback management listener whose /v1/reload lets
-    # `hermes egress reload` apply future ruleset changes without a
+    # `vigil egress reload` apply future ruleset changes without a
     # restart; the daemon requires the key env var to be non-empty at
     # startup, so make sure the token exists before first start.
     ip.ensure_management_token()
@@ -440,7 +440,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     proxy_cfg.setdefault("enforce_on_docker", True)
     # CRITICAL: do NOT silently downgrade credential_source on re-run.
     # If the operator previously configured `bitwarden` mode (e.g. for
-    # rotation), running `hermes egress setup` again WITHOUT
+    # rotation), running `vigil egress setup` again WITHOUT
     # --from-bitwarden must not rewrite credential_source to "env" —
     # that silently breaks the Bitwarden rotation guarantee the docs
     # make.  Require an explicit --no-bitwarden to switch back.
@@ -694,7 +694,7 @@ def cmd_reload(args: argparse.Namespace) -> int:
     proxy.yaml WITHOUT restarting the daemon — no dropped connections, no
     restart window.  When the change involves new upstream SECRETS (a
     Bitwarden rotation, a newly added provider key), use
-    ``hermes egress restart`` instead: the daemon reads real credentials
+    ``vigil egress restart`` instead: the daemon reads real credentials
     from its own environment at spawn time, and a reload does not
     re-populate that env.
     """
@@ -861,10 +861,10 @@ def cmd_config(args: argparse.Namespace) -> int:
 
 
 def _load_env_file_into_environ() -> int:
-    """Backfill provider keys from ``~/.hermes/.env`` into ``os.environ``.
+    """Backfill provider keys from ``~/.vigil/.env`` into ``os.environ``.
 
-    ``hermes egress setup`` discovers providers by reading ``os.environ``, but
-    many operators keep their keys ONLY in ``~/.hermes/.env`` (which the agent
+    ``vigil egress setup`` discovers providers by reading ``os.environ``, but
+    many operators keep their keys ONLY in ``~/.vigil/.env`` (which the agent
     loads at runtime but which is NOT exported into an interactive shell).
     Without this, ``setup`` reports "no provider keys found" even though the
     keys plainly exist — a confusing first-run papercut.

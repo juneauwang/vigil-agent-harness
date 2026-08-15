@@ -120,7 +120,7 @@ def test_env_loader_prints_remediation_hint(tmp_path, monkeypatch, capsys):
     registry._reset_registry_for_tests()
     env_loader.reset_secret_source_cache()
 
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     (home / "config.yaml").write_text(
         "secrets:\n"

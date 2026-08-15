@@ -26,7 +26,7 @@ description: >
 
   Pure stdlib transport (http.server + urllib) — no a2a-sdk dependency required.
 author: Nous Research
-# requires_env / optional_env are surfaced in the `hermes config` UI via the
+# requires_env / optional_env are surfaced in the `vigil config` UI via the
 # platform-plugin env var injector in hermes_cli/config.py.
 requires_env: []
 optional_env:

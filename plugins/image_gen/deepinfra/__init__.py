@@ -7,13 +7,13 @@ the OpenAI-compatible ``/v1/openai/images/generations`` endpoint as an
 **Fully dynamic model discovery.** Unlike the other image-gen plugins in
 this tree (which ship a hardcoded ``_MODELS`` dict), DeepInfra publishes
 a single tagged catalog at
-``https://api.deepinfra.com/v1/openai/models?filter=true&sort_by=hermes``
+``https://api.deepinfra.com/v1/openai/models?filter=true&sort_by=vigil``
 where each entry's ``metadata.tags`` declares its surface (``image-gen``
 here). ``list_models()`` filters that catalog via
 :func:`hermes_cli.models._fetch_deepinfra_models_by_tag` so newly added
-models show up in ``hermes tools`` automatically. No model ids are
+models show up in ``vigil tools`` automatically. No model ids are
 hardcoded in this file — if a model is retired upstream, it disappears
-from hermes the next time the catalog is fetched, no patch required.
+from vigil the next time the catalog is fetched, no patch required.
 
 Model selection (first hit wins):
 

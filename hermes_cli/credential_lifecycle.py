@@ -1,12 +1,12 @@
-"""Unified provider-credential lifecycle across every store Hermes reads.
+"""Unified provider-credential lifecycle across every store Vigil reads.
 
 A provider API key can live in up to THREE stores at once:
 
-    1. ``~/.hermes/.env``                     — the canonical secret store
-    2. ``~/.hermes/auth.json`` →
+    1. ``~/.vigil/.env``                     — the canonical secret store
+    2. ``~/.vigil/auth.json`` →
        ``credential_pool.<provider>[*]``      — env-seeded pool entries
        (``source == "env:<VAR>"``) persisted by the pool loader
-    3. ``~/.hermes/config.yaml``              — inline mirrors written by the
+    3. ``~/.vigil/config.yaml``              — inline mirrors written by the
        custom-endpoint flows (``model.api_key``, ``auxiliary.<task>.api_key``,
        ``custom_providers[*].api_key``)
 
@@ -186,7 +186,7 @@ def purge_env_credential_references(
     """
     pruned = _prune_env_pool_entries(env_var)
     providers = sorted(set(pruned) | set(_providers_for_env_var(env_var)))
-    # Make the removal sticky the same way `hermes auth remove` does: a
+    # Make the removal sticky the same way `vigil auth remove` does: a
     # lingering shell export (or another live process's os.environ) would
     # otherwise re-seed the pool entry on the next load_pool(). The matching
     # save path lifts the suppression on an explicit re-add.
@@ -217,7 +217,7 @@ def save_provider_env_credential(env_var: str, value: str) -> Dict[str, Any]:
     value of this var (``model.api_key`` etc.) is updated to the new value so
     a stale higher-precedence copy cannot shadow the rotation (#62269).
     Suppressed ``env:<VAR>`` pool sources are re-enabled so a deliberate
-    re-add through the UI behaves like ``hermes auth add``.
+    re-add through the UI behaves like ``vigil auth add``.
     """
     from hermes_cli.config import load_env, save_env_value
 

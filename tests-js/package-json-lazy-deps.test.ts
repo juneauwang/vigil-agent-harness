@@ -1,7 +1,7 @@
 /**
  * Invariants for what is eager vs lazy in the root ``package.json``.
  *
- * The root ``package.json`` is installed by ``hermes update`` on every user,
+ * The root ``package.json`` is installed by ``vigil update`` on every user,
  * including users who never opted into a given browser backend. Anything
  * listed in ``dependencies`` therefore runs its npm postinstall script for
  * everyone — including binary-fetching backends, on every update.
@@ -15,9 +15,9 @@
  *
  * - ``@askjo/camofox-browser`` is NOT eager. It is an explicit opt-in
  *   alternative browser backend, selected by the user via
- *   ``hermes tools`` → Browser Automation → Camofox, and only used at
+ *   ``vigil tools`` → Browser Automation → Camofox, and only used at
  *   runtime when ``CAMOFOX_URL`` is set. Its postinstall fetches a ~300MB
- *   Firefox-fork binary, which silently blocked ``hermes update`` for
+ *   Firefox-fork binary, which silently blocked ``vigil update`` for
  *   multi-minute stretches on slow / network-restricted connections
  *   (notably users in China running through a VPN). The package is
  *   installed on demand by ``tools_config.py`` ``post_setup_key ==

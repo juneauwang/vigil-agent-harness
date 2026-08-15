@@ -1,7 +1,7 @@
 """``vigil watch`` —— 值守采集服务管理（OPS-DELTA #9 第一层）。
 
 systemd --user 常驻服务（服务名固定 ``vigil-watch.service``，与 upstream
-Hermes 的 ``hermes-gateway.service`` 无任何关联，硬约束 7）跑拉模式巡检
+Vigil 的 ``hermes-gateway.service`` 无任何关联，硬约束 7）跑拉模式巡检
 （每 5 分钟拉 alertmanager → 有告警写 ``~/.vigil/watch/inbox/``）。采集是
 确定性代码；分析播报由 agent 会话消费 inbox（tools/watch_tools.py）。
 
@@ -72,7 +72,7 @@ After=network-online.target
 
 [Service]
 Type=simple
-Environment=HERMES_HOME={home}
+Environment=VIGIL_HOME={home}
 ExecStart={python} -m {_COLLECT_LOOP_MODULE}
 Restart=on-failure
 RestartSec=30

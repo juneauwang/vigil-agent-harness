@@ -8,33 +8,33 @@
 #
 # Env note: /init scrubs env before invoking CMD, so when this wrapper
 # is launched through the supervised path it must rehydrate via
-# with-contenv before touching HERMES_HOME / PATH. On the non-PID-1
+# with-contenv before touching VIGIL_HOME / PATH. On the non-PID-1
 # fallback path the Dockerfile env is still intact, so we skip the
 # re-exec and continue directly.
 #
 # Routing:
-#   no args                       → exec `hermes` (the default)
+#   no args                       → exec `vigil` (the default)
 #   first arg is an executable    → exec it directly (sleep, bash, sh, …)
-#   first arg is anything else    → exec `hermes <args>` (subcommand passthrough)
+#   first arg is anything else    → exec `vigil <args>` (subcommand passthrough)
 #
-# Drop to hermes via s6-setuidgid, but skip it when already non-root.
+# Drop to vigil via s6-setuidgid, but skip it when already non-root.
 set -e
 
-if [ -z "${HERMES_MAIN_WRAPPER_ENV_READY:-}" ] && \
-   [ -z "${HERMES_HOME:-}" ] && \
+if [ -z "${VIGIL_MAIN_WRAPPER_ENV_READY:-}" ] && \
+   [ -z "${VIGIL_HOME:-}" ] && \
    [ -x /command/with-contenv ]; then
-    export HERMES_MAIN_WRAPPER_ENV_READY=1
+    export VIGIL_MAIN_WRAPPER_ENV_READY=1
     exec /command/with-contenv sh "$0" "$@"
 fi
-unset HERMES_MAIN_WRAPPER_ENV_READY
+unset VIGIL_MAIN_WRAPPER_ENV_READY
 
 drop() { [ "$(id -u)" = 0 ] && set -- s6-setuidgid hermes "$@"; exec "$@"; }
 
 # --- Reject the unsupported `docker run --user <uid>:<gid>` start ---
 # Mirror the guard in stage2-hook.sh (cont-init). This is the surface the
 # user actually sees in `docker run` output: when the container is pinned to
-# an arbitrary non-root, non-hermes UID, the bootstrap was skipped and the
-# baked image dirs (owned by the hermes build UID) are unwritable, so fail
+# an arbitrary non-root, non-vigil UID, the bootstrap was skipped and the
+# baked image dirs (owned by the vigil build UID) are unwritable, so fail
 # fast here with actionable guidance rather than crashing on `cd`/EACCES
 # further down. See stage2-hook.sh for the full rationale.
 cur_uid="$(id -u)"
@@ -45,7 +45,7 @@ if [ "$cur_uid" != 0 ] && [ "$cur_uid" != "$(id -u hermes)" ]; then
 To make container-written files match your HOST user, don't use --user.
 Start as root (the default) and pass your host UID/GID instead:
 
-    docker run -e HERMES_UID=\$(id -u) -e HERMES_GID=\$(id -g) ...
+    docker run -e VIGIL_UID=\$(id -u) -e VIGIL_GID=\$(id -g) ...
 
 NAS users (Synology / unRAID / UGOS) can use the PUID/PGID aliases:
 
@@ -59,7 +59,7 @@ EOF
 fi
 
 # HOME comes through with-contenv as /root (the /init context). Override
-# to the hermes user's home before dropping privileges so libraries that
+# to the vigil user's home before dropping privileges so libraries that
 # resolve paths via $HOME (e.g. discord lockfile under XDG_STATE_HOME)
 # don't try to write to /root.
 export HOME=/opt/data
@@ -67,14 +67,14 @@ export HOME=/opt/data
 # Save the Docker -w (or default) working directory before init
 # scripts cd to /opt/data, so the container starts in the
 # directory the user requested.
-_hermes_orig_cwd="${HERMES_ORIG_CWD:-$PWD}"
+_hermes_orig_cwd="${VIGIL_ORIG_CWD:-$PWD}"
 
 cd /opt/data
 # shellcheck disable=SC1091
 . /opt/hermes/.venv/bin/activate
 
 # Restore the original working directory before handing off to
-# the user's command so `hermes chat` starts in the Docker -w
+# the user's command so `vigil chat` starts in the Docker -w
 # directory, not /opt/data.
 cd "$_hermes_orig_cwd"
 
@@ -87,5 +87,5 @@ if command -v "$1" >/dev/null 2>&1; then
     drop "$@"
 fi
 
-# Hermes subcommand pass-through.
+# Vigil subcommand pass-through.
 drop hermes "$@"

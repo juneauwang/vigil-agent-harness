@@ -75,7 +75,7 @@ class TestResolveVerifyIntegration:
 
     def test_no_ca_uses_default_verify_on_linux(self, monkeypatch):
         monkeypatch.setattr(sys, "platform", "linux")
-        for var in ("HERMES_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
+        for var in ("VIGIL_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
             monkeypatch.delenv(var, raising=False)
         assert _resolve_verify() is True
 
@@ -84,5 +84,5 @@ class TestResolveVerifyIntegration:
     def test_insecure_wins_over_everything(self, monkeypatch, tmp_path):
         bundle = tmp_path / "ca.pem"
         bundle.write_text("stub")
-        monkeypatch.setenv("HERMES_CA_BUNDLE", str(bundle))
+        monkeypatch.setenv("VIGIL_CA_BUNDLE", str(bundle))
         assert _resolve_verify(insecure=True) is False

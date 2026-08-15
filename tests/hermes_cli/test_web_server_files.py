@@ -40,7 +40,7 @@ def _close_client(client):
 @pytest.fixture
 def forced_files_client(monkeypatch, tmp_path):
     root = tmp_path / "data"
-    monkeypatch.setenv("HERMES_DASHBOARD_FILES_ROOT", str(root))
+    monkeypatch.setenv("VIGIL_DASHBOARD_FILES_ROOT", str(root))
 
     client, prev_auth_required, prev_bound_host = _client_with_app_state()
     try:
@@ -54,8 +54,8 @@ def forced_files_client(monkeypatch, tmp_path):
 def local_files_client(monkeypatch, tmp_path):
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.delenv("HERMES_DASHBOARD_FILES_ROOT", raising=False)
-    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.delenv("VIGIL_DASHBOARD_FILES_ROOT", raising=False)
+    monkeypatch.delenv("VIGIL_HOME", raising=False)
     monkeypatch.setenv("HOME", str(home))
 
     client, prev_auth_required, prev_bound_host = _client_with_app_state()
@@ -231,7 +231,7 @@ def test_other_credential_store_basenames_blocked(forced_files_client):
     """Regression: the managed-files guard must cover the same credential
     basenames as gateway.platforms.base._ROOT_CREDENTIAL_FILES and
     agent.file_safety.get_read_block_error, not just .env — an operator can
-    point the managed root at HERMES_HOME itself (#57505), which contains
+    point the managed root at VIGIL_HOME itself (#57505), which contains
     all of these live secret stores."""
     client, root = forced_files_client
     root.mkdir(parents=True, exist_ok=True)

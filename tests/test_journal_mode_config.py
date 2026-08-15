@@ -11,7 +11,7 @@ import yaml
 def _write_config(monkeypatch: pytest.MonkeyPatch, tmp_path, config: object) -> None:
     home = tmp_path / "hermes-home"
     home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     (home / "config.yaml").write_text(
         yaml.safe_dump(config),
         encoding="utf-8",
@@ -46,7 +46,7 @@ def test_new_nonsecret_hermes_env_override_is_not_exposed(monkeypatch, tmp_path)
     from hermes_state import resolve_journal_mode
 
     _configure_mode(monkeypatch, tmp_path, "wal")
-    monkeypatch.setenv("HERMES_JOURNAL_MODE", "delete")
+    monkeypatch.setenv("VIGIL_JOURNAL_MODE", "delete")
     assert resolve_journal_mode() == "wal"
 
 
