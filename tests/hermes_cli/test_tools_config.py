@@ -567,14 +567,14 @@ def test_visible_providers_reuses_logged_out_feature_snapshot(monkeypatch):
         lambda *args, **kwargs: pytest.fail("feature snapshot was resolved again"),
     )
 
+    # Batch 29 removed every managed "Nous Subscription" row from
+    # TOOL_CATEGORIES (image_gen included) — the snapshot-reuse contract
+    # still holds on a category that ships free provider rows.
     providers = _visible_providers(
-        TOOL_CATEGORIES["image_gen"], {}, features=features
+        TOOL_CATEGORIES["tts"], {}, features=features
     )
 
-    assert any(
-        provider.get("managed_nous_feature") == "image_gen"
-        for provider in providers
-    )
+    assert any(p.get("tts_provider") == "edge" for p in providers)
 
 
 def test_visible_providers_reuses_pool_video_feature_snapshot(monkeypatch):

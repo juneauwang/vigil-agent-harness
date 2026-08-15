@@ -267,7 +267,13 @@ def _get_backend() -> str:
         except Exception as exc:  # noqa: BLE001 — a broken provider is skipped
             logger.debug("web provider %r.is_available() raised: %s", provider.name, exc)
 
-    return "firecrawl"  # default (backward compat)
+    # OPS-DELTA #48 (batch 29): final fallback must be a free, no-key option
+    # — never a subscription/dead entry. ddgs (DuckDuckGo, no API key) is the
+    # default for users who never configured a provider; the `hermes tools`
+    # picker installs the ddgs package on selection (post_setup "ddgs").
+    # Legacy installs that had no keys previously landed on "firecrawl" and
+    # failed at runtime without credentials — strictly worse.
+    return "ddgs"
 
 
 def _get_search_backend() -> str:

@@ -2183,8 +2183,11 @@ class TestNewEndpoints:
         assert all(p["status"] in valid for p in data["providers"])
         # Genuinely-free keyless row stays Ready.
         assert by_name["Microsoft Edge TTS"]["status"] == "ready"
+        # OPS-DELTA #48 (batch 29): the managed "Nous Subscription" row was
+        # removed — Vigil users have no Nous Portal, so the picker must not
+        # advertise a dead subscription entry.
+        assert "Nous Subscription" not in by_name
         # Keyless ≠ ready for gated rows:
-        assert by_name["Nous Subscription"]["status"] == "needs_auth"
         assert by_name["xAI TTS"]["status"] == "needs_auth"
         assert by_name["KittenTTS"]["status"] == "needs_setup"
         assert by_name["Piper"]["status"] == "needs_setup"
@@ -2197,36 +2200,26 @@ class TestNewEndpoints:
 
 
     def test_select_managed_nous_provider_reports_needs_nous_auth(self, monkeypatch):
-        """Selecting a managed Nous row while logged out flags needs_nous_auth.
-
-        Regression: the GUI PUT wrote browser.cloud_provider + use_gateway
-        but skipped the Portal entitlement handshake the CLI runs inline
-        (ensure_nous_portal_access) — so the row never activated and nothing
-        told the user to sign in. The endpoint now reports the entitlement
-        gap so the client can drive the existing Nous OAuth flow.
-        """
-        from hermes_cli.nous_account import NousPortalAccountInfo
-
-        monkeypatch.setattr(
-            "hermes_cli.nous_subscription.get_nous_portal_account_info",
-            lambda *a, **k: NousPortalAccountInfo(
-                logged_in=False, source="none", fresh=False, paid_service_access=None
-            ),
-        )
-
+        """OPS-DELTA #48: the managed "Nous Subscription (Browser Use cloud)"
+        row was removed — the GUI can no longer select it (400), and a free
+        local row persists normally with no entitlement gate."""
         resp = self.client.put(
             "/api/tools/toolsets/browser/provider",
             json={"provider": "Nous Subscription (Browser Use cloud)"},
         )
+        assert resp.status_code == 400
+
+        resp = self.client.put(
+            "/api/tools/toolsets/browser/provider",
+            json={"provider": "Local Browser"},
+        )
         assert resp.status_code == 200
         data = resp.json()
         assert data["ok"] is True
-        assert data["needs_nous_auth"] is True
-        assert data["feature"] == "browser"
-        # The selection is still persisted — activation is what's gated.
+        assert "needs_nous_auth" not in data
         from hermes_cli.config import load_config
         cfg = load_config()
-        assert cfg["browser"]["cloud_provider"] == "browser-use"
+        assert cfg["browser"]["cloud_provider"] == "local"
 
 
     # -- Web capability split (search vs extract backends) ------------------
