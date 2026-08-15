@@ -310,9 +310,11 @@ function partitionSidebarNav(
   const builtinPaths = new Set(builtIn.map((i) => i.path));
   const coreItems: NavItem[] = [];
   const pluginItems: NavItem[] = [];
+  // Vigil: Hermes 遗留插件（kanban/achievements）不进运维面板导航。
+  const vigilHiddenPluginPaths = new Set(["/kanban", "/achievements"]);
   for (const item of merged) {
     if (builtinPaths.has(item.path)) coreItems.push(item);
-    else pluginItems.push(item);
+    else if (!vigilHiddenPluginPaths.has(item.path)) pluginItems.push(item);
   }
   return { coreItems, pluginItems };
 }
@@ -617,6 +619,12 @@ export default function App() {
                 )}
               >
                 <PluginSlot name="header-left" />
+
+                <img
+                  src="/favicon.png"
+                  alt="Vigil"
+                  className="size-6 shrink-0 rounded-md"
+                />
 
                 <Typography className="font-bold text-[1.125rem] leading-[0.95] tracking-[0.0525rem] text-midground uppercase">
                   Vigil
