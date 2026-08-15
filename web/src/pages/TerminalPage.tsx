@@ -4,7 +4,7 @@ import { TerminalPanel } from "@/components/TerminalPanel";
 
 /**
  * Terminal 页 —— 底部终端面板的展开形态（大视图，复用同一组件 expanded 模式）。
- * 数据源未就绪 → 空态 + WS 预留，不造假日志。
+ * 批二十八契约：POST /api/exec + SSE stream；needs_approval 态弹审批卡。
  */
 export default function TerminalPage() {
   const [collapsed, setCollapsed] = useState(false);
@@ -14,7 +14,7 @@ export default function TerminalPage() {
         <TerminalSquare className="size-5 text-[var(--vigil-muted)]" />
         <h1 className="text-lg font-semibold">Terminal</h1>
         <span className="text-xs text-[var(--vigil-muted)]">
-          · 审计日志 / AI 执行命令 / YAML 片段
+          · 执行 / 审计 / YAML（POST /api/exec + SSE，批二十八契约）
         </span>
       </div>
       <div className="flex min-h-0 flex-1 flex-col">
