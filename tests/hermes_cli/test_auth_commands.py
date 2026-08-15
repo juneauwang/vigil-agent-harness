@@ -70,7 +70,7 @@ def _clear_provider_env(monkeypatch):
 
 
 def test_auth_add_api_key_persists_manual_entry(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
@@ -95,7 +95,7 @@ def test_auth_add_api_key_persists_manual_entry(tmp_path, monkeypatch):
 
 
 def test_auth_add_nous_oauth_persists_pool_entry(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
     token = _jwt_with_email("nous@example.com")
     monkeypatch.setattr(
@@ -155,10 +155,10 @@ def test_auth_add_nous_oauth_persists_pool_entry(tmp_path, monkeypatch):
     assert entry["agent_key"] == token
     assert entry["portal_base_url"] == "https://portal.example.com"
 
-    # `hermes auth add nous` must also populate providers.nous so the
+    # `vigil auth add nous` must also populate providers.nous so the
     # 401-recovery path (resolve_nous_runtime_credentials) can refresh an
     # invoke JWT when the token expires. If this mirror is missing, recovery
-    # raises "Hermes is not logged into Nous Portal" and the agent dies.
+    # raises "Vigil is not logged into Nous Portal" and the agent dies.
     singleton = payload["providers"]["nous"]
     assert singleton["access_token"] == token
     assert singleton["refresh_token"] == "refresh-token"
@@ -168,11 +168,11 @@ def test_auth_add_nous_oauth_persists_pool_entry(tmp_path, monkeypatch):
 
 
 def test_auth_add_nous_oauth_honors_custom_label(tmp_path, monkeypatch):
-    """`hermes auth add nous --type oauth --label <name>` must preserve the
+    """`vigil auth add nous --type oauth --label <name>` must preserve the
     custom label end-to-end — it was silently dropped in the first cut of the
     persist_nous_credentials helper because `--label` wasn't threaded through.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
     token = _jwt_with_email("nous@example.com")
     monkeypatch.setattr(
@@ -229,16 +229,16 @@ def test_auth_add_nous_oauth_honors_custom_label(tmp_path, monkeypatch):
 
 
 def test_auth_add_codex_oauth_keeps_distinct_pool_accounts(tmp_path, monkeypatch):
-    """Two ``hermes auth add openai-codex`` runs for different ChatGPT
+    """Two ``vigil auth add openai-codex`` runs for different ChatGPT
     accounts must produce two independent pool entries with distinct tokens.
 
     Regression for #39236: the add path used to route through the singleton
     ``_save_codex_tokens`` save, so the second login overwrote the first
     account's singleton-mirrored ``device_code`` entry instead of adding a
-    second independent one. ``hermes auth list`` showed two labels sharing
+    second independent one. ``vigil auth list`` showed two labels sharing
     one token pair, and rotation silently always used the latest account.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
     first_token = _jwt_with_email("first-codex@example.com")
     second_token = _jwt_with_email("second-codex@example.com")
@@ -301,7 +301,7 @@ def test_auth_add_codex_oauth_keeps_distinct_pool_accounts(tmp_path, monkeypatch
 
 
 def test_codex_auth_status_reports_pool_only_credential(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, _codex_pool_only_store())
 
     from hermes_cli.auth import get_codex_auth_status
@@ -313,7 +313,7 @@ def test_codex_auth_status_reports_pool_only_credential(tmp_path, monkeypatch):
 
 
 def test_codex_runtime_pool_only_rate_limit_is_not_missing_auth(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, _codex_pool_only_store(exhausted=True))
 
     from hermes_cli.auth import AuthError, CODEX_RATE_LIMITED_CODE, resolve_codex_runtime_credentials
@@ -326,7 +326,7 @@ def test_codex_runtime_pool_only_rate_limit_is_not_missing_auth(tmp_path, monkey
 
 
 def test_auth_add_xai_oauth_sets_active_provider(tmp_path, monkeypatch):
-    """hermes auth add xai-oauth must set active_provider and write a pool entry.
+    """vigil auth add xai-oauth must set active_provider and write a pool entry.
 
     Regression history:
     - Early path called ``pool.add_entry()`` without ``active_provider``, so
@@ -336,7 +336,7 @@ def test_auth_add_xai_oauth_sets_active_provider(tmp_path, monkeypatch):
     - Current path mirrors openai-codex: pool-only ``manual:device_code`` entry
       plus ``mark_provider_active_if_unset`` on first add.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
     access_token = "xai-test-access-token"
     monkeypatch.setattr(
@@ -381,14 +381,14 @@ def test_auth_add_xai_oauth_sets_active_provider(tmp_path, monkeypatch):
 
 
 def test_auth_add_xai_oauth_keeps_distinct_pool_accounts(tmp_path, monkeypatch):
-    """Two ``hermes auth add xai-oauth`` runs must produce independent pool entries.
+    """Two ``vigil auth add xai-oauth`` runs must produce independent pool entries.
 
     Regression for the same collapse class as #39236 / #42316 for Codex: the
     add path used to route through the singleton ``_save_xai_oauth_tokens``
     save, so the second login overwrote the first account's singleton-mirrored
     ``device_code`` entry instead of adding a second independent one.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}})
     first_token = "xai-access-token-account-a"
     second_token = "xai-access-token-account-b"
@@ -470,7 +470,7 @@ def test_auth_add_xai_oauth_keeps_distinct_pool_accounts(tmp_path, monkeypatch):
 
 
 def test_auth_remove_reindexes_priorities(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     # Prevent pool auto-seeding from host env vars and file-backed sources
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     monkeypatch.delenv("ANTHROPIC_TOKEN", raising=False)
@@ -522,7 +522,7 @@ def test_auth_remove_reindexes_priorities(tmp_path, monkeypatch):
 
 
 def test_clear_provider_auth_removes_provider_pool_entries(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(
         tmp_path,
         {
@@ -568,14 +568,14 @@ def test_clear_provider_auth_removes_provider_pool_entries(tmp_path, monkeypatch
 
 
 def test_logout_resets_codex_config_when_auth_state_already_cleared(tmp_path, monkeypatch, capsys):
-    """`hermes logout --provider openai-codex` must still clear model.provider.
+    """`vigil logout --provider openai-codex` must still clear model.provider.
 
     Users can end up with auth.json already cleared but config.yaml still set to
     openai-codex.  Previously logout reported no auth state and left the agent
     pinned to the Codex provider.
     """
     hermes_home = tmp_path / "hermes"
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
     _write_auth_store(tmp_path, {"version": 1, "providers": {}, "credential_pool": {}})
     (hermes_home / "config.yaml").write_text(
         "model:\n"
@@ -600,7 +600,7 @@ def test_logout_resets_codex_config_when_auth_state_already_cleared(tmp_path, mo
 
 def test_unsuppress_credential_source_clears_marker(tmp_path, monkeypatch):
     """unsuppress_credential_source() removes a previously-set marker."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, {"version": 1})
 
     from hermes_cli.auth import suppress_credential_source, unsuppress_credential_source, is_source_suppressed
@@ -619,7 +619,7 @@ def test_unsuppress_credential_source_clears_marker(tmp_path, monkeypatch):
 
 def test_unsuppress_credential_source_preserves_other_markers(tmp_path, monkeypatch):
     """Clearing one marker must not affect unrelated markers."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(tmp_path, {"version": 1})
 
     from hermes_cli.auth import (
@@ -638,7 +638,7 @@ def test_unsuppress_credential_source_preserves_other_markers(tmp_path, monkeypa
 
 
 # =============================================================================
-# Unified credential-source stickiness — every source Hermes reads from has a
+# Unified credential-source stickiness — every source Vigil reads from has a
 # registered RemovalStep in agent.credential_sources, and every seeding path
 # gates on is_source_suppressed.  Below: one test per source proving remove
 # sticks across a fresh load_pool() call.
@@ -646,10 +646,10 @@ def test_unsuppress_credential_source_preserves_other_markers(tmp_path, monkeypa
 
 
 def test_seed_from_singletons_respects_hermes_pkce_suppression(tmp_path, monkeypatch):
-    """anthropic hermes_pkce must not re-seed from ~/.hermes/.anthropic_oauth.json when suppressed."""
+    """anthropic hermes_pkce must not re-seed from ~/.vigil/.anthropic_oauth.json when suppressed."""
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
 
     import yaml
     (hermes_home / "config.yaml").write_text(yaml.dump({"model": {"provider": "anthropic", "model": "claude"}}))
@@ -700,7 +700,7 @@ def test_credential_sources_registry_has_expected_steps():
         "gh auth token / COPILOT_GITHUB_TOKEN / GH_TOKEN",
         "Any env-seeded credential (XAI_API_KEY, DEEPSEEK_API_KEY, etc.)",
         "~/.claude/.credentials.json",
-        "~/.hermes/.anthropic_oauth.json",
+        "~/.vigil/.anthropic_oauth.json",
         "auth.json providers.nous",
         "auth.json providers.openai-codex + ~/.codex/auth.json",
         "auth.json providers.minimax-oauth",
@@ -735,7 +735,7 @@ def test_auth_remove_copilot_suppresses_all_variants(tmp_path, monkeypatch):
     """
     hermes_home = tmp_path / "hermes"
     hermes_home.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
 
     # The copilot pool entry is no longer persisted directly in auth.json —
     # `(copilot, gh_cli)` is borrowed and stripped by

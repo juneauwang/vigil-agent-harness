@@ -312,7 +312,7 @@ async def search_sessions(
                 seen[root] = payload
 
             # Direct ID matches first: users often paste a session id from CLI,
-            # logs, or another Hermes surface. FTS can't find those unless the
+            # logs, or another Vigil surface. FTS can't find those unless the
             # id happens to appear in message text. search_sessions_by_id is
             # SQL-bounded, so this stays cheap even with thousands of sessions.
             for row in db.search_sessions_by_id(
@@ -447,7 +447,7 @@ async def import_sessions_endpoint(request: Request):
     """Import one or more sessions exported from the dashboard or CLI.
 
     This is intentionally separate from ``/api/ops/import``: that endpoint
-    restores a whole Hermes backup archive, while this endpoint is scoped to
+    restores a whole Vigil backup archive, while this endpoint is scoped to
     session rows/messages and is safe to use from the Sessions page.
     """
     try:
@@ -519,7 +519,7 @@ async def delete_empty_sessions_endpoint(profile: Optional[str] = None):
 
 @manage_router.get("/api/sessions/stats")
 async def get_session_stats(profile: Optional[str] = None):
-    """Session-store statistics for the Sessions page (mirrors `hermes sessions stats`).
+    """Session-store statistics for the Sessions page (mirrors `vigil sessions stats`).
 
     Registered before ``/api/sessions/{session_id}`` so the literal ``stats``
     path isn't captured as a session id by the parameterized route.

@@ -32,11 +32,11 @@ from agent.proxy_sources import iron_proxy as ip
 
 @pytest.fixture
 def hermes_home(tmp_path, monkeypatch):
-    """Point HERMES_HOME at a temp dir so install paths don't touch the real $HOME."""
+    """Point VIGIL_HOME at a temp dir so install paths don't touch the real $HOME."""
 
     home = tmp_path / "hermes"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     # Make sure no stale provider keys influence discovery.
     for key in list(os.environ):
         if key.endswith("_API_KEY"):
@@ -625,7 +625,7 @@ def test_reset_for_tests_clears_version_cache_and_nonce():
 def test_docker_egress_node_options_uses_sentinel(hermes_home, monkeypatch):
     """``_egress_proxy_args_for_docker`` should NOT put NODE_OPTIONS in
     env_overrides directly; it uses a sentinel key
-    ``_HERMES_EGRESS_NODE_OPTIONS_APPEND`` so DockerEnvironment can
+    ``_VIGIL_EGRESS_NODE_OPTIONS_APPEND`` so DockerEnvironment can
     append-merge with the operator's existing NODE_OPTIONS."""
 
     from tools.environments.docker import _egress_proxy_args_for_docker
@@ -653,7 +653,7 @@ def test_docker_egress_node_options_uses_sentinel(hermes_home, monkeypatch):
 
     _, env, _ = _egress_proxy_args_for_docker()
     # The egress dict should contain the sentinel, NOT a raw NODE_OPTIONS.
-    assert env.get("_HERMES_EGRESS_NODE_OPTIONS_APPEND") == "--use-openssl-ca"
+    assert env.get("_VIGIL_EGRESS_NODE_OPTIONS_APPEND") == "--use-openssl-ca"
     assert "NODE_OPTIONS" not in env, (
         "NODE_OPTIONS in egress env_overrides would clobber the operator's "
         "docker_env NODE_OPTIONS — that's exactly the bug arshkumarsingh "

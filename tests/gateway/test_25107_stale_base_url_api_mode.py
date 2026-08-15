@@ -79,7 +79,7 @@ def _fake_switch_result(*, base_url="", api_mode=""):
 def _setup_isolated_home(tmp_path, monkeypatch, model_yaml_value, *, base_url="", api_mode=""):
     import gateway.run as gateway_run
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     hermes_home.mkdir()
     cfg_path = hermes_home / "config.yaml"
     cfg_path.write_text(

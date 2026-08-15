@@ -11,7 +11,7 @@ of 4000+ models across 109+ providers.  Provides:
 Data resolution order:
   1. In-memory cache (fresh, or stale served immediately while a single
      background daemon thread refreshes)
-  2. Disk cache (~/.hermes/models_dev_cache.json — any age; stale data is
+  2. Disk cache (~/.vigil/models_dev_cache.json — any age; stale data is
      served rather than blocking callers on the network)
   3. Network fetch (https://models.dev/api.json) — only when no cache
      exists at all; failed refreshes back off for 5 minutes process-wide
@@ -145,10 +145,10 @@ class ProviderInfo:
 
 
 # ---------------------------------------------------------------------------
-# Provider ID mapping: Hermes ↔ models.dev
+# Provider ID mapping: Vigil ↔ models.dev
 # ---------------------------------------------------------------------------
 
-# Hermes provider names → models.dev provider IDs
+# Vigil provider names → models.dev provider IDs
 PROVIDER_TO_MODELS_DEV: Dict[str, str] = {
     "openrouter": "openrouter",
     "novita": "novita-ai",
@@ -190,7 +190,7 @@ PROVIDER_TO_MODELS_DEV: Dict[str, str] = {
     "ollama-cloud": "ollama-cloud",
 }
 
-# Reverse mapping: models.dev → Hermes (built lazily)
+# Reverse mapping: models.dev → Vigil (built lazily)
 _MODELS_DEV_TO_PROVIDER: Optional[Dict[str, str]] = None
 
 
@@ -378,7 +378,7 @@ def fetch_models_dev(
       5. Any failed refresh (foreground or background) suppresses further
          automatic refreshes for 5 minutes process-wide.
 
-    When ``force_refresh=True`` (used by ``hermes config refresh``, the
+    When ``force_refresh=True`` (used by ``vigil config refresh``, the
     \"refresh model catalog\" code path), cache fast paths and the failure
     backoff are bypassed; the function hits the network and only falls back
     to cached data if the call fails. When ``allow_network=False``, any
@@ -580,7 +580,7 @@ class ModelCapabilities:
 
 
 def _get_provider_models(provider: str) -> Optional[Dict[str, Any]]:
-    """Resolve a Hermes provider ID to its models dict from models.dev.
+    """Resolve a Vigil provider ID to its models dict from models.dev.
 
     Returns the models dict or None if the provider is unknown or has no data.
     """
@@ -704,7 +704,7 @@ _NOISE_PATTERNS: re.Pattern = re.compile(
 )
 
 # Google's live Gemini catalogs currently include a mix of stale slugs and
-# Gemma models whose TPM quotas are too small for normal Hermes agent traffic.
+# Gemma models whose TPM quotas are too small for normal Vigil agent traffic.
 # Keep capability metadata available for direct/manual use, but hide these from
 # the Gemini model catalogs we surface in setup and model selection.
 _GOOGLE_HIDDEN_MODELS = frozenset({
@@ -845,10 +845,10 @@ def get_provider_info(
 ) -> Optional[ProviderInfo]:
     """Get full provider metadata from models.dev.
 
-    Accepts either a Hermes provider ID (e.g. "kilocode") or a models.dev
+    Accepts either a Vigil provider ID (e.g. "kilocode") or a models.dev
     ID (e.g. "kilo").  Returns None if the provider is not in the catalog.
     """
-    # Resolve Hermes ID → models.dev ID
+    # Resolve Vigil ID → models.dev ID
     mdev_id = PROVIDER_TO_MODELS_DEV.get(provider_id, provider_id)
 
     # NOTE: keep the zero-argument call on the default path. Dozens of test
@@ -875,7 +875,7 @@ def get_model_info(
 ) -> Optional[ModelInfo]:
     """Get full model metadata from models.dev.
 
-    Accepts Hermes or models.dev provider ID.  Tries exact match then
+    Accepts Vigil or models.dev provider ID.  Tries exact match then
     case-insensitive fallback.  Returns None if not found.
     """
     mdev_id = PROVIDER_TO_MODELS_DEV.get(provider_id, provider_id)

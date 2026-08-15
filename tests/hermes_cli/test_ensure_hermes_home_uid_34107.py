@@ -1,7 +1,7 @@
 """Regression tests for #34107 — Docker UID/GID handling in ensure_hermes_home.
 
-When Hermes runs in Docker with ``HERMES_UID=1000`` / ``HERMES_GID=911``,
-the entrypoint chowns the top-level ``HERMES_HOME`` once at startup. But
+When Vigil runs in Docker with ``VIGIL_UID=1000`` / ``VIGIL_GID=911``,
+the entrypoint chowns the top-level ``VIGIL_HOME`` once at startup. But
 subdirectories created at runtime by ``ensure_hermes_home()`` — especially
 for profile namespaces under ``profiles/<name>/`` spawned by kanban
 workers — were landing as ``root:root`` and blocking subsequent
@@ -28,8 +28,8 @@ import pytest
 
 class TestResolveHermesUidGid:
     def test_returns_parsed_values_when_both_set(self, monkeypatch):
-        monkeypatch.setenv("HERMES_UID", "1000")
-        monkeypatch.setenv("HERMES_GID", "911")
+        monkeypatch.setenv("VIGIL_UID", "1000")
+        monkeypatch.setenv("VIGIL_GID", "911")
         from hermes_cli.config import _resolve_hermes_uid_gid
         uid, gid = _resolve_hermes_uid_gid()
         assert uid == 1000
@@ -38,8 +38,8 @@ class TestResolveHermesUidGid:
 
     @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific")
     def test_windows_returns_none_none(self, monkeypatch):
-        monkeypatch.setenv("HERMES_UID", "1000")
-        monkeypatch.setenv("HERMES_GID", "911")
+        monkeypatch.setenv("VIGIL_UID", "1000")
+        monkeypatch.setenv("VIGIL_GID", "911")
         from hermes_cli.config import _resolve_hermes_uid_gid
         uid, gid = _resolve_hermes_uid_gid()
         assert uid is None
@@ -53,8 +53,8 @@ class TestResolveHermesUidGid:
 
 class TestChownToHermesUid:
     def test_calls_os_chown_when_both_set(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_UID", "1000")
-        monkeypatch.setenv("HERMES_GID", "911")
+        monkeypatch.setenv("VIGIL_UID", "1000")
+        monkeypatch.setenv("VIGIL_GID", "911")
         from hermes_cli import config as cfg
 
         d = tmp_path / "subdir"
@@ -70,8 +70,8 @@ class TestChownToHermesUid:
         the entrypoint's startup chown -R will pick it up on restart, and
         in most cases the dir was already correctly-owned by the calling
         user anyway."""
-        monkeypatch.setenv("HERMES_UID", "1000")
-        monkeypatch.setenv("HERMES_GID", "911")
+        monkeypatch.setenv("VIGIL_UID", "1000")
+        monkeypatch.setenv("VIGIL_GID", "911")
         from hermes_cli import config as cfg
 
         d = tmp_path / "subdir"
@@ -87,8 +87,8 @@ class TestChownToHermesUid:
     def test_attributeerror_swallowed_for_windows_compat(self, tmp_path, monkeypatch):
         """os.chown doesn't exist on Windows. Catching AttributeError keeps
         the helper portable."""
-        monkeypatch.setenv("HERMES_UID", "1000")
-        monkeypatch.setenv("HERMES_GID", "911")
+        monkeypatch.setenv("VIGIL_UID", "1000")
+        monkeypatch.setenv("VIGIL_GID", "911")
         from hermes_cli import config as cfg
 
         d = tmp_path / "subdir"
@@ -106,8 +106,8 @@ class TestChownToHermesUid:
 class TestSecureDirChown:
     @pytest.mark.skipif(sys.platform == "win32", reason="chown is no-op on Windows")
     def test_secure_dir_invokes_chown_when_env_set(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_UID", "1000")
-        monkeypatch.setenv("HERMES_GID", "911")
+        monkeypatch.setenv("VIGIL_UID", "1000")
+        monkeypatch.setenv("VIGIL_GID", "911")
         from hermes_cli import config as cfg
 
         d = tmp_path / "subdir"
@@ -119,8 +119,8 @@ class TestSecureDirChown:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="chown is no-op on Windows")
     def test_secure_dir_no_chown_when_env_unset(self, tmp_path, monkeypatch):
-        monkeypatch.delenv("HERMES_UID", raising=False)
-        monkeypatch.delenv("HERMES_GID", raising=False)
+        monkeypatch.delenv("VIGIL_UID", raising=False)
+        monkeypatch.delenv("VIGIL_GID", raising=False)
         from hermes_cli import config as cfg
 
         d = tmp_path / "subdir"

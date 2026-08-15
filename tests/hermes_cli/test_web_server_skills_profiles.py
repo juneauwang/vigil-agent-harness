@@ -5,7 +5,7 @@ file (future CLI/gateway runs) — it never retargets the running dashboard
 process. Before the ``profile`` parameter existed, toggling a skill after
 "activating" a profile silently wrote into the dashboard's own config.
 These tests pin the new behavior: reads and writes land in the REQUESTED
-profile's HERMES_HOME, and the dashboard's own profile stays untouched.
+profile's VIGIL_HOME, and the dashboard's own profile stays untouched.
 """
 import pytest
 import yaml
@@ -95,7 +95,7 @@ class TestProfileScopedHubActions:
     def test_hub_install_spawns_with_profile_flag(
         self, client, isolated_profiles, monkeypatch
     ):
-        """Hub installs must go through a fresh ``hermes -p <profile>``
+        """Hub installs must go through a fresh ``vigil -p <profile>``
         subprocess — the in-process scope can't reach skills_hub's
         import-time SKILLS_DIR binding."""
         import hermes_cli.web_server as web_server

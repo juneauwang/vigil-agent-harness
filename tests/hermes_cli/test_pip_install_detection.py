@@ -12,11 +12,11 @@ import pytest
 
 
 def test_code_scoped_stamp_wins_over_home_stamp(tmp_path):
-    """The stamp next to the running code is authoritative over $HERMES_HOME.
+    """The stamp next to the running code is authoritative over $VIGIL_HOME.
 
-    Models a host git install whose $HERMES_HOME is shared with (and stamped
+    Models a host git install whose $VIGIL_HOME is shared with (and stamped
     'docker' by) a co-located container. The code-scoped stamp must win so the
-    host install is correctly identified as 'git' and 'hermes update' works.
+    host install is correctly identified as 'git' and 'vigil update' works.
     """
     code = tmp_path / "code"
     home = tmp_path / "home"
@@ -35,7 +35,7 @@ def test_code_scoped_stamp_wins_over_home_stamp(tmp_path):
 
 
 def test_stamp_install_method_writes_code_scoped(tmp_path):
-    """stamp_install_method writes next to the code, not into $HERMES_HOME."""
+    """stamp_install_method writes next to the code, not into $VIGIL_HOME."""
     code = tmp_path / "code"
     home = tmp_path / "home"
     code.mkdir()
@@ -55,7 +55,7 @@ def test_container_without_stamp_is_not_docker(tmp_path):
     ``test_stamp_file_takes_precedence``; the published image -> ``docker``),
     so neither hits this path. An unsupported manual install dropped into a
     container has no stamp and was wrongly classified as the published Docker
-    image, so ``hermes update`` refused to run. With a ``.git`` checkout it
+    image, so ``vigil update`` refused to run. With a ``.git`` checkout it
     must resolve to ``git``.
     """
     (tmp_path / ".git").mkdir()

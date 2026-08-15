@@ -29,7 +29,7 @@ def _reset_auth_registry():
 def hermes_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     return home
 
 

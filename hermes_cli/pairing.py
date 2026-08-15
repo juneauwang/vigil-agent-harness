@@ -2,14 +2,14 @@
 CLI commands for the DM pairing system.
 
 Usage:
-    hermes pairing list              # Show all pending + approved users
-    hermes pairing approve <platform> <request-id|code>  # Approve a pairing request
-    hermes pairing revoke <platform> <user_id> # Revoke user access
-    hermes pairing clear-pending     # Clear all expired/pending codes
+    vigil pairing list              # Show all pending + approved users
+    vigil pairing approve <platform> <request-id|code>  # Approve a pairing request
+    vigil pairing revoke <platform> <user_id> # Revoke user access
+    vigil pairing clear-pending     # Clear all expired/pending codes
 """
 
 def pairing_command(args):
-    """Handle hermes pairing subcommands."""
+    """Handle vigil pairing subcommands."""
     from gateway.pairing import PairingStore
 
     store = PairingStore()
@@ -94,7 +94,7 @@ def _cmd_approve(store, platform: str, code: str):
         print(f"  Lockout clears in ~{mins} minute(s).")
         print(
             "  To reset sooner, delete the '_lockout:{0}' entry from "
-            "~/.hermes/platforms/pairing/_rate_limits.json\n".format(platform)
+            "~/.vigil/platforms/pairing/_rate_limits.json\n".format(platform)
         )
     else:
         print(f"\n  Pairing request or code '{code}' not found or expired for platform '{platform}'.")

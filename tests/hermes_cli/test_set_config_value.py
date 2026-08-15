@@ -16,10 +16,10 @@ from hermes_cli.config import (
 
 @pytest.fixture(autouse=True)
 def _isolated_hermes_home(tmp_path):
-    """Point HERMES_HOME at a temp dir so tests never touch real config."""
+    """Point VIGIL_HOME at a temp dir so tests never touch real config."""
     env_file = tmp_path / ".env"
     env_file.touch()
-    with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+    with patch.dict(os.environ, {"VIGIL_HOME": str(tmp_path)}):
         yield tmp_path
 
 
@@ -196,7 +196,7 @@ class TestConfigGetUnset:
 # ---------------------------------------------------------------------------
 
 class TestListNavigation:
-    """hermes config set must preserve YAML list fields when using numeric
+    """vigil config set must preserve YAML list fields when using numeric
     indices.  Before #17876, _set_nested would silently replace the entire
     list with a dict, destroying every sibling entry.
     """
@@ -442,10 +442,10 @@ class TestSecretRedactionInDisplay:
 # ---------------------------------------------------------------------------
 
 class TestSchemaValidation:
-    """#34067: ``hermes config set`` must not report bare success for
+    """#34067: ``vigil config set`` must not report bare success for
     unrecognized keys. The key IS written (arbitrary keys are supported —
     top-level scalars bridge into os.environ for skills/external apps), but
-    a post-write notice warns that Hermes may never read it and suggests the
+    a post-write notice warns that Vigil may never read it and suggests the
     likely-intended path. Headline case: the plausible-but-wrong
     ``gateway.discord.gateway_restart_notification`` (correct path:
     ``discord.gateway_restart_notification``).
@@ -459,10 +459,10 @@ class TestSchemaValidation:
 
     def test_desktop_macos_signing_identity_is_accepted(self, _isolated_hermes_home, capsys):
         """The documented TCC signing identity setting is part of the schema."""
-        set_config_value("desktop.macos_signing_identity", "Hermes Local Signing")
+        set_config_value("desktop.macos_signing_identity", "Vigil Local Signing")
         import yaml
         saved = yaml.safe_load(_read_config(_isolated_hermes_home))
-        assert saved["desktop"]["macos_signing_identity"] == "Hermes Local Signing"
+        assert saved["desktop"]["macos_signing_identity"] == "Vigil Local Signing"
         assert "not a recognized config key" not in capsys.readouterr().out
 
 
@@ -530,7 +530,7 @@ class TestDisplaySkinTouch:
 
     The gateway's skin watcher broadcasts ``skin.changed`` on a signature move
     of (active name, skin-file mtime). Re-affirming the already-configured skin
-    (`hermes config set display.skin X` while it is already X — the recovery
+    (`vigil config set display.skin X` while it is already X — the recovery
     path when a surface missed the original activation) moves NEITHER part, so
     without the touch the explicit apply is invisible to every live surface.
     """
@@ -572,7 +572,7 @@ class TestDisplaySkinTouch:
 # ---------------------------------------------------------------------------
 
 class TestMappingGuard:
-    """``hermes config set <section> <scalar>`` must not silently destroy an
+    """``vigil config set <section> <scalar>`` must not silently destroy an
     existing mapping.  Bare ``model`` is a documented shorthand — redirect to
     ``model.default``.  All other mapping sections are refused without --force.
     """
@@ -582,7 +582,7 @@ class TestMappingGuard:
         (tmp_path / "config.yaml").write_text(_yaml.dump(data))
 
     def test_bare_model_shorthand_preserves_siblings(self, _isolated_hermes_home):
-        """hermes config set model <id> → model.default, siblings survive."""
+        """vigil config set model <id> → model.default, siblings survive."""
         self._write_config(_isolated_hermes_home, {
             "model": {
                 "default": "gpt-4o",
@@ -606,7 +606,7 @@ class TestMappingGuard:
         assert "gpt-5.6-sol" in _read_config(_isolated_hermes_home)
 
     def test_non_model_mapping_is_refused(self, _isolated_hermes_home):
-        """hermes config set terminal bash → refuse, terminal has sub-keys."""
+        """vigil config set terminal bash → refuse, terminal has sub-keys."""
         self._write_config(_isolated_hermes_home, {
             "terminal": {
                 "backend": "docker",
@@ -619,7 +619,7 @@ class TestMappingGuard:
         assert exc.value.code == 1
 
     def test_non_model_mapping_force_overwrites(self, _isolated_hermes_home):
-        """hermes config set --force terminal bash → proceed, section wiped."""
+        """vigil config set --force terminal bash → proceed, section wiped."""
         self._write_config(_isolated_hermes_home, {
             "terminal": {
                 "backend": "docker",
@@ -646,7 +646,7 @@ class TestMappingGuard:
         assert parsed["model"]["provider"] == "openai-api"
 
     def test_model_force_overwrites_entire_section(self, _isolated_hermes_home):
-        """hermes config set --force model <id> → overwrite entire section."""
+        """vigil config set --force model <id> → overwrite entire section."""
         self._write_config(_isolated_hermes_home, {
             "model": {
                 "default": "gpt-4o",

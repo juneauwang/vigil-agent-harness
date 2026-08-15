@@ -176,7 +176,7 @@ def test_approval_denied_emits_requested_and_denied(tmp_path, monkeypatch):
     """CLI 审批 deny → requested + denied 事件。"""
     import tools.approval as approval_mod
 
-    monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+    monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
     monkeypatch.setattr(
         approval_mod, "prompt_dangerous_approval",
         lambda *a, **kw: "deny",
@@ -193,7 +193,7 @@ def test_approval_denied_emits_requested_and_denied(tmp_path, monkeypatch):
 def test_approval_timeout_emits_timeout(tmp_path, monkeypatch):
     import tools.approval as approval_mod
 
-    monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+    monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
     monkeypatch.setattr(
         approval_mod, "prompt_dangerous_approval",
         lambda *a, **kw: "timeout",
@@ -212,7 +212,7 @@ def test_approval_timeout_emits_timeout(tmp_path, monkeypatch):
 def test_approval_approved_emits_approved(tmp_path, monkeypatch):
     import tools.approval as approval_mod
 
-    monkeypatch.setenv("HERMES_INTERACTIVE", "1")
+    monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
     monkeypatch.setattr(
         approval_mod, "prompt_dangerous_approval",
         lambda *a, **kw: "once",

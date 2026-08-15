@@ -33,7 +33,7 @@ def _cleanup_mcp_state(mcp_tool, extra_servers=()) -> None:
 
 def test_initial_connect_failure_is_registry_owned_and_reaped(monkeypatch, tmp_path):
     """Normal discovery must retain the parked task for clean shutdown."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     from tools import mcp_tool
 
@@ -104,7 +104,7 @@ def test_initial_connect_failure_is_registry_owned_and_reaped(monkeypatch, tmp_p
 
 def test_initial_connect_failure_revives_same_registered_server(monkeypatch, tmp_path):
     """A cached parked failure must revive through register_mcp_servers()."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     from tools import mcp_tool
     from tools.registry import ToolRegistry
@@ -199,7 +199,7 @@ def test_initial_connect_failure_revives_same_registered_server(monkeypatch, tmp
 
 def test_terminal_initial_failure_is_not_retained(monkeypatch, tmp_path):
     """A non-recoverable startup error must not leave a dead cache entry."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     from tools import mcp_tool
 
@@ -235,7 +235,7 @@ def test_terminal_initial_failure_is_not_retained(monkeypatch, tmp_path):
 
 def test_standalone_failed_connect_is_reaped_without_global_owner(monkeypatch, tmp_path):
     """Probe-only _connect_server failures must not publish parked servers."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     from tools import mcp_tool
 

@@ -188,7 +188,7 @@ class TestOneTurnNeverPersisted:
         from gateway.run import GatewayRunner
         from hermes_cli.model_switch import ModelSwitchResult
 
-        hermes_home = tmp_path / ".hermes"
+        hermes_home = tmp_path / ".vigil"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text(
             _yaml.safe_dump(

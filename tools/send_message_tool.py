@@ -90,11 +90,11 @@ def _media_caption_split(text, media_files, *, max_caption_len):
     """Decide whether the accompanying text should ride on the media bubble.
 
     Single enforced chokepoint for the ``MEDIA:<path> caption`` behavior
-    across every standalone sender. ``hermes send`` (and the send_message
+    across every standalone sender. ``vigil send`` (and the send_message
     tool / cron) strips the ``MEDIA:`` tag and leaves the remaining prose as
     ``text``; historically each platform sent that ``text`` as a *separate*
     message before an uncaptioned media bubble, splitting the reported case
-    ``hermes send --to whatsapp "MEDIA:/x.png This Caption"`` into two parts.
+    ``vigil send --to whatsapp "MEDIA:/x.png This Caption"`` into two parts.
 
     Returns ``(caption, body_text)``:
 
@@ -427,9 +427,9 @@ def _handle_send(args):
                     },
                 )
             else:
-                return tool_error(f"Platform '{platform_name}' is not configured. Set up credentials in ~/.hermes/config.yaml or environment variables.")
+                return tool_error(f"Platform '{platform_name}' is not configured. Set up credentials in ~/.vigil/config.yaml or environment variables.")
         else:
-            return tool_error(f"Platform '{platform_name}' is not configured. Set up credentials in ~/.hermes/config.yaml or environment variables.")
+            return tool_error(f"Platform '{platform_name}' is not configured. Set up credentials in ~/.vigil/config.yaml or environment variables.")
 
     from gateway.platforms.base import BasePlatformAdapter
 
@@ -506,8 +506,8 @@ def _handle_send(args):
             try:
                 from gateway.mirror import mirror_to_session
                 from gateway.session_context import get_session_env
-                source_label = get_session_env("HERMES_SESSION_PLATFORM", "cli")
-                user_id = get_session_env("HERMES_SESSION_USER_ID", "") or None
+                source_label = get_session_env("VIGIL_SESSION_PLATFORM", "cli")
+                user_id = get_session_env("VIGIL_SESSION_USER_ID", "") or None
                 if mirror_to_session(
                     platform_name,
                     chat_id,
@@ -642,11 +642,11 @@ def _describe_media_for_mirror(media_files):
 def _get_cron_auto_delivery_target():
     """Return the cron scheduler's auto-delivery target for the current run, if any."""
     from gateway.session_context import get_session_env
-    platform = get_session_env("HERMES_CRON_AUTO_DELIVER_PLATFORM", "").strip().lower()
-    chat_id = get_session_env("HERMES_CRON_AUTO_DELIVER_CHAT_ID", "").strip()
+    platform = get_session_env("VIGIL_CRON_AUTO_DELIVER_PLATFORM", "").strip().lower()
+    chat_id = get_session_env("VIGIL_CRON_AUTO_DELIVER_CHAT_ID", "").strip()
     if not platform or not chat_id:
         return None
-    thread_id = get_session_env("HERMES_CRON_AUTO_DELIVER_THREAD_ID", "").strip() or None
+    thread_id = get_session_env("VIGIL_CRON_AUTO_DELIVER_THREAD_ID", "").strip() or None
     return {
         "platform": platform,
         "chat_id": chat_id,
@@ -1803,7 +1803,7 @@ async def _send_matrix_via_adapter(pconfig, chat_id, message, media_files=None, 
     that exhaust recipient OTKs and silently drop messages (issue #46310).
 
     Falls back to an ephemeral connect/disconnect cycle only when no gateway
-    is running (standalone cron, ``hermes send`` CLI).
+    is running (standalone cron, ``vigil send`` CLI).
     """
     media_files = media_files or []
     metadata = {"thread_id": thread_id} if thread_id else None
@@ -1971,9 +1971,9 @@ async def _send_bluebubbles(extra, chat_id, message):
 def _check_send_message():
     """Gate send_message on gateway running (always available on messaging platforms).
 
-    Also passes for kanban workers — the dispatcher sets ``HERMES_KANBAN_TASK``
+    Also passes for kanban workers — the dispatcher sets ``VIGIL_KANBAN_TASK``
     on every spawned worker, but those workers run with the assignee profile's
-    ``HERMES_HOME`` which has no ``gateway.pid``, so the gateway-running check
+    ``VIGIL_HOME`` which has no ``gateway.pid``, so the gateway-running check
     would fail even though the parent gateway is alive. Honoring the env var
     lets workers call ``send_message`` to deliver rich content directly to the
     originating chat (paired with ``kanban_complete`` for the short notifier
@@ -1981,10 +1981,10 @@ def _check_send_message():
     reply with more than the ~200-char first-line truncation the kanban
     notifier applies.
     """
-    if os.environ.get("HERMES_KANBAN_TASK"):
+    if os.environ.get("VIGIL_KANBAN_TASK"):
         return True
     from gateway.session_context import get_session_env
-    platform = get_session_env("HERMES_SESSION_PLATFORM", "")
+    platform = get_session_env("VIGIL_SESSION_PLATFORM", "")
     if platform and platform != "local":
         return True
     try:
@@ -2109,7 +2109,7 @@ from tools.registry import tool_error
 # ``_send_via_adapter``, ``_parse_target_ref``, the per-platform ``_send_*``
 # helpers) remains the shared transport used by:
 #   - cron delivery (cron/scheduler.py)
-#   - the ``hermes send`` CLI command (hermes_cli/send_cmd.py)
+#   - the ``vigil send`` CLI command (hermes_cli/send_cmd.py)
 #   - the gateway kanban notifier (dashboard-toggled, outside agent control)
 #   - the standalone MCP server (mcp_serve.py), which is an opt-in surface
 # Those callers import the helpers directly; none of them need the registry

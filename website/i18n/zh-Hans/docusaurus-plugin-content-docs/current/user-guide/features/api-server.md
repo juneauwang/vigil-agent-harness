@@ -11,26 +11,26 @@ API 服务器将 hermes-agent 作为 OpenAI 兼容的 HTTP 端点暴露出来。
 你的 agent 使用完整工具集（终端、文件操作、网络搜索、记忆、技能）处理请求，并返回最终响应。在流式传输时，工具进度指示器会内联显示，让前端能够展示 agent 正在执行的操作。
 
 :::tip 一个后端同时覆盖模型与工具
-Hermes 本身需要配置好 provider（提供商）和工具后端，API 服务器才能发挥作用。[Nous Portal](/user-guide/features/tool-gateway) 订阅同时处理两者——300+ 个模型，以及通过 Tool Gateway 提供的网络/图像/TTS/浏览器功能。在启动 API 服务器之前运行一次 `hermes setup --portal`，Open WebUI 或 LobeChat 等前端即可获得一个完整配备工具的后端。
+Vigil 本身需要配置好 provider（提供商）和工具后端，API 服务器才能发挥作用。[Nous Portal](/user-guide/features/tool-gateway) 订阅同时处理两者——300+ 个模型，以及通过 Tool Gateway 提供的网络/图像/TTS/浏览器功能。在启动 API 服务器之前运行一次 `vigil setup --portal`，Open WebUI 或 LobeChat 等前端即可获得一个完整配备工具的后端。
 :::
 
 ## 快速开始
 
 ### 1. 启用 API 服务器
 
-在 `~/.hermes/.env` 中添加：
+在 `~/.vigil/.env` 中添加：
 
 ```bash
 API_SERVER_ENABLED=true
 API_SERVER_KEY=change-me-local-dev
-# 可选：仅当浏览器需要直接调用 Hermes 时
+# 可选：仅当浏览器需要直接调用 Vigil 时
 # API_SERVER_CORS_ORIGINS=http://localhost:3000
 ```
 
 ### 2. 启动 gateway
 
 ```bash
-hermes gateway
+vigil gateway
 ```
 
 你将看到：
@@ -106,11 +106,11 @@ curl http://localhost:8642/v1/chat/completions \
 
 上传的文件（`file` / `input_file` / `file_id`）和非图像 `data:` URL 将返回 `400 unsupported_content_type`。
 
-**流式传输**（`"stream": true`）：返回逐 token 响应块的 Server-Sent Events（SSE）。对于 **Chat Completions**，流使用标准 `chat.completion.chunk` 事件，以及 Hermes 自定义的 `hermes.tool.progress` 事件用于工具启动的 UX 展示。对于 **Responses**，流使用 OpenAI Responses 事件类型，如 `response.created`、`response.output_text.delta`、`response.output_item.added`、`response.output_item.done` 和 `response.completed`。
+**流式传输**（`"stream": true`）：返回逐 token 响应块的 Server-Sent Events（SSE）。对于 **Chat Completions**，流使用标准 `chat.completion.chunk` 事件，以及 Vigil 自定义的 `hermes.tool.progress` 事件用于工具启动的 UX 展示。对于 **Responses**，流使用 OpenAI Responses 事件类型，如 `response.created`、`response.output_text.delta`、`response.output_item.added`、`response.output_item.done` 和 `response.completed`。
 
 **流中的工具进度：**
-- **Chat Completions**：Hermes 发出 `event: hermes.tool.progress` 以提供工具启动可见性，同时不污染持久化的 assistant 文本。
-- **Responses**：Hermes 在 SSE 流期间发出符合规范的 `function_call` 和 `function_call_output` 输出项，让客户端能够实时渲染结构化工具 UI。
+- **Chat Completions**：Vigil 发出 `event: hermes.tool.progress` 以提供工具启动可见性，同时不污染持久化的 assistant 文本。
+- **Responses**：Vigil 在 SSE 流期间发出符合规范的 `function_call` 和 `function_call_output` 输出项，让客户端能够实时渲染结构化工具 UI。
 
 ### POST /v1/responses
 
@@ -219,7 +219,7 @@ OpenAI Responses API 格式。通过 `previous_response_id` 支持服务端对�
 }
 ```
 
-在集成仪表板、浏览器 UI 或控制平面时使用此端点，以便它们能够发现当前运行的 Hermes 版本是否支持 runs、流式传输、取消和 session 连续性，而无需依赖私有 Python 内部实现。
+在集成仪表板、浏览器 UI 或控制平面时使用此端点，以便它们能够发现当前运行的 Vigil 版本是否支持 runs、流式传输、取消和 session 连续性，而无需依赖私有 Python 内部实现。
 
 ### GET /health
 
@@ -246,7 +246,7 @@ OpenAI Responses API 格式。通过 `previous_response_id` 支持服务端对�
 }
 ```
 
-Runs 接受简单的 `input` 字符串，以及可选的 `session_id`、`instructions`、`conversation_history` 或 `previous_response_id`。当提供 `session_id` 时，Hermes 会在 run 状态中暴露它，以便外部 UI 将 run 与自己的对话 ID 关联。
+Runs 接受简单的 `input` 字符串，以及可选的 `session_id`、`instructions`、`conversation_history` 或 `previous_response_id`。当提供 `session_id` 时，Vigil 会在 run 状态中暴露它，以便外部 UI 将 run 与自己的对话 ID 关联。
 
 ### GET /v1/runs/\{run_id\}
 
@@ -274,7 +274,7 @@ run 的工具调用进度、token 增量和生命周期事件的 Server-Sent Eve
 
 ### POST /v1/runs/\{run_id\}/stop
 
-中断正在运行的 agent 轮次。端点立即返回 `{"status": "stopping"}`，同时 Hermes 要求活跃 agent 在下一个安全中断点停止。
+中断正在运行的 agent 轮次。端点立即返回 `{"status": "stopping"}`，同时 Vigil 要求活跃 agent 在下一个安全中断点停止。
 run 会保持 `stopping` 并继续被跟踪，直到 executor 支持的工作退出，然后进入 `cancelled`；停止请求不会隐藏仍在运行的 worker。
 
 ## Jobs API（后台计划任务）
@@ -287,7 +287,7 @@ run 会保持 `stopping` 并继续被跟踪，直到 executor 支持的工作退
 
 ### POST /api/jobs
 
-创建新的计划任务。请求体接受与 `hermes cron` 相同的结构——prompt（提示词）、schedule（计划）、skills（技能）、provider 覆盖、投递目标。
+创建新的计划任务。请求体接受与 `vigil cron` 相同的结构——prompt（提示词）、schedule（计划）、skills（技能）、provider 覆盖、投递目标。
 
 ### GET /api/jobs/\{job_id\}
 
@@ -329,7 +329,7 @@ run 会保持 `stopping` 并继续被跟踪，直到 executor 支持的工作退
 Authorization: Bearer ***
 ```
 
-通过 `API_SERVER_KEY` 环境变量配置密钥。如果需要浏览器直接调用 Hermes，还需将 `API_SERVER_CORS_ORIGINS` 设置为明确的允许列表。
+通过 `API_SERVER_KEY` 环境变量配置密钥。如果需要浏览器直接调用 Vigil，还需将 `API_SERVER_CORS_ORIGINS` 设置为明确的允许列表。
 
 :::warning 安全
 API 服务器提供对 hermes-agent 工具集的完整访问权限，**包括终端命令**。当绑定到非回环地址（如 `0.0.0.0`）时，**必须**设置 `API_SERVER_KEY`。同时保持 `API_SERVER_CORS_ORIGINS` 范围尽量小，以控制浏览器访问。
@@ -352,7 +352,7 @@ API 服务器提供对 hermes-agent 工具集的完整访问权限，**包括终
 
 ### config.yaml
 
-相同的设置也可以写在 `~/.hermes/config.yaml` 中嵌套的 `gateway.api_server:` 小节下：
+相同的设置也可以写在 `~/.vigil/config.yaml` 中嵌套的 `gateway.api_server:` 小节下：
 
 ```yaml
 gateway:
@@ -362,7 +362,7 @@ gateway:
     host: 127.0.0.1
     key: your-secret-key
     cors_origins: http://localhost:3000
-    model_name: my-hermes
+    model_name: my-vigil
 ```
 
 `port`、`key`、`host`、`cors_origins` 和 `model_name` 会自动桥接到该平台的 `extra` 设置中，行为与对应的 `API_SERVER_*` 环境变量完全一致。环境变量优先于 `config.yaml` 中的值。该配置块同样可以放在 `gateway.platforms.api_server:` 或顶层 `platforms.api_server:` 小节下。
@@ -410,30 +410,30 @@ API_SERVER_CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
 
 ## 使用 Profiles 的多用户设置
 
-要为多个用户提供各自隔离的 Hermes 实例（独立的配置、记忆、技能），请使用 [profiles](/user-guide/profiles)：
+要为多个用户提供各自隔离的 Vigil 实例（独立的配置、记忆、技能），请使用 [profiles](/user-guide/profiles)：
 
 ```bash
 # 为每个用户创建 profile
-hermes profile create alice
-hermes profile create bob
+vigil profile create alice
+vigil profile create bob
 
 # 在不同端口上配置每个 profile 的 API 服务器。API_SERVER_* 是环境变量
 # （不是 config.yaml 键），因此将它们写入每个 profile 的 .env：
-cat >> ~/.hermes/profiles/alice/.env <<EOF
+cat >> ~/.vigil/profiles/alice/.env <<EOF
 API_SERVER_ENABLED=true
 API_SERVER_PORT=8643
 API_SERVER_KEY=alice-secret
 EOF
 
-cat >> ~/.hermes/profiles/bob/.env <<EOF
+cat >> ~/.vigil/profiles/bob/.env <<EOF
 API_SERVER_ENABLED=true
 API_SERVER_PORT=8644
 API_SERVER_KEY=bob-secret
 EOF
 
 # 启动每个 profile 的 gateway
-hermes -p alice gateway &
-hermes -p bob gateway &
+vigil -p alice gateway &
+vigil -p bob gateway &
 ```
 
 每个 profile 的 API 服务器自动将 profile 名称作为模型 ID 广播：
@@ -441,7 +441,7 @@ hermes -p bob gateway &
 - `http://localhost:8643/v1/models` → 模型 `alice`
 - `http://localhost:8644/v1/models` → 模型 `bob`
 
-在 Open WebUI 中，将每个添加为单独的连接。模型下拉列表显示 `alice` 和 `bob` 作为不同模型，每个均由完全隔离的 Hermes 实例支持。详见 [Open WebUI 指南](/user-guide/messaging/open-webui#multi-user-setup-with-profiles)。
+在 Open WebUI 中，将每个添加为单独的连接。模型下拉列表显示 `alice` 和 `bob` 作为不同模型，每个均由完全隔离的 Vigil 实例支持。详见 [Open WebUI 指南](/user-guide/messaging/open-webui#multi-user-setup-with-profiles)。
 
 ## 限制
 
@@ -451,6 +451,6 @@ hermes -p bob gateway &
 
 ## 代理模式
 
-API 服务器还作为 **gateway 代理模式**的后端。当另一个 Hermes gateway 实例配置了指向此 API 服务器的 `GATEWAY_PROXY_URL` 时，它会将所有消息转发到这里，而不是运行自己的 agent。这支持分离部署——例如，一个处理 Matrix E2EE 的 Docker 容器将请求中继到宿主机侧的 agent。
+API 服务器还作为 **gateway 代理模式**的后端。当另一个 Vigil gateway 实例配置了指向此 API 服务器的 `GATEWAY_PROXY_URL` 时，它会将所有消息转发到这里，而不是运行自己的 agent。这支持分离部署——例如，一个处理 Matrix E2EE 的 Docker 容器将请求中继到宿主机侧的 agent。
 
 完整设置指南参见 [Matrix 代理模式](/user-guide/messaging/matrix#proxy-mode-e2ee-on-macos)。

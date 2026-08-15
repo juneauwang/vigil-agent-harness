@@ -99,7 +99,7 @@ memory:
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     _retaindb_module, captured = _capture_initialized_client(monkeypatch, tmp_path)
 
     RetainDBMemoryProvider().initialize("sess-1")

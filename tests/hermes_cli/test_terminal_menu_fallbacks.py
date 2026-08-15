@@ -39,7 +39,7 @@ def test_prompt_model_selection_requires_expensive_confirmation(monkeypatch, cap
 def test_remove_custom_provider_falls_back_on_menu_runtime_error(tmp_path, monkeypatch):
     from hermes_cli.main import _remove_custom_provider
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     monkeypatch.setattr("hermes_cli.curses_ui.curses_radiolist", _raise_menu)
 
     cfg = load_config()

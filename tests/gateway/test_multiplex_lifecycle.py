@@ -4,7 +4,7 @@ import pytest
 
 class TestServedProfilesStatus:
     def test_write_and_read_served_profiles(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         import importlib
         import gateway.status as status
         importlib.reload(status)

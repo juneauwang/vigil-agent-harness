@@ -1,5 +1,5 @@
 # Vigil Agent CLI Configuration
-# Copy settings from this example into ~/.hermes/config.yaml, or use
+# Copy settings from this example into ~/.vigil/config.yaml, or use
 # `hermes config set <section.key> <value>` to update the active profile.
 # This file configures CLI behavior; only documented secret environment
 # variables in .env take precedence over their corresponding settings.
@@ -131,11 +131,11 @@ model:
 # client rebuilds during credential rotation.  For OpenAI-wire chat
 # completions (streaming and non-streaming) the configured value is also
 # used as the per-request ``timeout=`` kwarg so it wins over the legacy
-# HERMES_API_TIMEOUT env var (which still applies when no config is set).
+# VIGIL_API_TIMEOUT env var (which still applies when no config is set).
 # ``stale_timeout_seconds`` controls the non-streaming stale-call detector and
-# wins over the legacy HERMES_API_CALL_STALE_TIMEOUT env var. Leaving these
-# unset keeps the legacy defaults (HERMES_API_TIMEOUT=1800s,
-# HERMES_API_CALL_STALE_TIMEOUT=90s, native Anthropic 900s). The
+# wins over the legacy VIGIL_API_CALL_STALE_TIMEOUT env var. Leaving these
+# unset keeps the legacy defaults (VIGIL_API_TIMEOUT=1800s,
+# VIGIL_API_CALL_STALE_TIMEOUT=90s, native Anthropic 900s). The
 # implicit non-stream stale detector is auto-disabled for local endpoints
 # and can scale upward for very large contexts.
 #
@@ -234,9 +234,9 @@ terminal:
   # font_family: "MesloLGS NF"  # Also accepts a CSS stack; blank uses bundled JetBrains Mono.
   timeout: 180
   # HOME policy for tool subprocesses:
-  #   auto    - default: host uses your real HOME; containers use HERMES_HOME/home
+  #   auto    - default: host uses your real HOME; containers use VIGIL_HOME/home
   #   real    - force your real OS-user HOME
-  #   profile - force HERMES_HOME/home for strict per-profile CLI config isolation
+  #   profile - force VIGIL_HOME/home for strict per-profile CLI config isolation
   home_mode: "auto"
   docker_mount_cwd_to_workspace: false  # SECURITY: off by default. Opt in to mount the launch cwd into Docker /workspace.
   lifetime_seconds: 300
@@ -276,7 +276,7 @@ terminal:
 #   # chosen docker_image expects to start as root.
 #   docker_run_as_host_user: true
 #   # Optional: explicitly forward selected env vars into Docker.
-#   # These values come from your current shell first, then ~/.hermes/.env.
+#   # These values come from your current shell first, then ~/.vigil/.env.
 #   # Warning: anything forwarded here is visible to commands run in the container.
 #   docker_forward_env:
 #     - "GITHUB_TOKEN"
@@ -804,9 +804,9 @@ skills:
   creation_nudge_interval: 15
 
   # External skill directories — share skills across tools/agents without
-  # copying them into ~/.hermes/skills/.  Each path is expanded (~ and ${VAR})
+  # copying them into ~/.vigil/skills/.  Each path is expanded (~ and ${VAR})
   # and resolved to an absolute path.  External dirs are read-only: skill
-  # creation always writes to ~/.hermes/skills/.  Local skills take precedence
+  # creation always writes to ~/.vigil/skills/.  Local skills take precedence
   # when names collide.
   # external_dirs:
   #   - ~/.agents/skills
@@ -872,7 +872,7 @@ agent:
   # coding surfaces (CLI, TUI, desktop) and programmatic callers, and disables
   # it on conversational messaging surfaces (Telegram, Discord, etc.) where the
   # verification summary would reach a human as chat noise. Set true or false to
-  # force it on or off; the HERMES_VERIFY_ON_STOP env var (1/0) takes precedence.
+  # force it on or off; the VIGIL_VERIFY_ON_STOP env var (1/0) takes precedence.
   # verify_on_stop: auto
 
   # Standing operator instructions for the coding posture (when Vigil is in a
@@ -1155,7 +1155,7 @@ platform_toolsets:
 # =============================================================================
 # Text-to-Speech
 # =============================================================================
-# TTS defaults to Edge TTS unless changed in ~/.hermes/config.yaml.
+# TTS defaults to Edge TTS unless changed in ~/.vigil/config.yaml.
 # Gemini TTS supports persona/director prompt files, and Gemini 3.1 Flash TTS
 # can use a hidden auxiliary rewrite pass to insert expressive square-bracket
 # audio tags into the TTS script without showing tags in chat.
@@ -1167,7 +1167,7 @@ platform_toolsets:
 #     model: "gemini-3.1-flash-tts-preview"
 #     voice: "Kore"
 #     audio_tags: false
-#     persona_prompt_file: ""  # e.g. ~/.hermes/tts/radio-host.md
+#     persona_prompt_file: ""  # e.g. ~/.vigil/tts/radio-host.md
 #   xai:
 #     voice_id: "eve"       # built-in or custom voice ID from xAI Console
 #     language: "en"        # BCP-47 code ("en", "pt-BR") or "auto"
@@ -1200,7 +1200,7 @@ stt:
   language: "en"               # GLOBAL language hint for every STT provider (per-provider language wins). Set "" for auto-detect.
   # groq:
   #   model: "whisper-large-v3-turbo"
-  #   language: ""             # blank = stt.language > HERMES_LOCAL_STT_LANGUAGE > auto-detect
+  #   language: ""             # blank = stt.language > VIGIL_LOCAL_STT_LANGUAGE > auto-detect
   openai:
     model: "whisper-1"         # whisper-1 | gpt-4o-mini-transcribe | gpt-4o-transcribe | gpt-transcribe
     language: ""               # auto-detect; set to "en", "es", "fr", etc. to force
@@ -1313,7 +1313,7 @@ delegation:
 #
 # Requires: pip install honcho-ai
 # Config: ~/.honcho/config.json (shared with Claude Code, Cursor, etc.)
-# API key: HONCHO_API_KEY in ~/.hermes/.env or ~/.honcho/config.json
+# API key: HONCHO_API_KEY in ~/.vigil/.env or ~/.honcho/config.json
 #
 # Vigil-specific overrides (optional — most config comes from ~/.honcho/config.json):
 # honcho: {}
@@ -1332,7 +1332,7 @@ display:
   #   new:     Show a tool indicator only when the tool changes (skip repeats)
   #   all:     Show every tool call with a short preview (default)
   #   verbose: Full args, results, and debug logs (same as /verbose)
-  #   log:     Silent in chat; append every tool call to ~/.hermes/logs/tool_calls.log (gateway only)
+  #   log:     Silent in chat; append every tool call to ~/.vigil/logs/tool_calls.log (gateway only)
   # Toggle at runtime with /verbose in the CLI
   tool_progress: all
 
@@ -1449,7 +1449,7 @@ display:
   #   sisyphus       — Earthy stone-and-moss theme
   #   charizard      — Fiery orange dragon theme
   #
-  # Custom skins: drop a YAML file in ~/.hermes/skins/<name>.yaml
+  # Custom skins: drop a YAML file in ~/.vigil/skins/<name>.yaml
   # Schema (all fields optional, missing values inherit from default):
   #
   #   name: my-theme
@@ -1524,8 +1524,8 @@ display:
 #   on_session_finalize, on_session_reset, subagent_stop
 #
 # First-use consent: each (event, command) pair prompts once on a TTY, then
-# is persisted to ~/.hermes/shell-hooks-allowlist.json.  Non-interactive
-# runs (gateway, cron) need --accept-hooks, HERMES_ACCEPT_HOOKS=1, or the
+# is persisted to ~/.vigil/shell-hooks-allowlist.json.  Non-interactive
+# runs (gateway, cron) need --accept-hooks, VIGIL_ACCEPT_HOOKS=1, or the
 # hooks_auto_accept key below.
 #
 # See website/docs/user-guide/features/hooks.md for the full JSON wire
@@ -1534,15 +1534,15 @@ display:
 # hooks:
 #   pre_tool_call:
 #     - matcher: "terminal"
-#       command: "~/.hermes/agent-hooks/block-rm-rf.sh"
+#       command: "~/.vigil/agent-hooks/block-rm-rf.sh"
 #       timeout: 10
 #   post_tool_call:
 #     - matcher: "write_file|patch"
-#       command: "~/.hermes/agent-hooks/auto-format.sh"
+#       command: "~/.vigil/agent-hooks/auto-format.sh"
 #   pre_llm_call:
-#     - command: "~/.hermes/agent-hooks/inject-cwd-context.sh"
+#     - command: "~/.vigil/agent-hooks/inject-cwd-context.sh"
 #   subagent_stop:
-#     - command: "~/.hermes/agent-hooks/log-orchestration.sh"
+#     - command: "~/.vigil/agent-hooks/log-orchestration.sh"
 #
 # hooks_auto_accept: false
 
@@ -1552,7 +1552,7 @@ display:
 # =============================================================================
 # Shared metrics are disabled by default. When enabled, Vigil writes only
 # allowlisted aggregate counters and immutable JSON
-# packages under $HERMES_HOME/telemetry/shared_metrics; it does not upload them.
+# packages under $VIGIL_HOME/telemetry/shared_metrics; it does not upload them.
 # Packages include a random profile-scoped ID that stays stable until this
 # directory is deleted. It is not derived from hardware, account, or host data.
 # Successfully exported local history is retained for 30 days; pending deltas
@@ -1567,8 +1567,8 @@ telemetry:
 # Update Behavior
 # =============================================================================
 updates:
-  # Create a full HERMES_HOME zip before every `hermes update`.
-  # Backups land in ~/.hermes/backups/ and can be restored with `hermes import`.
+  # Create a full VIGIL_HOME zip before every `hermes update`.
+  # Backups land in ~/.vigil/backups/ and can be restored with `hermes import`.
   # Off by default because large homes can add minutes to every update.
   pre_update_backup: false
 
@@ -1591,9 +1591,9 @@ updates:
 # The bundled Nous Portal plugin reads these on startup; settings here are
 # the canonical surface. Each can be overridden by an environment variable:
 #
-#   dashboard.oauth.client_id   <-  HERMES_DASHBOARD_OAUTH_CLIENT_ID
-#   dashboard.oauth.portal_url  <-  HERMES_DASHBOARD_PORTAL_URL
-#   dashboard.public_url        <-  HERMES_DASHBOARD_PUBLIC_URL
+#   dashboard.oauth.client_id   <-  VIGIL_DASHBOARD_OAUTH_CLIENT_ID
+#   dashboard.oauth.portal_url  <-  VIGIL_DASHBOARD_PORTAL_URL
+#   dashboard.public_url        <-  VIGIL_DASHBOARD_PUBLIC_URL
 #
 # Env wins when set to a non-empty value. This is what Fly.io's platform-
 # secret injection uses to push per-deploy client_ids without needing to
@@ -1601,7 +1601,7 @@ updates:
 # so a provisioned-but-not-populated secret can't shadow a valid entry here.
 #
 # Local dev / on-prem deploys should typically set these via config.yaml
-# (the ~/.hermes/.env file is reserved for API keys and secrets).
+# (the ~/.vigil/.env file is reserved for API keys and secrets).
 #
 # dashboard:
 #   oauth:
@@ -1632,10 +1632,10 @@ updates:
 # nous block above when gating the dashboard with your own identity provider.
 # Each setting can be overridden by an environment variable:
 #
-#   dashboard.oauth.self_hosted.issuer         <-  HERMES_DASHBOARD_OIDC_ISSUER
-#   dashboard.oauth.self_hosted.client_id      <-  HERMES_DASHBOARD_OIDC_CLIENT_ID
-#   dashboard.oauth.self_hosted.scopes         <-  HERMES_DASHBOARD_OIDC_SCOPES
-#   dashboard.oauth.self_hosted.client_secret  <-  HERMES_DASHBOARD_OIDC_CLIENT_SECRET
+#   dashboard.oauth.self_hosted.issuer         <-  VIGIL_DASHBOARD_OIDC_ISSUER
+#   dashboard.oauth.self_hosted.client_id      <-  VIGIL_DASHBOARD_OIDC_CLIENT_ID
+#   dashboard.oauth.self_hosted.scopes         <-  VIGIL_DASHBOARD_OIDC_SCOPES
+#   dashboard.oauth.self_hosted.client_secret  <-  VIGIL_DASHBOARD_OIDC_CLIENT_SECRET
 #
 # dashboard:
 #   oauth:
@@ -1652,15 +1652,15 @@ updates:
 #       # IDP's discovery doc) IN ADDITION to PKCE. Leave unset for a public
 #       # (PKCE-only) client — the common case.
 #       #
-#       # This is a CREDENTIAL: prefer setting HERMES_DASHBOARD_OIDC_CLIENT_SECRET
-#       # in ~/.hermes/.env over putting it here in config.yaml.
+#       # This is a CREDENTIAL: prefer setting VIGIL_DASHBOARD_OIDC_CLIENT_SECRET
+#       # in ~/.vigil/.env over putting it here in config.yaml.
 #       #   client_secret: ""
 
 # =============================================================================
 # External secret sources
 # =============================================================================
 # Pull provider credentials from external secret managers at process startup
-# instead of storing them in ~/.hermes/.env. Only the manager's bootstrap
+# instead of storing them in ~/.vigil/.env. Only the manager's bootstrap
 # credential (e.g. BWS_ACCESS_TOKEN / OP_SERVICE_ACCOUNT_TOKEN) lives in .env
 # (or your shell / desktop session); everything else rotates centrally.
 # Failures never block startup — Vigil warns once and continues with
@@ -1673,7 +1673,7 @@ updates:
 #     are skipped with a startup warning (never a silent clobber)
 #   - a source's override_existing lets it beat .env/shell values, but
 #     never another secret source's claim
-# Docs: https://hermes-agent.nousresearch.com/docs/user-guide/secrets/
+# Docs: https://github.com/juneauwang/vigil-agent-harness
 #
 # secrets:
 #   # Optional explicit ordering of enabled sources.
@@ -1690,7 +1690,7 @@ updates:
 #       enabled: false
 #       max_stale_seconds: 0               # 0 disables stale fallback
 #     override_existing: true              # BSM values win over existing env
-#     auto_install: true                   # lazy-download bws into ~/.hermes/bin
+#     auto_install: true                   # lazy-download bws into ~/.vigil/bin
 #
 #   # ---- 1Password (op CLI) -------------------------------------------------
 #   onepassword:
@@ -1723,14 +1723,14 @@ updates:
 # Ops Agent Harness —— 运维权限与拓扑（§3/§2 数据契约，见 ops-agent-harness.md）
 # =============================================================================
 # 完全 fork 的运维 harness 专用块。所有键都是行为设置，走 config.yaml，
-# 不加 HERMES_* env var。ops profile 的 config.yaml 启用后：
+# 不加 VIGIL_* env var。ops profile 的 config.yaml 启用后：
 #   - memory.provider: topo  → system prompt 注入 TOPO 段（事实层第一层）
 #   - toolsets 含 topo        → 暴露 topo_query / topo_update 工具
 #   - ops.permissions.enabled → 执行工具层命令分级矩阵（L1-L4 × 环境）
 #
 ops:
   # ── 拓扑表（事实层）──────────────────────────────────────────────
-  # topology.yaml 存于 HERMES_HOME（schema v0.1，见 ops-agent-harness.md §2.2）：
+  # topology.yaml 存于 VIGIL_HOME（schema v0.1，见 ops-agent-harness.md §2.2）：
   #   第一层 topology.yaml（总览，<50 行，注入 system prompt）
   #   第二层 entities/<name>.yaml（单实体完整档案，topo_query detail 按需加载）
   topology:

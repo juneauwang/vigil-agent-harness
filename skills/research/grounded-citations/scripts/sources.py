@@ -25,8 +25,8 @@ an ``[unverified]`` marker rather than silently blended in.
 
 Ledger path resolution (first wins):
   --ledger PATH
-  $HERMES_CITATION_LEDGER
-  $HERMES_HOME/cache/citations/ledger.json
+  $VIGIL_CITATION_LEDGER
+  $VIGIL_HOME/cache/citations/ledger.json
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ _UNVERIFIED_RE = re.compile(r"\[unverified\]", re.IGNORECASE)
 def resolve_ledger_path(explicit: str | None = None) -> Path:
     if explicit:
         return Path(explicit).expanduser()
-    env = os.environ.get("HERMES_CITATION_LEDGER", "").strip()
+    env = os.environ.get("VIGIL_CITATION_LEDGER", "").strip()
     if env:
         return Path(env).expanduser()
     return get_hermes_home() / "cache" / "citations" / "ledger.json"

@@ -1,4 +1,4 @@
-"""Compatibility alias for the core Hermes Relay runtime.
+"""Compatibility alias for the core Vigil Relay runtime.
 
 New code should import :mod:`agent.relay_runtime`. This module remains an
 alias, rather than a copy, so existing plugins and tests share the same

@@ -4,7 +4,7 @@ Two invariants, each of which has been broken before:
 
 1. IMPORT WEIGHT: _startup_fast must stay stdlib-only. The whole point of
    the module is to run before main.py's heavy import wall; one careless
-   ``from hermes_cli.config import ...`` silently makes `hermes --version`
+   ``from hermes_cli.config import ...`` silently makes `vigil --version`
    slow again for everyone (the regression would be invisible — everything
    still works, just 40x slower).
 
@@ -64,7 +64,7 @@ def test_startup_fast_import_weight():
 
 def _run_version(env_overrides: dict) -> subprocess.CompletedProcess:
     env = {**os.environ, **env_overrides}
-    env.pop("HERMES_DEV", None)
+    env.pop("VIGIL_DEV", None)
     return subprocess.run(
         [sys.executable, "-m", "hermes_cli.main", "--version"],
         capture_output=True,
@@ -76,9 +76,9 @@ def _run_version(env_overrides: dict) -> subprocess.CompletedProcess:
 
 
 def test_fast_version_parity_off_termux(tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
-    result = _run_version({"HERMES_HOME": str(home), "TERMUX_VERSION": ""})
+    result = _run_version({"VIGIL_HOME": str(home), "TERMUX_VERSION": ""})
     assert result.returncode == 0, result.stderr
     out = result.stdout
     for field in ("Vigil v", "Install directory:", "Python:", "OpenAI SDK:"):
@@ -87,10 +87,10 @@ def test_fast_version_parity_off_termux(tmp_path):
 
 def test_fast_version_parity_on_termux(tmp_path):
     """The historical Termux path — the one eb4040242 broke."""
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     result = _run_version(
-        {"HERMES_HOME": str(home), "TERMUX_VERSION": "0.118"}
+        {"VIGIL_HOME": str(home), "TERMUX_VERSION": "0.118"}
     )
     assert result.returncode == 0, result.stderr
     assert "Vigil v" in result.stdout
@@ -98,9 +98,9 @@ def test_fast_version_parity_on_termux(tmp_path):
 
 
 def test_fast_version_reports_install_method_stamp(tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     (home / ".install_method").write_text("git\n", encoding="utf-8")
-    result = _run_version({"HERMES_HOME": str(home), "TERMUX_VERSION": ""})
+    result = _run_version({"VIGIL_HOME": str(home), "TERMUX_VERSION": ""})
     assert result.returncode == 0, result.stderr
     assert "Install method: git" in result.stdout

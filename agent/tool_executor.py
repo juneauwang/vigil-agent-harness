@@ -65,7 +65,7 @@ def _ensure_file_checkpoint(
         return
 
     # File tools resolve relative paths against the task's live/session cwd,
-    # which can differ from the Hermes process cwd (notably in Docker).  Resolve
+    # which can differ from the Vigil process cwd (notably in Docker).  Resolve
     # through that same path pipeline before asking the checkpoint manager to
     # discover the project root.
     from tools.file_tools import _resolve_path_for_task
@@ -132,14 +132,14 @@ def _parse_tool_arguments(raw_arguments: Any) -> tuple[dict, Optional[str]]:
 
 
 def _resolve_concurrent_tool_timeout() -> float | None:
-    raw = os.getenv("HERMES_CONCURRENT_TOOL_TIMEOUT_S", "").strip()
+    raw = os.getenv("VIGIL_CONCURRENT_TOOL_TIMEOUT_S", "").strip()
     if not raw:
         return _DEFAULT_CONCURRENT_TOOL_TIMEOUT_S
     try:
         value = float(raw)
     except ValueError:
         logger.warning(
-            "invalid HERMES_CONCURRENT_TOOL_TIMEOUT_S=%r; using %.0fs",
+            "invalid VIGIL_CONCURRENT_TOOL_TIMEOUT_S=%r; using %.0fs",
             raw,
             _DEFAULT_CONCURRENT_TOOL_TIMEOUT_S,
         )
@@ -158,7 +158,7 @@ def _flush_session_db_after_tool_progress(
     """Flush tool-call progress before projecting it to any UI surface.
 
     Tool execution can perform side effects that terminate or restart the
-    current Hermes process before the normal turn-end persistence path runs.
+    current Vigil process before the normal turn-end persistence path runs.
     Flush the already-appended assistant/tool messages immediately so the
     transcript survives destructive-but-valid tool calls.
     """
@@ -421,7 +421,7 @@ def _run_agent_tool_execution_middleware(
     begin_execution=None,
     authorization_gate: _ConcurrentToolAuthorizationGate | None = None,
 ) -> _ManagedToolResult:
-    """Run Relay rewrites before Hermes policy and dispatch exactly once."""
+    """Run Relay rewrites before Vigil policy and dispatch exactly once."""
     from agent import relay_tools
     from hermes_cli.middleware import (
         apply_tool_request_middleware,
@@ -441,7 +441,7 @@ def _run_agent_tool_execution_middleware(
         with dispatch_lock:
             if state["dispatched"]:
                 raise RuntimeError(
-                    "Hermes tool execution callback invoked more than once"
+                    "Vigil tool execution callback invoked more than once"
                 )
             state["dispatched"] = True
             state["blocked"] = False

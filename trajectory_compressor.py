@@ -48,7 +48,7 @@ from rich.console import Console
 from hermes_constants import OPENROUTER_BASE_URL, get_hermes_home
 from agent.retry_utils import jittered_backoff
 
-# Load .env from HERMES_HOME first, then project root as a dev fallback.
+# Load .env from VIGIL_HOME first, then project root as a dev fallback.
 from hermes_cli.env_loader import load_hermes_dotenv
 
 _hermes_home = get_hermes_home()

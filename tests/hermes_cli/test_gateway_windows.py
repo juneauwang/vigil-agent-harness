@@ -69,13 +69,13 @@ def test_build_gateway_argv_keeps_venv_console_python_for_uv_venv(monkeypatch, t
 
 class TestStableWindowsGatewayWorkingDir:
     def test_stable_gateway_working_dir_uses_hermes_home(self, tmp_path, monkeypatch):
-        home = tmp_path / ".hermes"
+        home = tmp_path / ".vigil"
         home.mkdir()
         monkeypatch.setattr("hermes_cli.config.get_hermes_home", lambda: home)
         assert gateway_windows._stable_gateway_working_dir(tmp_path / "checkout") == str(home.resolve())
 
     def test_stable_gateway_working_dir_falls_back_to_project_root(self, tmp_path, monkeypatch):
-        missing = tmp_path / "missing" / ".hermes"
+        missing = tmp_path / "missing" / ".vigil"
         project = tmp_path / "checkout"
         monkeypatch.setattr("hermes_cli.config.get_hermes_home", lambda: missing)
         assert gateway_windows._stable_gateway_working_dir(project) == str(project)
@@ -217,7 +217,7 @@ def test_gateway_vbs_script_is_console_less(monkeypatch):
     assert "hermes_cli.main" in content
     assert "gateway run" in content
     assert ", 0, False" in content  # hidden window, detached/async
-    for var in ("HERMES_HOME", "PYTHONIOENCODING", "HERMES_GATEWAY_DETACHED", "VIRTUAL_ENV", "PYTHONPATH"):
+    for var in ("VIGIL_HOME", "PYTHONIOENCODING", "VIGIL_GATEWAY_DETACHED", "VIRTUAL_ENV", "PYTHONPATH"):
         assert var in content
     assert "--profile" in content and "work" in content
     assert content.endswith("\r\n")
@@ -240,7 +240,7 @@ def test_gateway_vbs_script_is_console_less(monkeypatch):
 #
 # Background: on Windows, asyncio.add_signal_handler raises NotImplementedError,
 # so the gateway's SIGTERM handler (which drains in-flight agents and writes
-# resume_pending=True) never fires when `hermes gateway stop` kills the
+# resume_pending=True) never fires when `vigil gateway stop` kills the
 # process. The fix: stop() writes the planned_stop_marker first, waits for
 # the gateway's marker-watcher thread to drain + exit cleanly, then escalates
 # to taskkill if drain times out.

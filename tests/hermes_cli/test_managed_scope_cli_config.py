@@ -3,7 +3,7 @@
 cli.py's load_cli_config() builds config separately from
 hermes_cli.config._load_config_impl, so the managed-scope merge has to be
 applied in BOTH places or the interactive CLI/TUI surface (skin, display prefs)
-silently ignores administrator-pinned values while `hermes config`/`doctor`
+silently ignores administrator-pinned values while `vigil config`/`doctor`
 honor them. This locks the cli.py path.
 """
 import importlib
@@ -17,8 +17,8 @@ def homes(tmp_path, monkeypatch):
     home.mkdir()
     managed = tmp_path / "managed"
     managed.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.setenv("VIGIL_MANAGED_DIR", str(managed))
     import hermes_cli.config as cfg
     from hermes_cli import managed_scope
 
@@ -32,10 +32,10 @@ def _load_cli_config(home):
     """Call cli.py's standalone loader fresh.
 
     cli.py binds ``_hermes_home = get_hermes_home()`` at import time (module
-    singleton), so monkeypatching HERMES_HOME after import doesn't move it.
+    singleton), so monkeypatching VIGIL_HOME after import doesn't move it.
     Point the module's cached home at the test's home for the duration of the
     call. (In real use cli is imported once per process with the real home, so
-    this only matters for tests that swap HERMES_HOME.)
+    this only matters for tests that swap VIGIL_HOME.)
     """
     import cli
 

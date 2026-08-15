@@ -9,14 +9,14 @@
 
 declare global {
   interface Window {
-    __HERMES_BASE_PATH__?: string;
-    __HERMES_SESSION_TOKEN__?: string;
+    __VIGIL_BASE_PATH__?: string;
+    __VIGIL_SESSION_TOKEN__?: string;
   }
 }
 
 function readBasePath(): string {
   if (typeof window === "undefined") return "";
-  const raw = window.__HERMES_BASE_PATH__ ?? "";
+  const raw = window.__VIGIL_BASE_PATH__ ?? "";
   if (!raw) return "";
   const withLead = raw.startsWith("/") ? raw : `/${raw}`;
   return withLead.replace(/\/+$/, "");
@@ -61,9 +61,9 @@ function parseErrorBody(text: string, status: number): ApiError {
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
-  const token = typeof window !== "undefined" ? window.__HERMES_SESSION_TOKEN__ : undefined;
-  if (token && !headers.has("X-Hermes-Session-Token")) {
-    headers.set("X-Hermes-Session-Token", token);
+  const token = typeof window !== "undefined" ? window.__VIGIL_SESSION_TOKEN__ : undefined;
+  if (token && !headers.has("X-Vigil-Session-Token")) {
+    headers.set("X-Vigil-Session-Token", token);
   }
   if (init?.body && typeof init.body === "string") {
     headers.set("Content-Type", "application/json");
@@ -350,8 +350,8 @@ export const api = {
     signal?: AbortSignal,
   ): Promise<void> => {
     const headers = new Headers();
-    const token = typeof window !== "undefined" ? window.__HERMES_SESSION_TOKEN__ : undefined;
-    if (token) headers.set("X-Hermes-Session-Token", token);
+    const token = typeof window !== "undefined" ? window.__VIGIL_SESSION_TOKEN__ : undefined;
+    if (token) headers.set("X-Vigil-Session-Token", token);
     return fetch(`${BASE}/api/exec/${encodeURIComponent(execId)}/stream`, {
       headers,
       signal,

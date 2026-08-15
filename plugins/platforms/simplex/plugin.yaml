@@ -11,7 +11,7 @@ description: >
   time, making it one of the most private messengers available.
 author: Mibayy, jooray
 # ``requires_env`` and ``optional_env`` entries are surfaced in the
-# ``hermes config`` UI via the platform-plugin env var injector in
+# ``vigil config`` UI via the platform-plugin env var injector in
 # ``hermes_cli/config.py``.
 requires_env:
   - name: SIMPLEX_WS_URL
@@ -47,7 +47,7 @@ optional_env:
     description: "Human label for the home channel (defaults to the ID)"
     prompt: "Home channel display name (or empty)"
     password: false
-  - name: HERMES_SIMPLEX_TEXT_BATCH_DELAY
+  - name: VIGIL_SIMPLEX_TEXT_BATCH_DELAY
     description: >-
       Quiet-period seconds (default: 0.8) used to concatenate rapid-fire
       inbound text messages into a single MessageEvent — same pattern as

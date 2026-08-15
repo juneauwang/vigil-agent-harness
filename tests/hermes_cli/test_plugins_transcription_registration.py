@@ -1,7 +1,7 @@
 """Tests for PluginContext.register_transcription_provider().
 
 Exercises the plugin context hook end-to-end: drops a fake plugin into
-``$HERMES_HOME/plugins/``, runs ``PluginManager().discover_and_load()``,
+``$VIGIL_HOME/plugins/``, runs ``PluginManager().discover_and_load()``,
 and asserts the registration result.
 
 Mirrors the shape of ``test_plugins_tts_registration.py`` (companion
@@ -62,7 +62,7 @@ class TestRegisterTranscriptionProvider:
         from agent import transcription_registry
         transcription_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["VIGIL_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "my-stt-plugin",
@@ -94,7 +94,7 @@ class TestRegisterTranscriptionProvider:
         from agent import transcription_registry
         transcription_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["VIGIL_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "bad-stt-plugin",
@@ -119,7 +119,7 @@ class TestRegisterTranscriptionProvider:
         from agent import transcription_registry
         transcription_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["VIGIL_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "shadow-stt-plugin",

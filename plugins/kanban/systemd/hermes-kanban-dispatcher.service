@@ -4,7 +4,7 @@
 #
 #     systemctl --user disable --now hermes-kanban-dispatcher.service
 #     # then make sure a gateway is running; e.g. a systemd user unit
-#     # for `hermes gateway start`. The gateway hosts the dispatcher.
+#     # for `vigil gateway start`. The gateway hosts the dispatcher.
 #
 # This unit is kept for users who truly cannot run the gateway (host
 # policy forbids long-lived services, etc.). It now invokes the
@@ -15,7 +15,7 @@
 
 [Unit]
 Description=Hermes Kanban dispatcher (DEPRECATED standalone daemon — prefer gateway-embedded dispatch)
-Documentation=https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban
+Documentation=https://github.com/juneauwang/vigil-agent-harness
 After=network.target
 
 [Service]
@@ -24,7 +24,7 @@ ExecStart=/usr/bin/env hermes kanban daemon --force --interval 60 --pidfile %t/h
 Restart=on-failure
 RestartSec=5
 # Log to the journal via stdout/stderr; the dispatcher also writes per-task
-# worker output to $HERMES_HOME/kanban/logs/<task>.log.
+# worker output to $VIGIL_HOME/kanban/logs/<task>.log.
 StandardOutput=journal
 StandardError=journal
 

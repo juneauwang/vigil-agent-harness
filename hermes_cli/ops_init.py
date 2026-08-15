@@ -9,7 +9,7 @@ Creates the ``ops`` profile, writes the ops config (topo toolset + TOPO
 memory provider + permission matrix), and seeds the sample topology table
 (``topology.yaml`` + ``hosts/`` + ``entities/``, schema v0.3 三层模型：
 第一层总览 + 第二层服务索引 + 第三层详情档案) and sample runbooks
-(``runbooks/``) into the profile's HERMES_HOME.
+(``runbooks/``) into the profile's VIGIL_HOME.
 
 Shipped inside the wheel as ``vigil ops-init`` so pip-installed users can
 initialize the ops profile without a repo checkout. The legacy
@@ -23,7 +23,7 @@ Usage:
     不报错——权限语义不放松，uat→prod 只会更严。
 
 Files written (inside the Vigil root, default ``~/.vigil``; override with
-``VIGIL_HOME`` / ``HERMES_HOME`` env or ``--root``):
+``VIGIL_HOME`` / ``VIGIL_HOME`` env or ``--root``):
     <root>/profiles/ops/config.yaml
     <root>/profiles/ops/topology.yaml
     <root>/profiles/ops/hosts/*.yaml
@@ -52,7 +52,7 @@ _PROFILE_NAME = "ops"
 # 下面的 enabled: true 是显式声明（向后兼容），显式 false 仍可关闭。
 _CONFIG_TPL = """\
 # ops profile —— 由 vigil ops-init 生成。
-# 行为配置一律走 config.yaml（upstream 约定：不加 HERMES_* env var）。
+# 行为配置一律走 config.yaml（upstream 约定：不加 VIGIL_* env var）。
 #
 # 核对通过、准备接管生产前，把 ops.permissions.env 改为 prod：
 #   - L2（重启服务/装包）→ 审批；L3（rm -rf/重启DB/改配置）→ 拒绝；L4（删namespace/删库）→ 拒绝
@@ -283,7 +283,7 @@ def _warn_topology_env_sync(profile_dir: Path, env: str) -> None:
 
 def run(root: Path, env: str = "test", force: bool = False, no_alias: bool = False) -> int:
     """Initialize the ops profile under ``root``. Returns process exit code."""
-    os.environ["HERMES_HOME"] = str(root)  # 让 profile 解析锚定在 <root>/profiles
+    os.environ["VIGIL_HOME"] = str(root)  # 让 profile 解析锚定在 <root>/profiles
 
     from hermes_cli.profiles import (
         create_profile,
@@ -328,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--root",
-        help="Vigil 根目录（默认 ~/.vigil，或 $VIGIL_HOME/$HERMES_HOME）；ops profile 建在 <root>/profiles/ops",
+        help="Vigil 根目录（默认 ~/.vigil，或 $VIGIL_HOME）；ops profile 建在 <root>/profiles/ops",
     )
     parser.add_argument(
         "--env", default="test",

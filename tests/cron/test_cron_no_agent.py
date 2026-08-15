@@ -19,13 +19,13 @@ import pytest
 
 @pytest.fixture
 def hermes_env(tmp_path, monkeypatch):
-    """Isolate HERMES_HOME for each test so jobs/scripts don't leak."""
-    home = tmp_path / ".hermes"
+    """Isolate VIGIL_HOME for each test so jobs/scripts don't leak."""
+    home = tmp_path / ".vigil"
     home.mkdir()
     (home / "scripts").mkdir()
     (home / "cron").mkdir()
 
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
 
     # Reload modules that cache get_hermes_home() at import time.
     import importlib

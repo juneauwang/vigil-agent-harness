@@ -398,7 +398,7 @@ export async function applyUpdates(opts: DesktopUpdateApplyOptions = {}): Promis
     const result = await bridge.apply(opts)
 
     // CLI install with no staged updater: not an error — the user just runs
-    // `hermes update` themselves. Land on a dedicated manual state so the
+    // `vigil update` themselves. Land on a dedicated manual state so the
     // overlay shows the command + copy button instead of a dead retry loop.
     if (result?.manual) {
       $updateApply.set({

@@ -20,7 +20,7 @@ def temp_pyproject(tmp_path, monkeypatch):
         version = "0.0.0"
 
         [project.scripts]
-        hermes = "hermes_cli.main:main"
+        vigil = "hermes_cli.main:main"
         hermes-agent = "run_agent:main"
         hermes-acp = "acp_adapter.entry:main"
     """

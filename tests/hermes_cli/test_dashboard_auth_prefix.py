@@ -1,23 +1,23 @@
 """Path-prefix (X-Forwarded-Prefix) awareness for the dashboard-auth gate.
 
 Mission-control style deployments reverse-proxy the dashboard at a path
-prefix (e.g. ``mission-control.tilos.com/hermes/*`` -> local Caddy ->
-:9119), injecting ``X-Forwarded-Prefix: /hermes`` on every request.
+prefix (e.g. ``mission-control.tilos.com/vigil/*`` -> local Caddy ->
+:9119), injecting ``X-Forwarded-Prefix: /vigil`` on every request.
 
 The dashboard already honours this for the SPA bundle (rewriting asset
-URLs and the bootstrap ``__HERMES_BASE_PATH__``). The OAuth gate must
+URLs and the bootstrap ``__VIGIL_BASE_PATH__``). The OAuth gate must
 honour it too:
 
   1. The gate's ``Location:`` redirect to /login (in
-     ``_unauth_response``) needs to be ``/hermes/login`` so the browser
+     ``_unauth_response``) needs to be ``/vigil/login`` so the browser
      follows it through the proxy.
   2. The 401 JSON envelope's ``login_url`` needs the same prefix so the
      SPA's full-page navigation lands at the proxied login page.
   3. ``_redirect_uri`` (the OAuth callback URL handed to the IDP) must
      reconstruct the public URL including the prefix, otherwise the IDP
      redirects back to ``/auth/callback`` instead of
-     ``/hermes/auth/callback`` and the user gets 404.
-  4. Cookies must use ``Path=/hermes`` when behind a prefix so they
+     ``/vigil/auth/callback`` and the user gets 404.
+  4. Cookies must use ``Path=/vigil`` when behind a prefix so they
      don't leak to other apps on the same origin AND so they get sent
      back to the dashboard on subsequent requests under the prefix.
   5. The ``__Host-`` cookie prefix requires ``Path=/`` — when behind an
@@ -112,7 +112,7 @@ class TestForwardedPrefixNormalisation:
     ):
         """Home Assistant Supervisor ingress prefixes are 63 chars before
         add-ons append their own mount path. They must survive validation so
-        the SPA receives the correct __HERMES_BASE_PATH__ and asset prefix."""
+        the SPA receives the correct __VIGIL_BASE_PATH__ and asset prefix."""
         prefix_mod._warned_malformed_prefixes.clear()
         assert len(HA_INGRESS_DASHBOARD_PREFIX) > 64
 
@@ -213,7 +213,7 @@ class TestOAuthRedirectUriRespectsPrefix:
         """The IDP returns the user to the redirect_uri we sent. If we
         don't include the prefix, the IDP redirects to
         ``https://mission-control.tilos.com/auth/callback`` instead of
-        ``https://mission-control.tilos.com/hermes/auth/callback`` — the
+        ``https://mission-control.tilos.com/vigil/auth/callback`` — the
         former routes to the MC frontend, not the dashboard, so the
         user gets 404."""
         r = gated_app_proxied.get(
@@ -253,13 +253,13 @@ class TestOAuthRedirectUriRespectsPrefix:
 
 
 # ---------------------------------------------------------------------------
-# HERMES_DASHBOARD_PUBLIC_URL / dashboard.public_url override
+# VIGIL_DASHBOARD_PUBLIC_URL / dashboard.public_url override
 # ---------------------------------------------------------------------------
 
 
 class TestPublicUrlOverride:
     """``dashboard.public_url`` (env override:
-    ``HERMES_DASHBOARD_PUBLIC_URL``) lets an operator force the absolute
+    ``VIGIL_DASHBOARD_PUBLIC_URL``) lets an operator force the absolute
     base URL the OAuth ``redirect_uri`` is built from.
 
     When set, it is the *complete authority* — scheme + host + optional
@@ -317,7 +317,7 @@ class TestPublicUrlOverride:
         """Precedence pin — env wins over config.yaml. Fly.io / CI
         secret injection depends on this ordering."""
         monkeypatch.setenv(
-            "HERMES_DASHBOARD_PUBLIC_URL", "https://from-env.example",
+            "VIGIL_DASHBOARD_PUBLIC_URL", "https://from-env.example",
         )
         patch_config("https://from-config.example")
         redirect_uri = self._redirect_uri(gated_app_direct)
@@ -347,7 +347,7 @@ class TestPublicUrlOverride:
             'https://example.com/"injected',       # quote char
             "https://example.com/\nhttps://evil",  # CRLF injection
         ]:
-            monkeypatch.setenv("HERMES_DASHBOARD_PUBLIC_URL", bad)
+            monkeypatch.setenv("VIGIL_DASHBOARD_PUBLIC_URL", bad)
             redirect_uri = self._redirect_uri(gated_app_direct)
             # Fell through to request reconstruction — netloc is the
             # bound host, NOT the hostile value.
@@ -363,7 +363,7 @@ class TestPublicUrlOverride:
         self, patch_config, monkeypatch, caplog
     ):
         """A non-empty env var that's missing its scheme (the #1 cause
-        of "I set HERMES_DASHBOARD_PUBLIC_URL but the callback is still
+        of "I set VIGIL_DASHBOARD_PUBLIC_URL but the callback is still
         http://") must emit an operator-facing WARNING rather than being
         silently discarded. Regression for #42780."""
         import logging
@@ -374,7 +374,7 @@ class TestPublicUrlOverride:
         # regardless of test ordering.
         prefix_mod._warned_malformed_public_urls.clear()
         patch_config(None)
-        monkeypatch.setenv("HERMES_DASHBOARD_PUBLIC_URL", "hermes.domain.com")
+        monkeypatch.setenv("VIGIL_DASHBOARD_PUBLIC_URL", "hermes.domain.com")
 
         with caplog.at_level(logging.WARNING, logger=prefix_mod.__name__):
             result = prefix_mod.resolve_public_url()
@@ -386,7 +386,7 @@ class TestPublicUrlOverride:
             if r.levelno == logging.WARNING
         ]
         assert any(
-            "HERMES_DASHBOARD_PUBLIC_URL" in m
+            "VIGIL_DASHBOARD_PUBLIC_URL" in m
             and "hermes.domain.com" in m
             and "scheme" in m
             for m in warnings
@@ -472,16 +472,16 @@ class TestCookiePathRespectsPrefix:
     ):
         """The end-to-end property: after a successful OAuth round
         trip via the proxy, the session-AT cookie carries the
-        __Secure- prefix AND Path=/hermes, so the next request under
+        __Secure- prefix AND Path=/vigil, so the next request under
         the same prefix is authenticated.
 
         Note on TestClient semantics: starlette's TestClient sees the
         literal request path (``/auth/login``, ``/auth/callback``) —
         not the public path the proxy displays to the browser
-        (``/hermes/auth/login``, ``/hermes/auth/callback``). A cookie
-        set with ``Path=/hermes`` would therefore NOT be sent back on
+        (``/vigil/auth/login``, ``/vigil/auth/callback``). A cookie
+        set with ``Path=/vigil`` would therefore NOT be sent back on
         the second request through TestClient even though it WOULD be
-        sent by a real browser hitting ``/hermes/auth/callback``. To
+        sent by a real browser hitting ``/vigil/auth/callback``. To
         avoid baking that mismatch into the test, we inspect the
         ``Set-Cookie`` header on the callback's response WITHOUT
         depending on the PKCE cookie round-tripping through
@@ -503,7 +503,7 @@ class TestCookiePathRespectsPrefix:
         state = r1.headers["location"].split("state=")[1]
 
         # Round-trip the cookie by hand because TestClient's jar won't
-        # automatically send a Path=/hermes cookie to a /auth/callback
+        # automatically send a Path=/vigil cookie to a /auth/callback
         # request path.
         r2 = gated_app_proxied.get(
             f"/auth/callback?code=stub_code&state={state}",

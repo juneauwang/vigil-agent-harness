@@ -87,14 +87,14 @@ def test_restore_flow_end_to_end(valid_db, tmp_path):
 
 class TestPreUpdateBackupIntegrityGuard:
     """E2E: run the real ``_run_pre_update_backup`` against a temp
-    HERMES_HOME whose state.db is corrupted mid-flight (#68474)."""
+    VIGIL_HOME whose state.db is corrupted mid-flight (#68474)."""
 
     @pytest.fixture()
     def hermes_home(self, tmp_path, monkeypatch):
         from pathlib import Path
         import sys
 
-        root = tmp_path / ".hermes"
+        root = tmp_path / ".vigil"
         root.mkdir()
         (root / "config.yaml").write_text("model:\n  provider: openrouter\n")
         db = root / "state.db"
@@ -102,7 +102,7 @@ class TestPreUpdateBackupIntegrityGuard:
         conn.execute("CREATE TABLE sessions (id INTEGER PRIMARY KEY)")
         conn.commit()
         conn.close()
-        monkeypatch.setenv("HERMES_HOME", str(root))
+        monkeypatch.setenv("VIGIL_HOME", str(root))
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
         for mod in list(sys.modules.keys()):
             if mod.startswith("hermes_cli.config") or mod == "hermes_constants":

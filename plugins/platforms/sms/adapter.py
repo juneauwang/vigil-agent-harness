@@ -80,9 +80,9 @@ def check_sms_requirements() -> bool:
 
 class SmsAdapter(BasePlatformAdapter):
     """
-    Twilio SMS <-> Hermes gateway adapter.
+    Twilio SMS <-> Vigil gateway adapter.
 
-    Each inbound phone number gets its own Hermes session (multi-tenant).
+    Each inbound phone number gets its own Vigil session (multi-tenant).
     Replies are always sent from the configured TWILIO_PHONE_NUMBER.
     """
 
@@ -516,7 +516,7 @@ def _build_adapter(config):
 
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system."""
+    """Plugin entry point — called by the Vigil plugin system."""
     ctx.register_platform(
         name="sms",
         label="SMS (Twilio)",

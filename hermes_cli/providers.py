@@ -1,5 +1,5 @@
 """
-Single source of truth for provider identity in Hermes Agent.
+Single source of truth for provider identity in Vigil Agent.
 
 Two data sources, merged at runtime:
 
@@ -7,7 +7,7 @@ Two data sources, merged at runtime:
    names, and full model metadata (context, cost, capabilities).  This is
    the primary database.
 
-2. **Hermes overlays** — transport type, auth patterns, aggregator flags,
+2. **Vigil overlays** — transport type, auth patterns, aggregator flags,
    and additional env vars that models.dev doesn't track.  Small dict,
    maintained here.
 
@@ -28,12 +28,12 @@ from utils import base_url_host_matches, base_url_hostname
 logger = logging.getLogger(__name__)
 
 
-# -- Hermes overlay ----------------------------------------------------------
-# Hermes-specific metadata that models.dev doesn't provide.
+# -- Vigil overlay ----------------------------------------------------------
+# Vigil-specific metadata that models.dev doesn't provide.
 
 @dataclass(frozen=True)
 class HermesOverlay:
-    """Hermes-specific provider metadata layered on top of models.dev."""
+    """Vigil-specific provider metadata layered on top of models.dev."""
 
     transport: str = "openai_chat"        # openai_chat | anthropic_messages | codex_responses
     is_aggregator: bool = False
@@ -43,7 +43,7 @@ class HermesOverlay:
     base_url_env_var: str = ""            # env var for user-custom base URL
 
 
-HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
+VIGIL_OVERLAYS: Dict[str, HermesOverlay] = {
     "moa": HermesOverlay(
         transport="openai_chat",
         auth_type="virtual",
@@ -79,7 +79,7 @@ HERMES_OVERLAYS: Dict[str, HermesOverlay] = {
         transport="openai_chat",
         auth_type="oauth_external",
         base_url_override="https://portal.qwen.ai/v1",
-        base_url_env_var="HERMES_QWEN_BASE_URL",
+        base_url_env_var="VIGIL_QWEN_BASE_URL",
     ),
     "lmstudio": HermesOverlay(
         transport="openai_chat",
@@ -264,7 +264,7 @@ class ProviderDef:
     is_aggregator: bool = False
     auth_type: str = "api_key"
     doc: str = ""
-    source: str = ""                      # "models.dev", "hermes", "user-config"
+    source: str = ""                      # "models.dev", "vigil", "user-config"
 
 
 # -- Aliases ------------------------------------------------------------------
@@ -456,8 +456,8 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     """Look up a built-in provider by id or alias.
 
     Resolution order:
-      1. Hermes overlays (for providers not in models.dev: nous, openai-codex, etc.)
-      2. models.dev catalog + Hermes overlay
+      1. Vigil overlays (for providers not in models.dev: nous, openai-codex, etc.)
+      2. models.dev catalog + Vigil overlay
 
     User-defined providers from config.yaml (``providers:`` / ``custom_providers:``)
     are resolved by :func:`resolve_provider_full`, which layers ``resolve_user_provider``
@@ -481,7 +481,7 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
     except Exception:
         mdev_info = None
 
-    overlay = HERMES_OVERLAYS.get(canonical)
+    overlay = VIGIL_OVERLAYS.get(canonical)
 
     if mdev_info is not None:
         # Merge models.dev + overlay
@@ -491,7 +491,7 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
         base_url_env = overlay.base_url_env_var if overlay else ""
         base_url_override = overlay.base_url_override if overlay else ""
 
-        # Combine env vars: models.dev env + hermes extra
+        # Combine env vars: models.dev env + vigil extra
         env_vars = list(mdev_info.env)
         if overlay and overlay.extra_env_vars:
             for ev in overlay.extra_env_vars:
@@ -512,7 +512,7 @@ def get_provider(name: str, *, allow_network: bool = True) -> Optional[ProviderD
         )
 
     if overlay is not None:
-        # Hermes-only provider (not in models.dev)
+        # Vigil-only provider (not in models.dev)
         return ProviderDef(
             id=canonical,
             name=_LABEL_OVERRIDES.get(canonical, canonical),
@@ -686,7 +686,7 @@ def determine_api_mode(provider: str, base_url: str = "", model: str = "") -> st
         return mandated
 
     # Nous is dual-wire: anthropic/* → Messages, everything else →
-    # chat_completions. The Hermes overlay still advertises openai_chat
+    # chat_completions. The Vigil overlay still advertises openai_chat
     # (the majority of the Portal catalog), so the transport lookup below
     # would pin Claude on the wrong wire without this carve-out.
     provider_norm = (provider or "").strip().lower()
@@ -697,7 +697,7 @@ def determine_api_mode(provider: str, base_url: str = "", model: str = "") -> st
     if pdef is not None:
         return TRANSPORT_TO_API_MODE.get(pdef.transport, "chat_completions")
 
-    # Direct provider checks for providers not in HERMES_OVERLAYS
+    # Direct provider checks for providers not in VIGIL_OVERLAYS
     if provider == "bedrock":
         return "bedrock_converse"
 
@@ -889,7 +889,7 @@ def resolve_provider_full(
         if user_pdef is not None:
             return user_pdef
 
-    # 0.5 Exact Hermes provider IDs must win over LOSSY alias collapsing.
+    # 0.5 Exact built-in provider IDs must win over LOSSY alias collapsing.
     # Example: kimi-coding-cn should stay distinct from kimi-coding instead of
     # normalizing through the shared models.dev alias "kimi-for-coding".
     # A collapse is lossy only when MULTIPLE distinct registry providers

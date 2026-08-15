@@ -2,7 +2,7 @@
 
 Exposes OpenAI's ``gpt-image-2`` model at three quality tiers as an
 :class:`ImageGenProvider` implementation. The tiers are implemented as
-three virtual model IDs so the ``hermes tools`` model picker and the
+three virtual model IDs so the ``vigil tools`` model picker and the
 ``image_gen.model`` config key behave like any other multi-model backend:
 
     gpt-image-2-low     ~15s   fastest, good for iteration
@@ -11,7 +11,7 @@ three virtual model IDs so the ``hermes tools`` model picker and the
 
 All three hit the same underlying API model (``gpt-image-2``) with a
 different ``quality`` parameter. Output is base64 JSON → saved under
-``$HERMES_HOME/cache/images/``.
+``$VIGIL_HOME/cache/images/``.
 
 Selection precedence (first hit wins):
 

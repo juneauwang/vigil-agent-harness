@@ -17,7 +17,7 @@ GitHub auth setup: HTTPS tokens, SSH keys, gh CLI login.
 | Source | Bundled (installed by default) |
 | Path | `skills/github/github-auth` |
 | Version | `1.1.0` |
-| Author | Hermes Agent |
+| Author | Vigil |
 | License | MIT |
 | Platforms | linux, macos, windows |
 | Tags | `GitHub`, `Authentication`, `Git`, `gh-cli`, `SSH`, `Setup` |
@@ -26,7 +26,7 @@ GitHub auth setup: HTTPS tokens, SSH keys, gh CLI login.
 ## Reference: full SKILL.md
 
 :::info
-The following is the complete skill definition that Hermes loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
+The following is the complete skill definition that Vigil loads when this skill is triggered. This is what the agent sees as instructions when the skill is active.
 :::
 
 # GitHub Authentication Setup
@@ -225,7 +225,7 @@ If git credentials are already configured (via credential.helper store), the tok
 
 ```bash
 # Read from git credential store
-uv run python3 "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/git-credential-token.py"
+uv run python3 "${VIGIL_HOME:-$HOME/.vigil}/skills/github/github-auth/scripts/git-credential-token.py"
 ```
 
 ### Helper: Detect Auth Method
@@ -238,11 +238,11 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null; then
   echo "AUTH_METHOD=gh"
 elif [ -n "$GITHUB_TOKEN" ]; then
   echo "AUTH_METHOD=curl"
-elif _hermes_env="${HERMES_HOME:-$HOME/.hermes}/.env"; [ -f "$_hermes_env" ] && grep -q "^GITHUB_TOKEN=" "$_hermes_env"; then
+elif _hermes_env="${VIGIL_HOME:-$HOME/.vigil}/.env"; [ -f "$_hermes_env" ] && grep -q "^GITHUB_TOKEN=" "$_hermes_env"; then
   export GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_hermes_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
   echo "AUTH_METHOD=curl"
 elif grep -q "github.com" ~/.git-credentials 2>/dev/null; then
-  export GITHUB_TOKEN=$(uv run python3 "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/git-credential-token.py")
+  export GITHUB_TOKEN=$(uv run python3 "${VIGIL_HOME:-$HOME/.vigil}/skills/github/github-auth/scripts/git-credential-token.py")
   echo "AUTH_METHOD=curl"
 else
   echo "AUTH_METHOD=none"

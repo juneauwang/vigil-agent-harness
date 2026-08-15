@@ -1,6 +1,6 @@
 """Tests for the launch-time stale-bytecode sweep (checkout fingerprint guard).
 
-Bug class: the checkout's ``.py`` files change (``hermes update``, manual
+Bug class: the checkout's ``.py`` files change (``vigil update``, manual
 ``git pull``, ZIP update) while ``__pycache__`` retains bytecode compiled
 from the previous revision; the next process to import trusts the stale
 ``.pyc`` and dies with ``cannot import name ...`` (#6207, #60242).
@@ -56,7 +56,7 @@ def test_sweep_clears_pycache_when_checkout_changed(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Plugin-update sibling site: __pycache__ under ~/.hermes/plugins/<name>
+# Plugin-update sibling site: __pycache__ under ~/.vigil/plugins/<name>
 # ---------------------------------------------------------------------------
 
 def test_clear_plugin_bytecode_removes_nested_caches(tmp_path):

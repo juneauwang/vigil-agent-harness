@@ -14,7 +14,7 @@ description: "通过 AgentMail 为 Agent 提供专属电子邮件收件箱"
 
 | | |
 |---|---|
-| 来源 | 可选 — 使用 `hermes skills install official/email/agentmail` 安装 |
+| 来源 | 可选 — 使用 `vigil skills install official/email/agentmail` 安装 |
 | 路径 | `optional-skills/email/agentmail` |
 | 版本 | `1.0.0` |
 | 平台 | linux, macos, windows |
@@ -23,7 +23,7 @@ description: "通过 AgentMail 为 Agent 提供专属电子邮件收件箱"
 ## 参考：完整 SKILL.md
 
 :::info
-以下是 Hermes 在触发此 skill 时加载的完整 skill 定义。这是 skill 激活时 Agent 所看到的指令内容。
+以下是 Vigil 在触发此 skill 时加载的完整 skill 定义。这是 skill 激活时 Agent 所看到的指令内容。
 :::
 
 # AgentMail — Agent 专属电子邮件收件箱
@@ -52,7 +52,7 @@ AgentMail 为 Agent 提供独立的身份和收件箱。
 - 创建账户并生成 API 密钥（以 `am_` 开头）
 
 ### 2. 配置 MCP 服务器
-添加至 `~/.hermes/config.yaml`（粘贴实际密钥 — MCP 环境变量不会从 .env 展开）：
+添加至 `~/.vigil/config.yaml`（粘贴实际密钥 — MCP 环境变量不会从 .env 展开）：
 ```yaml
 mcp_servers:
   agentmail:
@@ -62,9 +62,9 @@ mcp_servers:
       AGENTMAIL_API_KEY: "am_your_key_here"
 ```
 
-### 3. 重启 Hermes
+### 3. 重启 Vigil
 ```bash
-hermes
+vigil
 ```
 所有 11 个 AgentMail 工具现已自动可用。
 
@@ -132,7 +132,7 @@ hermes
 ## 验证
 配置完成后，使用以下命令测试：
 ```
-hermes --toolsets mcp -q "Create an AgentMail inbox called test-agent and tell me its email address"
+vigil --toolsets mcp -q "Create an AgentMail inbox called test-agent and tell me its email address"
 ```
 应返回新收件箱的地址。
 

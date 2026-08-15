@@ -2,7 +2,7 @@
 
 Public home for helpers that used to live as private functions on
 ``hermes_cli.main`` — importing that module drags in the whole CLI
-surface, which lightweight consumers (``hermes status``, dump tooling)
+surface, which lightweight consumers (``vigil status``, dump tooling)
 should not pay for.
 """
 

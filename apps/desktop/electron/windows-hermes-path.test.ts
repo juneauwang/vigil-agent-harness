@@ -1,9 +1,9 @@
-// Unit tests for the pure Windows `hermes` resolution helpers extracted from
+// Unit tests for the pure Windows `vigil` resolution helpers extracted from
 // main.ts's findOnPath(), handOffWindowsBootstrapRecovery(), and
 // unwrapWindowsVenvHermesCommand(). These pin the two Windows resolution bugs
 // that caused desktop reinstall loops:
 //   1. buildPathExtCandidates() — PATHEXT extensions must be tried BEFORE the
-//      empty extension, or an extensionless Git-Bash `hermes` shim shadows
+//      empty extension, or an extensionless Git-Bash `vigil` shim shadows
 //      the real hermes.cmd/hermes.exe.
 //   2. chooseUpdaterArgs() — must gate on haveRealInstall (any real-install
 //      signal), not just the hermes.exe console-script shim, or healthy

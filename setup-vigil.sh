@@ -98,15 +98,9 @@ is_checkout() {
 
 resolve_data_root() {
     # 与 hermes_constants.get_hermes_home() 的默认链保持一致：
-    # VIGIL_HOME → HERMES_HOME → ~/.vigil（旧 ~/.hermes 布局兜底）
+    # VIGIL_HOME → ~/.vigil
     if [ -n "${VIGIL_HOME:-}" ]; then
         VIGIL_ROOT="$VIGIL_HOME"
-    elif [ -n "${HERMES_HOME:-}" ]; then
-        VIGIL_ROOT="$HERMES_HOME"
-    elif [ -d "$HOME/.vigil" ]; then
-        VIGIL_ROOT="$HOME/.vigil"
-    elif [ -d "$HOME/.hermes" ]; then
-        VIGIL_ROOT="$HOME/.hermes"
     else
         VIGIL_ROOT="$HOME/.vigil"
     fi

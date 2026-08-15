@@ -15,7 +15,7 @@ from hermes_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable
 db = sqlite3.connect(":memory:")
 try:
     db.execute("CREATE VIRTUAL TABLE docs USING fts5(content, tokenize='trigram')")
-    db.execute("INSERT INTO docs VALUES ('hermes')")
+    db.execute("INSERT INTO docs VALUES ('vigil')")
     matches = db.execute(
         "SELECT count(*) FROM docs WHERE docs MATCH 'erm'"
     ).fetchone()[0]

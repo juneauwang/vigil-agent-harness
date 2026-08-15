@@ -7,7 +7,7 @@ const config: Config = {
   tagline: 'The self-improving AI agent',
   favicon: 'img/favicon.ico',
 
-  url: 'https://hermes-agent.nousresearch.com',
+  url: 'https://github.com/juneauwang/vigil-agent-harness',
   baseUrl: '/docs/',
 
   organizationName: 'NousResearch',
@@ -114,7 +114,7 @@ const config: Config = {
         docs: {
           routeBasePath: '/',  // Docs at the root of /docs/
           sidebarPath: './sidebars.ts',
-          editUrl: 'https://github.com/NousResearch/hermes-agent/edit/main/website/',
+          editUrl: 'https://github.com/juneauwang/vigil-agent-harness',
         },
         blog: false,
         theme: {
@@ -155,7 +155,7 @@ const config: Config = {
           position: 'left',
         },
         {
-          href: 'https://hermes-agent.nousresearch.com/',
+          href: 'https://github.com/juneauwang/vigil-agent-harness',
           label: 'Download',
           position: 'left',
         },
@@ -164,17 +164,17 @@ const config: Config = {
           position: 'right',
         },
         {
-          href: 'https://hermes-agent.nousresearch.com',
+          href: 'https://github.com/juneauwang/vigil-agent-harness',
           label: 'Home',
           position: 'right',
         },
         {
-          href: 'https://github.com/NousResearch/hermes-agent',
+          href: 'https://github.com/juneauwang/vigil-agent-harness',
           label: 'GitHub',
           position: 'right',
         },
         {
-          href: 'https://discord.gg/NousResearch',
+          href: 'https://github.com/juneauwang/vigil-agent-harness',
           label: 'Discord',
           position: 'right',
         },
@@ -195,16 +195,16 @@ const config: Config = {
         {
           title: 'Community',
           items: [
-            { label: 'Discord', href: 'https://discord.gg/NousResearch' },
-            { label: 'GitHub Issues', href: 'https://github.com/NousResearch/hermes-agent/issues' },
+            { label: 'Discord', href: 'https://github.com/juneauwang/vigil-agent-harness' },
+            { label: 'GitHub Issues', href: 'https://github.com/juneauwang/vigil-agent-harness' },
             { label: 'Skills Hub', href: 'https://agentskills.io' },
           ],
         },
         {
           title: 'More',
           items: [
-            { label: 'Desktop Download', href: 'https://hermes-agent.nousresearch.com/' },
-            { label: 'GitHub', href: 'https://github.com/NousResearch/hermes-agent' },
+            { label: 'Desktop Download', href: 'https://github.com/juneauwang/vigil-agent-harness' },
+            { label: 'GitHub', href: 'https://github.com/juneauwang/vigil-agent-harness' },
             { label: 'Nous Research', href: 'https://nousresearch.com' },
           ],
         },

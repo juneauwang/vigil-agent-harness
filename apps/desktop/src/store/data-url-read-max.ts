@@ -2,7 +2,7 @@
  * Max size for local files Desktop loads as data URLs (composer attach, image
  * previews, etc.). Main owns the real cap + its JSON under userData — this
  * atom only mirrors it for Settings → Chat. See electron/main.ts
- * (`hermes:data-url-read-max:*`) and the default/clamp in electron/hardening.ts.
+ * (`vigil:data-url-read-max:*`) and the default/clamp in electron/hardening.ts.
  */
 
 import { atom } from 'nanostores'

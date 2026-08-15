@@ -1,4 +1,4 @@
-"""``hermes tools`` subcommand parser.
+"""``vigil tools`` subcommand parser.
 
 Extracted from ``hermes_cli/main.py:main()`` (god-file Phase 2 follow-up).
 Handler injected to avoid importing ``main``.
@@ -28,7 +28,7 @@ def build_tools_parser(subparsers, *, cmd_tools: Callable) -> None:
     )
     tools_sub = tools_parser.add_subparsers(dest="tools_action")
 
-    # hermes tools list [--platform cli]
+    # vigil tools list [--platform cli]
     tools_list_p = tools_sub.add_parser(
         "list",
         help="Show all tools and their enabled/disabled status",
@@ -39,7 +39,7 @@ def build_tools_parser(subparsers, *, cmd_tools: Callable) -> None:
         help="Platform to show (default: cli)",
     )
 
-    # hermes tools disable <name...> [--platform cli]
+    # vigil tools disable <name...> [--platform cli]
     tools_disable_p = tools_sub.add_parser(
         "disable",
         help="Disable toolsets or MCP tools",
@@ -56,7 +56,7 @@ def build_tools_parser(subparsers, *, cmd_tools: Callable) -> None:
         help="Platform to apply to (default: cli)",
     )
 
-    # hermes tools enable <name...> [--platform cli]
+    # vigil tools enable <name...> [--platform cli]
     tools_enable_p = tools_sub.add_parser(
         "enable",
         help="Enable toolsets or MCP tools",
@@ -73,7 +73,7 @@ def build_tools_parser(subparsers, *, cmd_tools: Callable) -> None:
         help="Platform to apply to (default: cli)",
     )
 
-    # hermes tools post-setup <key>
+    # vigil tools post-setup <key>
     tools_postsetup_p = tools_sub.add_parser(
         "post-setup",
         help="Run a provider's post-setup install hook (npm/pip/binary)",

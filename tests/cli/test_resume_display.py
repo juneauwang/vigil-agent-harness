@@ -34,7 +34,7 @@ def _make_cli(config_overrides=None, env_overrides=None, **kwargs):
             else:
                 _clean_config[k] = v
 
-    clean_env = {"LLM_MODEL": "", "HERMES_MAX_ITERATIONS": ""}
+    clean_env = {"LLM_MODEL": "", "VIGIL_MAX_ITERATIONS": ""}
     if env_overrides:
         clean_env.update(env_overrides)
     with (
@@ -129,7 +129,7 @@ class TestDisplayResumedHistory:
         output = self._capture_display(cli)
 
         assert "You:" in output
-        assert "Hermes:" in output
+        assert "Vigil:" in output
         assert "What is Python?" in output
         assert "Python is a high-level programming language." in output
         assert "How do I install it?" in output

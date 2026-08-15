@@ -1,10 +1,10 @@
-"""MCP picker — interactive `hermes mcp picker` (also the default `hermes mcp`).
+"""MCP picker — interactive `vigil mcp picker` (also the default `vigil mcp`).
 
 Lists every catalog entry plus any custom MCP servers the user has added via
-``hermes mcp add``, lets them pick one, and routes to install / enable /
+``vigil mcp add``, lets them pick one, and routes to install / enable /
 disable / uninstall / configure-tools flows.
 
-Mirrors the `hermes plugin` picker UX: arrow keys to navigate, ENTER on a row
+Mirrors the `vigil plugin` picker UX: arrow keys to navigate, ENTER on a row
 to act on it. The action depends on current status:
 
   not installed (catalog)   → install  (clone/bootstrap if needed, prompt for creds)
@@ -122,7 +122,7 @@ def _enable_disable(name: str, *, enable: bool) -> None:
     save_config(cfg)
     print(color(
         f"  ✓ '{name}' {'enabled' if enable else 'disabled'}. "
-        "Start a new Hermes session for changes to take effect.",
+        "Start a new Vigil session for changes to take effect.",
         Colors.GREEN,
     ))
 
@@ -230,7 +230,7 @@ def _handle_row(row: _Row) -> None:
 
 def _print_rows_text(rows: List[_Row]) -> None:
     """Plain-text catalog dump used as a fallback when curses can't run, and
-    as the default output of `hermes mcp catalog`."""
+    as the default output of `vigil mcp catalog`."""
     if not rows:
         print()
         print(color("  No MCPs in the catalog or configured.", Colors.DIM))
@@ -250,7 +250,7 @@ def _print_rows_text(rows: List[_Row]) -> None:
         Colors.DIM,
     ))
 
-    # Surface manifest-version warnings so users know when their Hermes is
+    # Surface manifest-version warnings so users know when their Vigil is
     # too old to install everything in the catalog.
     diags = catalog_diagnostics()
     future = [d for d in diags if d[1] == "future_manifest"]
@@ -258,7 +258,7 @@ def _print_rows_text(rows: List[_Row]) -> None:
         print()
         for name, _, msg in future:
             print(color(
-                f"  ⚠ '{name}' requires a newer Hermes — run `vigil update` "
+                f"  ⚠ '{name}' requires a newer Vigil — run `vigil update` "
                 "to install this entry.",
                 Colors.YELLOW,
             ))
@@ -267,12 +267,12 @@ def _print_rows_text(rows: List[_Row]) -> None:
 
 
 def show_catalog() -> None:
-    """`hermes mcp catalog` — print the curated list + custom servers, no interaction."""
+    """`vigil mcp catalog` — print the curated list + custom servers, no interaction."""
     _print_rows_text(_build_rows())
 
 
 def run_picker() -> None:
-    """`hermes mcp picker` (and default `hermes mcp`) — interactive selector.
+    """`vigil mcp picker` (and default `vigil mcp`) — interactive selector.
 
     Loops until the user hits ESC/q. After each action the picker re-renders
     so the user can manage several entries in one session.
@@ -299,7 +299,7 @@ def run_picker() -> None:
 
 
 def install_by_name(identifier: str) -> int:
-    """`hermes mcp install <name>` — non-interactive entry-point.
+    """`vigil mcp install <name>` — non-interactive entry-point.
 
     Returns 0 on success, non-zero on failure (so the CLI can propagate
     exit codes).

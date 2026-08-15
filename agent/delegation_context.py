@@ -1,7 +1,7 @@
 """Context-local state for delegate_task child execution.
 
-The parent Hermes process may itself be a Kanban dispatcher worker with
-HERMES_KANBAN_* variables in process env. delegate_task children run inside the
+The parent Vigil process may itself be a Kanban dispatcher worker with
+VIGIL_KANBAN_* variables in process env. delegate_task children run inside the
 same Python process, but they are not dispatcher-owned Kanban workers. This
 module lets code paths that resolve tool schemas or spawn subprocesses fail
 closed for delegated children without mutating global os.environ for the parent.
@@ -23,7 +23,7 @@ _DELEGATED_CHILD_CONTEXT: ContextVar[bool] = ContextVar(
 )
 
 # Set for any in-process execution that is NOT the dispatcher-owned worker even
-# though the worker's HERMES_KANBAN_* vars are legitimately in os.environ (cron
+# though the worker's VIGIL_KANBAN_* vars are legitimately in os.environ (cron
 # jobs fired via the `cronjob` tool).  Kept separate from
 # _DELEGATED_CHILD_CONTEXT so the delegate_task-specific behaviour attached to
 # that flag (subprocess env scrubbing, its own error strings) is unchanged.
@@ -32,16 +32,16 @@ _NON_DISPATCHER_OWNED_CONTEXT: ContextVar[bool] = ContextVar(
     default=False,
 )
 
-DELEGATED_CHILD_ENV_MARKER = "HERMES_DELEGATED_CHILD_CONTEXT"
+DELEGATED_CHILD_ENV_MARKER = "VIGIL_DELEGATED_CHILD_CONTEXT"
 
 KANBAN_ENV_KEYS: tuple[str, ...] = (
-    "HERMES_KANBAN_TASK",
-    "HERMES_KANBAN_RUN_ID",
-    "HERMES_KANBAN_WORKSPACE",
-    "HERMES_KANBAN_WORKSPACES_ROOT",
-    "HERMES_KANBAN_CLAIM_LOCK",
-    "HERMES_KANBAN_BOARD",
-    "HERMES_KANBAN_DB",
+    "VIGIL_KANBAN_TASK",
+    "VIGIL_KANBAN_RUN_ID",
+    "VIGIL_KANBAN_WORKSPACE",
+    "VIGIL_KANBAN_WORKSPACES_ROOT",
+    "VIGIL_KANBAN_CLAIM_LOCK",
+    "VIGIL_KANBAN_BOARD",
+    "VIGIL_KANBAN_DB",
 )
 
 
@@ -76,10 +76,10 @@ def non_dispatcher_owned_context() -> Iterator[None]:
 
     A Kanban worker is a normal CLI agent whose default toolset includes
     ``cronjob``; ``cronjob(action="run")`` runs ``run_job()`` inside the worker's
-    own process, where ``HERMES_KANBAN_TASK`` is legitimately set.  Without this
+    own process, where ``VIGIL_KANBAN_TASK`` is legitimately set.  Without this
     marker the cron agent is misread as that worker: the kanban toolset is
     force-added, the worker protocol is injected into its system prompt, and
-    ``kanban_complete`` defaults ``task_id`` to ``$HERMES_KANBAN_TASK`` — letting
+    ``kanban_complete`` defaults ``task_id`` to ``$VIGIL_KANBAN_TASK`` — letting
     an unrelated cron job close the worker's task and overwrite real results.
 
     Scoped via ContextVar rather than by clearing ``os.environ``: the env is
@@ -97,7 +97,7 @@ def non_dispatcher_owned_context() -> Iterator[None]:
 def is_dispatcher_owned_worker_context() -> bool:
     """Return True only when this execution owns the dispatcher's Kanban task.
 
-    The single predicate every ``HERMES_KANBAN_*`` identity gate should use
+    The single predicate every ``VIGIL_KANBAN_*`` identity gate should use
     before trusting those vars.  False for delegate_task children and for cron
     jobs fired in-process from a worker.
     """
@@ -146,7 +146,7 @@ def delegated_child_subprocess_env(
 
     Most subprocess call sites historically used ``env=None`` to inherit the
     process environment.  In a ``delegate_task`` child, inheriting as-is leaks
-    parent dispatcher ``HERMES_KANBAN_*`` vars while losing the ContextVar in
+    parent dispatcher ``VIGIL_KANBAN_*`` vars while losing the ContextVar in
     the new process.  This helper preserves normal ``env=None`` semantics for
     non-delegated calls, and only materializes a scrubbed env when the lineage
     marker must be propagated across a child-process boundary.

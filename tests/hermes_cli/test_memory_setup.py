@@ -72,7 +72,7 @@ def test_write_env_vars_strips_line_separators_and_nul(tmp_path):
 
 def test_install_dependencies_force_reinstalls_versioned_specs(tmp_path, monkeypatch):
     """force=True hands every declared spec (version ranges intact) to pip,
-    so a downgraded/stripped bridge package is restored on hermes update."""
+    so a downgraded/stripped bridge package is restored on vigil update."""
     import yaml as _yaml
 
     plugin_dir = tmp_path / "mem0"

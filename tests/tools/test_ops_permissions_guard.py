@@ -104,7 +104,7 @@ def test_matrix_deny_is_hard_block_even_with_yolo(guard_env, monkeypatch):
 
 def test_matrix_approve_rides_smart_approval(guard_env, monkeypatch):
     guard_env("prod")
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
@@ -122,7 +122,7 @@ def test_prod_change_command_requires_human_confirmation_even_with_smart_approva
     docker compose up）即使 smart-approval 判 approve、yolo 开启，也必须人工
     确认——不直接放行。"""
     guard_env("prod")
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
@@ -137,7 +137,7 @@ def test_prod_change_command_yolo_does_not_bypass_confirmation(guard_env, monkey
     """OPS-DELTA #32：yolo 不能绕过 prod 变更确认门。"""
     guard_env("prod")
     approval_module._YOLO_MODE_FROZEN = True
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     result = approval_module.check_all_command_guards("systemctl restart myapp", "local")
     assert result["approved"] is False
     assert "prod 变更确认门" in result.get("description", "")
@@ -149,7 +149,7 @@ def test_b_prime_prod_ungraded_yolo_requires_confirmation(guard_env, monkeypatch
     yolo / smart-approval / 永久 allowlist 都不能绕过。"""
     guard_env("prod")
     approval_module._YOLO_MODE_FROZEN = True
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     result = approval_module.check_all_command_guards("mv a.txt b.txt", "local")
     assert result["approved"] is False
     # ask 路径的拒绝结果不带 ops_matrix 键——确认门证据在 description（含 B' 文案）
@@ -160,7 +160,7 @@ def test_b_prime_prod_ungraded_yolo_requires_confirmation(guard_env, monkeypatch
 def test_b_prime_prod_ungraded_smart_approval_still_confirms(guard_env, monkeypatch):
     """B'：prod 未分级命令 smart-approval 判 approve 也不能自动放行。"""
     guard_env("prod")
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
     result = approval_module.check_all_command_guards("cp x y", "local")
@@ -179,8 +179,8 @@ def test_prod_change_command_deny_still_hard_blocks(guard_env):
 
 def test_matrix_approve_fails_closed_without_human(guard_env, monkeypatch):
     guard_env("prod")
-    monkeypatch.delenv("HERMES_EXEC_ASK", raising=False)
-    monkeypatch.delenv("HERMES_INTERACTIVE", raising=False)
+    monkeypatch.delenv("VIGIL_EXEC_ASK", raising=False)
+    monkeypatch.delenv("VIGIL_INTERACTIVE", raising=False)
 
     result = approval_module.check_all_command_guards("systemctl restart myapp", "local")
     assert result["approved"] is False
@@ -189,7 +189,7 @@ def test_matrix_approve_fails_closed_without_human(guard_env, monkeypatch):
 
 def test_gate_disabled_leaves_existing_flow_unchanged(guard_env, monkeypatch):
     guard_env("prod", enabled=False)
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "manual"})
 
     # pip install 不在 DANGEROUS_PATTERNS；gate 关闭 → 直接通过
@@ -279,7 +279,7 @@ def test_gate_disabled_target_zero_impact(guard_env, monkeypatch):
 def test_target_prod_approve_notes_entity(guard_env, monkeypatch):
     """目标 env=prod 且矩阵 approve → 审批提示注明目标实体（目标: node2 (prod)）"""
     guard_env("test")
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     monkeypatch.setattr(approval_module, "_get_approval_config",
                         # Pin the legacy deny policy: this test asserts the
                         # timeout → blocked contract; with the default "wait"
@@ -316,7 +316,7 @@ def test_custom_env_role_prod_approves_l2(guard_env, monkeypatch):
     guard_env("bare_metal_prod", environments=[
         {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
     ])
-    monkeypatch.setenv("HERMES_EXEC_ASK", "1")
+    monkeypatch.setenv("VIGIL_EXEC_ASK", "1")
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 

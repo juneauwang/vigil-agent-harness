@@ -1,13 +1,13 @@
-"""Hermes-managed uv and Python runtime repair.
+"""Vigil-managed uv and Python runtime repair.
 
-Hermes owns its own uv binary at ``$HERMES_HOME/bin/uv`` (or ``uv.exe`` on
+Vigil owns its own uv binary at ``$VIGIL_HOME/bin/uv`` (or ``uv.exe`` on
 Windows).  Every code path that needs uv resolves it from that single location.
 If the binary is missing, ``ensure_uv()`` bootstraps it via the official
 standalone installer with ``UV_UNMANAGED_INSTALL`` / ``UV_INSTALL_DIR`` pointed
-at ``$HERMES_HOME/bin`` so the installer writes directly there — no PATH
+at ``$VIGIL_HOME/bin`` so the installer writes directly there — no PATH
 probing, no conda guards, no multi-location resolution chains.
 
-The Python backing the install is different: it is shared by every Hermes
+The Python backing the install is different: it is shared by every Vigil
 profile because the checkout's ``venv`` is shared.  Runtime repair therefore
 uses an install-scoped store under ``<checkout>/.hermes-runtime/python``. A
 vulnerable interpreter is never reinstalled in place. We provision a new
@@ -51,9 +51,9 @@ _REPAIR_LOCK_NAME = "runtime-repair.lock"
 
 
 def managed_uv_path() -> Path:
-    """Return the path where Hermes keeps *its* uv binary.
+    """Return the path where Vigil keeps *its* uv binary.
 
-    ``$HERMES_HOME/bin/uv`` on POSIX, ``$HERMES_HOME\\bin\\uv.exe`` on
+    ``$VIGIL_HOME/bin/uv`` on POSIX, ``$VIGIL_HOME\\bin\\uv.exe`` on
     Windows.  The directory may not exist yet — callers should use
     ``ensure_uv()`` to bootstrap it.
     """
@@ -86,7 +86,7 @@ def managed_python_env(
     install_dir: Path | None = None,
     base_env: dict[str, str] | None = None,
 ) -> dict[str, str]:
-    """Return a sanitized environment for Hermes-private uv Python commands."""
+    """Return a sanitized environment for Vigil-private uv Python commands."""
     target = (
         Path(install_dir)
         if install_dir is not None
@@ -144,7 +144,7 @@ def _report_runtime_repair_failure(repair: RuntimeRepairResult) -> None:
             f"the existing venv is unchanged ({repair.detail})."
         )
         print(
-            "    Sessions stay protected meanwhile: Hermes keeps databases "
+            "    Sessions stay protected meanwhile: Vigil keeps databases "
             "out of WAL mode on this SQLite build. The next `vigil update` "
             "will retry."
         )
@@ -157,7 +157,7 @@ class _UvResult(str):
     """``ensure_uv()`` return value that survives an update boundary.
 
     ``ensure_uv()``'s arity has flipped between a single path string and a
-    ``(path, fresh_bootstrap)`` tuple across releases. ``hermes update`` runs
+    ``(path, fresh_bootstrap)`` tuple across releases. ``vigil update`` runs
     the call site from the *old*, already-imported ``hermes_cli.main`` against
     this *freshly pulled* module, so the two can disagree on how many values
     ``ensure_uv()`` returns. An install parked on a 2-tuple release runs
@@ -227,7 +227,7 @@ def _ensure_uv_path(
         # Compatibility boundary: an older, already-imported updater calls the
         # freshly pulled ``ensure_uv()`` after bootstrapping uv.  Repair here so
         # that first update can migrate a vulnerable runtime without requiring
-        # a second ``hermes update``.
+        # a second ``vigil update``.
         try:
             repair = repair_vulnerable_runtime(result)
             if repair_observer is not None:
@@ -279,9 +279,9 @@ def ensure_uv(
 def _uv_self_update_is_fresh(now: float | None = None) -> bool:
     """Return True when ``uv self update`` ran recently enough to skip.
 
-    uv releases roughly weekly while many users run ``hermes update`` daily;
+    uv releases roughly weekly while many users run ``vigil update`` daily;
     re-running a blocking network self-update on every invocation is waste
-    and, offline, an unbounded hang risk. A stamp file under HERMES_HOME
+    and, offline, an unbounded hang risk. A stamp file under VIGIL_HOME
     caches the last successful self-update time.
     """
     try:
@@ -319,7 +319,7 @@ def update_managed_uv(
 ) -> Optional[str]:
     """Run ``uv self update`` on the managed uv binary.
 
-    Call this during ``hermes update`` so the managed copy stays current.
+    Call this during ``vigil update`` so the managed copy stays current.
     Returns the managed path when uv is available and ``None`` otherwise.
     A self-update failure is non-fatal because the old version still works.
     ``repair_observer``, when provided, receives the runtime repair result.
@@ -387,7 +387,7 @@ def update_managed_uv(
 def _reload_hermes_constants():
     """Re-execute ``hermes_constants`` from disk and return the fresh module.
 
-    ``hermes update`` imports ``hermes_constants`` from the OLD checkout,
+    ``vigil update`` imports ``hermes_constants`` from the OLD checkout,
     ``git pull`` then replaces that file, and this freshly-pulled module runs
     its lazy imports against the module object Python already cached in
     ``sys.modules`` — the pre-upgrade one. A symbol added by the update is
@@ -395,7 +395,7 @@ def _reload_hermes_constants():
     contains it, which is what made this read as a contradiction:
 
         cannot import name 'venv_python_path' from 'hermes_constants'
-        (~/.hermes/hermes-agent/hermes_constants.py)
+        (~/.vigil/hermes-agent/hermes_constants.py)
 
     Reloading picks up the definitions actually on disk, so callers keep using
     the shared helper instead of hand-rolling a second copy of its logic. Same
@@ -584,7 +584,7 @@ def _attempt_install_generation(
     try:
         python.resolve().relative_to(generation.resolve())
     except (OSError, ValueError):
-        logger.warning("uv resolved Python outside the Hermes generation: %s", python)
+        logger.warning("uv resolved Python outside the Vigil generation: %s", python)
         _remove_tree(generation, boundary=python_root)
         return None
 
@@ -954,7 +954,7 @@ def _windows_runtime_holders() -> tuple[bool, str]:
         return True, f"could not verify Windows venv holders: {exc}"
     if holders:
         pids = ", ".join(str(item[0]) for item in holders[:6])
-        return True, f"other Hermes processes still hold the venv (PID {pids})"
+        return True, f"other Vigil processes still hold the venv (PID {pids})"
     return False, ""
 
 
@@ -991,7 +991,7 @@ def _refresh_managed_uv_catalog(uv_bin: str) -> bool:
     newer version number to retry with.
 
     Re-running the official installer is the only supported refresh path for
-    unmanaged installs.  Only the Hermes-managed binary is ever refreshed;
+    unmanaged installs.  Only the Vigil-managed binary is ever refreshed;
     a caller-supplied foreign uv path is left alone.
 
     Returns ``True`` when the binary's version actually changed — i.e. a
@@ -1022,9 +1022,9 @@ def _default_live_venv(root: Path) -> Path:
     Managed installs create ``<checkout>/venv``, but uv-default and dev
     checkouts use ``<checkout>/.venv``.  Historically only ``venv`` was
     probed, so a ``.venv`` install linking a vulnerable SQLite returned
-    ``not-applicable`` on every ``hermes update`` and stayed on
+    ``not-applicable`` on every ``vigil update`` and stayed on
     journal_mode=DELETE forever — even though the WAL fallback warning
-    promises that ``hermes update`` repairs the runtime (issue class:
+    promises that ``vigil update`` repairs the runtime (issue class:
     2,600x slower ``state.db`` appends under DELETE).
 
     ``venv`` wins when it holds an interpreter (managed layout takes
@@ -1153,7 +1153,7 @@ def repair_vulnerable_runtime(
             )
 
         print(
-            "  ⚠ Hermes venv links SQLite "
+            "  ⚠ Vigil venv links SQLite "
             f"{current.sqlite_version_string}, which has the WAL-reset bug."
         )
         provisioned = _install_safe_python_generation(
@@ -1247,7 +1247,7 @@ def _install_uv(target: Path) -> None:
 
     Uses ``UV_UNMANAGED_INSTALL`` (POSIX) or ``UV_INSTALL_DIR`` (Windows)
     so the astral installer writes the binary directly into
-    ``$HERMES_HOME/bin/`` instead of ``~/.local/bin/``.
+    ``$VIGIL_HOME/bin/`` instead of ``~/.local/bin/``.
     """
     system = platform.system()
     env = {

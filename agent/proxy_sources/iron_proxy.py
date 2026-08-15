@@ -21,12 +21,12 @@ Design summary
 --------------
 
 * The ``iron-proxy`` binary is auto-installed into ``<hermes_home>/bin/iron-proxy``
-  on first use.  Hermes pins one upstream version (``_IRON_PROXY_VERSION``)
+  on first use.  Vigil pins one upstream version (``_IRON_PROXY_VERSION``)
   and downloads the matching tar.gz from the official GitHub Releases page,
   verifying the SHA-256 against the release's ``checksums.txt``.
 
 * A long-lived CA at ``<hermes_home>/proxy/ca.{crt,key}`` is generated on
-  first ``hermes egress setup``.  Sandboxes trust this CA so iron-proxy can
+  first ``vigil egress setup``.  Sandboxes trust this CA so iron-proxy can
   terminate TLS and rewrite headers.
 
 * The proxy config lives at ``<hermes_home>/proxy/proxy.yaml``.  It enumerates
@@ -39,7 +39,7 @@ Design summary
   Bitwarden Secrets Manager is configured, the real value is pulled there
   at proxy startup instead.
 
-* The proxy runs as a managed subprocess (``hermes egress start``), pidfile
+* The proxy runs as a managed subprocess (``vigil egress start``), pidfile
   at ``<hermes_home>/proxy/iron-proxy.pid``.  Daemon output (including
   per-request records on v0.39) goes to ``<hermes_home>/proxy/iron-proxy.log``;
   ``audit.log`` is pre-created but reserved for a future pin that supports
@@ -110,14 +110,14 @@ _STARTUP_GRACE_SECONDS = 5
 # whose ``POST /v1/reload`` re-reads proxy.yaml and atomically swaps the
 # transform pipeline in-place — no restart, no dropped connections.  We
 # always enable it on generated configs: it binds loopback only and every
-# request needs the bearer key below.  ``hermes egress reload`` is the
+# request needs the bearer key below.  ``vigil egress reload`` is the
 # client.
 #
 # The key is minted at setup time, stored at
 # ``<hermes_home>/proxy/management.token`` (0600), and injected into the
 # daemon's env under this name at start.  v0.39 validates at startup that
 # the named env var is non-empty when management.listen is set.
-_MGMT_API_KEY_ENV = "HERMES_IRON_PROXY_MGMT_KEY"
+_MGMT_API_KEY_ENV = "VIGIL_IRON_PROXY_MGMT_KEY"
 # The management listener binds loopback at tunnel_port + 2 (tunnel_port
 # is CONNECT/MITM, +1 is the plain-HTTP forward listener).
 _MGMT_PORT_OFFSET = 2
@@ -165,7 +165,7 @@ _BEARER_PROVIDERS: Dict[str, Tuple[str, ...]] = {
 # not "uncovered".
 #
 # ``aliases`` are interchangeable env-var names for the SAME upstream
-# credential (Hermes' auth.py keys Google on both GEMINI_API_KEY and
+# credential (Vigil' auth.py keys Google on both GEMINI_API_KEY and
 # GOOGLE_API_KEY).  Aliased names MUST collapse into a single mapping:
 # every rule carries ``require: true``, and two require-rules on the same
 # host reject each other's requests (each rule whose own token isn't
@@ -366,7 +366,7 @@ def _proxy_state_dir_ro() -> Path:
     """Return the proxy state dir without creating it.
 
     Read-only callers (status probes, pidfile reads, version queries) use
-    this — there's no reason to materialize ``~/.hermes/proxy/`` just to
+    this — there's no reason to materialize ``~/.vigil/proxy/`` just to
     check whether a pidfile exists.
     """
     from hermes_constants import get_hermes_home
@@ -466,7 +466,7 @@ def install_iron_proxy(*, force: bool = False) -> Path:
 
     Returns the path to the installed executable.  Raises on any failure
     (network, checksum, extraction).  Callers in the auto-install path catch
-    these; the user-facing ``hermes proxy install`` surface lets them
+    these; the user-facing ``vigil proxy install`` surface lets them
     propagate so the wizard can show a clear error.
     """
 
@@ -713,7 +713,7 @@ def iron_proxy_version(binary: Path) -> str:
     except (OSError, subprocess.TimeoutExpired):
         return ""
     out = (res.stdout or res.stderr or "").strip()
-    # Don't cache empty output — that would poison ``hermes egress
+    # Don't cache empty output — that would poison ``vigil egress
     # status`` for the lifetime of the process if the first probe hit a
     # corrupt binary or a flag-rename in a newer upstream.  Re-probe on
     # the next call instead.
@@ -767,7 +767,7 @@ def ensure_ca_cert(*, force: bool = False) -> Tuple[Path, Path]:
                 "openssl", "req", "-x509", "-new", "-nodes",
                 "-key", str(tmp_key),
                 "-sha256", "-days", "3650",
-                "-subj", "/CN=hermes iron-proxy CA",
+                "-subj", "/CN=vigil iron-proxy CA",
                 "-addext", "basicConstraints=critical,CA:TRUE",
                 "-addext", "keyUsage=critical,keyCertSign",
                 "-out", str(tmp_crt),
@@ -846,9 +846,9 @@ def ensure_management_token(*, force: bool = False) -> str:
     """Return the management-API bearer key, minting it on first call.
 
     Stored at ``<hermes_home>/proxy/management.token`` with 0600 perms.
-    The daemon receives it via the ``HERMES_IRON_PROXY_MGMT_KEY`` env var
+    The daemon receives it via the ``VIGIL_IRON_PROXY_MGMT_KEY`` env var
     (named in the generated config's ``management.api_key_env``);
-    ``hermes egress reload`` reads the same file to authenticate.
+    ``vigil egress reload`` reads the same file to authenticate.
     """
 
     p = _management_token_path()
@@ -1282,7 +1282,7 @@ def build_proxy_config(
         # random port each start and nothing records it — metrics are
         # effectively disabled/undiscoverable at this pin.  If we want
         # scrapable metrics later, allocate a fixed port and surface it
-        # in ``ProxyStatus`` / ``hermes egress status``.
+        # in ``ProxyStatus`` / ``vigil egress status``.
         "metrics": {
             "listen": "127.0.0.1:0",
         },
@@ -1290,7 +1290,7 @@ def build_proxy_config(
         # authenticated (key read from the env var named below; injected
         # by ``start_proxy`` from ``management.token``).  ``POST /v1/reload``
         # re-reads THIS config file and atomically swaps the transform
-        # pipeline — `hermes egress reload` applies allowlist/token/mapping
+        # pipeline — `vigil egress reload` applies allowlist/token/mapping
         # changes without a restart.  Loopback deliberately: sandboxes must
         # never reach the management surface, so it does NOT bind the
         # docker bridge like the traffic listeners do.
@@ -1363,7 +1363,7 @@ def write_proxy_config(config: Dict) -> Path:
     """
 
     try:
-        import yaml  # PyYAML is already a Hermes dep
+        import yaml  # PyYAML is already a Vigil dep
     except ImportError as exc:
         raise RuntimeError(
             "PyYAML is required to write the iron-proxy config but is not "
@@ -1507,7 +1507,7 @@ def discover_uncovered_providers(
     sandbox is holding real credentials that the proxy can't strip — the
     isolation guarantee is incomplete for those providers.
 
-    The wizard and ``hermes egress status`` use this to print a warning.
+    The wizard and ``vigil egress status`` use this to print a warning.
     (Anthropic / Azure OpenAI / Gemini used to be here; they're now
     first-class swapped providers via ``_HEADER_AUTH_PROVIDERS``.)
     """
@@ -1529,7 +1529,7 @@ def merge_mappings(
     """Combine an existing mapping set with freshly discovered providers.
 
     By default this PRESERVES tokens for providers already in ``existing`` —
-    re-running ``hermes egress setup`` should not invalidate the tokens
+    re-running ``vigil egress setup`` should not invalidate the tokens
     baked into containers that are already running.  Only newly added
     providers get freshly minted tokens.
 
@@ -1589,7 +1589,7 @@ def _read_pid() -> Optional[int]:
 # by ``_pid_alive`` to confirm a candidate PID still refers to *our* managed
 # binary even across PID recycling (a fresh process can't inherit our
 # arbitrary env value).
-_HERMES_IRON_PROXY_NONCE_ENV = "HERMES_IRON_PROXY_NONCE"
+_VIGIL_IRON_PROXY_NONCE_ENV = "VIGIL_IRON_PROXY_NONCE"
 _proxy_nonce: Optional[str] = None
 
 
@@ -1718,7 +1718,7 @@ def _pid_alive(pid: int) -> bool:
         try:
             env_bytes = Path(f"/proc/{pid}/environ").read_bytes()
             for nonce in nonce_candidates:
-                needle = f"{_HERMES_IRON_PROXY_NONCE_ENV}={nonce}".encode()
+                needle = f"{_VIGIL_IRON_PROXY_NONCE_ENV}={nonce}".encode()
                 if needle in env_bytes:
                     return True
         except OSError:
@@ -1818,15 +1818,15 @@ def start_proxy(
     # Plant a per-start nonce in the child env so ``_pid_alive`` can
     # confirm a candidate PID still refers to *our* binary across PID
     # recycling.  Module-global is fine — only one managed proxy per
-    # Hermes process.
+    # Vigil process.
     _proxy_nonce = hashlib.sha256(os.urandom(16)).hexdigest()
-    env[_HERMES_IRON_PROXY_NONCE_ENV] = _proxy_nonce
+    env[_VIGIL_IRON_PROXY_NONCE_ENV] = _proxy_nonce
 
     log_path = _proxy_state_dir() / "iron-proxy.log"
     # Keep ownership of the fd tight: open with explicit 0o600 so the
     # log doesn't get world-readable under a slack umask, then close it
     # immediately after Popen (the child has its own dup).  Without the
-    # close-on-success path, every restart leaked one fd in the Hermes
+    # close-on-success path, every restart leaked one fd in the Vigil
     # process.
     #
     # O_NOFOLLOW (defence-in-depth, same threat model as the pidfile
@@ -1892,7 +1892,7 @@ def start_proxy(
     # Write the pidfile IMMEDIATELY after Popen, BEFORE the listening
     # verification.  If the parent dies during the poll loop (SIGINT,
     # OOM, kernel pause), the pidfile is still on disk so the next
-    # ``hermes egress stop`` can clean up the orphan.  Failure paths
+    # ``vigil egress stop`` can clean up the orphan.  Failure paths
     # below unlink the pidfile when they kill the child.
     pidfile = _pidfile()
     try:
@@ -1907,7 +1907,7 @@ def start_proxy(
     # of liveness keeps Docker container creation snappy.
     #
     # We scope a Ctrl-C handler around the poll loop so an operator who
-    # hits Ctrl-C while waiting for ``hermes egress start`` doesn't leak
+    # hits Ctrl-C while waiting for ``vigil egress start`` doesn't leak
     # an orphan with the port bound.
     #
     # Probe the CONFIGURED bind host, not loopback unconditionally — on

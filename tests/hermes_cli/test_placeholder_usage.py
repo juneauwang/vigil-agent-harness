@@ -30,7 +30,7 @@ def test_config_set_usage_marks_placeholders(capsys):
 
 
 def test_show_config_marks_placeholders(tmp_path, capsys):
-    with patch.dict(os.environ, {"HERMES_HOME": str(tmp_path)}):
+    with patch.dict(os.environ, {"VIGIL_HOME": str(tmp_path)}):
         show_config()
 
     out = capsys.readouterr().out

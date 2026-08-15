@@ -10,7 +10,7 @@ SOP（agent 侧行为引导，不改核心）：对话输入疑似凭据（长�
 ``store()`` 存入后只引用名字，不再在命令串/回复里内插明文。命令串里的
 明文会过 ``agent/redact.py`` 打码（#21 输出侧）。
 
-存储：<HERMES_HOME>/secrets/<name>，权限 600，owner 校验（非 owner 拒绝
+存储：<VIGIL_HOME>/secrets/<name>，权限 600，owner 校验（非 owner 拒绝
 读取）。name 仅允许 [A-Za-z0-9._-]+（防路径穿越）。
 """
 

@@ -1,9 +1,9 @@
-"""``hermes project`` CLI — manage first-class, multi-folder Projects.
+"""``vigil project`` CLI — manage first-class, multi-folder Projects.
 
 A Project is a human-named workspace spanning one or more folders, with one
 designated primary repo. Projects anchor desktop session grouping and (when
 bound to a kanban board) give kanban tasks a deterministic worktree + branch
-convention. State lives in the per-profile ``$HERMES_HOME/projects.db`` store
+convention. State lives in the per-profile ``$VIGIL_HOME/projects.db`` store
 (see :mod:`hermes_cli.projects_db`).
 
 This is a footprint-ladder rung-2 capability: a CLI command + gateway RPC,
@@ -36,7 +36,7 @@ def build_parser(
     sub = parser.add_subparsers(dest="project_action")
 
     p_create = sub.add_parser("create", help="Create a new project")
-    p_create.add_argument("name", help="Human name, e.g. 'Hermes Agent'")
+    p_create.add_argument("name", help="Human name, e.g. 'Vigil Agent'")
     p_create.add_argument(
         "folders", nargs="*", help="Folder paths to include (first = primary)"
     )
@@ -106,7 +106,7 @@ def build_parser(
 
 
 def projects_command(args: argparse.Namespace) -> int:
-    """Entry point from ``hermes project …`` argparse dispatch."""
+    """Entry point from ``vigil project …`` argparse dispatch."""
     action = getattr(args, "project_action", None)
     if not action:
         parser = getattr(args, "_project_parser", None)

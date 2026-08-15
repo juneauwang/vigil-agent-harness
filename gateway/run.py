@@ -19,7 +19,7 @@ try:
     import hermes_bootstrap  # noqa: F401
 except ModuleNotFoundError:
     # Graceful fallback when hermes_bootstrap isn't registered in the venv
-    # yet — happens during partial ``hermes update`` where git-reset landed
+    # yet — happens during partial ``vigil update`` where git-reset landed
     # new code but ``uv pip install -e .`` didn't finish.  Missing bootstrap
     # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
     pass
@@ -391,7 +391,7 @@ _GATEWAY_SECRET_PATTERNS = (
 
 
 def _ensure_windows_gateway_venv_imports() -> None:
-    """Make detached Windows gateway runs see the Hermes venv packages.
+    """Make detached Windows gateway runs see the Vigil venv packages.
 
     Some Windows restart paths run the gateway under uv's base ``pythonw.exe``
     to avoid the venv launcher respawning a visible console interpreter.  That
@@ -928,7 +928,7 @@ def _coerce_gateway_timestamp(value: Any) -> Optional[float]:
     if isinstance(value, bool):  # bool is a subclass of int — skip it
         return None
     if isinstance(value, (int, float)):
-        # Some platform events use milliseconds; Hermes state rows use seconds.
+        # Some platform events use milliseconds; Vigil state rows use seconds.
         return float(value) / 1000.0 if float(value) > 10_000_000_000 else float(value)
     if isinstance(value, str):
         text = value.strip()
@@ -952,9 +952,9 @@ def _auto_continue_freshness_window() -> float:
     Thin wrapper that delegates to the canonical implementation in
     ``gateway.session`` (the single source of truth shared with the
     routing-time zombie gate in ``get_or_create_session``).  Reads
-    ``HERMES_AUTO_CONTINUE_FRESHNESS`` (bridged from ``config.yaml``
+    ``VIGIL_AUTO_CONTINUE_FRESHNESS`` (bridged from ``config.yaml``
     ``agent.gateway_auto_continue_freshness`` at gateway startup, same
-    pattern as ``HERMES_AGENT_TIMEOUT``).  Falls back to the module default
+    pattern as ``VIGIL_AGENT_TIMEOUT``).  Falls back to the module default
     when unset or malformed.  Non-positive values disable the freshness gate
     (restores the pre-fix "always fresh" behaviour for users who want to opt
     out).  Kept here so existing call sites and test patches importing it
@@ -983,12 +983,12 @@ def _startup_restore_drain_timeout_secs() -> float:
     slot rather than spawning a second agent.  So on timeout we release the
     gate and let the slow turn finish in the background.
 
-    Reads ``HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT`` (bridged from
+    Reads ``VIGIL_STARTUP_RESTORE_DRAIN_TIMEOUT`` (bridged from
     ``config.yaml`` ``agent.gateway_startup_restore_drain_timeout`` at gateway
     startup, same pattern as the other ``agent.*`` knobs).  Non-positive
     disables the bound (restores the historical "wait forever" behaviour).
     """
-    raw = os.environ.get("HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT")
+    raw = os.environ.get("VIGIL_STARTUP_RESTORE_DRAIN_TIMEOUT")
     if raw is None or raw == "":
         return float(_STARTUP_RESTORE_DRAIN_TIMEOUT_SECS_DEFAULT)
     try:
@@ -1000,7 +1000,7 @@ def _startup_restore_drain_timeout_secs() -> float:
 def _float_env(name: str, default: float) -> float:
     """Read an env var as float, falling back to ``default`` on typos/empty.
 
-    A misconfigured env var (e.g. ``HERMES_AGENT_TIMEOUT=abc``) must not
+    A misconfigured env var (e.g. ``VIGIL_AGENT_TIMEOUT=abc``) must not
     crash the gateway or an agent turn.  Unset/empty also falls back.
     """
     raw = os.environ.get(name)
@@ -1809,19 +1809,19 @@ def _clear_planned_restart_notification() -> None:
 
 # Mark this process as a gateway so cli.py's module-level load_cli_config()
 # knows not to clobber TERMINAL_CWD if lazily imported.
-os.environ["_HERMES_GATEWAY"] = "1"
+os.environ["_VIGIL_GATEWAY"] = "1"
 
 _ensure_ssl_certs()
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Resolve Hermes home directory (respects HERMES_HOME override)
+# Resolve Vigil home directory (respects VIGIL_HOME override)
 from hermes_constants import get_hermes_home, get_hermes_home_override
 from utils import atomic_json_write, is_truthy_value
 _hermes_home = get_hermes_home()
 
-# Load environment variables from ~/.hermes/.env first.
+# Load environment variables from ~/.vigil/.env first.
 # User-managed env files should override stale shell exports on restart.
 from dotenv import load_dotenv  # noqa: F401  # backward-compat for tests that monkeypatch this symbol
 from hermes_cli.env_loader import load_hermes_dotenv
@@ -1832,9 +1832,9 @@ load_hermes_dotenv(hermes_home=_hermes_home, project_env=Path(__file__).resolve(
 def _reload_runtime_env_preserving_config_authority() -> None:
     """Reload .env for fresh credentials without letting stale .env override config.
 
-    Gateway processes are long-lived, so per-turn code reloads ~/.hermes/.env to
+    Gateway processes are long-lived, so per-turn code reloads ~/.vigil/.env to
     pick up rotated API keys. config.yaml remains authoritative for agent budget
-    settings such as agent.max_turns; otherwise a stale HERMES_MAX_ITERATIONS in
+    settings such as agent.max_turns; otherwise a stale VIGIL_MAX_ITERATIONS in
     .env can replace the startup bridge on later turns.
 
     In multiplex mode this is a NO-OP for the credential reload: secrets come
@@ -1859,7 +1859,7 @@ def _reload_runtime_env_preserving_config_authority() -> None:
 
 
 def _bridge_max_turns_from_config(home: "Path") -> None:
-    """Bridge config.yaml agent.max_turns into HERMES_MAX_ITERATIONS (a global)."""
+    """Bridge config.yaml agent.max_turns into VIGIL_MAX_ITERATIONS (a global)."""
     config_path = home / 'config.yaml'
     if not config_path.exists():
         return
@@ -1885,22 +1885,22 @@ def _bridge_max_turns_from_config(home: "Path") -> None:
 
     agent_cfg = cfg.get("agent", {})
     if isinstance(agent_cfg, dict) and "max_turns" in agent_cfg:
-        os.environ["HERMES_MAX_ITERATIONS"] = str(agent_cfg["max_turns"])
+        os.environ["VIGIL_MAX_ITERATIONS"] = str(agent_cfg["max_turns"])
     # config-authoritative knobs for the session-search index (config.yaml
     # sessions.* wins over stale env; env stays the cross-process carrier).
     sessions_cfg = cfg.get("sessions", {})
     if isinstance(sessions_cfg, dict):
         if "cjk_fts" in sessions_cfg:
-            os.environ["HERMES_CJK_FTS"] = str(sessions_cfg["cjk_fts"])
+            os.environ["VIGIL_CJK_FTS"] = str(sessions_cfg["cjk_fts"])
         if "search_slow_ms" in sessions_cfg:
-            os.environ["HERMES_SEARCH_SLOW_MS"] = str(sessions_cfg["search_slow_ms"])
+            os.environ["VIGIL_SEARCH_SLOW_MS"] = str(sessions_cfg["search_slow_ms"])
 
 
 def _current_max_iterations() -> int:
     """Return the current per-turn iteration budget after runtime env refresh."""
     _reload_runtime_env_preserving_config_authority()
     try:
-        return int(os.getenv("HERMES_MAX_ITERATIONS", "500"))
+        return int(os.getenv("VIGIL_MAX_ITERATIONS", "500"))
     except (TypeError, ValueError):
         return 500
 
@@ -2047,7 +2047,7 @@ if _config_path.exists():
         # env vars, so a managed timezone / redact_secrets / max_turns / terminal
         # setting wins over the user's value at the env layer too. This bridge
         # reads config.yaml directly (not via load_config), so without the
-        # overlay every HERMES_*/TERMINAL_* env var below would carry the user's
+        # overlay every VIGIL_*/TERMINAL_* env var below would carry the user's
         # value even when an administrator pinned it. Fail-open via the helper.
         try:
             from hermes_cli import managed_scope
@@ -2110,7 +2110,7 @@ if _config_path.exists():
                     # never receives a literal "~/" which the kernel rejects.
                     # SSH cwd is interpreted by the remote shell, so preserve
                     # "~" / "~/..." for the SSH backend instead of expanding it
-                    # to the Hermes host/container HOME (often /opt/data). Shared
+                    # to the Vigil host/container HOME (often /opt/data). Shared
                     # predicate with terminal_tool so the two sites can't drift.
                     if _cfg_key == "cwd" and isinstance(_val, str):
                         from tools.terminal_tool import _is_ssh_remote_tilde_cwd
@@ -2164,31 +2164,31 @@ if _config_path.exists():
         # config.yaml is the documented, authoritative source for these
         # settings — it unconditionally wins over .env values. Previously
         # the guards below read `if X not in os.environ` and let stale
-        # .env entries (e.g. HERMES_MAX_ITERATIONS=60 written by an old
-        # `hermes setup` run) silently shadow the user's current config.
+        # .env entries (e.g. VIGIL_MAX_ITERATIONS=60 written by an old
+        # `vigil setup` run) silently shadow the user's current config.
         # See PR #18413 / the 60-vs-500 max_turns incident.
         _agent_cfg = _cfg.get("agent", {})
         if _agent_cfg and isinstance(_agent_cfg, dict):
             if "max_turns" in _agent_cfg:
-                os.environ["HERMES_MAX_ITERATIONS"] = str(_agent_cfg["max_turns"])
+                os.environ["VIGIL_MAX_ITERATIONS"] = str(_agent_cfg["max_turns"])
             if "gateway_timeout" in _agent_cfg:
-                os.environ["HERMES_AGENT_TIMEOUT"] = str(_agent_cfg["gateway_timeout"])
+                os.environ["VIGIL_AGENT_TIMEOUT"] = str(_agent_cfg["gateway_timeout"])
             if "gateway_timeout_warning" in _agent_cfg:
-                os.environ["HERMES_AGENT_TIMEOUT_WARNING"] = str(_agent_cfg["gateway_timeout_warning"])
+                os.environ["VIGIL_AGENT_TIMEOUT_WARNING"] = str(_agent_cfg["gateway_timeout_warning"])
             if "gateway_notify_interval" in _agent_cfg:
-                os.environ["HERMES_AGENT_NOTIFY_INTERVAL"] = str(_agent_cfg["gateway_notify_interval"])
+                os.environ["VIGIL_AGENT_NOTIFY_INTERVAL"] = str(_agent_cfg["gateway_notify_interval"])
             if "session_stall_timeout" in _agent_cfg:
-                os.environ["HERMES_SESSION_STALL_TIMEOUT"] = str(
+                os.environ["VIGIL_SESSION_STALL_TIMEOUT"] = str(
                     _agent_cfg["session_stall_timeout"]
                 )
             if "restart_drain_timeout" in _agent_cfg:
-                os.environ["HERMES_RESTART_DRAIN_TIMEOUT"] = str(_agent_cfg["restart_drain_timeout"])
+                os.environ["VIGIL_RESTART_DRAIN_TIMEOUT"] = str(_agent_cfg["restart_drain_timeout"])
             if "gateway_auto_continue_freshness" in _agent_cfg:
-                os.environ["HERMES_AUTO_CONTINUE_FRESHNESS"] = str(
+                os.environ["VIGIL_AUTO_CONTINUE_FRESHNESS"] = str(
                     _agent_cfg["gateway_auto_continue_freshness"]
                 )
             if "gateway_startup_restore_drain_timeout" in _agent_cfg:
-                os.environ["HERMES_STARTUP_RESTORE_DRAIN_TIMEOUT"] = str(
+                os.environ["VIGIL_STARTUP_RESTORE_DRAIN_TIMEOUT"] = str(
                     _agent_cfg["gateway_startup_restore_drain_timeout"]
                 )
         # config-authoritative knobs for the session-search index; same
@@ -2196,45 +2196,45 @@ if _config_path.exists():
         _sessions_cfg = _cfg.get("sessions", {})
         if _sessions_cfg and isinstance(_sessions_cfg, dict):
             if "cjk_fts" in _sessions_cfg:
-                os.environ["HERMES_CJK_FTS"] = str(_sessions_cfg["cjk_fts"])
+                os.environ["VIGIL_CJK_FTS"] = str(_sessions_cfg["cjk_fts"])
             if "search_slow_ms" in _sessions_cfg:
-                os.environ["HERMES_SEARCH_SLOW_MS"] = str(
+                os.environ["VIGIL_SEARCH_SLOW_MS"] = str(
                     _sessions_cfg["search_slow_ms"]
                 )
         _display_cfg = _cfg.get("display", {})
         if _display_cfg and isinstance(_display_cfg, dict):
             if "busy_input_mode" in _display_cfg:
-                os.environ["HERMES_GATEWAY_BUSY_INPUT_MODE"] = str(_display_cfg["busy_input_mode"])
+                os.environ["VIGIL_GATEWAY_BUSY_INPUT_MODE"] = str(_display_cfg["busy_input_mode"])
             if "busy_text_mode" in _display_cfg:
-                os.environ["HERMES_GATEWAY_BUSY_TEXT_MODE"] = str(_display_cfg["busy_text_mode"])
+                os.environ["VIGIL_GATEWAY_BUSY_TEXT_MODE"] = str(_display_cfg["busy_text_mode"])
             if "busy_ack_enabled" in _display_cfg:
-                os.environ["HERMES_GATEWAY_BUSY_ACK_ENABLED"] = str(_display_cfg["busy_ack_enabled"])
+                os.environ["VIGIL_GATEWAY_BUSY_ACK_ENABLED"] = str(_display_cfg["busy_ack_enabled"])
             # This process-level env var is documented as an override for
             # service managers, so preserve it when already set. Other display
             # bridges stay config-authoritative for backwards compatibility.
             if (
                 "busy_steer_ack_enabled" in _display_cfg
-                and "HERMES_GATEWAY_BUSY_STEER_ACK_ENABLED" not in os.environ
+                and "VIGIL_GATEWAY_BUSY_STEER_ACK_ENABLED" not in os.environ
             ):
-                os.environ["HERMES_GATEWAY_BUSY_STEER_ACK_ENABLED"] = str(
+                os.environ["VIGIL_GATEWAY_BUSY_STEER_ACK_ENABLED"] = str(
                     _display_cfg["busy_steer_ack_enabled"]
                 )
-        # Timezone: bridge config.yaml → HERMES_TIMEZONE env var.
+        # Timezone: bridge config.yaml → VIGIL_TIMEZONE env var.
         _tz_cfg = _cfg.get("timezone", "")
         if _tz_cfg and isinstance(_tz_cfg, str):
-            os.environ["HERMES_TIMEZONE"] = _tz_cfg.strip()
+            os.environ["VIGIL_TIMEZONE"] = _tz_cfg.strip()
         # Security settings
         _security_cfg = _cfg.get("security", {})
         if isinstance(_security_cfg, dict):
             _redact = _security_cfg.get("redact_secrets")
             if _redact is not None:
-                os.environ["HERMES_REDACT_SECRETS"] = str(_redact).lower()
+                os.environ["VIGIL_REDACT_SECRETS"] = str(_redact).lower()
         # Gateway settings (media delivery allowlist + recency trust + strict mode)
         _gateway_cfg = _cfg.get("gateway", {})
         if isinstance(_gateway_cfg, dict):
             _strict = _gateway_cfg.get("strict")
             if _strict is not None:
-                os.environ["HERMES_MEDIA_DELIVERY_STRICT"] = (
+                os.environ["VIGIL_MEDIA_DELIVERY_STRICT"] = (
                     "1" if _strict else "0"
                 )
             _allow_dirs = _gateway_cfg.get("media_delivery_allow_dirs")
@@ -2246,15 +2246,15 @@ if _config_path.exists():
                 else:
                     _allow_dirs_str = ""
                 if _allow_dirs_str:
-                    os.environ["HERMES_MEDIA_ALLOW_DIRS"] = _allow_dirs_str
+                    os.environ["VIGIL_MEDIA_ALLOW_DIRS"] = _allow_dirs_str
             _trust_recent = _gateway_cfg.get("trust_recent_files")
             if _trust_recent is not None:
-                os.environ["HERMES_MEDIA_TRUST_RECENT_FILES"] = (
+                os.environ["VIGIL_MEDIA_TRUST_RECENT_FILES"] = (
                     "1" if _trust_recent else "0"
                 )
             _trust_recent_seconds = _gateway_cfg.get("trust_recent_files_seconds")
             if _trust_recent_seconds is not None:
-                os.environ["HERMES_MEDIA_TRUST_RECENT_SECONDS"] = str(_trust_recent_seconds)
+                os.environ["VIGIL_MEDIA_TRUST_RECENT_SECONDS"] = str(_trust_recent_seconds)
             # Bridge gateway.platform_connect_timeout → the internal env var the
             # connect path + Discord adapter ready-wait both read (#19776).
             # Unlike the agent.*/display.* bridges above (config-authoritative),
@@ -2262,9 +2262,9 @@ if _config_path.exists():
             # already set explicitly; otherwise config.yaml supplies the value.
             if (
                 "platform_connect_timeout" in _gateway_cfg
-                and not os.environ.get("HERMES_GATEWAY_PLATFORM_CONNECT_TIMEOUT", "").strip()
+                and not os.environ.get("VIGIL_GATEWAY_PLATFORM_CONNECT_TIMEOUT", "").strip()
             ):
-                os.environ["HERMES_GATEWAY_PLATFORM_CONNECT_TIMEOUT"] = str(
+                os.environ["VIGIL_GATEWAY_PLATFORM_CONNECT_TIMEOUT"] = str(
                     _gateway_cfg["platform_connect_timeout"]
                 )
     except Exception as _bridge_err:
@@ -2310,10 +2310,10 @@ except Exception as _bootstrap_exc:
     print(f"  Warning: deprecation check failed: {_bootstrap_exc}", file=sys.stderr)
 
 # Gateway runs in quiet mode - suppress debug output and use cwd directly (no temp dirs)
-os.environ["HERMES_QUIET"] = "1"
+os.environ["VIGIL_QUIET"] = "1"
 
 # Enable interactive exec approval for dangerous commands on messaging platforms
-os.environ["HERMES_EXEC_ASK"] = "1"
+os.environ["VIGIL_EXEC_ASK"] = "1"
 
 # Set terminal working directory for messaging platforms.
 # config.yaml terminal.cwd is the canonical source (bridged to TERMINAL_CWD
@@ -2548,7 +2548,7 @@ def _resolve_runtime_agent_kwargs() -> dict:
 
     model_cfg = _get_model_config()
     max_tokens = None
-    _env_mt = os.environ.get("HERMES_MAX_TOKENS")
+    _env_mt = os.environ.get("VIGIL_MAX_TOKENS")
     if _env_mt:
         try:
             max_tokens = int(_env_mt)
@@ -3135,7 +3135,7 @@ def _teams_pipeline_plugin_enabled() -> bool:
 
 
 def _gateway_config_home() -> Path:
-    """Return the Hermes home that gateway config reads should use."""
+    """Return the Vigil home that gateway config reads should use."""
     override = get_hermes_home_override()
     if override:
         return Path(override)
@@ -3143,7 +3143,7 @@ def _gateway_config_home() -> Path:
 
 
 def _load_gateway_config() -> dict:
-    """Load and parse ~/.hermes/config.yaml, returning {} on any error.
+    """Load and parse ~/.vigil/config.yaml, returning {} on any error.
 
     Uses the module-level ``_hermes_home`` (so tests that monkeypatch it
     still see their fixture) and shares the mtime-keyed raw-yaml cache
@@ -3323,12 +3323,12 @@ def _get_channel_override(
 
 
 def _resolve_hermes_bin() -> Optional[list[str]]:
-    """Resolve the Hermes update command as argv parts.
+    """Resolve the Vigil update command as argv parts.
 
     Tries in order:
-    1. ``shutil.which("hermes")`` — standard PATH lookup
-    2. ``sys.executable -m hermes_cli.main`` — fallback when Hermes is running
-       from a venv/module invocation and the ``hermes`` shim is not on PATH
+    1. ``shutil.which("vigil")`` — standard PATH lookup
+    2. ``sys.executable -m hermes_cli.main`` — fallback when Vigil is running
+       from a venv/module invocation and the ``vigil`` shim is not on PATH
 
     Returns argv parts ready for quoting/joining, or ``None`` if neither works.
     """
@@ -4407,7 +4407,7 @@ class TurnRunner:
         # session_key is propagated via contextvars in _set_session_env()
         # (_SESSION_KEY) and via set_current_session_key() (_approval_session_key)
         # below — both concurrency-safe and inherited by tool worker threads.
-        # We deliberately do NOT write os.environ["HERMES_SESSION_KEY"] here:
+        # We deliberately do NOT write os.environ["VIGIL_SESSION_KEY"] here:
         # os.environ is process-global, so concurrent gateway sessions (e.g.
         # two Discord threads) would clobber each other's value, and a tool
         # thread whose contextvar is unset would fall back to os.environ and
@@ -4415,7 +4415,7 @@ class TurnRunner:
         # the wrong thread (#24100). The non-gateway surfaces don't depend on
         # this write: CLI and cron bind the session via contextvars
         # (set_current_session_key / session context), and only the TUI
-        # slash-worker *subprocess* exports HERMES_SESSION_KEY (from its own
+        # slash-worker *subprocess* exports VIGIL_SESSION_KEY (from its own
         # --session-key argv, a separate process) — so removing this in-process
         # gateway write does not affect any of them.
 
@@ -4628,7 +4628,7 @@ class TurnRunner:
             except Exception:
                 _cached_sid_is_dead = False
 
-        # Detect cross-process writes: when another process (e.g. hermes
+        # Detect cross-process writes: when another process (e.g. vigil
         # dashboard) appends to the same session in the shared SessionDB,
         # the cached agent's in-memory transcript becomes stale.  Compare
         # the session's current message_count against the count recorded
@@ -4968,7 +4968,7 @@ class TurnRunner:
         # Memory update notifications in chat.  Config: display.memory_notifications
         #   off     — no chat notification (still logged to stdout)
         #   on      — generic "💾 Memory updated" (default)
-        #   verbose — content preview: "💾 Memory ➕ Hermes Repo..."
+        #   verbose — content preview: "💾 Memory ➕ Vigil Repo..."
         _mem_notif = ctx.user_config.get("display", {}).get("memory_notifications")
         if isinstance(_mem_notif, bool):
             _mem_notif = "on" if _mem_notif else "off"
@@ -6152,7 +6152,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         except Exception as e:
             # WARNING (not DEBUG) so the failure appears in errors.log — matches
             # cli.py's handling of the same init path.  Users hitting NFS-mounted
-            # HERMES_HOME silently lost /resume, /title, /history, /branch, and
+            # VIGIL_HOME silently lost /resume, /title, /history, /branch, and
             # session search without this.  The underlying cause (usually
             # "locking protocol" from NFS) is now also captured by
             # hermes_state.get_last_init_error() for slash-command error strings.
@@ -6189,7 +6189,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 logger.debug("state.db auto-maintenance skipped: %s", exc)
 
         # Opportunistic shadow-repo cleanup — deletes stale checkpoint repos
-        # under ~/.hermes/checkpoints/.  Opt-in via checkpoints.auto_prune,
+        # under ~/.vigil/checkpoints/.  Opt-in via checkpoints.auto_prune,
         # idempotent via .last_prune marker.
         try:
             from hermes_cli.config import load_config as _load_full_config
@@ -6200,7 +6200,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # missing workdir at startup is ambiguous (deleted project
                 # vs. an unmounted external volume / network share / VPN
                 # not yet up) and this sweep runs unattended. Orphan cleanup
-                # is only ever done via the explicit `hermes checkpoints
+                # is only ever done via the explicit `vigil checkpoints
                 # prune` command, which the user has to invoke.
                 maybe_auto_prune_checkpoints(
                     retention_days=int(_ckpt_cfg.get("retention_days", 7)),
@@ -6213,7 +6213,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         # DM pairing store for code-based user authorization.
         # ``pairing_store`` stays as the global/default store for the
-        # ``hermes pairing`` CLI and any caller without a profile context.
+        # ``vigil pairing`` CLI and any caller without a profile context.
         # ``pairing_stores`` is the per-profile map used by
         # ``authz_mixin._is_user_authorized`` to route checks to the right
         # whitelist (one per profile in multiplex mode).
@@ -6535,7 +6535,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         cleanup, so the next start dies with "PID file race lost" (#14128).
 
         Each await uses the existing per-adapter timeout budget
-        (``HERMES_GATEWAY_ADAPTER_DISCONNECT_TIMEOUT``). On timeout the old
+        (``VIGIL_GATEWAY_ADAPTER_DISCONNECT_TIMEOUT``). On timeout the old
         task is cancelled and detached, then teardown forces forward progress;
         the loop never hangs even if an adapter swallows cancellation. Never
         raises.
@@ -6576,13 +6576,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     def _adapter_disconnect_timeout_secs(self) -> float:
         """Return the per-adapter disconnect timeout used during shutdown."""
-        raw = os.getenv("HERMES_GATEWAY_ADAPTER_DISCONNECT_TIMEOUT", "").strip()
+        raw = os.getenv("VIGIL_GATEWAY_ADAPTER_DISCONNECT_TIMEOUT", "").strip()
         if raw:
             try:
                 timeout = float(raw)
             except ValueError:
                 logger.warning(
-                    "Ignoring invalid HERMES_GATEWAY_ADAPTER_DISCONNECT_TIMEOUT=%r",
+                    "Ignoring invalid VIGIL_GATEWAY_ADAPTER_DISCONNECT_TIMEOUT=%r",
                     raw,
                 )
             else:
@@ -6591,13 +6591,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     def _platform_connect_timeout_secs(self, platform=None) -> float:
         """Return the per-platform connect timeout used during startup/retry."""
-        raw = os.getenv("HERMES_GATEWAY_PLATFORM_CONNECT_TIMEOUT", "").strip()
+        raw = os.getenv("VIGIL_GATEWAY_PLATFORM_CONNECT_TIMEOUT", "").strip()
         if raw:
             try:
                 timeout = float(raw)
             except ValueError:
                 logger.warning(
-                    "Ignoring invalid HERMES_GATEWAY_PLATFORM_CONNECT_TIMEOUT=%r",
+                    "Ignoring invalid VIGIL_GATEWAY_PLATFORM_CONNECT_TIMEOUT=%r",
                     raw,
                 )
             else:
@@ -6778,18 +6778,18 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _telegram_topic_root_lobby_message(self) -> str:
         return (
             "This main chat is reserved for system commands.\n\n"
-            "To start a new Hermes chat, open the All Messages topic at the top "
+            "To start a new Vigil chat, open the All Messages topic at the top "
             "of this bot interface and send any message there. Telegram will "
             "create a new topic for that message; each topic works as an "
-            "independent Hermes session."
+            "independent Vigil session."
         )
 
     def _telegram_topic_root_new_message(self) -> str:
         return (
-            "To start a new parallel Hermes chat, open the All Messages topic "
+            "To start a new parallel Vigil chat, open the All Messages topic "
             "at the top of this bot interface and send any message there. "
             "Telegram will create a new topic for it.\n\n"
-            "Each topic is an independent Hermes session. Use /new inside an "
+            "Each topic is an independent Vigil session. Use /new inside an "
             "existing topic only if you want to replace that topic's current session."
         )
 
@@ -6797,7 +6797,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not self._is_telegram_topic_lane(source):
             return None
         return (
-            "Started a new Hermes session in this topic.\n\n"
+            "Started a new Vigil session in this topic.\n\n"
             "Tip: for parallel work, open All Messages and send a message there "
             "to create a separate topic instead of using /new here. /new replaces "
             "the session attached to the current topic."
@@ -6808,7 +6808,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         source: SessionSource,
         session_entry,
     ) -> None:
-        """Persist the Telegram topic -> Hermes session binding for topic lanes."""
+        """Persist the Telegram topic -> Vigil session binding for topic lanes."""
         session_db = getattr(self, "_session_db", None)
         if session_db is None or not source.chat_id or not source.thread_id:
             return
@@ -6832,7 +6832,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Update the topic binding to point at ``session_entry.session_id``.
 
         Telegram topic lanes persist a (chat_id, thread_id) -> session_id row
-        so reopening a topic in a fresh process resumes the right Hermes
+        so reopening a topic in a fresh process resumes the right Vigil
         session. When compression rotates ``session_entry.session_id`` mid-turn,
         the binding goes stale and the next inbound message in that topic
         reloads the oversized parent transcript instead of the compressed
@@ -7046,7 +7046,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
 
         # When the config has no model.default but a provider was resolved
-        # (e.g. user ran `hermes auth add openai-codex` without `hermes model`),
+        # (e.g. user ran `vigil auth add openai-codex` without `vigil model`),
         # fall back to the provider's first catalog model so the API call
         # doesn't fail with "model must be a non-empty string".
         if not model and runtime_kwargs.get("provider"):
@@ -7358,7 +7358,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             #   • cron jobs still run
             #   • the reconnect watcher can recover platforms when the
             #     underlying problem clears (proxy comes back, user runs
-            #     `hermes whatsapp`, etc.)
+            #     `vigil whatsapp`, etc.)
             # We used to exit-with-failure here to trigger systemd restart,
             # but that converted a transient outage into a restart loop and
             # killed in-process state every time. The reconnect watcher
@@ -7530,7 +7530,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _log_scale_to_zero_not_armed_reason(self) -> None:
         """Log why the idle watcher did NOT arm — but only for an OPTED-IN instance.
 
-        A non-opted instance (no HERMES_SCALE_TO_ZERO stamp) not arming is the normal
+        A non-opted instance (no VIGIL_SCALE_TO_ZERO stamp) not arming is the normal
         case and must stay silent. When the Labs stamp IS set but the watcher still
         didn't arm, that's the surprising case worth one INFO line so "why won't it
         suspend/wake?" is a log grep, not a box-dive.
@@ -7612,7 +7612,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Watch for idle and drive the relay dormant so the platform can suspend.
 
         Started ONLY when _scale_to_zero_should_arm() (opted in via the Labs
-        HERMES_SCALE_TO_ZERO stamp + relay-only/absent messaging + a wakeUrl).
+        VIGIL_SCALE_TO_ZERO stamp + relay-only/absent messaging + a wakeUrl).
         On a sustained idle window it runs the DORMANT sequence (D12/F12/F14):
           - mark runtime status `draining` (composes with the existing state
             machine, §3.4(6); does NOT set _running=False),
@@ -7887,7 +7887,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         observe-the-marker latency the live-validation gate checks (point a).
         Reconciles once at startup. A marker stamped with a PRIOR
         instantiation epoch (one that survived a machine restart on the durable
-        HERMES_HOME volume — NS-570) is treated as absent by ``drain_requested``
+        VIGIL_HOME volume — NS-570) is treated as absent by ``drain_requested``
         and is NOT honoured; only a marker from the current instantiation flips
         the gateway into drain. Best-effort: any tick error is logged and the
         loop continues (a transient stat() failure must not wedge the gateway).
@@ -8002,12 +8002,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _load_prefill_messages() -> List[Dict[str, Any]]:
         """Load ephemeral prefill messages from config or env var.
         
-        Checks HERMES_PREFILL_MESSAGES_FILE env var first, then falls back to
-        the top-level prefill_messages_file key in ~/.hermes/config.yaml.
+        Checks VIGIL_PREFILL_MESSAGES_FILE env var first, then falls back to
+        the top-level prefill_messages_file key in ~/.vigil/config.yaml.
         agent.prefill_messages_file is accepted as a legacy fallback.
-        Relative paths are resolved from ~/.hermes/.
+        Relative paths are resolved from ~/.vigil/.
         """
-        file_path = os.getenv("HERMES_PREFILL_MESSAGES_FILE", "")
+        file_path = os.getenv("VIGIL_PREFILL_MESSAGES_FILE", "")
         if not file_path:
             cfg = _load_gateway_runtime_config()
             file_path = str(cfg.get("prefill_messages_file", "") or "")
@@ -8036,10 +8036,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _load_ephemeral_system_prompt() -> str:
         """Load ephemeral system prompt from config or env var.
         
-        Checks HERMES_EPHEMERAL_SYSTEM_PROMPT env var first, then falls back to
-        agent.system_prompt in ~/.hermes/config.yaml.
+        Checks VIGIL_EPHEMERAL_SYSTEM_PROMPT env var first, then falls back to
+        agent.system_prompt in ~/.vigil/config.yaml.
         """
-        prompt = os.getenv("HERMES_EPHEMERAL_SYSTEM_PROMPT", "")
+        prompt = os.getenv("VIGIL_EPHEMERAL_SYSTEM_PROMPT", "")
         if prompt:
             return prompt
         cfg = _load_gateway_runtime_config()
@@ -8277,7 +8277,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     @staticmethod
     def _load_busy_input_mode() -> str:
         """Load gateway drain-time busy-input behavior from config/env."""
-        mode = os.getenv("HERMES_GATEWAY_BUSY_INPUT_MODE", "").strip().lower()
+        mode = os.getenv("VIGIL_GATEWAY_BUSY_INPUT_MODE", "").strip().lower()
         if not mode:
             cfg = _load_gateway_runtime_config()
             mode = str(cfg_get(cfg, "display", "busy_input_mode", default="") or "").strip().lower()
@@ -8299,7 +8299,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         ``busy_input_mode`` and maps to non-queue text handling here).
         """
         # Legacy explicit override wins for backward compat.
-        legacy = os.getenv("HERMES_GATEWAY_BUSY_TEXT_MODE", "").strip().lower()
+        legacy = os.getenv("VIGIL_GATEWAY_BUSY_TEXT_MODE", "").strip().lower()
         if not legacy:
             cfg = _load_gateway_runtime_config()
             legacy = str(cfg_get(cfg, "display", "busy_text_mode", default="") or "").strip().lower()
@@ -8314,7 +8314,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     @staticmethod
     def _load_restart_drain_timeout() -> float:
         """Load graceful gateway restart/stop drain timeout in seconds."""
-        raw = os.getenv("HERMES_RESTART_DRAIN_TIMEOUT", "").strip()
+        raw = os.getenv("VIGIL_RESTART_DRAIN_TIMEOUT", "").strip()
         if not raw:
             cfg = _load_gateway_runtime_config()
             raw = str(cfg_get(cfg, "agent", "restart_drain_timeout", default="") or "").strip()
@@ -8333,7 +8333,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     @staticmethod
     def _load_restart_after_turn_timeout() -> float:
         """Load in-band restart wait-for-idle timeout in seconds (#77184)."""
-        env_raw = os.getenv("HERMES_RESTART_AFTER_TURN_TIMEOUT")
+        env_raw = os.getenv("VIGIL_RESTART_AFTER_TURN_TIMEOUT")
         if env_raw is not None and str(env_raw).strip() != "":
             raw: object = env_raw
         else:
@@ -8363,7 +8363,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
           - ``error``  — only the final message when exit code is non-zero
           - ``off``    — no watcher messages at all
         """
-        mode = os.getenv("HERMES_BACKGROUND_NOTIFICATIONS", "")
+        mode = os.getenv("VIGIL_BACKGROUND_NOTIFICATIONS", "")
         if not mode:
             cfg = _load_gateway_runtime_config()
             raw = cfg_get(cfg, "display", "background_process_notifications")
@@ -8417,7 +8417,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         Cron already does this per job via ``get_fallback_chain``; the gateway
         previously froze ``self._fallback_model`` at process start, so a chain
-        configured (or changed) after ``hermes gateway`` was running never
+        configured (or changed) after ``vigil gateway`` was running never
         reached messaging sessions even though the same process's cron jobs
         fell back correctly. Fixes #60955.
 
@@ -9026,7 +9026,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Check if busy ack is disabled — skip sending but still process the input.
         # Placed before debounce so we don't stamp a "last ack" timestamp that was
         # never actually delivered.
-        busy_ack_enabled = os.environ.get("HERMES_GATEWAY_BUSY_ACK_ENABLED", "true").lower() == "true"
+        busy_ack_enabled = os.environ.get("VIGIL_GATEWAY_BUSY_ACK_ENABLED", "true").lower() == "true"
         if not busy_ack_enabled:
             logger.debug("Busy ack suppressed for session %s", session_key)
             return True  # input still processed, just no ack sent
@@ -9048,7 +9048,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # like STT transcript echo suppression: keep the behavior, drop only
         # the confirmation bubble.
         if is_steer_mode:
-            steer_ack_env = os.environ.get("HERMES_GATEWAY_BUSY_STEER_ACK_ENABLED")
+            steer_ack_env = os.environ.get("VIGIL_GATEWAY_BUSY_STEER_ACK_ENABLED")
             if steer_ack_env is not None:
                 steer_ack_enabled = steer_ack_env.strip().lower() in {"1", "true", "yes", "on"}
             else:
@@ -9370,7 +9370,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Suppress ONLY the home-channel broadcast when the drain that is ending
         # in this shutdown asked us to be quiet (e.g. a NAS auto-update image
         # migration — drain-gated, then the machine is recreated). On the
-        # always-on Hermes Cloud fleet that broadcast would otherwise fire on
+        # always-on Vigil Cloud fleet that broadcast would otherwise fire on
         # every routine auto-update, spamming home channels with operator-
         # flavoured "gateway shutting down" pings the user doesn't care about.
         # The per-active-session interrupt pings above are deliberately NOT
@@ -9809,7 +9809,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         # On Windows there's no bash/setsid chain — spawn a tiny Python
         # watcher directly via sys.executable instead.  The watcher polls
-        # current_pid, waits for our exit, then runs `hermes gateway
+        # current_pid, waits for our exit, then runs `vigil gateway
         # restart` with detach flags so the respawn survives the CLI
         # that triggered the /restart command closing its console.
         if sys.platform == "win32":
@@ -9871,13 +9871,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             from tools.environments.local import build_subprocess_env
             watcher_env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=True)
             # This watcher is intentionally outside the running gateway. If it
-            # inherits the gateway marker, `hermes gateway restart` refuses to
+            # inherits the gateway marker, `vigil gateway restart` refuses to
             # run as a self-restart loop guard and the gateway stays stopped.
-            watcher_env.pop("_HERMES_GATEWAY", None)
+            watcher_env.pop("_VIGIL_GATEWAY", None)
             project_root = Path(__file__).resolve().parent.parent
             # The watcher runs sys.executable (console python) under the
             # CREATE_NO_WINDOW detach kwargs below: it owns one hidden
-            # console, inherited by the `hermes gateway restart` child, so
+            # console, inherited by the `vigil gateway restart` child, so
             # nothing flashes. Do NOT swap in GUI-subsystem pythonw.exe —
             # a console-less watcher forces every console-subsystem
             # descendant to allocate a visible conhost (#54220/#56747).
@@ -9899,7 +9899,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 *cmd_argv,
             ]
             # The watcher process must itself break away from any job object the
-            # parent CLI lives in (Electron/Tauri-wrapped Hermes Desktop, Windows
+            # parent CLI lives in (Electron/Tauri-wrapped Vigil Desktop, Windows
             # Terminal, schtasks shells); otherwise it is reaped when the CLI
             # exits and the gateway never respawns.  windows_detach_popen_kwargs()
             # carries CREATE_BREAKAWAY_FROM_JOB, but a restrictive job object
@@ -9954,13 +9954,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             f"{cmd} gateway restart"
         )
         # Same marker scrub as the Windows watcher above: this watcher runs
-        # `hermes gateway restart` from outside the gateway, but it inherits
-        # _HERMES_GATEWAY=1 from us, and the CLI's self-restart loop guard
+        # `vigil gateway restart` from outside the gateway, but it inherits
+        # _VIGIL_GATEWAY=1 from us, and the CLI's self-restart loop guard
         # refuses to run when that marker is set — silently (DEVNULL), so the
         # gateway stops and never comes back.
         from tools.environments.local import build_subprocess_env
         watcher_env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=True)
-        watcher_env.pop("_HERMES_GATEWAY", None)
+        watcher_env.pop("_VIGIL_GATEWAY", None)
         setsid_bin = shutil.which("setsid")
         if setsid_bin:
             subprocess.Popen(
@@ -10013,7 +10013,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Detect whether the gateway unit is registered as a system or
             # user service.  Daemon-style deployments are typically system
             # units (e.g. /etc/systemd/system/hermes-gateway.service), while
-            # `hermes setup` under a non-root account may register a user
+            # `vigil setup` under a non-root account may register a user
             # unit.  Hard-coding ``--user`` broke system-unit deployments:
             # systemctl returned an empty MainPID, the PID-equality check
             # below failed, and the planned-restart helper was never
@@ -10162,7 +10162,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             await self._await_active_work_before_restart()
             # Launch the detached helper only AFTER the after-turn wait.
             # Its deadline is drain_timeout+5 and covers stop() teardown —
-            # launching earlier would fire `hermes gateway restart` while
+            # launching earlier would fire `vigil gateway restart` while
             # the requesting turn was still running.
             if detached:
                 try:
@@ -10667,7 +10667,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         
         Returns True if at least one adapter connected successfully.
         """
-        logger.info("Starting Hermes Gateway...")
+        logger.info("Starting Vigil Gateway...")
         # Enable faulthandler for stack dumps on freezes/crashes (#70344).
         # Falls back to a log file when sys.stderr is None (Windows VBS /
         # pythonw / detached service) — otherwise the gateway would die
@@ -10721,7 +10721,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         # Sanity-check that systemd's TimeoutStopSec covers our drain
         # window.  When the user upgraded hermes-agent without re-running
-        # ``hermes setup``, their unit file may still encode the old
+        # ``vigil setup``, their unit file may still encode the old
         # default — in which case SIGKILL hits mid-drain and looks like
         # a phantom kill in the journal.  Best-effort, never raises.
         try:
@@ -10744,10 +10744,10 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # config.yaml → env bridge did the right thing at a glance (instead
         # of silently running at a stale .env value for weeks).
         try:
-            _effective_max_iter = int(os.getenv("HERMES_MAX_ITERATIONS", "500"))
+            _effective_max_iter = int(os.getenv("VIGIL_MAX_ITERATIONS", "500"))
             logger.info(
                 "Agent budget: max_iterations=%d (agent.max_turns from config.yaml, "
-                "or HERMES_MAX_ITERATIONS from .env, or default 500)",
+                "or VIGIL_MAX_ITERATIONS from .env, or default 500)",
                 _effective_max_iter,
             )
         except Exception:
@@ -10758,7 +10758,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # state at import time, so this log line is the source of truth
         # for this process's lifetime.
         try:
-            _redact_raw = os.getenv("HERMES_REDACT_SECRETS", "true")
+            _redact_raw = os.getenv("VIGIL_REDACT_SECRETS", "true")
             _redact_on = _redact_raw.lower() in {"1", "true", "yes", "on"}
             if _redact_on:
                 logger.info(
@@ -10767,7 +10767,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
             else:
                 logger.warning(
-                    "Secret redaction: DISABLED (HERMES_REDACT_SECRETS=%s). "
+                    "Secret redaction: DISABLED (VIGIL_REDACT_SECRETS=%s). "
                     "API keys and tokens may appear verbatim in chat output, "
                     "session JSONs, and logs. Set security.redact_secrets: true "
                     "in config.yaml to re-enable.",
@@ -10797,7 +10797,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             logger.debug("gateway health OTLP export startup failed", exc_info=True)
 
         # Log any active supply-chain security advisories. Operators see this
-        # in gateway.log and `hermes status` surfaces it; we do NOT block
+        # in gateway.log and `vigil status` surfaces it; we do NOT block
         # startup or surface it inline to user messages, since the gateway
         # operator is the one who can act on it (uninstall the package,
         # rotate credentials).  See hermes_cli/security_advisories.py.
@@ -10960,7 +10960,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         # Register declarative shell hooks from cli-config.yaml.  Gateway
         # has no TTY, so consent has to come from one of the three opt-in
-        # channels (--accept-hooks on launch, HERMES_ACCEPT_HOOKS env var,
+        # channels (--accept-hooks on launch, VIGIL_ACCEPT_HOOKS env var,
         # or hooks_auto_accept: true in config.yaml).  We pass
         # accept_hooks=False here and let register_from_config resolve
         # the effective value from env + config itself — the CLI-side
@@ -11003,8 +11003,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         #
         # SKIP suspension after a clean (graceful) shutdown — the previous
         # process already drained active agents, so sessions aren't stuck.
-        # This prevents unwanted auto-resets after `hermes update`,
-        # `hermes gateway restart`, or `/restart`.
+        # This prevents unwanted auto-resets after `vigil update`,
+        # `vigil gateway restart`, or `/restart`.
         _clean_marker = _hermes_home / ".clean_shutdown"
         if _clean_marker.exists():
             logger.info("Previous gateway exited cleanly — skipping session suspension")
@@ -11308,7 +11308,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     #   • cron jobs still run
                     #   • the reconnect watcher gets a chance to recover the
                     #     failing platforms once the underlying problem is
-                    #     fixed (e.g. user runs `hermes whatsapp`, fixes
+                    #     fixed (e.g. user runs `vigil whatsapp`, fixes
                     #     proxy, etc.)
                     # Exiting here used to convert a single misconfigured
                     # platform into an infinite systemd restart loop.
@@ -11485,7 +11485,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         # Start background kanban dispatcher — spawns workers for ready
         # tasks. Gated by `kanban.dispatch_in_gateway` (default True).
-        # When false, users run `hermes kanban daemon` externally or
+        # When false, users run `vigil kanban daemon` externally or
         # simply don't use kanban; this loop becomes a no-op.
         self._spawn_supervised(self._kanban_dispatcher_watcher, "kanban_dispatcher_watcher")
 
@@ -11531,7 +11531,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self._spawn_supervised(self._async_delegation_watcher, "async_delegation_watcher")
 
         # Start the scale-to-zero idle watcher ONLY when this instance is opted
-        # in (the NAS "Labs" HERMES_SCALE_TO_ZERO stamp), messaging is
+        # in (the NAS "Labs" VIGIL_SCALE_TO_ZERO stamp), messaging is
         # relay-only/absent, and a wakeUrl is registered (decisions.md D1/D11/
         # §3.4(1)). A non-opted instance never starts it, so behaviour is exactly
         # as today. When armed, the watcher drives the relay dormant on sustained
@@ -11764,7 +11764,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # (no permission, topics-mode off, parent is a DM, etc.). When
         # None we fall through to using the home channel directly — the
         # synthetic turn still lands; just without thread isolation.
-        thread_name = f"Hermes — {cli_title}"
+        thread_name = f"Vigil — {cli_title}"
         try:
             new_thread_id = await adapter.create_handoff_thread(
                 str(home.chat_id), thread_name,
@@ -12103,7 +12103,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     def _session_stall_timeout_seconds(self) -> float:
         """Return configured stall timeout (seconds); 0 disables the watchdog."""
-        return _float_env("HERMES_SESSION_STALL_TIMEOUT", 300)
+        return _float_env("VIGIL_SESSION_STALL_TIMEOUT", 300)
 
     def _iter_gateway_adapters(self):
         """Yield every live platform adapter (default + multiplex profiles)."""
@@ -12645,7 +12645,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if not watchdog.start():
             return False
         self._systemd_watchdog = watchdog
-        watchdog.ready("Hermes Gateway running")
+        watchdog.ready("Vigil Gateway running")
         return True
 
     async def _stop_systemd_watchdog(self) -> None:
@@ -13151,7 +13151,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # suppresses auto-start, so the messaging channels silently stay
             # dark until the operator manually restarts (issue #42675).
             #
-            # An operator-initiated stop (`hermes gateway stop`,
+            # An operator-initiated stop (`vigil gateway stop`,
             # systemd/launchd ExecStop, the s6 stop path, Ctrl+C) writes a
             # planned-stop marker BEFORE signalling, so it is classified as
             # a planned stop (not signal-initiated) and correctly persists
@@ -13184,7 +13184,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         0) unless ``gateway.multiplex_profiles`` is on.
 
         Each profile's adapters are created and connected under that profile's
-        HERMES_HOME + secret scope (``_profile_runtime_scope``), stored in
+        VIGIL_HOME + secret scope (``_profile_runtime_scope``), stored in
         ``self._profile_adapters[profile]``, and given a message handler that
         stamps ``source.profile`` before delegating to the shared
         ``_handle_message`` — so the agent turn resolves that profile's config,
@@ -13243,14 +13243,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     profile_name, e, exc_info=True,
                 )
 
-        # Record served profiles in runtime status for `hermes status`.
+        # Record served profiles in runtime status for `vigil status`.
         try:
             from gateway.status import write_runtime_status
             from gateway.pairing import PairingStore
             served = [active] + sorted(self._profile_adapters.keys())
             # Per-profile PairingStores so authz_mixin can route pairing
             # checks to the right whitelist. The active profile gets a store
-            # at its HERMES_HOME; additional served profiles resolve from
+            # at its VIGIL_HOME; additional served profiles resolve from
             # their own profile homes. See gateway.pairing.PairingStore.
             for name in served:
                 if name and name not in self.pairing_stores:
@@ -14344,7 +14344,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # asyncio task created via create_task(), which snapshots the spawning
         # context with copy_context(). If a *concurrent* message had already
         # bound its session via set_session_vars() when this task was created,
-        # we inherited ITS HERMES_SESSION_* ContextVars. Until we bind our own
+        # we inherited ITS VIGIL_SESSION_* ContextVars. Until we bind our own
         # (a few steps down, in _set_session_env), any subprocess spawned here
         # would read the foreign session's identity via the subprocess-env
         # bridge — the _UNSET-strip guard there can't help because the vars are
@@ -14706,7 +14706,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # wall-clock age alone isn't sufficient.  Evict only when the agent
         # has been *idle* beyond the inactivity threshold (or when the agent
         # object has no activity tracker and wall-clock age is extreme).
-        _raw_stale_timeout = _float_env("HERMES_AGENT_TIMEOUT", 1800)
+        _raw_stale_timeout = _float_env("VIGIL_AGENT_TIMEOUT", 1800)
         _quick_state = self._peek_session_state(_quick_key)
         _stale_ts = _quick_state.turn.started_ts if _quick_state else 0
         if _quick_state is not None and _quick_state.turn.agent is not None and _stale_ts:
@@ -14799,7 +14799,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return None
 
             _telegram_followup_grace = float(
-                os.getenv("HERMES_TELEGRAM_FOLLOWUP_GRACE_SECONDS", "3.0")
+                os.getenv("VIGIL_TELEGRAM_FOLLOWUP_GRACE_SECONDS", "3.0")
             )
             _grace_state = self._peek_session_state(_quick_key)
             _started_at = _grace_state.turn.started_ts if _grace_state else 0
@@ -16036,7 +16036,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
                 # Translate host cache path to in-container path if running under Docker backend.
                 # This ensures the agent receives a path it can open inside its sandbox, as the
-                # cache directories are auto-mounted at /root/.hermes/cache/* by get_cache_directory_mounts().
+                # cache directories are auto-mounted at /root/.vigil/cache/* by get_cache_directory_mounts().
                 agent_path = to_agent_visible_cache_path(path)
 
                 context_note = _build_document_context_note(display_name, agent_path, mtype)
@@ -16585,7 +16585,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 session_entry.session_id,
                 owner_key=_quick_key,
                 generation=run_generation,
-                timeout=_float_env("HERMES_AGENT_TIMEOUT", 1800),
+                timeout=_float_env("VIGIL_AGENT_TIMEOUT", 1800),
             )
             if _lease_token is not None:
                 _lease_state = self._session_state(_quick_key).turn
@@ -17422,8 +17422,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 except Exception:
                     pass
             if not home_env:
-                # Slack dispatches all Hermes commands through a single
-                # parent slash command `/hermes`; bare `/sethome` is not
+                # Slack dispatches all Vigil commands through a single
+                # parent slash command `/vigil`; bare `/sethome` is not
                 # registered and would fail with "app did not respond".
                 sethome_cmd = (
                     "/hermes sethome"
@@ -17432,7 +17432,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 )
                 notice = (
                     f"📬 No home channel is set for {platform_name.title()}. "
-                    f"A home channel is where Hermes delivers cron job results "
+                    f"A home channel is where Vigil delivers cron job results "
                     f"and cross-platform messages.\n\n"
                     f"Type {sethome_cmd} to make this chat your home channel, "
                     f"or ignore to skip."
@@ -19739,7 +19739,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         try:
             send_result = await adapter.send(
                 source.chat_id,
-                "System topic for Hermes commands and status.",
+                "System topic for Vigil commands and status.",
                 metadata={"thread_id": str(thread_id)},
             )
             message_id = getattr(send_result, "message_id", None)
@@ -19782,7 +19782,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Return a Bot API-safe forum topic name from a generated session title."""
         cleaned = re.sub(r"\s+", " ", str(title or "")).strip()
         if not cleaned:
-            return "Hermes Chat"
+            return "Vigil Chat"
         # Telegram forum topic names are short (currently 1-128 chars). Keep
         # extra room for multi-byte titles and avoid trailing ellipsis churn.
         if len(cleaned) > 120:
@@ -19790,7 +19790,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return cleaned
 
     def _is_discord_auto_thread_lane(self, source: SessionSource) -> bool:
-        """Return True only for Discord threads Hermes just auto-created."""
+        """Return True only for Discord threads Vigil just auto-created."""
         return (
             source.platform == Platform.DISCORD
             and source.chat_type == "thread"
@@ -19877,7 +19877,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         cleaned = re.sub(r"\s+", " ", str(title or "")).strip()
         if not cleaned:
-            return "Hermes Chat"
+            return "Vigil Chat"
         if utf16_len(cleaned) > 80:
             cleaned = _prefix_within_utf16_limit(cleaned, 77).rstrip() + "..."
         return cleaned
@@ -20030,7 +20030,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         session_id: str,
         title: str,
     ) -> None:
-        """Best-effort rename of a Telegram DM topic when Hermes auto-titles a session."""
+        """Best-effort rename of a Telegram DM topic when Vigil auto-titles a session."""
         if not await asyncio.to_thread(self._is_telegram_topic_lane, source) or not source.chat_id or not source.thread_id:
             return
 
@@ -20201,11 +20201,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "  /topic <id>        Inside a topic: restore a previous session by ID\n"
             "\n"
             "How it works:\n"
-            "1. Run /topic once in this DM — Hermes checks BotFather Threads\n"
+            "1. Run /topic once in this DM — Vigil checks BotFather Threads\n"
             "   Settings are enabled and flips on multi-session mode.\n"
             "2. Tap All Messages at the top of the bot and send any message.\n"
             "   Telegram creates a new topic for that message; each topic is\n"
-            "   an independent Hermes session (fresh history, fresh context).\n"
+            "   an independent Vigil session (fresh history, fresh context).\n"
             "3. The root DM becomes a system lobby — send /topic, /status,\n"
             "   /help, /usage there. Normal prompts go in a topic.\n"
             "4. /new inside a topic resets just that topic's session.\n"
@@ -20245,7 +20245,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "Multi-session topic mode is now OFF for this chat.\n\n"
             "Existing topics in Telegram aren't removed — they'll just stop "
             "being gated as independent sessions. The root DM works as a "
-            "normal Hermes chat again. Run /topic to re-enable later."
+            "normal Vigil chat again. Run /topic to re-enable later."
         )
 
 
@@ -20253,7 +20253,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         lines = [
             "Telegram multi-session topics are enabled.",
             "",
-            "To create a new Hermes chat, open All Messages at the top of this "
+            "To create a new Vigil chat, open All Messages at the top of this "
             "bot interface and send any message there. Telegram will create a "
             "new topic for it.",
             "",
@@ -20296,7 +20296,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return "\n".join(lines)
 
     async def _restore_telegram_topic_session(self, event: MessageEvent, raw_session_id: str) -> str:
-        """Restore an existing Telegram-owned Hermes session into this topic."""
+        """Restore an existing Telegram-owned Vigil session into this topic."""
         source = event.source
         session_id = await self._session_db.resolve_session_id(raw_session_id.strip())
         if not session_id:
@@ -20346,7 +20346,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         response = f"Session restored: {title}"
         if last_assistant:
-            response += f"\n\nLast Hermes message:\n{last_assistant}"
+            response += f"\n\nLast Vigil message:\n{last_assistant}"
         return response
 
 
@@ -20809,7 +20809,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         stream_interval: float = 4.0,
         timeout: float = 1800.0,
     ) -> None:
-        """Watch ``hermes update --gateway``, streaming output + forwarding prompts.
+        """Watch ``vigil update --gateway``, streaming output + forwarding prompts.
 
         Polls ``.update_output.txt`` for new content and sends chunks to the
         user periodically.  Detects ``.update_prompt.json`` (written by the
@@ -20931,13 +20931,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if exit_code == 0:
                         await adapter.send(
                             chat_id,
-                            "✅ Hermes update finished.",
+                            "✅ Vigil update finished.",
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     else:
                         await adapter.send(
                             chat_id,
-                            "❌ Hermes update failed (exit code {}).".format(exit_code),
+                            "❌ Vigil update failed (exit code {}).".format(exit_code),
                             metadata=_non_conversational_metadata(metadata, platform=platform),
                         )
                     logger.info("Update finished (exit=%s), notified %s", exit_code, session_key)
@@ -21036,7 +21036,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             try:
                 await adapter.send(
                     chat_id,
-                    "❌ Hermes update timed out after 30 minutes.",
+                    "❌ Vigil update timed out after 30 minutes.",
                     metadata=_non_conversational_metadata(metadata, platform=platform),
                 )
             except Exception:
@@ -21108,7 +21108,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if not adapter and chat_id:
                 # The update finished, but the target platform has not
                 # reconnected yet (common right after the restart that
-                # `hermes update` triggers). Treating "adapter missing" as a
+                # `vigil update` triggers). Treating "adapter missing" as a
                 # definitive skip would delete the markers and silently lose the
                 # completion notification — the user never learns whether the
                 # update succeeded or timed out. Preserve the markers instead so
@@ -21139,13 +21139,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     if len(output) > 3500:
                         output = "…" + output[-3500:]
                     if exit_code == 0:
-                        msg = f"✅ Hermes update finished.\n\n```\n{output}\n```"
+                        msg = f"✅ Vigil update finished.\n\n```\n{output}\n```"
                     else:
-                        msg = f"❌ Hermes update failed.\n\n```\n{output}\n```"
+                        msg = f"❌ Vigil update failed.\n\n```\n{output}\n```"
                 elif exit_code == 0:
-                    msg = "✅ Hermes update finished successfully."
+                    msg = "✅ Vigil update finished successfully."
                 else:
-                    msg = "❌ Hermes update failed. Check the gateway logs or run `vigil update` manually for details."
+                    msg = "❌ Vigil update failed. Check the gateway logs or run `vigil update` manually for details."
                 await adapter.send(
                     chat_id,
                     msg,
@@ -21260,7 +21260,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         delivered: set[tuple[str, str, Optional[str]]] = set()
         skipped = skip_targets or set()
-        message = "♻️ Gateway online — Hermes is back and ready."
+        message = "♻️ Gateway online — Vigil is back and ready."
 
         for platform, platform_cfg in self.config.platforms.items():
             home = platform_cfg.home_channel
@@ -21921,7 +21921,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         source = self._build_process_event_source(evt)
         if not source:
             # API-server-originated sessions bind a RAW session key (the
-            # X-Hermes-Session-Id value — see _bind_api_server_session), not a
+            # X-Vigil-Session-Id value — see _bind_api_server_session), not a
             # structured ``agent:main:...`` key, so _build_process_event_source
             # cannot derive routing metadata from it and returns None above.
             # Recover the raw session id and wake the real session via the API
@@ -21976,7 +21976,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # its chat_id is the raw session id (see _bind_api_server_session,
             # which binds chat_id = session_id). handle_message would run the
             # wake under a build_session_key()-derived key that never matches
-            # the raw X-Hermes-Session-Id session — self-post instead.
+            # the raw X-Vigil-Session-Id session — self-post instead.
             from gateway.wake import deliver_wake
             raw_sid = str(evt.get("origin_session_id") or "").strip() or str(source.chat_id or "")
             try:
@@ -23736,7 +23736,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return len(to_evict)
 
     # ------------------------------------------------------------------
-    # Proxy mode: forward messages to a remote Hermes API server
+    # Proxy mode: forward messages to a remote Vigil API server
     # ------------------------------------------------------------------
 
     def _get_proxy_url(self) -> Optional[str]:
@@ -23835,7 +23835,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         run_generation: Optional[int] = None,
         event_message_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Forward the message to a remote Hermes API server instead of
+        """Forward the message to a remote Vigil API server instead of
         running a local AIAgent.
 
         When ``GATEWAY_PROXY_URL`` (or ``gateway.proxy_url`` in config.yaml)
@@ -23887,7 +23887,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Build messages in OpenAI chat format --------------------------
         #
         # The remote api_server can maintain session continuity via
-        # X-Hermes-Session-Id, so it loads its own history.  We only
+        # X-Vigil-Session-Id, so it loads its own history.  We only
         # need to send the current user message.  If the remote has
         # no history for this session yet, include what we have locally
         # so the first exchange has context.
@@ -23913,7 +23913,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         if proxy_key:
             headers["Authorization"] = f"Bearer {proxy_key}"
         if session_id:
-            headers["X-Hermes-Session-Id"] = session_id
+            headers["X-Vigil-Session-Id"] = session_id
 
         body = {
             "model": "hermes-agent",
@@ -24207,7 +24207,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         return None
 
     def _resolve_profile_home_for_source(self, source: SessionSource) -> "Path":
-        """Resolve which profile's HERMES_HOME should serve this inbound source.
+        """Resolve which profile's VIGIL_HOME should serve this inbound source.
 
         Resolution order:
           1. ``source.profile`` — set by /p/<profile>/ URL prefix, per-credential
@@ -24241,7 +24241,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             if explicit_profile and not profile_exists(name):
                 logger.warning(
                     "Profile %r does not exist for source %s/%s (guild_id=%s), "
-                    "falling back to global HERMES_HOME",
+                    "falling back to global VIGIL_HOME",
                     explicit_profile,
                     source.platform.value,
                     source.chat_id,
@@ -24253,7 +24253,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Catch normalization errors, path errors, etc.
             logger.warning(
                 "Failed to resolve profile directory for source %s/%s (guild_id=%s), "
-                "falling back to global HERMES_HOME: %s",
+                "falling back to global VIGIL_HOME: %s",
                 source.platform.value,
                 source.chat_id,
                 getattr(source, "guild_id", None),
@@ -24347,7 +24347,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
         # Tool progress mode — resolved per-platform with env var fallback
         _resolved_tp = resolve_display_setting(user_config, platform_key, "tool_progress")
-        _env_tp = os.getenv("HERMES_TOOL_PROGRESS_MODE")
+        _env_tp = os.getenv("VIGIL_TOOL_PROGRESS_MODE")
         _display_cfg = display_config if isinstance(display_config, dict) else {}
         _platforms_cfg = _display_cfg.get("platforms") or {}
         _platform_cfg = _platforms_cfg.get(platform_key) or {}
@@ -24430,7 +24430,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _live_status_adapter = None
         if _live_status_mode == "off":
             _live_status_adapter = None
-        # "log" mode: tool calls are written to ~/.hermes/logs/tool_calls.log
+        # "log" mode: tool calls are written to ~/.vigil/logs/tool_calls.log
         # instead of the chat (#3459 / #3458). Gateway-only by design.
         log_mode_enabled = progress_mode == "log" and source.platform != Platform.WEBHOOK
         log_queue: "queue.Queue | None" = queue.Queue() if log_mode_enabled else None
@@ -24963,9 +24963,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # Periodic "still working" notifications for long-running tasks.
         # Fires every N seconds so the user knows the agent hasn't died.
         # Config: agent.gateway_notify_interval in config.yaml, or
-        # HERMES_AGENT_NOTIFY_INTERVAL env var.  Default 180s (3 min).
+        # VIGIL_AGENT_NOTIFY_INTERVAL env var.  Default 180s (3 min).
         # 0 = disable notifications.
-        _NOTIFY_INTERVAL_RAW = _float_env("HERMES_AGENT_NOTIFY_INTERVAL", 180)
+        _NOTIFY_INTERVAL_RAW = _float_env("VIGIL_AGENT_NOTIFY_INTERVAL", 180)
         _NOTIFY_INTERVAL = _NOTIFY_INTERVAL_RAW if _NOTIFY_INTERVAL_RAW > 0 else None
         _long_running_mode = _display_surface_mode(
             "long_running_notifications",
@@ -25113,11 +25113,11 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # configured duration is caught and killed.  (#4815)
             #
             # Config: agent.gateway_timeout in config.yaml, or
-            # HERMES_AGENT_TIMEOUT env var (env var takes precedence).
+            # VIGIL_AGENT_TIMEOUT env var (env var takes precedence).
             # Default 1800s (30 min inactivity).  0 = unlimited.
-            _agent_timeout_raw = _float_env("HERMES_AGENT_TIMEOUT", 1800)
+            _agent_timeout_raw = _float_env("VIGIL_AGENT_TIMEOUT", 1800)
             _agent_timeout = _agent_timeout_raw if _agent_timeout_raw > 0 else None
-            _agent_warning_raw = _float_env("HERMES_AGENT_TIMEOUT_WARNING", 900)
+            _agent_warning_raw = _float_env("VIGIL_AGENT_TIMEOUT_WARNING", 900)
             _agent_warning = _agent_warning_raw if _agent_warning_raw > 0 else None
             _warning_fired = False
 
@@ -26051,7 +26051,7 @@ def _run_planned_stop_watcher(
 
     On Windows, ``asyncio.add_signal_handler`` raises NotImplementedError
     for SIGTERM/SIGINT, so the standard signal-driven shutdown path
-    never runs when ``hermes gateway stop`` signals the gateway. The
+    never runs when ``vigil gateway stop`` signals the gateway. The
     consequence is that the drain loop is skipped — in-flight agent
     sessions are killed mid-turn and ``resume_pending`` is never set,
     so the next gateway boot has no idea those sessions need to be
@@ -26138,7 +26138,7 @@ def _start_gateway_housekeeping(stop_event: threading.Event, adapters=None, loop
     this housekeeping still wants its hourly cadence — so it owns its own loop.
 
     Refreshes the channel directory every 5 minutes and prunes the
-    image/audio/video/document/screenshot caches + expired ``hermes debug
+    image/audio/video/document/screenshot caches + expired ``vigil debug
     share`` pastes once per hour, and polls the curator hourly (its inner
     gate enforces the real weekly cadence).
     """
@@ -26379,9 +26379,9 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     record_boot_fingerprint()
 
     # ── Duplicate-instance guard ──────────────────────────────────────
-    # Prevent two gateways from running under the same HERMES_HOME.
-    # The PID file is scoped to HERMES_HOME, so future multi-profile
-    # setups (each profile using a distinct HERMES_HOME) will naturally
+    # Prevent two gateways from running under the same VIGIL_HOME.
+    # The PID file is scoped to VIGIL_HOME, so future multi-profile
+    # setups (each profile using a distinct VIGIL_HOME) will naturally
     # allow concurrent instances without tripping this guard.
     from gateway.status import (
         acquire_gateway_runtime_lock,
@@ -26528,7 +26528,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         else:
             hermes_home = str(get_hermes_home())
             logger.error(
-                "Another gateway instance is already running (PID %d, HERMES_HOME=%s). "
+                "Another gateway instance is already running (PID %d, VIGIL_HOME=%s). "
                 "Use 'vigil gateway restart' to replace it, or 'vigil gateway stop' first.",
                 existing_pid, hermes_home,
             )
@@ -26617,7 +26617,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         except Exception as e:
             logger.debug("Takeover marker check failed: %s", e)
 
-        # Planned stop check: service managers and `hermes gateway stop`
+        # Planned stop check: service managers and `vigil gateway stop`
         # also send SIGTERM, which is indistinguishable from an unexpected
         # external kill unless the CLI marks it first. SIGINT comes from an
         # interactive Ctrl+C and is likewise an intentional foreground stop.
@@ -26730,12 +26730,12 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         logger.info("Skipping signal handlers (not running in main thread).")
 
     # Windows fallback: asyncio.add_signal_handler raises NotImplementedError
-    # on Windows, so `hermes gateway stop`'s SIGTERM (which Python maps to
+    # on Windows, so `vigil gateway stop`'s SIGTERM (which Python maps to
     # TerminateProcess on Windows) never invokes shutdown_signal_handler.
     # That means the drain loop never runs, mark_resume_pending never fires,
     # and sessions are silently lost across restarts (issue #33778).
     #
-    # The fix is a marker-polling thread: `hermes gateway stop` writes the
+    # The fix is a marker-polling thread: `vigil gateway stop` writes the
     # planned-stop marker BEFORE killing, and this thread notices it and
     # drives the same shutdown path the signal handler would have.  Runs
     # on every platform (cheap, defensive) so non-signal-bearing
@@ -26784,7 +26784,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # Lifecycle ledger (NS-608): report if the previous gateway life died
     # uncleanly (SIGKILL / OOM / VM death — no exit path ran), then claim
     # the sentinel for this life. Placed after the PID-file/lock claim so
-    # only the authoritative gateway for this HERMES_HOME touches the
+    # only the authoritative gateway for this VIGIL_HOME touches the
     # sentinel — a --replace loser exiting above must not clobber it.
     try:
         from gateway.lifecycle_ledger import record_startup as _lifecycle_record_startup
@@ -26879,7 +26879,7 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
 
     # Multiplex profiles: tell the built-in ticker which profile homes to
     # tick so secondary-profile cron jobs actually fire (#69377).
-    # Without this, only the process-global HERMES_HOME (default profile)
+    # Without this, only the process-global VIGIL_HOME (default profile)
     # is iterated and every secondary profile's cron store is silently
     # ignored — jobs show as "scheduled" with a valid next_run_at but
     # never execute because no ticker owns that store.
@@ -26994,10 +26994,10 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # When an unexpected SIGTERM caused the shutdown and it wasn't a planned
     # restart (/restart, /update, SIGUSR1), exit non-zero so systemd's
     # Restart=on-failure revives the process.  This covers:
-    #   - hermes update killing the gateway mid-work
+    #   - vigil update killing the gateway mid-work
     #   - External kill commands
     #   - WSL2/container runtime sending unexpected signals
-    # `hermes gateway stop` and interactive Ctrl+C are handled above as
+    # `vigil gateway stop` and interactive Ctrl+C are handled above as
     # planned stops and should not trigger service-manager revival.
     if _signal_initiated_shutdown and not runner._restart_requested:
         logger.info(
@@ -27030,7 +27030,7 @@ def main():
 
     import argparse
     
-    parser = argparse.ArgumentParser(description="Hermes Gateway - Multi-platform messaging")
+    parser = argparse.ArgumentParser(description="Vigil Gateway - Multi-platform messaging")
     parser.add_argument("--config", "-c", help="Path to gateway config file")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
     

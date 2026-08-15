@@ -13,15 +13,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 @pytest.fixture
 def kanban_home(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     # Allow the kanban notifier path-validator to upload artifacts the
     # tests write under ``tmp_path``. Without this, every artifact-delivery
     # test silently drops files because ``tmp_path`` isn't inside the
     # default ``MEDIA_DELIVERY_SAFE_ROOTS`` cache dirs.
-    monkeypatch.setenv("HERMES_MEDIA_ALLOW_DIRS", str(tmp_path))
+    monkeypatch.setenv("VIGIL_MEDIA_ALLOW_DIRS", str(tmp_path))
     kb.init_db()
     return home
 
@@ -135,7 +135,7 @@ async def test_notifier_artifact_delivery_skips_missing_files(kanban_home, tmp_p
 
     # Allow ``tmp_path`` through the media-delivery safety filter. See the
     # companion test for the full explanation.
-    monkeypatch.setenv("HERMES_MEDIA_ALLOW_DIRS", str(tmp_path))
+    monkeypatch.setenv("VIGIL_MEDIA_ALLOW_DIRS", str(tmp_path))
 
     real_pdf = tmp_path / "real.pdf"
     real_pdf.write_bytes(b"%PDF-fake")
@@ -148,14 +148,14 @@ async def test_notifier_artifact_delivery_skips_missing_files(kanban_home, tmp_p
         conn.close()
 
     import os
-    os.environ["HERMES_KANBAN_TASK"] = tid
+    os.environ["VIGIL_KANBAN_TASK"] = tid
     try:
         kt._handle_complete({
             "summary": "one real, one ghost",
             "artifacts": [str(real_pdf), "/tmp/definitely-does-not-exist.pdf"],
         })
     finally:
-        os.environ.pop("HERMES_KANBAN_TASK", None)
+        os.environ.pop("VIGIL_KANBAN_TASK", None)
 
     runner = object.__new__(GatewayRunner)
     runner._running = True

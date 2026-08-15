@@ -36,7 +36,7 @@ def test_density_stats_count_isolated_nodes():
 
 
 def test_memory_is_cards_split_on_separator(tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     (home / "memories").mkdir(parents=True)
     (home / "memories" / "MEMORY.md").write_text(
         "Project uses pytest with xdist\n§\nUser prefers concise responses",
@@ -62,7 +62,7 @@ def test_memory_is_cards_split_on_separator(tmp_path):
 
 
 def test_full_payload_shape_and_edge_integrity(tmp_path):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     token = set_hermes_home_override(home)
     try:

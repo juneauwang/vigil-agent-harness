@@ -1,7 +1,7 @@
 /**
  * Profile share: export/import a profile as a portable bundle.
  *
- * The archive is the CLI's own `hermes profile export` tar.gz (config, skills,
+ * The archive is the CLI's own `vigil profile export` tar.gz (config, skills,
  * SOUL.md, cron — credentials always excluded), plus one desktop-only file at
  * the root: `desktop.json`, the appearance/interface overlay (skin + mode,
  * any user-theme definitions the skin needs, the profile rail color, and the

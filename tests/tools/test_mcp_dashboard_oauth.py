@@ -100,7 +100,7 @@ def test_mcp_oauth_helpers_use_dashboard_flow_without_loopback_port():
 def test_failed_reauth_rollback_preserves_newer_oauth_state(tmp_path, monkeypatch):
     from tools.mcp_oauth import HermesTokenStorage
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     storage = HermesTokenStorage("reports")
     storage._tokens_path().parent.mkdir(parents=True)
     storage._tokens_path().write_text("OLD")

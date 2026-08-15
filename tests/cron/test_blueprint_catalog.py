@@ -2,7 +2,7 @@
 
 Covers the core catalog/slot schema/renderers/fill (cron/blueprint_catalog.py),
 the shared /blueprint command handler (hermes_cli/blueprint_cmd.py), and
-the docs generator. Uses an isolated HERMES_HOME for anything that touches the
+the docs generator. Uses an isolated VIGIL_HOME for anything that touches the
 cron job store.
 """
 
@@ -135,15 +135,15 @@ class TestRenderers:
 
     def test_deeplink_shape(self):
         url = blueprint_deeplink(get_blueprint("morning-brief"), {"time": "07:15"})
-        assert url.startswith("hermes://blueprint/morning-brief?")
+        assert url.startswith("vigil://blueprint/morning-brief?")
         assert "time=07" in url
 
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     import hermes_constants
     importlib.reload(hermes_constants)
     import cron.jobs as jobs

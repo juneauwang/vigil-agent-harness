@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Vigil CLI - Main entry point (ops agent harness, fork of Vigil Agent).
+Vigil CLI - Main entry point (ops agent harness, fork of an MIT-licensed upstream agent harness).
 
 Usage:
     vigil                      # Interactive chat (default)
@@ -35,12 +35,12 @@ Usage:
 #
 # Guarded against ModuleNotFoundError because ``hermes_bootstrap`` is a
 # top-level module registered via pyproject.toml's ``py-modules`` list.
-# When the user upgrades code via ``git pull`` (or ``hermes update``
+# When the user upgrades code via ``git pull`` (or ``vigil update``
 # crashes between ``git reset --hard`` and ``uv pip install -e .``), the
 # new code references ``hermes_bootstrap`` but the editable install's
 # ``.pth`` file still points at the old set of top-level modules.  Without
-# this guard, hermes crashes on import and the user can't run
-# ``hermes update`` to recover.  Missing the bootstrap means UTF-8 stdio
+# this guard, vigil crashes on import and the user can't run
+# ``vigil update`` to recover.  Missing the bootstrap means UTF-8 stdio
 # setup is skipped on Windows — degraded, not broken.  POSIX is unaffected.
 try:
     import hermes_bootstrap  # noqa: F401
@@ -69,7 +69,7 @@ if _bootstrap_root not in sys.path:
 from hermes_cli import _startup_fast  # noqa: E402
 
 # Early venv self-heal — MUST run before any third-party import below.  When
-# a prior ``hermes update`` left a recovery marker and a core package's import
+# a prior ``vigil update`` left a recovery marker and a core package's import
 # files were wiped (#57828 — failed lazy backend refresh), the module-level
 # ``from hermes_cli.env_loader import ...`` / ``from hermes_cli.config import
 # ...`` imports further down would crash before ``main()`` ever reaches
@@ -216,13 +216,13 @@ def _ensure_project_root_on_path_fast() -> None:
 
 
 def _set_process_title() -> None:
-    """Set the process title to 'hermes' so tools like 'ps', 'top', and
+    """Set the process title to 'vigil' so tools like 'ps', 'top', and
     'htop' show the app name instead of 'python3.xx'.
 
     Purely cosmetic — non-fatal on any platform.
 
     Strategy (try in order):
-      1. ``setproctitle`` (opt-in dep — installed via ``hermes tools`` or
+      1. ``setproctitle`` (opt-in dep — installed via ``vigil tools`` or
          ``pip install setproctitle``, or bundled in a future release).
       2. ctypes ``prctl(PR_SET_NAME)`` (Linux only, 15-char limit).
       3. ctypes ``pthread_setname_np`` (macOS only, kernel thread name —
@@ -295,12 +295,12 @@ def _wants_tui_early(argv: "list[str] | None" = None) -> bool:
     """Earliest TUI decision, usable before argparse/config imports.
 
     Precedence: explicit ``--cli`` wins (forces classic REPL), then
-    explicit ``--tui``/``HERMES_TUI=1``, then a real-TTY gate (a
+    explicit ``--tui``/``VIGIL_TUI=1``, then a real-TTY gate (a
     non-interactive stdio can't host the Ink UI, so ambient config never
     boots it there), then ``display.interface`` in config.
 
     The TTY gate is load-bearing for headless spawners — kanban workers,
-    cron jobs, pipes run ``hermes … chat -q`` with stdio on a pipe. This
+    cron jobs, pipes run ``vigil … chat -q`` with stdio on a pipe. This
     is the earliest launch decision (it runs before ``cmd_chat`` /
     ``_resolve_use_tui``), so a ``display.interface: tui`` default used to
     boot the TUI here — whose no-TTY bail-out exits 0 without doing the
@@ -311,7 +311,7 @@ def _wants_tui_early(argv: "list[str] | None" = None) -> bool:
         argv = sys.argv[1:]
     if "--cli" in argv:
         return False
-    if os.environ.get("HERMES_TUI") == "1" or "--tui" in argv:
+    if os.environ.get("VIGIL_TUI") == "1" or "--tui" in argv:
         return True
     try:
         if not (sys.stdin.isatty() and sys.stdout.isatty()):
@@ -327,15 +327,15 @@ def _wants_tui_early(argv: "list[str] | None" = None) -> bool:
 # before the Node TUI takes stdin into raw mode). During that window any
 # incoming bytes are echoed straight back to the user's shell scrollback as
 # ``^[[<…M`` text. The TUI itself runs `resetTerminalModes()` again in
-# `entry.tsx`; this is just the earlier cousin. ``HERMES_TUI_NO_EARLY_DISABLE``
+# `entry.tsx`; this is just the earlier cousin. ``VIGIL_TUI_NO_EARLY_DISABLE``
 # escapes the behaviour for diagnostics.
 def _suppress_mouse_residue_early() -> None:
-    if os.environ.get("HERMES_TUI_NO_EARLY_DISABLE") == "1":
+    if os.environ.get("VIGIL_TUI_NO_EARLY_DISABLE") == "1":
         return
     if not _wants_tui_early():
         return
     try:
-        # Skip when stdout is redirected (`hermes --tui … >log`, CI capture):
+        # Skip when stdout is redirected (`vigil --tui … >log`, CI capture):
         # the bytes can't reach the terminal anyway and would just pollute
         # the log with raw CSI.
         if not os.isatty(1):
@@ -389,7 +389,7 @@ def _print_fast_version_info() -> None:
 
 
 def _try_ultrafast_version() -> bool:
-    """Handle ``hermes --version`` before config/logging imports."""
+    """Handle ``vigil --version`` before config/logging imports."""
     return _startup_fast.try_fast_version()
 
 
@@ -475,7 +475,7 @@ from hermes_cli.subcommands.claw import build_claw_parser
 def _require_tty(command_name: str) -> None:
     """Exit with a clear error if stdin is not a terminal.
 
-    Interactive TUI commands (hermes tools, hermes setup, hermes model) use
+    Interactive TUI commands (vigil tools, vigil setup, vigil model) use
     curses or input() prompts that spin at 100% CPU when stdin is a pipe.
     This guard prevents accidental non-interactive invocation.
     """
@@ -495,23 +495,23 @@ _ensure_project_root_on_path_fast()
 
 
 # ---------------------------------------------------------------------------
-# Profile override — MUST happen before any hermes module import.
+# Profile override — MUST happen before any vigil module import.
 #
-# Many modules cache HERMES_HOME at import time (module-level constants).
+# Many modules cache VIGIL_HOME at import time (module-level constants).
 # We intercept --profile/-p from sys.argv here and set the env var so that
-# every subsequent ``os.getenv("HERMES_HOME", ...)`` resolves correctly.
+# every subsequent ``os.getenv("VIGIL_HOME", ...)`` resolves correctly.
 # The flag is stripped from sys.argv so argparse never sees it.
-# Falls back to ~/.hermes/active_profile for sticky default.
+# Falls back to ~/.vigil/active_profile for sticky default.
 # ---------------------------------------------------------------------------
 def _apply_profile_override() -> None:
-    """Pre-parse --profile/-p and set HERMES_HOME before imports."""
+    """Pre-parse --profile/-p and set VIGIL_HOME before imports."""
     argv = sys.argv[1:]
     profile_name = None
     consume = 0
     profile_index = None
 
     def _inside_mcp_add_args(index: int) -> bool:
-        """True once argv reaches `hermes mcp add ... --args <command argv>`.
+        """True once argv reaches `vigil mcp add ... --args <command argv>`.
 
         ``mcp add --args`` is command-argv passthrough. Flags after that point
         belong to the child MCP command (for example Docker MCP Toolkit's
@@ -525,7 +525,7 @@ def _apply_profile_override() -> None:
         return True
 
     def _resolve_sudo_user_profile_env(name: str) -> str | None:
-        """Resolve `sudo hermes -p <name>` against the invoking user's home.
+        """Resolve `sudo vigil -p <name>` against the invoking user's home.
 
         `_apply_profile_override()` runs before argparse, so `--run-as-user`
         is not available yet. For sudo invocations, the best available signal
@@ -557,7 +557,7 @@ def _apply_profile_override() -> None:
         return None
 
     # 1. Check for explicit -p / --profile flag. Historically this worked even
-    # after the subcommand (`hermes chat -p coder`), so keep scanning broadly.
+    # after the subcommand (`vigil chat -p coder`), so keep scanning broadly.
     # The exception is command-argv passthrough regions such as `mcp add --args`.
     value_flags = {
         "-z", "--oneshot",
@@ -610,33 +610,33 @@ def _apply_profile_override() -> None:
             consume = 0
             profile_index = None
 
-    # 1.5 If HERMES_HOME is already set and no explicit flag was given, trust it
+    # 1.5 If VIGIL_HOME is already set and no explicit flag was given, trust it
     # only when it already points to a specific profile directory.  The
     # distinguishing heuristic: a profile path has "profiles" as its immediate
-    # parent directory name (e.g. ~/.hermes/profiles/coder or
-    # /opt/data/profiles/coder).  If HERMES_HOME points to the hermes root
-    # instead (e.g. systemd hardcodes HERMES_HOME=/root/.hermes), we must
+    # parent directory name (e.g. ~/.vigil/profiles/coder or
+    # /opt/data/profiles/coder).  If VIGIL_HOME points to the vigil root
+    # instead (e.g. systemd hardcodes VIGIL_HOME=/root/.vigil), we must
     # still read active_profile — the user may have switched profiles via
-    # `hermes profile use` and the gateway should honour that choice.
+    # `vigil profile use` and the gateway should honour that choice.
     # See issue #22502.
-    hermes_home_env = os.environ.get("HERMES_HOME", "")
+    hermes_home_env = os.environ.get("VIGIL_HOME", "")
     if profile_name is None and hermes_home_env:
         if Path(hermes_home_env).parent.name == "profiles":
             return
 
-    # 2. If no flag, check active_profile in the hermes root.
+    # 2. If no flag, check active_profile in the vigil root.
     #
     # EXCEPTION: a supervised s6 gateway child (exported by the container
-    # run-script as HERMES_S6_SUPERVISED_CHILD=1) must NOT follow the sticky
+    # run-script as VIGIL_S6_SUPERVISED_CHILD=1) must NOT follow the sticky
     # active_profile. Each supervised slot has a fixed profile identity: named
     # slots pass ``-p <name>`` explicitly (handled in step 1 above), and the
-    # reserved ``gateway-default`` slot runs bare ``hermes gateway run`` to mean
-    # "the root HERMES_HOME profile". If the reserved default child read
+    # reserved ``gateway-default`` slot runs bare ``vigil gateway run`` to mean
+    # "the root VIGIL_HOME profile". If the reserved default child read
     # active_profile here, switching the active profile (e.g. via the dashboard)
     # would silently redirect the default gateway into that profile — yielding a
     # duplicate gateway for the active profile and no real default gateway. See
     # the "Docker & Profiles & Dashboard" report.
-    if profile_name is None and not os.environ.get("HERMES_S6_SUPERVISED_CHILD"):
+    if profile_name is None and not os.environ.get("VIGIL_S6_SUPERVISED_CHILD"):
         try:
             from hermes_constants import get_default_hermes_root
 
@@ -649,7 +649,7 @@ def _apply_profile_override() -> None:
         except (UnicodeDecodeError, OSError):
             pass  # corrupted file, skip
 
-    # 3. If we found a profile, resolve and set HERMES_HOME
+    # 3. If we found a profile, resolve and set VIGIL_HOME
     if profile_name is not None:
         try:
             from hermes_cli.profiles import resolve_profile_env
@@ -664,13 +664,13 @@ def _apply_profile_override() -> None:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(1)
         except Exception as exc:
-            # A bug in profiles.py must NEVER prevent hermes from starting
+            # A bug in profiles.py must NEVER prevent vigil from starting
             print(
                 f"Warning: profile override failed ({exc}), using default",
                 file=sys.stderr,
             )
             return
-        os.environ["HERMES_HOME"] = hermes_home
+        os.environ["VIGIL_HOME"] = hermes_home
         # Strip the flag from argv so argparse doesn't choke
         if consume > 0 and profile_index is not None:
             start = profile_index + 1  # +1 because argv is sys.argv[1:]
@@ -679,14 +679,14 @@ def _apply_profile_override() -> None:
 
 _apply_profile_override()
 
-# Load .env from ~/.hermes/.env first, then project root as dev fallback.
+# Load .env from ~/.vigil/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from hermes_cli.config import get_hermes_home
 from hermes_cli.env_loader import load_hermes_dotenv
 
 load_hermes_dotenv(project_env=PROJECT_ROOT / ".env")
 
-# Bridge security.redact_secrets from config.yaml → HERMES_REDACT_SECRETS env
+# Bridge security.redact_secrets from config.yaml → VIGIL_REDACT_SECRETS env
 # var BEFORE hermes_logging imports agent.redact (which snapshots the flag at
 # module-import time). Without this, config.yaml's toggle is ignored because
 # the setup_logging() call below imports agent.redact, which reads the env var
@@ -716,12 +716,12 @@ try:
             _early_cfg_raw = managed_scope.apply_managed_overlay(_early_cfg_raw)
         except Exception:
             pass
-        if "HERMES_REDACT_SECRETS" not in os.environ:
+        if "VIGIL_REDACT_SECRETS" not in os.environ:
             _early_sec_cfg = _early_cfg_raw.get("security", {})
             if isinstance(_early_sec_cfg, dict):
                 _early_redact = _early_sec_cfg.get("redact_secrets")
                 if _early_redact is not None:
-                    os.environ["HERMES_REDACT_SECRETS"] = str(_early_redact).lower()
+                    os.environ["VIGIL_REDACT_SECRETS"] = str(_early_redact).lower()
         _early_net_cfg = _early_cfg_raw.get("network", {})
         if isinstance(_early_net_cfg, dict) and _early_net_cfg.get("force_ipv4"):
             _FORCE_IPV4_EARLY = True
@@ -730,7 +730,7 @@ try:
 except Exception:
     pass  # best-effort — redaction stays at default (enabled) on config errors
 
-# Initialize centralized file logging early — all `hermes` subcommands
+# Initialize centralized file logging early — all `vigil` subcommands
 # (chat, setup, gateway, config, etc.) write to agent.log + errors.log.
 # Dashboard entrypoints bootstrap with GUI mode so gui.log is always present
 # during GUI testing, including pre-dispatch startup failures.
@@ -863,7 +863,7 @@ def _read_git_revision_fingerprint(repo_root: Path) -> str | None:
                 return f"git:{ref}:{packed_sha}"
             # Ref name is known but unresolved — still stable across launches,
             # and the version/release fallback in the caller will invalidate
-            # after `hermes update`.
+            # after `vigil update`.
             return f"git:{ref}:unresolved"
         return f"git:HEAD:{head}"
     except OSError:
@@ -890,7 +890,7 @@ def _termux_bundled_skills_stamp_path() -> Path:
 def _termux_bundled_skills_sync_needed() -> bool:
     if not _is_termux_startup_environment():
         return True
-    if os.environ.get("HERMES_TERMUX_FORCE_SKILLS_SYNC") == "1":
+    if os.environ.get("VIGIL_TERMUX_FORCE_SKILLS_SYNC") == "1":
         return True
     try:
         stamp = _termux_bundled_skills_stamp_path()
@@ -930,7 +930,7 @@ def _sync_bundled_skills_for_startup() -> bool:
 def _termux_should_prefetch_update_check() -> bool:
     if not _is_termux_startup_environment():
         return True
-    return os.environ.get("HERMES_TERMUX_PREFETCH_UPDATES") == "1"
+    return os.environ.get("VIGIL_TERMUX_PREFETCH_UPDATES") == "1"
 
 
 def _relative_time(ts) -> str:
@@ -1334,7 +1334,7 @@ def _resolve_last_session(source: str = "cli") -> Optional[str]:
     """Look up the most recently-used session ID for a source.
 
     Scoped to the current workspace first (git repo root, else cwd) so
-    ``hermes -c`` from repo A continues repo A's last session rather than the
+    ``vigil -c`` from repo A continues repo A's last session rather than the
     global MRU. Falls back to the unscoped MRU when no session matches the
     current workspace, preserving the old behaviour for fresh directories.
     """
@@ -1390,7 +1390,7 @@ def _exec_in_container(container_info: dict, cli_args: list):
 
     Args:
         container_info: dict with backend, container_name, exec_user, hermes_bin
-        cli_args: the original CLI arguments (everything after 'hermes')
+        cli_args: the original CLI arguments (everything after 'vigil')
     """
 
     backend = container_info["backend"]
@@ -1696,7 +1696,7 @@ def _termux_workspace_install_context(
 
 
 def _tui_need_npm_install(root: Path) -> bool:
-    """True when @hermes/ink is missing or node_modules is behind package-lock.json.
+    """True when @vigil/ink is missing or node_modules is behind package-lock.json.
 
     Prebuilt bundle mode: when ``dist/entry.js`` exists and there is no
     ``package-lock.json`` (nix install layout only ships ``dist/`` +
@@ -1820,9 +1820,9 @@ def _tui_need_rebuild(root: Path) -> bool:
     The TUI bundle is self-contained. Rebuilding it on every launch adds a
     visible cold-start tax on slow Termux CPUs, while a simple mtime freshness
     check still rebuilds immediately after source updates, dependency updates,
-    or local edits. Set ``HERMES_TUI_FORCE_BUILD=1`` to force the old behaviour.
+    or local edits. Set ``VIGIL_TUI_FORCE_BUILD=1`` to force the old behaviour.
     """
-    force = (os.environ.get("HERMES_TUI_FORCE_BUILD") or "").strip().lower()
+    force = (os.environ.get("VIGIL_TUI_FORCE_BUILD") or "").strip().lower()
     if force in {"1", "true", "yes", "on"}:
         return True
 
@@ -1852,11 +1852,11 @@ def _ensure_tui_node() -> None:
     was used (nvm, fnm, proto, brew, or the bundled fallback).
 
     Idempotent no-op when node+npm are already discoverable. Set
-    ``HERMES_SKIP_NODE_BOOTSTRAP=1`` to disable auto-install.
+    ``VIGIL_SKIP_NODE_BOOTSTRAP=1`` to disable auto-install.
     """
     if shutil.which("node") and shutil.which("npm"):
         return
-    if os.environ.get("HERMES_SKIP_NODE_BOOTSTRAP"):
+    if os.environ.get("VIGIL_SKIP_NODE_BOOTSTRAP"):
         return
 
     helper = PROJECT_ROOT / "scripts" / "lib" / "node-bootstrap.sh"
@@ -1876,7 +1876,7 @@ def _ensure_tui_node() -> None:
                 "-c",
                 f'source "{helper}" >&2 && ensure_node >&2 && command -v node',
             ],
-            env={**os.environ, "HERMES_HOME": hermes_home},
+            env={**os.environ, "VIGIL_HOME": hermes_home},
             capture_output=True,
             text=True,
             encoding="utf-8",
@@ -1914,7 +1914,7 @@ def _restore_tui_workspace(tui_dir: Path) -> bool:
     """Try to restore a missing ``ui-tui/`` from git, returning True on success.
 
     On Windows an antivirus / NTFS filter driver can leave tracked ``ui-tui/``
-    files deleted in the working tree after ``hermes update`` (HEAD stays
+    files deleted in the working tree after ``vigil update`` (HEAD stays
     intact; the files just vanish — see issue #49145). Those files are tracked,
     so ``git restore`` puts them back deterministically. Best-effort: returns
     False (rather than raising) when git is unavailable, this isn't a checkout,
@@ -1950,7 +1950,7 @@ def _ensure_tui_workspace(tui_dir: Path) -> None:
         return
 
     if _restore_tui_workspace(tui_dir):
-        if not os.environ.get("HERMES_QUIET"):
+        if not os.environ.get("VIGIL_QUIET"):
             print(f"Restored missing TUI workspace: {tui_dir}")
         return
 
@@ -1969,15 +1969,15 @@ def _ensure_tui_workspace(tui_dir: Path) -> None:
 
 
 def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
-    """TUI: --dev → tsx src; else node dist (HERMES_TUI_DIR prebuilt or esbuild)."""
+    """TUI: --dev → tsx src; else node dist (VIGIL_TUI_DIR prebuilt or esbuild)."""
     _ensure_tui_node()
 
     def _node_bin(bin: str) -> str:
         if bin == "node":
-            env_node = os.environ.get("HERMES_NODE")
+            env_node = os.environ.get("VIGIL_NODE")
             if env_node and os.path.isfile(env_node) and os.access(env_node, os.X_OK):
                 return env_node
-        # find_node_executable() prefers the managed $HERMES_HOME/node tree,
+        # find_node_executable() prefers the managed $VIGIL_HOME/node tree,
         # which is not on PATH — a bare which() would declare "node not found"
         # and exit on an install whose only Node is the one Vigil installed,
         # and would pick a system Node over the managed one when both exist.
@@ -1997,12 +1997,12 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         return path
 
     # Footgun: --dev against a prebuilt bundle that has no source/node_modules.
-    ext_dir = os.environ.get("HERMES_TUI_DIR")
+    ext_dir = os.environ.get("VIGIL_TUI_DIR")
     if tui_dev and ext_dir:
         print(
-            f"Error: --dev is incompatible with HERMES_TUI_DIR={ext_dir}\n"
+            f"Error: --dev is incompatible with VIGIL_TUI_DIR={ext_dir}\n"
             f"The prebuilt TUI has no source code to hot-reload.\n"
-            f"Unset HERMES_TUI_DIR (e.g. `unset HERMES_TUI_DIR`) to use --dev from a checkout.",
+            f"Unset VIGIL_TUI_DIR (e.g. `unset VIGIL_TUI_DIR`) to use --dev from a checkout.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -2053,7 +2053,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         and _tui_need_npm_install(tui_dir)
     ):
         npm = _node_bin("npm")
-        if not os.environ.get("HERMES_QUIET"):
+        if not os.environ.get("VIGIL_QUIET"):
             print("Installing TUI dependencies…")
         npm_cwd = _workspace_root(tui_dir)
         # --workspace ui-tui avoids resolving apps/desktop (Electron + node-pty).
@@ -2104,7 +2104,7 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         result = _run_tui_install()
         if result.returncode != 0:
             # An npm outside the root package.json's `engines.npm` range fails
-            # here before doing any work; repair once (upgrade a Hermes-managed
+            # here before doing any work; repair once (upgrade a Vigil-managed
             # npm in place, or provision a managed runtime when the npm belongs
             # to the user) and retry rather than dumping EBADENGINE at the user.
             from hermes_cli.npm_engine import maybe_repair_npm_engine
@@ -2125,8 +2125,8 @@ def _make_tui_argv(tui_dir: Path, tui_dev: bool) -> tuple[list[str], Path]:
         did_install = True
 
     if tui_dev:
-        # Keep the local @hermes/ink package exports in sync with source.
-        # --dev runs src/entry.tsx directly, but @hermes/ink resolves through
+        # Keep the local @vigil/ink package exports in sync with source.
+        # --dev runs src/entry.tsx directly, but @vigil/ink resolves through
         # packages/hermes-ink/dist/entry-exports.js. If that dist bundle is
         # stale after a pull, newer hooks/components can exist in src while
         # being missing at runtime (e.g. useCursorAdvance). Prebuild it here.
@@ -2290,24 +2290,24 @@ def _safe_tui_cwd(env: Optional[dict] = None) -> str:
 
 def _apply_tui_python_env(env: dict) -> None:
     """Seed/repair Python-related env vars shared by CLI and dashboard TUI launches."""
-    src_root = str(env.get("HERMES_PYTHON_SRC_ROOT") or "").strip()
+    src_root = str(env.get("VIGIL_PYTHON_SRC_ROOT") or "").strip()
     if not src_root or not Path(src_root).is_dir():
-        env["HERMES_PYTHON_SRC_ROOT"] = str(PROJECT_ROOT)
+        env["VIGIL_PYTHON_SRC_ROOT"] = str(PROJECT_ROOT)
 
-    cwd = str(env.get("HERMES_CWD") or "").strip()
+    cwd = str(env.get("VIGIL_CWD") or "").strip()
     if not cwd or not Path(cwd).is_dir():
-        env["HERMES_CWD"] = _safe_tui_cwd(env)
+        env["VIGIL_CWD"] = _safe_tui_cwd(env)
 
-    python = str(env.get("HERMES_PYTHON") or "").strip()
+    python = str(env.get("VIGIL_PYTHON") or "").strip()
     if os.path.dirname(python):
         python_path = Path(python)
         if not python_path.is_absolute():
-            python_path = Path(env["HERMES_CWD"]) / python_path
+            python_path = Path(env["VIGIL_CWD"]) / python_path
         python_is_executable = python_path.is_file() and os.access(python_path, os.X_OK)
     else:
         python_is_executable = bool(shutil.which(python, path=env.get("PATH")))
     if not python_is_executable:
-        env["HERMES_PYTHON"] = sys.executable
+        env["VIGIL_PYTHON"] = sys.executable
 
 
 def _launch_tui(
@@ -2332,7 +2332,7 @@ def _launch_tui(
 
     import tempfile
 
-    # TUI child is a hermes process: propagate the profile-home contract via
+    # TUI child is a vigil process: propagate the profile-home contract via
     # the single factory; keep secrets (the TUI/agent needs provider creds).
     from tools.environments.local import build_subprocess_env
     env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=True)
@@ -2345,7 +2345,7 @@ def _launch_tui(
         prefix="hermes-tui-active-session-", suffix=".json"
     )
     os.close(active_session_fd)
-    env["HERMES_TUI_ACTIVE_SESSION_FILE"] = active_session_file
+    env["VIGIL_TUI_ACTIVE_SESSION_FILE"] = active_session_file
     env.setdefault("NODE_ENV", "development" if tui_dev else "production")
 
     wt_info = None
@@ -2367,20 +2367,20 @@ def _launch_tui(
             wt_info = None
         if not wt_info:
             sys.exit(1)
-        env["HERMES_CWD"] = wt_info["path"]
+        env["VIGIL_CWD"] = wt_info["path"]
         env["TERMINAL_CWD"] = wt_info["path"]
 
     _apply_tui_python_env(env)
 
     if model:
-        env["HERMES_MODEL"] = model
-        env["HERMES_INFERENCE_MODEL"] = model
+        env["VIGIL_MODEL"] = model
+        env["VIGIL_INFERENCE_MODEL"] = model
     if provider:
-        env["HERMES_TUI_PROVIDER"] = provider
-        env["HERMES_INFERENCE_PROVIDER"] = provider
+        env["VIGIL_TUI_PROVIDER"] = provider
+        env["VIGIL_INFERENCE_PROVIDER"] = provider
     tui_toolsets = _normalize_tui_toolsets(toolsets)
     if tui_toolsets:
-        env["HERMES_TUI_TOOLSETS"] = ",".join(tui_toolsets)
+        env["VIGIL_TUI_TOOLSETS"] = ",".join(tui_toolsets)
     if skills:
         if isinstance(skills, (list, tuple)):
             flattened = []
@@ -2389,27 +2389,27 @@ def _launch_tui(
                     part.strip() for part in str(item).split(",") if part.strip()
                 )
             if flattened:
-                env["HERMES_TUI_SKILLS"] = ",".join(flattened)
+                env["VIGIL_TUI_SKILLS"] = ",".join(flattened)
         else:
             value = str(skills).strip()
             if value:
-                env["HERMES_TUI_SKILLS"] = value
+                env["VIGIL_TUI_SKILLS"] = value
     if query:
-        env["HERMES_TUI_QUERY"] = query
+        env["VIGIL_TUI_QUERY"] = query
     if image:
-        env["HERMES_TUI_IMAGE"] = image
+        env["VIGIL_TUI_IMAGE"] = image
     if checkpoints:
-        env["HERMES_TUI_CHECKPOINTS"] = "1"
+        env["VIGIL_TUI_CHECKPOINTS"] = "1"
     if pass_session_id:
-        env["HERMES_TUI_PASS_SESSION_ID"] = "1"
+        env["VIGIL_TUI_PASS_SESSION_ID"] = "1"
     if max_turns is not None:
-        env["HERMES_TUI_MAX_TURNS"] = str(max_turns)
+        env["VIGIL_TUI_MAX_TURNS"] = str(max_turns)
     if verbose:
-        env["HERMES_TUI_TOOL_PROGRESS"] = "verbose"
+        env["VIGIL_TUI_TOOL_PROGRESS"] = "verbose"
     elif quiet:
-        env["HERMES_TUI_TOOL_PROGRESS"] = "off"
+        env["VIGIL_TUI_TOOL_PROGRESS"] = "off"
     if accept_hooks:
-        env["HERMES_ACCEPT_HOOKS"] = "1"
+        env["VIGIL_ACCEPT_HOOKS"] = "1"
     # Guarantee a generous V8 heap for the TUI. Default node cap is ~1.5–4GB
     # depending on version and can fatal-OOM on long sessions with large
     # transcripts / reasoning blobs. We target 8GB on an unconstrained host,
@@ -2428,17 +2428,17 @@ def _launch_tui(
     if not any(t.startswith("--max-old-space-size=") for t in _tokens):
         _tokens.append(f"--max-old-space-size={_resolve_tui_heap_mb()}")
     env["NODE_OPTIONS"] = " ".join(_tokens)
-    # HERMES_TUI_RESUME is an internal hand-off from the Python wrapper to the
+    # VIGIL_TUI_RESUME is an internal hand-off from the Python wrapper to the
     # Ink app.  Because we start from a full os.environ snapshot (via
     # build_subprocess_env), an exported/stale value
-    # in the user's shell would otherwise make a plain `hermes --tui` try to
+    # in the user's shell would otherwise make a plain `vigil --tui` try to
     # resume a non-existent session and leave the UI at "error: session not
     # found" with no live session.  Only forward a resume id that argparse
     # resolved for this invocation; direct `node ui-tui/dist/entry.js` users can
-    # still set HERMES_TUI_RESUME themselves.
-    env.pop("HERMES_TUI_RESUME", None)
+    # still set VIGIL_TUI_RESUME themselves.
+    env.pop("VIGIL_TUI_RESUME", None)
     if resume_session_id:
-        env["HERMES_TUI_RESUME"] = resume_session_id
+        env["VIGIL_TUI_RESUME"] = resume_session_id
 
     argv, cwd = _make_tui_argv(tui_dir, tui_dev)
     code: Optional[int] = None
@@ -2461,7 +2461,7 @@ def _launch_tui(
             except Exception:
                 pass
 
-    # Exit code 42 = TUI requested an update. Relaunch as `hermes update` so
+    # Exit code 42 = TUI requested an update. Relaunch as `vigil update` so
     # the user sees update output directly and gets the new version.
     # preserve_inherited=False ensures --tui and other flags are NOT carried
     # into the update subcommand.
@@ -2477,28 +2477,28 @@ def _launch_tui(
 
 
 def _pin_kanban_board_env() -> None:
-    """Pin the active kanban board into ``HERMES_KANBAN_BOARD`` for the chat session.
+    """Pin the active kanban board into ``VIGIL_KANBAN_BOARD`` for the chat session.
 
     Without this, in-process tools (``kanban_*``) and shelled-out CLI calls
-    (``hermes kanban …``) resolve the board on different paths: the env-pin if
+    (``vigil kanban …``) resolve the board on different paths: the env-pin if
     set, otherwise the global ``<root>/kanban/current`` file. A concurrent
-    ``hermes kanban boards switch`` from another session can flip the file
+    ``vigil kanban boards switch`` from another session can flip the file
     mid-turn, so the same chat sees its tool calls hit board A while its shell
     calls hit board B (#20074). Pinning at chat boot mirrors what the
     dispatcher already does for spawned workers.
     """
-    if os.environ.get("HERMES_KANBAN_BOARD"):
+    if os.environ.get("VIGIL_KANBAN_BOARD"):
         return
     try:
         from hermes_cli.kanban_db import get_current_board
 
-        os.environ["HERMES_KANBAN_BOARD"] = get_current_board()
+        os.environ["VIGIL_KANBAN_BOARD"] = get_current_board()
     except Exception:
         pass
 
 
 def _sync_bundled_skills_quietly() -> None:
-    """Seed ``~/.hermes/skills/`` with the bundled skill library on first launch.
+    """Seed ``~/.vigil/skills/`` with the bundled skill library on first launch.
 
     Called from any CLI entrypoint that the user might use as their first
     interaction with Vigil — chat, dashboard (the desktop GUI's backend),
@@ -2524,7 +2524,7 @@ def _resolve_use_tui(args) -> bool:
       1. ``--cli`` flag         → always classic REPL
       2. ``--tui`` flag         → always TUI (explicit ask)
       3. no TTY                 → always classic (ambient prefs don't apply)
-      4. ``HERMES_TUI=1`` env   → TUI
+      4. ``VIGIL_TUI=1`` env   → TUI
       5. ``display.interface`` config value ("cli" | "tui")
       6. default → classic REPL
 
@@ -2533,7 +2533,7 @@ def _resolve_use_tui(args) -> bool:
 
     The TTY gate (3) is load-bearing: ambient TUI preferences (env var or
     config default) must never hijack a NON-interactive invocation. Kanban
-    workers, cron jobs, and pipelines run ``hermes … chat -q`` with stdout
+    workers, cron jobs, and pipelines run ``vigil … chat -q`` with stdout
     on a pipe; booting the Ink TUI there hits its no-TTY bail-out, which
     prints a resume hint and exits 0 — a kanban worker then dies with
     "exited cleanly without calling kanban_complete — protocol violation"
@@ -2549,7 +2549,7 @@ def _resolve_use_tui(args) -> bool:
             return False
     except Exception:
         return False
-    if os.environ.get("HERMES_TUI") == "1":
+    if os.environ.get("VIGIL_TUI") == "1":
         return True
     try:
         from hermes_cli.config import load_config
@@ -2699,25 +2699,25 @@ def cmd_chat(args):
     # _YOLO_MODE_FROZEN.  This redundant set is a safety net for callers
     # that invoke cmd_chat directly (e.g. subcommand dispatch).
     if getattr(args, "yolo", False):
-        os.environ["HERMES_YOLO_MODE"] = "1"
+        os.environ["VIGIL_YOLO_MODE"] = "1"
 
     # --ignore-user-config: make load_cli_config() / load_config() skip the
-    # user's ~/.hermes/config.yaml and return built-in defaults. Set BEFORE
+    # user's ~/.vigil/config.yaml and return built-in defaults. Set BEFORE
     # importing cli (which runs `CLI_CONFIG = load_cli_config()` at module
     # import time). Credentials in .env are still loaded — this flag only
     # ignores behavioral/config settings.
     if getattr(args, "ignore_user_config", False):
-        os.environ["HERMES_IGNORE_USER_CONFIG"] = "1"
+        os.environ["VIGIL_IGNORE_USER_CONFIG"] = "1"
 
     # --ignore-rules: skip auto-injection of AGENTS.md/SOUL.md/.cursorrules
     # (rules), memory entries, and any preloaded skills coming from user config.
     # Maps to AIAgent(skip_context_files=True, skip_memory=True).
     if getattr(args, "ignore_rules", False):
-        os.environ["HERMES_IGNORE_RULES"] = "1"
+        os.environ["VIGIL_IGNORE_RULES"] = "1"
 
     # --source: tag session source for filtering (e.g. 'tool' for third-party integrations)
     if getattr(args, "source", None):
-        os.environ["HERMES_SESSION_SOURCE"] = args.source
+        os.environ["VIGIL_SESSION_SOURCE"] = args.source
 
     _pin_kanban_board_env()
 
@@ -2859,7 +2859,7 @@ def cmd_whatsapp(args):
     # We intentionally don't write WHATSAPP_ENABLED=true here.  If the user
     # aborts the wizard later (Ctrl+C, failed npm install, missed QR scan),
     # we'd otherwise leave .env claiming WhatsApp is ready when the bridge
-    # has no creds.json.  Every subsequent `hermes gateway` then paid a 30s
+    # has no creds.json.  Every subsequent `vigil gateway` then paid a 30s
     # bridge-bootstrap timeout and queued WhatsApp for indefinite retries.
     # Now: aborted setup leaves WHATSAPP_ENABLED unset → gateway skips it.
     # Re-runs that already have WHATSAPP_ENABLED=true (from a prior
@@ -3002,7 +3002,7 @@ def cmd_whatsapp(args):
     if (session_dir / "creds.json").exists():
         # Only enable WhatsApp now that pairing actually succeeded.  If the
         # user Ctrl+C'd at any earlier step, WHATSAPP_ENABLED stays unset
-        # and `hermes gateway` skips it cleanly instead of paying a 30s
+        # and `vigil gateway` skips it cleanly instead of paying a 30s
         # bridge timeout + queueing the platform for indefinite retries.
         save_env_value("WHATSAPP_ENABLED", "true")
         print("✓ WhatsApp paired successfully!")
@@ -3037,7 +3037,7 @@ def cmd_whatsapp_cloud(args):
     common setup mistakes (e.g. pasting a phone number into the Phone
     Number ID field).
 
-    Distinct from ``hermes whatsapp`` (the Baileys bridge wizard) — the
+    Distinct from ``vigil whatsapp`` (the Baileys bridge wizard) — the
     two adapters are complementary, not alternatives. See
     ``hermes_cli/setup_whatsapp_cloud.py``.
     """
@@ -3085,7 +3085,7 @@ def _is_profile_api_key_provider(provider_id: str) -> bool:
 def select_provider_and_model(args=None):
     """Core provider selection + model picking logic.
 
-    Shared by ``cmd_model`` (``hermes model``) and the setup wizard
+    Shared by ``cmd_model`` (``vigil model``) and the setup wizard
     (``setup_model_provider`` in setup.py).  Handles the full flow:
     provider picker, credential prompting, model selection, and config
     persistence.
@@ -3120,7 +3120,7 @@ def select_provider_and_model(args=None):
         config_provider = model_cfg.get("provider")
 
     effective_provider = (
-        config_provider or os.getenv("HERMES_INFERENCE_PROVIDER") or "auto"
+        config_provider or os.getenv("VIGIL_INFERENCE_PROVIDER") or "auto"
     )
     compatible_custom_providers = get_compatible_custom_providers(config)
     def _named_custom_provider_map(cfg) -> dict[str, dict[str, str]]:
@@ -3334,7 +3334,7 @@ def select_provider_and_model(args=None):
     # resolves back to a concrete slug, so the dispatch chain below is
     # unchanged. Custom providers and the trailing actions stay flat.
     canonical_descs = {p.slug: p.tui_desc for p in CANONICAL_PROVIDERS}
-    # Honor ``model_catalog.excluded_providers`` so the CLI ``hermes model``
+    # Honor ``model_catalog.excluded_providers`` so the CLI ``vigil model``
     # picker hides the same providers the gateway/TUI pickers do. A canonical
     # provider is hidden if its slug OR any of its aliases appears in the
     # exclusion list (case-insensitive), matching list_authenticated_providers'
@@ -3523,7 +3523,7 @@ def select_provider_and_model(args=None):
 
     # ── Post-switch cleanup: clear stale OPENAI_BASE_URL ──────────────
     # When the user switches to a named provider (anything except "custom"),
-    # a leftover OPENAI_BASE_URL in ~/.hermes/.env can poison auxiliary
+    # a leftover OPENAI_BASE_URL in ~/.vigil/.env can poison auxiliary
     # clients that use provider:auto. Clear it proactively.  (#5161)
     if selected_provider not in {
         "custom",
@@ -3534,7 +3534,7 @@ def select_provider_and_model(args=None):
 
 
 def _clear_stale_openai_base_url():
-    """Remove OPENAI_BASE_URL from ~/.hermes/.env if the active provider is not 'custom'.
+    """Remove OPENAI_BASE_URL from ~/.vigil/.env if the active provider is not 'custom'.
 
     After a provider switch, a leftover OPENAI_BASE_URL causes auxiliary
     clients (compression, vision, delegation) with provider:auto to route
@@ -3571,9 +3571,9 @@ def _clear_stale_openai_base_url():
 # its own provider+model pair in config.yaml under `auxiliary.<task>`.
 #
 # The UI lives behind "Configure auxiliary models..." at the bottom of the
-# `hermes model` provider picker. It does NOT re-run credential setup — it
+# `vigil model` provider picker. It does NOT re-run credential setup — it
 # only routes already-authenticated providers to specific aux tasks. Users
-# configure new providers through the normal `hermes model` flow first.
+# configure new providers through the normal `vigil model` flow first.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # (task_key, display_name, short_description)
@@ -3766,7 +3766,7 @@ def _aux_select_for_task(task: str) -> None:
     shows: authenticated built-ins, the user's own ``providers:`` /
     ``custom_providers:`` endpoints, and providers whose credential pool is
     temporarily exhausted. Only already-configured providers appear; users set
-    up new ones through the normal ``hermes model`` flow, then route aux tasks
+    up new ones through the normal ``vigil model`` flow, then route aux tasks
     to them here.
     """
     from hermes_cli.config import load_config
@@ -4248,8 +4248,8 @@ def _remove_custom_provider(config):
 # Lazy-export the model catalog at module level. Tests and a handful of
 # downstream call sites read `hermes_cli.main._PROVIDER_MODELS` directly,
 # so the symbol needs to be reachable as a module attribute. But importing
-# the catalog eagerly costs ~55ms on every `hermes` invocation — including
-# fast paths like `hermes --version` and slash-command dispatch that never
+# the catalog eagerly costs ~55ms on every `vigil` invocation — including
+# fast paths like `vigil --version` and slash-command dispatch that never
 # touch the catalog. PEP 562 module-level __getattr__ defers the import
 # until first attribute access, so the cost is only paid by callers that
 # actually look up the catalog. Termux already defers via the same
@@ -4373,11 +4373,11 @@ def _prompt_api_key(
     provider_id: str = "",
     existing_source: str = "",
 ) -> tuple:
-    """Shared API-key entry point for ``hermes setup`` / ``hermes model``.
+    """Shared API-key entry point for ``vigil setup`` / ``vigil model``.
 
     Handles both first-time entry and the already-configured case.  When a key
     is already present, offers [K]eep / [R]eplace / [C]lear so the user can
-    recover from a malformed paste without editing ``~/.hermes/.env`` by hand.
+    recover from a malformed paste without editing ``~/.vigil/.env`` by hand.
 
     Returns ``(resolved_key, abort)``.  ``abort=True`` means the caller should
     ``return`` immediately — the user cancelled entry, declined to replace, or
@@ -4754,7 +4754,7 @@ def cmd_sync(args):
             print(
                 f"'{skill}' is not sync-eligible (bundled, hub-installed, "
                 f"external, or not found). Only agent-created / user-authored "
-                f"skills under ~/.hermes/skills/ can sync.",
+                f"skills under ~/.vigil/skills/ can sync.",
                 file=sys.stderr,
             )
             return 1
@@ -4799,14 +4799,14 @@ def cmd_sync(args):
             )
         elif not status.get("feature_enabled"):
             print(
-                "\nSync feature is off for this instance (set HERMES_SYNC_ENABLED=1 "
+                "\nSync feature is off for this instance (set VIGIL_SYNC_ENABLED=1 "
                 "or config.yaml sync.enabled: true). Sync is inert.",
                 file=sys.stderr,
             )
         elif not status.get("base_url"):
             print(
                 "\nNo sync base URL configured (config.yaml sync.base_url or "
-                "HERMES_SYNC_BASE_URL). Sync is inert.",
+                "VIGIL_SYNC_BASE_URL). Sync is inert.",
                 file=sys.stderr,
             )
         return 0
@@ -4826,7 +4826,7 @@ def cmd_sync(args):
     if not ssc.resolve_sync_base_url():
         print(
             "sync inert: no sync base URL configured (config.yaml sync.base_url "
-            "or HERMES_SYNC_BASE_URL).",
+            "or VIGIL_SYNC_BASE_URL).",
             file=sys.stderr,
         )
         return 1
@@ -4882,7 +4882,7 @@ def cmd_webhook(args):
 def cmd_slack(args):
     """Slack integration helpers.
 
-    Dispatches ``hermes slack <subcommand>``. Currently supports:
+    Dispatches ``vigil slack <subcommand>``. Currently supports:
       manifest — print or write a Slack app manifest with every gateway
                  command registered as a first-class slash.
     """
@@ -4942,7 +4942,7 @@ def cmd_doctor(args):
 
 
 def cmd_security(args):
-    """Dispatch `hermes security <subcmd>`."""
+    """Dispatch `vigil security <subcmd>`."""
     sub = getattr(args, "security_command", None)
     if sub in ("audit", None):
         from hermes_cli.security_audit import cmd_security_audit
@@ -4955,7 +4955,7 @@ def cmd_security(args):
 
 
 def cmd_approvals(args):
-    """Dispatch `hermes approvals <subcmd>`."""
+    """Dispatch `vigil approvals <subcmd>`."""
     from hermes_cli.approvals_suggest import approvals_command
 
     status = approvals_command(args)
@@ -5206,7 +5206,7 @@ from hermes_cli.update_cmd import (  # noqa: F401
 )
 
 # Stamp file recording the checkout fingerprint the bytecode cache was last
-# validated against. Lives next to the checkout (NOT in HERMES_HOME) because
+# validated against. Lives next to the checkout (NOT in VIGIL_HOME) because
 # __pycache__ is per-checkout state shared by every profile.
 _BYTECODE_FINGERPRINT_FILE = ".bytecode-fingerprint"
 
@@ -5235,16 +5235,16 @@ def _sweep_stale_bytecode_if_checkout_changed() -> None:
     The stale-bytecode bug class (issues #6207, #60242; Dhruv's WhatsApp
     ``cannot import name 'parse_model_flags_detailed'`` report) has one
     shared shape: the checkout's ``.py`` files change (git pull inside
-    ``hermes update``, a manual ``git pull``, a ZIP update, a file-sync
+    ``vigil update``, a manual ``git pull``, a ZIP update, a file-sync
     restore) while ``__pycache__`` retains bytecode from the previous
     revision, and a later process trusts the stale ``.pyc`` instead of the
     fresh source.
 
-    Update-time clears alone can never close this class: ``hermes update``
+    Update-time clears alone can never close this class: ``vigil update``
     always executes the PRE-pull updater code, so any hardening added to it
     only takes effect one update late, and manual ``git pull`` never runs
     the updater at all. This launch-time guard closes the loop: every
-    ``hermes`` entry point compares the checkout fingerprint (cheap file
+    ``vigil`` entry point compares the checkout fingerprint (cheap file
     reads, no git subprocess) against the last-validated stamp and sweeps
     the bytecode cache once when they diverge.
 
@@ -5280,7 +5280,7 @@ def _web_ui_build_needed(web_dir: Path) -> bool:
 
     Uses a SHA-256 content hash of the web source tree (the same approach
     ``_desktop_build_needed()`` already uses for the Electron build), NOT
-    mtime comparison. ``git checkout`` / ``git pull`` / ``hermes update``
+    mtime comparison. ``git checkout`` / ``git pull`` / ``vigil update``
     rewrite source mtimes without changing content, which made the old
     mtime check unreliable in both directions: it could skip a rebuild when
     source had genuinely changed (serving a stale dashboard) and force a
@@ -5370,7 +5370,7 @@ def _compute_web_ui_content_hash(project_root: Path, web_dir: Path) -> str:
 
 
 def _web_ui_stamp_path() -> Path:
-    """Return the path to the web UI build stamp file under $HERMES_HOME."""
+    """Return the path to the web UI build stamp file under $VIGIL_HOME."""
     from hermes_constants import get_hermes_home
     return get_hermes_home() / "web-ui-build-stamp.json"
 
@@ -5406,7 +5406,7 @@ def _run_with_idle_timeout(
     WSL2 with the default 4 GB cap) the build can stall or sit silent for
     minutes; users see a frozen terminal, assume the update is hung, and
     reboot — leaving the editable install in a half-state with the
-    ``hermes`` launcher present but ``hermes_cli`` not importable.
+    ``vigil`` launcher present but ``hermes_cli`` not importable.
 
     This helper fixes both halves: stdout is streamed (so the user sees
     progress), and if no bytes have appeared on stdout/stderr for
@@ -5501,7 +5501,7 @@ def _nixos_build_env() -> dict[str, str] | None:
     does a bare ``PATH`` lookup — which fails on NixOS.
 
     Two-tier resolution:
-    1. Fast path — the hermes venv's python3 (present in managed installs)
+    1. Fast path — the vigil venv's python3 (present in managed installs)
     2. Fallback — resolves the absolute python3 path via ``nix-shell``
 
     Returns an env dict suitable for ``subprocess.run(env=...)`` or
@@ -5520,7 +5520,7 @@ def _nixos_build_env() -> dict[str, str] | None:
     if shutil.which("python3"):
         return None
 
-    # Tier 1: fast path — hermes venv python3, no nix-shell overhead
+    # Tier 1: fast path — vigil venv python3, no nix-shell overhead
     for venv_name in ("venv", ".venv"):
         venv_python = PROJECT_ROOT / venv_name / "bin" / "python3"
         if venv_python.exists():
@@ -5528,7 +5528,7 @@ def _nixos_build_env() -> dict[str, str] | None:
 
     # Tier 2: nix-shell fallback — resolves the absolute python3 path once.
     # Slower (~2–5 s for the nix-shell eval) but always works, even without
-    # a hermes venv (pip / non-managed / bare-git installs).  The resolved
+    # a vigil venv (pip / non-managed / bare-git installs).  The resolved
     # path is a self-contained Nix store binary (all deps via RPATH) so it
     # stays valid even after the nix-shell exits.
     try:
@@ -5558,7 +5558,7 @@ def _run_npm_install_deterministic(
     falls back to ``npm install`` only if ``npm ci`` fails (e.g. lockfile out of
     sync on a WIP checkout).  Without this, ``npm install`` on npm ≥ 10 silently
     rewrites committed lockfiles (stripping ``"peer": true`` etc.), which leaves
-    the working tree dirty and causes the next ``hermes update`` to stash the
+    the working tree dirty and causes the next ``vigil update`` to stash the
     lockfile — repeatedly.
 
     ``--include=dev`` is forced on every invocation: the callers are frontend
@@ -5611,7 +5611,7 @@ def _run_npm_install_deterministic(
     # command here identically (the `npm install` fallback included), so the
     # failure is worth exactly one repair attempt. `maybe_repair_npm_engine`
     # returns the npm to retry with — the same one after an in-place upgrade
-    # of a Hermes-managed install, or a freshly provisioned managed npm when
+    # of a Vigil-managed install, or a freshly provisioned managed npm when
     # the failing npm belongs to the user's own toolchain.
     from hermes_cli.npm_engine import maybe_repair_npm_engine
 
@@ -5744,7 +5744,7 @@ def _do_build_web_ui(web_dir: Path, *, fatal: bool = False) -> bool:
     Args:
         web_dir: Path to the dashboard frontend source directory.
         fatal: If True, print error guidance and return False on failure
-               instead of a soft warning (used by ``hermes web``).
+               instead of a soft warning (used by ``vigil web``).
 
     Returns True if the build succeeded or was skipped (no package.json).
     """
@@ -5893,12 +5893,12 @@ def _desktop_dist_exists(desktop_dir: Path) -> bool:
 # SHA-256 content hash of the source tree so that:
 #   - ``git checkout`` / ``git pull`` that touch mtimes but not content
 #     don't trigger a rebuild
-#   - ``hermes update`` can unconditionally call ``hermes desktop --build-only``
+#   - ``vigil update`` can unconditionally call ``vigil desktop --build-only``
 #     and it will skip if nothing actually changed
-#   - ``hermes desktop`` (interactive launch) skips the build when the
+#   - ``vigil desktop`` (interactive launch) skips the build when the
 #     stamp matches, making repeated launches fast
 #
-# Stamp file: $HERMES_HOME/desktop-build-stamp.json
+# Stamp file: $VIGIL_HOME/desktop-build-stamp.json
 # Schema:
 #   {
 #     "contentHash": "<sha256 hex of source files>",
@@ -5967,7 +5967,7 @@ def _compute_desktop_content_hash(project_root: Path) -> str:
 
 
 def _desktop_stamp_path() -> Path:
-    """Return the path to the desktop build stamp file under $HERMES_HOME."""
+    """Return the path to the desktop build stamp file under $VIGIL_HOME."""
     from hermes_constants import get_hermes_home
     return get_hermes_home() / "desktop-build-stamp.json"
 
@@ -5977,7 +5977,7 @@ def _desktop_build_needed(desktop_dir: Path, project_root: Path, *, source_mode:
 
     Compares the current content hash against the saved stamp. Also returns
     True if the expected build artifact doesn't exist (e.g. first run after
-    ``hermes update`` that pulled new source but hasn't built yet).
+    ``vigil update`` that pulled new source but hasn't built yet).
     """
     # If there's no build output at all, we definitely need to build
     if source_mode:
@@ -6067,7 +6067,7 @@ def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
 # ─── Desktop exe integrity gate (#69179) ────────────────────────────────────
 #
 # The desktop self-update chain (Desktop → hermes-setup --update →
-# `hermes update` → `hermes desktop --build-only` → relaunch) rebuilds
+# `vigil update` → `vigil desktop --build-only` → relaunch) rebuilds
 # Vigil.exe on the end user's machine and used to verify only that the file
 # EXISTS before declaring success. A corrupt cached Electron zip whose
 # extraction produced a truncated electron.exe, an interrupted rcedit resource
@@ -6931,7 +6931,7 @@ def _force_adhoc_macos_signing(env: dict, *, source_mode: bool) -> bool:
     """Stop electron-builder grabbing a random keychain identity on self-update.
 
     The desktop self-updater rebuilds *and re-signs the .app on the end user's
-    machine* (``hermes desktop --build-only`` → electron-builder ``--dir``).
+    machine* (``vigil desktop --build-only`` → electron-builder ``--dir``).
     With ``CSC_IDENTITY_AUTO_DISCOVERY`` on (its default), electron-builder
     signs the ``type=distribution``, hardened-runtime bundle with whatever it
     finds in that user's keychain — typically a personal "Apple Development"
@@ -7041,7 +7041,7 @@ def _desktop_launch_options() -> tuple[list[str], str]:
 
     Returns ``(electron_flags, disable_gpu)`` where ``electron_flags`` is a list
     of extra Electron CLI flags and ``disable_gpu`` is one of "auto"/"1"/"0"
-    (normalized for the HERMES_DESKTOP_DISABLE_GPU env var the Electron app
+    (normalized for the VIGIL_DESKTOP_DISABLE_GPU env var the Electron app
     reads). Best-effort: any config error yields the safe defaults
     ``([], "auto")`` so a malformed config never blocks the launch.
     """
@@ -7079,7 +7079,7 @@ def _register_linux_desktop_entry() -> None:
 
     Gives the Electron app a launcher presence: a menu item and an icon.
     ``Exec`` and ``Icon`` are absolute, so the entry works outside a login
-    shell. ``hermes uninstall --gui`` removes it.
+    shell. ``vigil uninstall --gui`` removes it.
     """
     try:
         from hermes_cli.linux_desktop_entry import install_desktop_entry, is_supported
@@ -7111,23 +7111,23 @@ def cmd_gui(args: argparse.Namespace):
     # with_hermes_node_path() copies os.environ when called with no arg.
     env = with_hermes_node_path()
     if getattr(args, "fake_boot", False):
-        env["HERMES_DESKTOP_BOOT_FAKE"] = "1"
+        env["VIGIL_DESKTOP_BOOT_FAKE"] = "1"
     if getattr(args, "ignore_existing", False):
-        env["HERMES_DESKTOP_IGNORE_EXISTING"] = "1"
+        env["VIGIL_DESKTOP_IGNORE_EXISTING"] = "1"
     if getattr(args, "hermes_root", None):
-        env["HERMES_DESKTOP_HERMES_ROOT"] = str(Path(args.hermes_root).expanduser().resolve())
+        env["VIGIL_DESKTOP_VIGIL_ROOT"] = str(Path(args.hermes_root).expanduser().resolve())
     if getattr(args, "cwd", None):
-        env["HERMES_DESKTOP_CWD"] = str(Path(args.cwd).expanduser().resolve())
+        env["VIGIL_DESKTOP_CWD"] = str(Path(args.cwd).expanduser().resolve())
     else:
-        env["HERMES_DESKTOP_CWD"] = os.getcwd()
+        env["VIGIL_DESKTOP_CWD"] = os.getcwd()
 
     # Desktop launch options from config.yaml (`desktop.electron_flags`,
     # `desktop.disable_gpu`). The GPU policy is bridged to the env var the
     # Electron app already reads; an explicit env var still wins over config so
-    # `HERMES_DESKTOP_DISABLE_GPU=... hermes desktop` keeps working.
+    # `VIGIL_DESKTOP_DISABLE_GPU=... vigil desktop` keeps working.
     config_electron_flags, config_disable_gpu = _desktop_launch_options()
-    if config_disable_gpu != "auto" and "HERMES_DESKTOP_DISABLE_GPU" not in os.environ:
-        env["HERMES_DESKTOP_DISABLE_GPU"] = config_disable_gpu
+    if config_disable_gpu != "auto" and "VIGIL_DESKTOP_DISABLE_GPU" not in os.environ:
+        env["VIGIL_DESKTOP_DISABLE_GPU"] = config_disable_gpu
 
     source_mode = getattr(args, "source", False)
     skip_build = getattr(args, "skip_build", False)
@@ -7177,13 +7177,13 @@ def cmd_gui(args: argparse.Namespace):
             print(f"✓ Desktop {build_label} is up to date (content stamp matches)")
         else:
             print("→ Installing desktop workspace dependencies...")
-            # Put the Hermes-managed Node on PATH so npm's child scripts (which
+            # Put the Vigil-managed Node on PATH so npm's child scripts (which
             # shell out to bare `node`, e.g. electron-winstaller's
             # select-7z-arch.js) resolve it even when the parent PATH is
             # stripped — the desktop updater chain (Desktop → hermes-setup →
-            # hermes update) loses shell PATH customizations. Wrapping the
+            # vigil update) loses shell PATH customizations. Wrapping the
             # NixOS build env keeps its PYTHON hint while restoring managed Node
-            # ahead of a bare PATH (same idiom as the `hermes update` path).
+            # ahead of a bare PATH (same idiom as the `vigil update` path).
             nixos_env = with_hermes_node_path(_nixos_build_env())
             install_result = _run_npm_install_deterministic(npm, PROJECT_ROOT, capture_output=False, env=nixos_env)
             if install_result.returncode != 0:
@@ -7366,7 +7366,7 @@ def _parse_dashboard_runtime(command: str) -> tuple[str, str, int] | None:
     if any(
         pattern in command
         for pattern in (
-            "hermes dashboard",
+            "vigil dashboard",
             "vigil dashboard",
             "hermes_cli.main dashboard",
             "hermes_cli/main.py dashboard",
@@ -7376,7 +7376,7 @@ def _parse_dashboard_runtime(command: str) -> tuple[str, str, int] | None:
     elif any(
         pattern in command
         for pattern in (
-            "hermes serve",
+            "vigil serve",
             "vigil serve",
             "hermes_cli.main serve",
             "hermes_cli/main.py serve",
@@ -7634,7 +7634,7 @@ def _dashboard_cmdline_for_pid(pid: int) -> list[str] | None:
 
     Linux: reads ``/proc/<pid>/cmdline`` (NUL-separated, lossless).
     macOS: falls back to ``ps -o command=`` + shlex (best effort — quoting
-    is reconstructed, but hermes launch commands don't embed exotic args).
+    is reconstructed, but vigil launch commands don't embed exotic args).
     Windows: returns ``None``; taskkill /F gives no graceful window and the
     desktop app manages its own backend there.
     """
@@ -7673,7 +7673,7 @@ def _dashboard_cmdline_for_pid(pid: int) -> list[str] | None:
 
 
 def _respawn_dashboard_processes(commands: list[list[str]]) -> list[list[str]]:
-    """Best-effort respawn of manually-started dashboards after ``hermes update``.
+    """Best-effort respawn of manually-started dashboards after ``vigil update``.
 
     Spawns each recovered argv detached (new session, output to the profile's
     ``logs/dashboard-restart.log``).  Returns the commands that failed to
@@ -7721,7 +7721,7 @@ _warn_stale_dashboard_processes = _kill_stale_dashboard_processes
 
 
 # =========================================================================
-# Fork detection and upstream management for `hermes update`
+# Fork detection and upstream management for `vigil update`
 # =========================================================================
 
 
@@ -7754,7 +7754,7 @@ def _load_installable_optional_extras(group: str = "all") -> list[str]:
     return referenced
 
 
-# Install-scoped breadcrumbs live next to the venv (not under $HERMES_HOME)
+# Install-scoped breadcrumbs live next to the venv (not under $VIGIL_HOME)
 # because the venv is shared across profiles.
 #
 # ``.update-incomplete`` — generic core ``.[all]`` install was interrupted.
@@ -7809,7 +7809,7 @@ def _clear_lazy_refresh_incomplete_marker() -> None:
 
 
 def _recover_from_interrupted_install() -> None:
-    """Finish update work left half-done by a prior ``hermes update``.
+    """Finish update work left half-done by a prior ``vigil update``.
 
     Handles two independent breadcrumbs:
 
@@ -7831,7 +7831,7 @@ def _recover_from_interrupted_install() -> None:
 
     Output: everything — our status lines AND the streamed pip/uv install
     (which inherits fd 1) — is routed to stderr.  Launches whose stdout is a
-    protocol stream (``hermes acp`` speaks JSON-RPC on stdout) must never get
+    protocol stream (``vigil acp`` speaks JSON-RPC on stdout) must never get
     install noise on stdout.
     """
     if _pytest_owns_live_checkout(PROJECT_ROOT):
@@ -8017,7 +8017,7 @@ def _recover_core_update_marker_locked() -> None:
 
 
 def _windows_running_hermes_launcher_locked() -> bool:
-    """True when a venv ``hermes*.exe`` shim is this process or an ancestor.
+    """True when a venv ``vigil*.exe`` shim is this process or an ancestor.
 
     Best-effort: returns False when psutil is unavailable or inspection fails.
     """
@@ -8078,7 +8078,7 @@ def _run_install_with_heartbeat(
 
     Some resolvers/build backends (especially when compiling Rust/C extensions)
     can stay quiet for minutes. Emit a simple elapsed-time heartbeat so users
-    know ``hermes update`` is still progressing even if pip/uv itself is silent.
+    know ``vigil update`` is still progressing even if pip/uv itself is silent.
     """
     done = threading.Event()
     start = _time.time()
@@ -8147,12 +8147,12 @@ def _quarantine_running_hermes_exe(
     Windows allows RENAMING a mapped/running executable (the kernel tracks the
     file by handle, not path), but blocks DELETE/REPLACE while it's loaded. uv
     needs to overwrite the entry-point shims during ``pip install -e .``;
-    when ``hermes update`` runs, ``hermes.exe`` IS the live process, and uv
+    when ``vigil update`` runs, ``hermes.exe`` IS the live process, and uv
     fails with ``Access is denied. (os error 5)``.
 
     We rename live shims to ``hermes.exe.old.<unix-ms>`` first. uv then writes
     fresh shims at the original paths. The ``.old`` files are cleaned up on
-    the next hermes invocation by ``_cleanup_quarantined_exes``.
+    the next vigil invocation by ``_cleanup_quarantined_exes``.
 
     Rename can still fail when *another* process has opened the .exe without
     ``FILE_SHARE_DELETE`` — typically AV real-time scanners with transient
@@ -8298,7 +8298,7 @@ def _run_quarantined_install(
     Any ``pip install -e .`` (or ``--reinstall``) rewrites the entry-point
     shims, and on Windows the live ``hermes.exe`` is the running process —
     pip can neither delete nor overwrite it, so without quarantine the shim
-    is left missing and ``hermes`` drops off PATH. This wraps
+    is left missing and ``vigil`` drops off PATH. This wraps
     :func:`_run_install_with_heartbeat` with the same rename-out-of-the-way /
     restore-on-failure dance that the primary install path uses, so EVERY
     install that touches the shims is protected — including the
@@ -8324,7 +8324,7 @@ def _run_quarantined_install(
 def _cleanup_quarantined_exes(scripts_dir: Path | None = None) -> None:
     """Sweep ``hermes.exe.old.*`` left by prior updates.
 
-    Called early on every hermes invocation. The .old files are unlocked once
+    Called early on every vigil invocation. The .old files are unlocked once
     their owning process exited, so deletion succeeds the next run. Silent
     no-op when nothing's there or on file-locked / permission errors.
     """
@@ -8618,7 +8618,7 @@ def _install_python_dependencies_with_optional_fallback(
     # partial installs where a newly added base dep (e.g. ``pathspec``)
     # silently fails to land on top of a half-stale venv, and the only
     # symptom is a downstream subprocess crashing with ModuleNotFoundError
-    # hours later inside ``hermes update``'s desktop-rebuild or skill-sync
+    # hours later inside ``vigil update``'s desktop-rebuild or skill-sync
     # stage. Reinstall with --reinstall to force resolution if anything is
     # missing, then re-verify so the failure surfaces here instead of
     # downstream.
@@ -8656,9 +8656,9 @@ def _verify_console_scripts_installed(
 
     On Windows, ``uv pip install -e .`` can register ``hermes.exe`` in the
     wheel RECORD while the file never lands on disk — typically when the live
-    ``hermes.exe`` shim is locked during ``hermes update``, or when uv/distlib
+    ``hermes.exe`` shim is locked during ``vigil update``, or when uv/distlib
     skips a launcher write. The symptom is ``hermes-agent.exe`` and
-    ``hermes-acp.exe`` present but ``hermes.exe`` missing, so ``hermes`` drops
+    ``hermes-acp.exe`` present but ``hermes.exe`` missing, so ``vigil`` drops
     off PATH even though the install reported success (issue #52931).
 
     If any shim is missing we reinstall with ``--reinstall -e .`` under the
@@ -8794,7 +8794,7 @@ def _verify_core_dependencies_installed(
         return
 
     # Run the check inside the venv Python — sys.executable here may be the
-    # outer Python that drove ``hermes update``, not the venv we just wrote
+    # outer Python that drove ``vigil update``, not the venv we just wrote
     # to. The uv install_cmd_prefix encodes which environment we targeted
     # (either ``[uv, pip]`` with VIRTUAL_ENV in env, or
     # ``[sys.executable, -m, pip]`` for the in-process Python); resolve the
@@ -8843,7 +8843,7 @@ def _verify_core_dependencies_installed(
     #
     # Quarantine the running ``hermes.exe`` first: ``--reinstall -e .``
     # rewrites the entry-point shims, and on Windows pip can't overwrite the
-    # live launcher, which would leave ``hermes`` off PATH.
+    # live launcher, which would leave ``vigil`` off PATH.
     scripts_dir = _venv_scripts_dir() if _is_windows() else None
     repair_args = ["install", "--reinstall", "-e", "."]
     try:
@@ -8990,12 +8990,12 @@ def _resolve_node_runtime_npm() -> str | None:
 
 
 class _UpdateOutputStream:
-    """Stream wrapper used during ``hermes update`` to survive terminal loss.
+    """Stream wrapper used during ``vigil update`` to survive terminal loss.
 
     Wraps the process's original stdout/stderr so that:
 
     * Every write is also mirrored to an append-only log file
-      (``~/.hermes/logs/update.log``) that users can inspect after the
+      (``~/.vigil/logs/update.log``) that users can inspect after the
       terminal disconnects.
     * Writes to the original stream that fail with ``BrokenPipeError`` /
       ``OSError`` / ``ValueError`` (closed file) no longer cascade into
@@ -9003,7 +9003,7 @@ class _UpdateOutputStream:
       stops.
 
     Combined with ``SIGHUP -> SIG_IGN`` installed by
-    ``_install_hangup_protection``, this makes ``hermes update`` safe to
+    ``_install_hangup_protection``, this makes ``vigil update`` safe to
     run in a plain SSH session that might disconnect mid-install.
     """
 
@@ -9065,7 +9065,7 @@ class _UpdateOutputStream:
 def _install_hangup_protection(gateway_mode: bool = False):
     """Protect ``cmd_update`` from SIGHUP and broken terminal pipes.
 
-    Users commonly run ``hermes update`` in an SSH session or a terminal
+    Users commonly run ``vigil update`` in an SSH session or a terminal
     that may close mid-install.  Without protection, ``SIGHUP`` from the
     terminal kills the Python process during ``pip install`` and leaves
     the venv half-installed; the documented workaround ("use screen /
@@ -9077,14 +9077,14 @@ def _install_hangup_protection(gateway_mode: bool = False):
        across ``exec()``, so pip and git subprocesses also stop dying on
        hangup.
     2. ``sys.stdout`` / ``sys.stderr`` are wrapped to mirror output to
-       ``~/.hermes/logs/update.log`` and to silently absorb
+       ``~/.vigil/logs/update.log`` and to silently absorb
        ``BrokenPipeError`` when the terminal vanishes.
 
     ``SIGINT`` (Ctrl-C) and ``SIGTERM`` (systemd shutdown) are
     **intentionally left alone** — those are legitimate cancellation
     signals the user or OS sent on purpose.
 
-    In gateway mode (``hermes update --gateway``) the update is already
+    In gateway mode (``vigil update --gateway``) the update is already
     spawned detached from a terminal, so this function is a no-op.
 
     Returns a dict that ``cmd_update`` can pass to
@@ -9225,7 +9225,7 @@ def cmd_update(args):
 
     if getattr(args, "check", False):
         # --check honors --branch so the "any new commits?" answer matches
-        # what a subsequent `hermes update --branch=<x>` would actually pull.
+        # what a subsequent `vigil update --branch=<x>` would actually pull.
         branch = _resolve_update_branch(args)
         _cmd_update_check(
             branch=branch,
@@ -9267,7 +9267,7 @@ def cmd_update(args):
 def _coalesce_session_name_args(argv: list) -> list:
     """Join unquoted multi-word session names after -c/--continue and -r/--resume.
 
-    When a user types ``hermes -c Pokemon Agent Dev`` without quoting the
+    When a user types ``vigil -c Pokemon Agent Dev`` without quoting the
     session name, argparse sees three separate tokens.  This function merges
     them into a single argument so argparse receives
     ``['-c', 'Pokemon Agent Dev']`` instead.
@@ -9363,7 +9363,7 @@ def cmd_profile(args):
     action = getattr(args, "profile_action", None)
 
     if action is None:
-        # Bare `hermes profile` — show current profile status
+        # Bare `vigil profile` — show current profile status
         profile_name = get_active_profile_name()
         dhh = display_hermes_home()
         print(f"\nActive profile: {profile_name}")
@@ -9431,7 +9431,7 @@ def cmd_profile(args):
         try:
             set_active_profile(name)
             if name == "default":
-                print("Switched to: default (~/.hermes)")
+                print("Switched to: default (~/.vigil)")
             else:
                 print(f"Switched to: {name}")
         except (ValueError, FileNotFoundError) as e:
@@ -10049,7 +10049,7 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
     ``DashboardAuthProvider`` is registered. Rather than greet an interactive
     operator with that hard error, prompt them to set up the bundled
     username/password provider on the spot — or point them at
-    ``hermes dashboard register`` for OAuth.
+    ``vigil dashboard register`` for OAuth.
 
     No-ops (so the existing fail-closed ``SystemExit`` remains the backstop)
     when:
@@ -10107,8 +10107,8 @@ def _maybe_setup_dashboard_auth_interactively(args) -> None:
             "the dashboard again:\n"
             "    vigil dashboard register\n"
             "  It provisions a Nous Portal OAuth client and writes "
-            "HERMES_DASHBOARD_OAUTH_CLIENT_ID into ~/.hermes/.env for you.\n"
-            "  Docs: https://hermes-agent.nousresearch.com/docs/"
+            "VIGIL_DASHBOARD_OAUTH_CLIENT_ID into ~/.vigil/.env for you.\n"
+            "  Docs: https://github.com/juneauwang/vigil-agent-harness"
             "user-guide/features/web-dashboard#authentication-gated-mode"
         )
         sys.exit(0)
@@ -10205,14 +10205,14 @@ def _read_ssh_session_token_file(path: str) -> str:
         raise SystemExit("--ssh-session-token-file must be absolute")
 
     token_path = _Path(path)
-    # The Desktop client writes the token under $HOME/.hermes/desktop-ssh: a
-    # literal "~/.hermes/desktop-ssh" in apps/desktop/electron/remote-lifecycle.ts
-    # expanded against the account's $HOME, independent of HERMES_HOME and the
+    # The Desktop client writes the token under $HOME/.vigil/desktop-ssh: a
+    # literal "~/.vigil/desktop-ssh" in apps/desktop/electron/remote-lifecycle.ts
+    # expanded against the account's $HOME, independent of VIGIL_HOME and the
     # active profile. Anchor validation to that same OS-home path, NOT to
-    # get_hermes_home(): a non-default sticky profile (or any HERMES_HOME pointing
+    # get_hermes_home(): a non-default sticky profile (or any VIGIL_HOME pointing
     # elsewhere, e.g. a Docker /opt/data root) re-homes get_hermes_home() and
     # would otherwise reject every token the client legitimately wrote (#69551).
-    token_root = _Path.home() / ".hermes" / "desktop-ssh"
+    token_root = _Path.home() / ".vigil" / "desktop-ssh"
     try:
         relative = token_path.relative_to(token_root)
     except ValueError as exc:
@@ -10284,8 +10284,8 @@ def _read_ssh_session_token_file(path: str) -> str:
 def _is_electron_packaged_web_dist(path: str) -> bool:
     """True when *path* looks like an Electron-packaged renderer dist.
 
-    Packaged Desktop sets ``HERMES_WEB_DIST`` to ``.../app.asar/dist`` or
-    ``.../app.asar.unpacked/dist``. A standalone ``hermes dashboard`` that
+    Packaged Desktop sets ``VIGIL_WEB_DIST`` to ``.../app.asar/dist`` or
+    ``.../app.asar.unpacked/dist``. A standalone ``vigil dashboard`` that
     inherits that value serves the desktop frontend in the browser
     (issue #52945 — "Desktop IPC bridge is unavailable").
     """
@@ -10315,7 +10315,7 @@ def cmd_dashboard(args):
         if not pids:
             print("No vigil dashboard processes running.")
             sys.exit(0)
-        # Reuse the same SIGTERM-grace-SIGKILL path used after `hermes update`.
+        # Reuse the same SIGTERM-grace-SIGKILL path used after `vigil update`.
         _kill_stale_dashboard_processes(reason="requested via --stop")
         # _kill_stale_dashboard_processes prints outcomes itself.  Exit 0 if
         # we killed at least one, 1 if they were all unkillable.
@@ -10334,30 +10334,30 @@ def cmd_dashboard(args):
         raise SystemExit("--ssh-session-token-file is only valid with vigil serve")
 
     # ── Sanitize Desktop-inherited env that hijacks a standalone launch ─
-    # Desktop Electron spawns its backend with HERMES_DESKTOP=1 plus
-    # HERMES_WEB_DIST=<packaged app.asar[/unpacked]/dist> (and often
-    # HERMES_SERVE_HEADLESS=1 on the serve path). A shell that inherits
-    # those vars then runs `hermes dashboard` would otherwise:
+    # Desktop Electron spawns its backend with VIGIL_DESKTOP=1 plus
+    # VIGIL_WEB_DIST=<packaged app.asar[/unpacked]/dist> (and often
+    # VIGIL_SERVE_HEADLESS=1 on the serve path). A shell that inherits
+    # those vars then runs `vigil dashboard` would otherwise:
     #   - serve the desktop renderer → "Desktop IPC bridge is unavailable"
     #     (issue #52945), or
-    #   - disable the SPA via inherited HERMES_SERVE_HEADLESS.
+    #   - disable the SPA via inherited VIGIL_SERVE_HEADLESS.
     # Only strip Electron-packaged WEB_DIST contamination — caller-managed
-    # HERMES_WEB_DIST overrides (dev / custom builds) must still work.
-    # The desktop-spawned backend itself (HERMES_DESKTOP=1) keeps its dist.
-    # Intentionally headless `serve` re-sets HERMES_SERVE_HEADLESS below.
-    if os.environ.get("HERMES_DESKTOP") != "1":
-        _inherited_web_dist = os.environ.get("HERMES_WEB_DIST", "")
+    # VIGIL_WEB_DIST overrides (dev / custom builds) must still work.
+    # The desktop-spawned backend itself (VIGIL_DESKTOP=1) keeps its dist.
+    # Intentionally headless `serve` re-sets VIGIL_SERVE_HEADLESS below.
+    if os.environ.get("VIGIL_DESKTOP") != "1":
+        _inherited_web_dist = os.environ.get("VIGIL_WEB_DIST", "")
         if _is_electron_packaged_web_dist(_inherited_web_dist):
-            os.environ.pop("HERMES_WEB_DIST", None)
+            os.environ.pop("VIGIL_WEB_DIST", None)
     if not _headless_backend:
-        os.environ.pop("HERMES_SERVE_HEADLESS", None)
+        os.environ.pop("VIGIL_SERVE_HEADLESS", None)
 
     # ── Unified profile launch routing ────────────────────────────────
     # The dashboard is a MACHINE management surface: it can read/write any
     # profile via the per-request ?profile= scoping. Running one dashboard
     # per profile just fragments that (port collisions, N processes, and a
     # "which dashboard am I on?" guessing game). So when a NAMED profile
-    # launches the dashboard (`worker dashboard` → HERMES_HOME points into
+    # launches the dashboard (`worker dashboard` → VIGIL_HOME points into
     # profiles/), default to the machine dashboard:
     #   - already running → open the browser at ?profile=<name> and exit
     #   - not running     → re-exec as the machine dashboard (pinned to the
@@ -10376,7 +10376,7 @@ def cmd_dashboard(args):
         and not getattr(args, "isolated", False)
         and not getattr(args, "open_profile", "")
         # Desktop pool backends are intentionally per-profile.
-        and os.environ.get("HERMES_DESKTOP") != "1"
+        and os.environ.get("VIGIL_DESKTOP") != "1"
     ):
         url = f"http://{args.host or '127.0.0.1'}:{args.port}/?profile={_launch_profile}"
         if _dashboard_listening(args.host, args.port):
@@ -10415,27 +10415,27 @@ def cmd_dashboard(args):
         if getattr(args, "skip_build", False):
             reexec_argv.append("--skip-build")
         from tools.environments.local import build_subprocess_env
-        # Exact env preservation: HERMES_HOME is explicitly pinned to the
+        # Exact env preservation: VIGIL_HOME is explicitly pinned to the
         # machine root below — the factory must not re-inject a profile home.
         env = build_subprocess_env(scrub_secrets=False, inherit_profile_home=False)
         # Pin the child to the machine ROOT, not the launching profile's
-        # HERMES_HOME.  We must resolve the root explicitly instead of just
-        # dropping HERMES_HOME: in the Docker layout the machine root is
-        # /opt/data (set via `ENV HERMES_HOME=/opt/data`), so an unset
-        # HERMES_HOME falls back to $HOME/.hermes = /opt/data/.hermes — an
+        # VIGIL_HOME.  We must resolve the root explicitly instead of just
+        # dropping VIGIL_HOME: in the Docker layout the machine root is
+        # /opt/data (set via `ENV VIGIL_HOME=/opt/data`), so an unset
+        # VIGIL_HOME falls back to $HOME/.vigil = /opt/data/.vigil — an
         # empty, auto-seeded home where the dashboard sees only the default
         # profile and the install-method stamp is missing (so the Docker
         # update-button guard also misfires).  get_default_hermes_root()
-        # returns the root for both layouts: ~/.hermes for a standard install
+        # returns the root for both layouts: ~/.vigil for a standard install
         # and /opt/data for Docker (it strips a trailing profiles/<name>).
         # See the support report for the double-mount workaround this avoids.
         try:
             from hermes_constants import get_default_hermes_root
-            env["HERMES_HOME"] = str(get_default_hermes_root())
+            env["VIGIL_HOME"] = str(get_default_hermes_root())
         except Exception:
             # Best-effort: if root resolution fails, fall back to the prior
-            # behaviour (drop HERMES_HOME) rather than block the reroute.
-            env.pop("HERMES_HOME", None)
+            # behaviour (drop VIGIL_HOME) rather than block the reroute.
+            env.pop("VIGIL_HOME", None)
         # On Windows, os.execvpe() does not truly replace the process — it
         # spawns via CreateProcess then the parent exits.  Under Python 3.14+
         # this can crash with STATUS_ACCESS_VIOLATION (0xC0000005) when
@@ -10498,8 +10498,8 @@ def cmd_dashboard(args):
     if _headless_backend:
         # Don't build the SPA, and tell mount_spa() (read at web_server import
         # below) to disable it even if a stray dist exists. Set it first.
-        os.environ["HERMES_SERVE_HEADLESS"] = "1"
-    elif "HERMES_WEB_DIST" not in os.environ and not getattr(args, "skip_build", False):
+        os.environ["VIGIL_SERVE_HEADLESS"] = "1"
+    elif "VIGIL_WEB_DIST" not in os.environ and not getattr(args, "skip_build", False):
         if not _build_web_ui(PROJECT_ROOT / "web", fatal=True):
             sys.exit(1)
     elif getattr(args, "skip_build", False):
@@ -10507,8 +10507,8 @@ def cmd_dashboard(args):
         # Verify the dist actually exists; otherwise the server will start
         # and serve 404s with no obvious cause (issue #23817).
         _dist_root = (
-            Path(os.environ["HERMES_WEB_DIST"])
-            if "HERMES_WEB_DIST" in os.environ
+            Path(os.environ["VIGIL_WEB_DIST"])
+            if "VIGIL_WEB_DIST" in os.environ
             else PROJECT_ROOT / "hermes_cli" / "web_dist"
         )
         if not (_dist_root / "index.html").exists():
@@ -10516,9 +10516,9 @@ def cmd_dashboard(args):
             # Instead of hard-failing (issue #59288 — desktop launches with
             # --build-mode skip after a wipe of web_dist), warn and attempt
             # ONE recovery build through the normal build path. Only the
-            # default dist location is recoverable: a custom HERMES_WEB_DIST
+            # default dist location is recoverable: a custom VIGIL_WEB_DIST
             # points at a caller-managed directory the build cannot populate.
-            _recoverable = "HERMES_WEB_DIST" not in os.environ
+            _recoverable = "VIGIL_WEB_DIST" not in os.environ
             if _recoverable:
                 print(f"⚠ --skip-build was passed but no web dist found at: {_dist_root}")
                 print("  Attempting one recovery build of the web UI...")
@@ -10533,22 +10533,22 @@ def cmd_dashboard(args):
             print("  ✓ Recovery build produced a web dist")
         print(f"→ Skipping web UI build (--skip-build); using dist at {_dist_root}")
     else:
-        # HERMES_WEB_DIST is set without --skip-build: the build is skipped
+        # VIGIL_WEB_DIST is set without --skip-build: the build is skipped
         # (the env var points at a caller-managed dist), so validate it the
         # same way the --skip-build branch does — otherwise the server starts
         # and serves 404s with no obvious cause (same failure mode as #23817,
         # via the env-var path).
-        _dist_root = Path(os.environ["HERMES_WEB_DIST"]).expanduser()
+        _dist_root = Path(os.environ["VIGIL_WEB_DIST"]).expanduser()
         if not (_dist_root / "index.html").exists():
-            print(f"✗ HERMES_WEB_DIST is set but no web dist found at: {_dist_root}")
+            print(f"✗ VIGIL_WEB_DIST is set but no web dist found at: {_dist_root}")
             print("  Pre-build first:  npm install --workspace web && npm run build -w web")
-            print("  Or unset HERMES_WEB_DIST to build and use the default web UI dist.")
+            print("  Or unset VIGIL_WEB_DIST to build and use the default web UI dist.")
             sys.exit(1)
-        # Write the expanded path back: web_server reads HERMES_WEB_DIST raw
+        # Write the expanded path back: web_server reads VIGIL_WEB_DIST raw
         # at import (no expanduser), so a validated "~/dist" would otherwise
         # pass here and still 404 there.
-        os.environ["HERMES_WEB_DIST"] = str(_dist_root)
-        print(f"→ Using web dist from HERMES_WEB_DIST: {_dist_root}")
+        os.environ["VIGIL_WEB_DIST"] = str(_dist_root)
+        print(f"→ Using web dist from VIGIL_WEB_DIST: {_dist_root}")
 
     # Discover and load plugins so any DashboardAuthProvider plugin
     # (e.g. plugins/dashboard_auth/nous) registers BEFORE start_server's
@@ -10720,7 +10720,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
 
 
 # Top-level flags that take a value. Needed by ``_first_positional_argv``
-# so that in ``hermes -m gpt5 chat``, ``gpt5`` is correctly skipped as a
+# so that in ``vigil -m gpt5 chat``, ``gpt5`` is correctly skipped as a
 # flag value rather than misclassified as a subcommand. Kept in sync with
 # the top-level flags declared in ``hermes_cli/_parser.py``.
 #
@@ -10750,7 +10750,7 @@ def _first_positional_argv() -> str | None:
 
     Used by ``main()`` to decide whether plugin discovery has to run at
     argparse-setup time. Handles common invocations like
-    ``hermes -m gpt5 --provider openai chat "msg"`` by skipping the
+    ``vigil -m gpt5 --provider openai chat "msg"`` by skipping the
     values attached to known top-level flags.
 
     Does NOT fully simulate argparse — unknown ``--foo=bar`` / ``--foo
@@ -10789,7 +10789,7 @@ def _plugin_cli_discovery_needed() -> bool:
     """
     first = _first_positional_argv()
     if first is None:
-        # Bare ``hermes`` or only flags → defaults to ``chat``.
+        # Bare ``vigil`` or only flags → defaults to ``chat``.
         return False
     if first in _BUILTIN_SUBCOMMANDS:
         return False
@@ -10806,11 +10806,11 @@ def _resolve_deferred_platform_cli_command(command_name: str | None) -> None:
 
     Bundled platform plugins are cheap-registered as *deferred* entries to
     avoid importing every gateway SDK during normal startup. A platform that
-    registers a top-level ``hermes <name>`` command (e.g. Photon ->
+    registers a top-level ``vigil <name>`` command (e.g. Photon ->
     ``ctx.register_cli_command(name="photon", ...)``) only runs that side
     effect when its module is imported. On the unknown-top-level-command slow
     path, ``discover_plugins()`` records the deferred loader but does not
-    import it, so the CLI registration never happens and ``hermes photon``
+    import it, so the CLI registration never happens and ``vigil photon``
     fails with argparse ``invalid choice`` (issue #54678).
 
     Resolving only the platform whose name matches the first positional token
@@ -10860,7 +10860,7 @@ _AGENT_SUBCOMMANDS = {
 
 
 def _is_tui_chat_launch(args) -> bool:
-    return bool(getattr(args, "tui", False) or os.environ.get("HERMES_TUI") == "1")
+    return bool(getattr(args, "tui", False) or os.environ.get("VIGIL_TUI") == "1")
 
 
 def _command_has_dedicated_mcp_startup(args) -> bool:
@@ -10881,7 +10881,7 @@ def _should_background_mcp_startup(args) -> bool:
 
 def _prepare_agent_startup(args) -> None:
     """Discover plugins/MCP/hooks for commands that can run an agent turn."""
-    # --yolo: chokepoint guarantee that HERMES_YOLO_MODE is set before ANY
+    # --yolo: chokepoint guarantee that VIGIL_YOLO_MODE is set before ANY
     # plugin/tool discovery below imports tools.approval, which freezes
     # _YOLO_MODE_FROZEN at import time (PR #7994 security design).  main()'s
     # dispatch path also sets this earlier, but _prepare_agent_startup() is
@@ -10889,7 +10889,7 @@ def _prepare_agent_startup(args) -> None:
     # so the guarantee lives here where the import is actually triggered
     # (#60328).
     if getattr(args, "yolo", False):
-        os.environ["HERMES_YOLO_MODE"] = "1"
+        os.environ["VIGIL_YOLO_MODE"] = "1"
     _apply_safe_mode(args)
 
     _sub_attr, _sub_set = _AGENT_SUBCOMMANDS.get(args.command, (None, None))
@@ -10969,9 +10969,9 @@ def _prepare_agent_startup(args) -> None:
 def _apply_safe_mode(args) -> None:
     if not getattr(args, "safe_mode", False):
         return
-    os.environ["HERMES_SAFE_MODE"] = "1"
-    os.environ["HERMES_IGNORE_USER_CONFIG"] = "1"
-    os.environ["HERMES_IGNORE_RULES"] = "1"
+    os.environ["VIGIL_SAFE_MODE"] = "1"
+    os.environ["VIGIL_IGNORE_USER_CONFIG"] = "1"
+    os.environ["VIGIL_IGNORE_RULES"] = "1"
 
 
 def _set_chat_arg_defaults(args) -> None:
@@ -10993,7 +10993,7 @@ def _try_termux_fast_cli_launch() -> bool:
     """Run obvious Termux non-TUI chat/oneshot/version paths on a light parser."""
     if not _is_termux_startup_environment():
         return False
-    if os.environ.get("HERMES_TERMUX_DISABLE_FAST_CLI") == "1":
+    if os.environ.get("VIGIL_TERMUX_DISABLE_FAST_CLI") == "1":
         return False
 
     argv = sys.argv[1:]
@@ -11047,10 +11047,10 @@ def _try_termux_fast_cli_launch() -> bool:
             # Bare Termux CLI should reach the prompt first and do agent-only
             # discovery on the first submitted turn instead of before input.
             setattr(args, "compact", True)
-            os.environ["HERMES_DEFER_AGENT_STARTUP"] = "1"
-            os.environ["HERMES_FAST_STARTUP_BANNER"] = "1"
+            os.environ["VIGIL_DEFER_AGENT_STARTUP"] = "1"
+            os.environ["VIGIL_FAST_STARTUP_BANNER"] = "1"
             if getattr(args, "accept_hooks", False):
-                os.environ["HERMES_ACCEPT_HOOKS"] = "1"
+                os.environ["VIGIL_ACCEPT_HOOKS"] = "1"
         else:
             _prepare_agent_startup(args)
         cmd_chat(args)
@@ -11062,7 +11062,7 @@ def _try_termux_fast_cli_launch() -> bool:
 def _try_termux_fast_tui_launch() -> bool:
     """Launch obvious Termux TUI invocations before building every subparser.
 
-    `hermes --tui` is the hot path on phones. The full parser setup imports
+    `vigil --tui` is the hot path on phones. The full parser setup imports
     command modules for model, fallback, migrate, kanban, bundles, plugins,
     etc. even though the TUI immediately execs Node. On Termux only, parse the
     lightweight top-level/chat parser and hand off to ``cmd_chat`` when the
@@ -11300,8 +11300,8 @@ def cmd_claw(args):
 
 
 def main():
-    """Main entry point for hermes CLI."""
-    # Cosmetic: make the process show up as 'hermes' instead of 'python3.11'
+    """Main entry point for vigil CLI."""
+    # Cosmetic: make the process show up as 'vigil' instead of 'python3.11'
     # in ps/top/htop.  Non-fatal — just a nicer UX.
     _set_process_title()
 
@@ -11313,28 +11313,28 @@ def main():
         pass
 
     # Sweep stale ``hermes.exe.old.*`` quarantine files left by previous
-    # ``hermes update`` runs on Windows. Silent no-op on non-Windows or when
+    # ``vigil update`` runs on Windows. Silent no-op on non-Windows or when
     # there's nothing to clean. See ``_quarantine_running_hermes_exe``.
     try:
         _cleanup_quarantined_exes()
     except Exception:
         pass
 
-    # If the checkout changed since the last launch (hermes update, manual
+    # If the checkout changed since the last launch (vigil update, manual
     # git pull, old-updater update that predates newer clears), sweep stale
     # __pycache__ once so no process — this one's lazy imports included —
     # resolves fresh source against old bytecode. Never raises.
     _sweep_stale_bytecode_if_checkout_changed()
 
-    # Self-heal a venv left half-built by an interrupted ``hermes update``
+    # Self-heal a venv left half-built by an interrupted ``vigil update``
     # (Ctrl-C, terminal close, WSL OOM mid-install). Skip when the user is
     # *running* update — that flow writes and clears its own marker, and we
     # don't want a recovery install racing the real one. Never raises.
     #
     # The substring match is deliberately loose: argv isn't parsed yet at this
     # point, and the failure modes are asymmetric. Over-matching (e.g.
-    # ``hermes skills install update``) merely defers recovery one launch;
-    # under-matching (missing ``hermes -p work update``) would race a recovery
+    # ``vigil skills install update``) merely defers recovery one launch;
+    # under-matching (missing ``vigil -p work update``) would race a recovery
     # install against the real one. Loose wins.
     try:
         if "update" not in sys.argv[1:]:
@@ -11384,7 +11384,7 @@ def main():
             "Manage the fallback provider chain.  Fallback providers are tried "
             "in order when the primary model fails with rate-limit, overload, or "
             "connection errors.  See: "
-            "https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers"
+            "https://github.com/juneauwang/vigil-agent-harness"
         ),
     )
     fallback_subparsers = fallback_parser.add_subparsers(dest="fallback_command")
@@ -11418,7 +11418,7 @@ def main():
             "Pull API keys from an external secret manager at process startup "
             "instead of storing them in ~/.vigil/.env.  Supports Bitwarden "
             "Secrets Manager and 1Password.  See: "
-            "https://hermes-agent.nousresearch.com/docs/user-guide/secrets/"
+            "https://github.com/juneauwang/vigil-agent-harness"
         ),
     )
     secrets_subparsers = secrets_parser.add_subparsers(dest="secrets_command")
@@ -11459,7 +11459,7 @@ def main():
     # egress command — iron-proxy outbound credential-injection firewall
     # =========================================================================
     # NOTE: this is the OUTBOUND egress firewall (ironsh/iron-proxy).
-    # `hermes proxy` (defined elsewhere in this file) is a separate INBOUND
+    # `vigil proxy` (defined elsewhere in this file) is a separate INBOUND
     # OAuth-aggregator reverse proxy.  Different direction, different purpose.
     egress_parser = subparsers.add_parser(
         "egress",
@@ -11468,7 +11468,7 @@ def main():
             "Manage iron-proxy, the optional TLS-intercepting egress firewall "
             "that swaps proxy tokens for real API credentials before outbound "
             "requests leave a sandbox.  Disabled by default.  See: "
-            "https://hermes-agent.nousresearch.com/docs/user-guide/egress/iron-proxy"
+            "https://github.com/juneauwang/vigil-agent-harness"
         ),
     )
 
@@ -11477,7 +11477,7 @@ def main():
 
     def _dispatch_egress(args):  # noqa: ANN001
         # The egress subparser uses dest='egress_command' to stay disjoint
-        # from the inbound OAuth ``hermes proxy`` subparser (dest='proxy_command').
+        # from the inbound OAuth ``vigil proxy`` subparser (dest='proxy_command').
         sub = getattr(args, "egress_command", None)
         if sub is not None and hasattr(args, "func") and args.func is not _dispatch_egress:
             return args.func(args)
@@ -11751,7 +11751,7 @@ def main():
     # own argparse tree.  No hardcoded plugin commands in main.py.
     #
     # Skipped when the invocation is already targeting a known built-in
-    # subcommand — ``hermes --help``, ``hermes version``, ``hermes logs``,
+    # subcommand — ``vigil --help``, ``vigil version``, ``vigil logs``,
     # etc.  This avoids eagerly importing every bundled plugin module
     # (google.cloud.pubsub_v1, aiohttp, grpc, PIL …) which costs
     # 500-650ms on typical installs.
@@ -12138,7 +12138,7 @@ def main():
         p.add_argument(
             "--model",
             help="Only match sessions whose model name contains this substring "
-            "(e.g. 'sonnet', 'gpt-5', 'hermes')",
+            "(e.g. 'sonnet', 'gpt-5', 'vigil')",
         )
         p.add_argument(
             "--provider",
@@ -12200,7 +12200,7 @@ def main():
         nargs="?",
         help=(
             "Output path. JSONL: file path (use - for stdout, required). "
-            "md/qmd: output directory (default: <hermes home>/session-exports)"
+            "md/qmd: output directory (default: <vigil home>/session-exports)"
         ),
     )
     sessions_export.add_argument(
@@ -12568,8 +12568,8 @@ def main():
     # desktop (a.k.a. gui) command
     #
     # The canonical name is "desktop"; "gui" is kept as a deprecated alias
-    # for one release. The Hermes-Setup.exe success screen tells users to
-    # run `hermes desktop` from a terminal, so the canonical name needs
+    # for one release. The Vigil-Setup.exe success screen tells users to
+    # run `vigil desktop` from a terminal, so the canonical name needs
     # to be the one that appears in --help (argparse promotes the primary
     # name; aliases stay hidden).
     # =========================================================================
@@ -12592,7 +12592,7 @@ def main():
     # =========================================================================
     # Pre-process argv so unquoted multi-word session names after -c / -r
     # are merged into a single token before argparse sees them.
-    # e.g. ``hermes -c Pokemon Agent Dev`` → ``hermes -c 'Pokemon Agent Dev'``
+    # e.g. ``vigil -c Pokemon Agent Dev`` → ``vigil -c 'Pokemon Agent Dev'``
     # ── Container-aware routing ────────────────────────────────────────
     # When NixOS container mode is active, route ALL subcommands into
     # the managed container.  This MUST run before parse_args() so that
@@ -12617,7 +12617,7 @@ def main():
     #
     # Fix: when argv contains a token matching a known subcommand, set
     # subparsers.required=True to force deterministic routing.  If that
-    # fails (e.g. 'hermes -c model' where 'model' is consumed as the
+    # fails (e.g. 'vigil -c model' where 'model' is consumed as the
     # session name for --continue), fall back to the default behaviour.
     import io as _io
 
@@ -12667,18 +12667,18 @@ def main():
         cmd_version(args)
         return
 
-    # --yolo: set HERMES_YOLO_MODE *before* plugin discovery.  The call to
+    # --yolo: set VIGIL_YOLO_MODE *before* plugin discovery.  The call to
     # _prepare_agent_startup() below triggers discover_plugins() → tool
     # imports, and tools.approval freezes _YOLO_MODE_FROZEN at module
     # import time (PR #7994, security hardening against prompt-injection).
     # If the env var is set only later (e.g. inside cmd_chat), the frozen
     # value is already False and --yolo silently does nothing.
     if getattr(args, "yolo", False):
-        os.environ["HERMES_YOLO_MODE"] = "1"
+        os.environ["VIGIL_YOLO_MODE"] = "1"
 
     # Discover Python plugins and register shell hooks once, before any
     # command that can fire lifecycle hooks.  Both are idempotent; gated
-    # so introspection/management commands (hermes hooks list, cron
+    # so introspection/management commands (vigil hooks list, cron
     # list, gateway status, mcp add, ...) don't pay discovery cost or
     # trigger consent prompts for hooks the user is still inspecting.
     _prepare_agent_startup(args)
@@ -12729,7 +12729,7 @@ def main():
 
     # Execute the command.  Propagate the handler's return code as the
     # process exit code so subcommands that signal failure (e.g.
-    # ``hermes egress start`` refusing when credential_source=bitwarden
+    # ``vigil egress start`` refusing when credential_source=bitwarden
     # is misconfigured) actually exit non-zero.  Handlers that return
     # None are treated as success (exit 0).
     if hasattr(args, "func"):

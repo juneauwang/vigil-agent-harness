@@ -46,7 +46,7 @@ export function percentToZoomLevel(percent) {
  * order. Every path that changes zoom (user action, restore-on-load, lifecycle
  * re-assert) funnels through here so the settings UI Scale control can never
  * drift from the actually-applied level — the bug where restore set the level
- * but forgot to emit 'hermes:zoom:changed', leaving the control stuck at 100%.
+ * but forgot to emit 'vigil:zoom:changed', leaving the control stuck at 100%.
  * Returns the clamped level so callers can persist it.
  */
 export function applyZoomLevel(webContents, level) {

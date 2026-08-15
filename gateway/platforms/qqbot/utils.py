@@ -27,11 +27,11 @@ def build_user_agent() -> str:
 
     Format::
 
-        QQBotAdapter/<qqbot_version> (Python/<py_version>; <os>; Hermes/<hermes_version>)
+        QQBotAdapter/<qqbot_version> (Python/<py_version>; <os>; Vigil/<hermes_version>)
 
     Example::
 
-        QQBotAdapter/1.0.0 (Python/3.11.15; darwin; Hermes/0.9.0)
+        QQBotAdapter/1.0.0 (Python/3.11.15; darwin; Vigil/0.9.0)
     """
     py_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     os_name = platform.system().lower()

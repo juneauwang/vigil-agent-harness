@@ -1,4 +1,4 @@
-"""Hermes gateway monitoring.
+"""Vigil gateway monitoring.
 
 Service health monitoring plus redacted operational diagnostics for the
 gateway daemon, exported over OTLP to an operator-configured endpoint.

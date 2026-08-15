@@ -399,7 +399,7 @@ unexpected exit). For each session updated within the last 120 seconds:
 
 ### Stuck-Loop Detection (`_suspend_stuck_loop_sessions`)
 
-Counts consecutive restarts via a JSON file (`{HERMES_HOME}/restart_counts.json`). If a
+Counts consecutive restarts via a JSON file (`{VIGIL_HOME}/restart_counts.json`). If a
 session has been active across 3+ consecutive restarts, it's auto-suspended so the user
 gets a clean slate.
 
@@ -435,7 +435,7 @@ Written at the end of a graceful shutdown. On next startup:
   drained, so no sessions are stuck.
 - Then delete the marker.
 
-This prevents unwanted auto-resets after `hermes update`, `hermes gateway restart`,
+This prevents unwanted auto-resets after `vigil update`, `vigil gateway restart`,
 or `/restart`.
 
 ---

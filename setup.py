@@ -2,7 +2,7 @@
 setup.py — wheel/sdist build guard.
 
 pip/PyPI and Homebrew are no longer supported distribution methods for
-Hermes Agent (see website/docs/getting-started/platform-support.md). The
+Vigil Agent (see website/docs/getting-started/platform-support.md). The
 wheel would ship without bundled assets (locales, skills, optional-mcps,
 web_dist, tui_dist, plugin manifests) since those are resolved at runtime
 via env-var overrides set by the nix wrapper or the source-checkout layout.
@@ -14,9 +14,9 @@ these commands internally, so the guard fires for ``uv build``,
 ``pip wheel``, ``python -m build``, and direct ``setup.py`` invocations
 alike unless one of the two sanctioned build flags is set:
 
-- ``HERMES_NIX_BUILD=1`` — uv2nix calls ``setuptools.build_meta.build_wheel``
+- ``VIGIL_NIX_BUILD=1`` — uv2nix calls ``setuptools.build_meta.build_wheel``
   (→ ``bdist_wheel``) inside a Nix build sandbox; ``nix/python.nix`` sets
-  this on the Hermes package derivation.
+  this on the Vigil package derivation.
 - ``VIGIL_BUILD=1`` — Vigil ships on PyPI as ``vigil-agent-harness``
   (v0.1.1+, 2026-08-09 发布修复); the release workflow runs
   ``VIGIL_BUILD=1 python -m build`` so the wheel ships the packaged
@@ -32,20 +32,20 @@ import os
 from setuptools import setup
 from setuptools.command.sdist import sdist
 
-_IN_NIX_BUILD = os.environ.get("HERMES_NIX_BUILD") == "1"
+_IN_NIX_BUILD = os.environ.get("VIGIL_NIX_BUILD") == "1"
 _IN_VIGIL_BUILD = os.environ.get("VIGIL_BUILD") == "1"
 _ALLOW_BUILD = _IN_NIX_BUILD or _IN_VIGIL_BUILD
 
 _BLOCK_MESSAGE = (
     "Building wheels or sdists for hermes-agent is not supported.\n"
-    "Hermes is distributed via the shell installer, Docker image, or Nix.\n"
-    "See: https://hermes-agent.nousresearch.com/docs/getting-started/installation\n"
+    "Vigil is distributed via the shell installer, Docker image, or Nix.\n"
+    "See: https://github.com/juneauwang/vigil-agent-harness"
     "\n"
     "If you are developing, use an editable install instead:\n"
     "  uv sync          # or: uv pip install -e .\n"
     "\n"
     "If you are building with Nix (uv2nix), this error should not fire —\n"
-    "the Hermes Nix derivation sets HERMES_NIX_BUILD=1. If it does, file a bug."
+    "the Vigil Nix derivation sets VIGIL_NIX_BUILD=1. If it does, file a bug."
 )
 
 

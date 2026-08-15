@@ -100,7 +100,7 @@ declare global {
       probeConnectionConfig: (remoteUrl: string) => Promise<DesktopConnectionProbeResult>
       oauthLoginConnectionConfig: (remoteUrl: string) => Promise<DesktopOauthLoginResult>
       oauthLogoutConnectionConfig: (remoteUrl?: string) => Promise<DesktopOauthLogoutResult>
-      // Hermes Cloud: one portal login powers discovery + silent per-agent
+      // Vigil Cloud: one portal login powers discovery + silent per-agent
       // sign-in (cloud-auto-discovery Phase 3).
       cloud: {
         status: () => Promise<DesktopCloudStatus>
@@ -112,7 +112,7 @@ declare global {
       profile: {
         get: () => Promise<DesktopActiveProfile>
         // Persists the desktop's profile choice and relaunches the local
-        // backend under the new HERMES_HOME (reloads the window). Pass null to
+        // backend under the new VIGIL_HOME (reloads the window). Pass null to
         // clear the preference.
         set: (name: string | null) => Promise<DesktopActiveProfile>
       }
@@ -176,7 +176,7 @@ declare global {
       revealPath?: (path: string) => Promise<boolean>
       // Open a DIRECTORY (created if missing) in the OS file manager.
       openDir?: (path: string) => Promise<{ ok: boolean; error?: string }>
-      // Local Desktop runtime-plugin root (<HERMES_HOME>/desktop-plugins),
+      // Local Desktop runtime-plugin root (<VIGIL_HOME>/desktop-plugins),
       // resolved by Electron independently of the connected backend (#66899).
       // Created on demand; returns the normalized absolute path.
       desktopPluginsRoot?: () => Promise<string>
@@ -413,7 +413,7 @@ export interface DesktopUpdateApplyResult {
   error?: string
   message?: string
   /** True when no staged updater exists (CLI install) and the user should run
-   *  `hermes update` themselves. `command` is the exact line to run. */
+   *  `vigil update` themselves. `command` is the exact line to run. */
   manual?: boolean
   command?: string
   hermesRoot?: string
@@ -515,7 +515,7 @@ export interface DesktopActiveProfile {
 
 export interface DesktopConnectionConfig {
   envOverride: boolean
-  // The saved connection mode. 'cloud' is a Hermes Cloud connection: it carries
+  // The saved connection mode. 'cloud' is a Vigil Cloud connection: it carries
   // a remote-shaped block (remoteUrl = the selected agent's dashboardUrl,
   // remoteAuthMode 'oauth') but is remembered as cloud so settings reopens into
   // the cloud picker. Resolution treats cloud exactly as remote
@@ -529,7 +529,7 @@ export interface DesktopConnectionConfig {
   remoteTokenPreview: string | null
   remoteTokenSet: boolean
   remoteUrl: string
-  // For a 'cloud' connection: the persisted Hermes Cloud org (slug or id) the
+  // For a 'cloud' connection: the persisted Vigil Cloud org (slug or id) the
   // connected instance was discovered under, so Settings → Gateway can reopen
   // into that org. Empty string for remote/local.
   cloudOrg: string
@@ -549,7 +549,7 @@ export interface DesktopConnectionConfigInput {
   remoteAuthMode?: 'oauth' | 'token'
   remoteToken?: string
   remoteUrl?: string
-  // For a 'cloud' connection: the selected Hermes Cloud org (slug or id) to
+  // For a 'cloud' connection: the selected Vigil Cloud org (slug or id) to
   // persist so Settings can reopen into it. Ignored for remote/local modes.
   cloudOrg?: string
   sshHost?: string
@@ -623,18 +623,18 @@ export interface DesktopOauthLogoutResult {
   connected: boolean
 }
 
-// --- Hermes Cloud (cloud-auto-discovery Phase 3) ---
+// --- Vigil Cloud (cloud-auto-discovery Phase 3) ---
 
 export interface DesktopCloudStatus {
   // The portal base URL the desktop talks to (default or env-overridden).
   portalBaseUrl: string
   // Whether the OAuth partition holds a live Nous portal (Privy) session — the
   // portal authenticates via Privy, so this reflects the privy-token cookie, NOT
-  // the hermes gateway session cookies. See cookiesHavePrivySession.
+  // the vigil gateway session cookies. See cookiesHavePrivySession.
   signedIn: boolean
 }
 
-// A discovered Hermes Cloud agent — the trimmed DTO from NAS GET /api/agents.
+// A discovered Vigil Cloud agent — the trimmed DTO from NAS GET /api/agents.
 export interface DesktopCloudAgent {
   id: string
   name: string

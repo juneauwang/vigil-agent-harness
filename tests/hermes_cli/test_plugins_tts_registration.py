@@ -1,7 +1,7 @@
 """Tests for PluginContext.register_tts_provider() (issue #30398).
 
 Exercises the plugin context hook end-to-end: drops a fake plugin into
-``$HERMES_HOME/plugins/``, runs ``PluginManager().discover_and_load()``,
+``$VIGIL_HOME/plugins/``, runs ``PluginManager().discover_and_load()``,
 and asserts the registration result.
 
 Mirrors the structure of
@@ -64,7 +64,7 @@ class TestRegisterTTSProvider:
         from agent import tts_registry
         tts_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["VIGIL_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "my-tts-plugin",
@@ -97,7 +97,7 @@ class TestRegisterTTSProvider:
         from agent import tts_registry
         tts_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["VIGIL_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "bad-tts-plugin",
@@ -127,7 +127,7 @@ class TestRegisterTTSProvider:
         from agent import tts_registry
         tts_registry._reset_for_tests()
 
-        hermes_home = Path(os.environ["HERMES_HOME"])
+        hermes_home = Path(os.environ["VIGIL_HOME"])
         _write_plugin(
             hermes_home / "plugins",
             "shadow-tts-plugin",

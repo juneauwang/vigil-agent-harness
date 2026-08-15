@@ -1,5 +1,5 @@
 """
-A2A client tools — let the Hermes agent talk to *other* agents as a peer.
+A2A client tools — let the Vigil agent talk to *other* agents as a peer.
 
 Tools (registered in the ``a2a`` toolset):
   - a2a_discover(url)         -> fetch + summarize a peer's Agent Card
@@ -340,7 +340,7 @@ def a2a_history(args: dict, **_: Any) -> str:
     """Recall a persisted A2A conversation by context_id.
 
     This is how prior A2A exchanges survive compaction/restarts: every turn is
-    written to ~/.hermes/a2a_conversations/<context>.jsonl and can be reloaded
+    written to ~/.vigil/a2a_conversations/<context>.jsonl and can be reloaded
     here.
     """
     context_id = str(args.get("context_id") or args.get("contextId") or "").strip()

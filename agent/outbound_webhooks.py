@@ -8,8 +8,8 @@ endpoints — CI systems, dashboards, other agents — with zero changes to
 call sites and zero polling on the receiving end.
 
 This is the outbound mirror of the inbound webhook platform
-(``gateway/platforms/webhook.py``): inbound wakes Hermes when the world
-changes; outbound tells the world when Hermes does something.
+(``gateway/platforms/webhook.py``): inbound wakes Vigil when the world
+changes; outbound tells the world when Vigil does something.
 
 Design notes
 ------------
@@ -19,28 +19,28 @@ Design notes
   enqueue, and return ``None`` immediately.  Outbound targets can never
   block a tool call, inject context, or otherwise influence agent flow.
 * Payloads are signed with HMAC-SHA256 (GitHub-style
-  ``X-Hermes-Signature-256: sha256=<hexdigest>`` over the raw body) when
+  ``X-Vigil-Signature-256: sha256=<hexdigest>`` over the raw body) when
   a secret is configured.  Receivers verify exactly like they verify
   GitHub webhooks.
 * No consent prompt: unlike shell hooks, an outbound target executes no
   code on this machine — it POSTs JSON to a URL the user themselves put
-  in config.  ``HERMES_SAFE_MODE=1`` still skips registration, matching
+  in config.  ``VIGIL_SAFE_MODE=1`` still skips registration, matching
   plugins / MCP / shell hooks.
 * Registration is idempotent — safe to invoke from both the CLI entry
   point and the gateway entry point.
 
-Config schema (``~/.hermes/config.yaml``)::
+Config schema (``~/.vigil/config.yaml``)::
 
     hooks:
       outbound:
         - url: https://ci.example.com/hermes-events
           events: [on_session_end, subagent_stop]
           # secret literal (discouraged) or env var name (preferred):
-          secret_env: HERMES_OUTBOUND_WEBHOOK_SECRET
+          secret_env: VIGIL_OUTBOUND_WEBHOOK_SECRET
           # optional regex, honored for pre/post_tool_call only:
           matcher: "terminal|delegate_task"
           timeout: 10       # per-attempt seconds, clamped to [1, 60]
-          name: ci-notify   # optional label for logs / `hermes hooks list`
+          name: ci-notify   # optional label for logs / `vigil hooks list`
 
 Wire format (POST body)::
 
@@ -59,9 +59,9 @@ Headers::
 
     Content-Type:            application/json
     User-Agent:              Hermes-Agent-Outbound-Webhook
-    X-Hermes-Event:          <hook event name>
-    X-Hermes-Delivery:       <delivery_id>
-    X-Hermes-Signature-256:  sha256=<hmac hexdigest>   # only when secret set
+    X-Vigil-Event:          <hook event name>
+    X-Vigil-Delivery:       <delivery_id>
+    X-Vigil-Signature-256:  sha256=<hmac hexdigest>   # only when secret set
 """
 
 from __future__ import annotations
@@ -168,8 +168,8 @@ def register_from_config(cfg: Optional[Dict[str, Any]]) -> List[WebhookTarget]:
 
     from utils import env_var_enabled
 
-    if env_var_enabled("HERMES_SAFE_MODE"):
-        logger.info("HERMES_SAFE_MODE=1 — outbound webhook registration skipped")
+    if env_var_enabled("VIGIL_SAFE_MODE"):
+        logger.info("VIGIL_SAFE_MODE=1 — outbound webhook registration skipped")
         return []
 
     hooks_cfg = cfg.get("hooks")
@@ -209,7 +209,7 @@ def register_from_config(cfg: Optional[Dict[str, Any]]) -> List[WebhookTarget]:
 
 def iter_configured_targets(cfg: Optional[Dict[str, Any]]) -> List[WebhookTarget]:
     """Parse ``hooks.outbound`` without registering anything.
-    Used by ``hermes hooks list``."""
+    Used by ``vigil hooks list``."""
     if not isinstance(cfg, dict):
         return []
     hooks_cfg = cfg.get("hooks")
@@ -407,7 +407,7 @@ def _serialize_payload(
     """Render the POST body.  Same top-level shape as shell hooks' stdin
     (documented in :mod:`agent.shell_hooks`), plus delivery metadata.
 
-    ``delivery_id`` is shared with the ``X-Hermes-Delivery`` header so
+    ``delivery_id`` is shared with the ``X-Vigil-Delivery`` header so
     receivers can dedupe on either — and since it (plus ``timestamp``)
     lives inside the HMAC-signed body, it doubles as replay protection.
     """
@@ -437,14 +437,14 @@ def _build_delivery(
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "Hermes-Agent-Outbound-Webhook",
-        "X-Hermes-Event": event,
-        "X-Hermes-Delivery": delivery_id,
+        "X-Vigil-Event": event,
+        "X-Vigil-Delivery": delivery_id,
     }
     if target.secret:
         digest = hmac.new(
             target.secret.encode("utf-8"), body, hashlib.sha256
         ).hexdigest()
-        headers["X-Hermes-Signature-256"] = f"sha256={digest}"
+        headers["X-Vigil-Signature-256"] = f"sha256={digest}"
     return {
         "url": target.url,
         "label": target.label,

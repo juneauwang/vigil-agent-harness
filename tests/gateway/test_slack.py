@@ -195,7 +195,7 @@ def adapter():
 
 @pytest.fixture(autouse=True)
 def _redirect_cache(tmp_path, monkeypatch):
-    """Point document cache to tmp_path so tests don't touch ~/.hermes."""
+    """Point document cache to tmp_path so tests don't touch ~/.vigil."""
     monkeypatch.setattr(
         "gateway.platforms.base.DOCUMENT_CACHE_DIR", tmp_path / "doc_cache"
     )
@@ -372,7 +372,7 @@ class TestAppMentionHandler:
         assert "assistant_thread_started" in registered_events
         assert "assistant_thread_context_changed" in registered_events
         # Slack slash commands are registered via a single regex matcher
-        # covering every COMMAND_REGISTRY entry (e.g. /hermes, /btw, /stop,
+        # covering every COMMAND_REGISTRY entry (e.g. /vigil, /btw, /stop,
         # /model, ...) so users get native-slash parity with Discord and
         # Telegram. Verify the regex matches the key expected slashes.
         assert (
@@ -551,7 +551,7 @@ class TestSlackConnectCleanup:
     async def test_disconnect_closes_workspace_clients_and_clears_runtime_state(self):
         """Regression for #51465: shutdown must close Slack WebClients.
 
-        ``hermes gateway run --replace`` takes the old process through the
+        ``vigil gateway run --replace`` takes the old process through the
         normal adapter.disconnect() path. If Slack leaves AsyncWebClient
         instances open there, aiohttp logs ``Unclosed client session`` while
         the old gateway exits after SIGTERM.
@@ -3094,7 +3094,7 @@ class TestSlashCommands:
 
     # ------------------------------------------------------------------
     # Native slash commands — /btw, /stop, /model, ... dispatched directly
-    # instead of as /hermes subcommands. This is the Discord/Telegram parity
+    # instead of as /vigil subcommands. This is the Discord/Telegram parity
     # fix: the slash name itself becomes the command.
     # ------------------------------------------------------------------
 
@@ -3138,9 +3138,9 @@ class TestSlashCommands:
 
     @pytest.mark.asyncio
     async def test_legacy_hermes_prefix_still_works(self, adapter):
-        """Backward compat: /hermes btw foo must still route to /btw foo.
+        """Backward compat: /vigil btw foo must still route to /btw foo.
 
-        Old workspace manifests only declared /hermes as the single slash.
+        Old workspace manifests only declared /vigil as the single slash.
         After users refresh their manifest they get /btw natively, but the
         legacy form must keep working during the transition.
         """
@@ -4547,7 +4547,7 @@ class TestSlackUserAgent:
 
     Slack platform partners (analytics, abuse-detection, etc.) attribute
     outbound API traffic by ``User-Agent``. The Slack adapter sets
-    ``user_agent_prefix=_HERMES_SLACK_USER_AGENT_PREFIX`` on every
+    ``user_agent_prefix=_VIGIL_SLACK_USER_AGENT_PREFIX`` on every
     ``AsyncWebClient`` it builds and threads the primary client into
     ``AsyncApp(client=...)`` so the prefix sticks on the app-owned client too.
     Pin both behaviors at the actual call sites — a future refactor that
@@ -4557,4 +4557,4 @@ class TestSlackUserAgent:
     def test_hermes_slack_user_agent_prefix_format(self):
         """Module constant matches the HermesAgent/<version> convention used
         elsewhere in the codebase for platform-partner attribution."""
-        assert _slack_mod._HERMES_SLACK_USER_AGENT_PREFIX.startswith("HermesAgent/")
+        assert _slack_mod._VIGIL_SLACK_USER_AGENT_PREFIX.startswith("HermesAgent/")

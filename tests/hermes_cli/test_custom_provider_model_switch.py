@@ -1,4 +1,4 @@
-"""Tests that `hermes model` always shows the model selection menu for custom
+"""Tests that `vigil model` always shows the model selection menu for custom
 providers, even when a model is already saved.
 
 Regression test for the bug where _model_flow_named_custom() returned
@@ -13,17 +13,17 @@ import pytest
 
 @pytest.fixture
 def config_home(tmp_path, monkeypatch):
-    """Isolated HERMES_HOME with a minimal config."""
+    """Isolated VIGIL_HOME with a minimal config."""
     home = tmp_path / "hermes"
     home.mkdir()
     config_yaml = home / "config.yaml"
     config_yaml.write_text("model: old-model\ncustom_providers: []\n")
     env_file = home / ".env"
     env_file.write_text("")
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.delenv("HERMES_MODEL", raising=False)
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.delenv("VIGIL_MODEL", raising=False)
     monkeypatch.delenv("LLM_MODEL", raising=False)
-    monkeypatch.delenv("HERMES_INFERENCE_PROVIDER", raising=False)
+    monkeypatch.delenv("VIGIL_INFERENCE_PROVIDER", raising=False)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     return home
@@ -287,13 +287,13 @@ class TestCustomProviderModelSwitch:
             "  crs-henkee:\n"
             "    name: CRS Henkee\n"
             "    base_url: http://127.0.0.1:3000/api/v1\n"
-            "    key_env: HERMES_CRS_HENKEE_KEY\n"
+            "    key_env: VIGIL_CRS_HENKEE_KEY\n"
             "    transport: anthropic_messages\n"
             "    model: claude-opus-4-7\n"
             "    default_model: claude-opus-4-7\n"
             "custom_providers: []\n"
         )
-        monkeypatch.setenv("HERMES_CRS_HENKEE_KEY", "cr_live_secret_xyz")
+        monkeypatch.setenv("VIGIL_CRS_HENKEE_KEY", "cr_live_secret_xyz")
 
         # provider_info as built by _named_custom_provider_map for a
         # ``providers:`` entry that has key_env but no inline api_key.
@@ -301,7 +301,7 @@ class TestCustomProviderModelSwitch:
             "name": "CRS Henkee",
             "base_url": "http://127.0.0.1:3000/api/v1",
             "api_key": "",
-            "key_env": "HERMES_CRS_HENKEE_KEY",
+            "key_env": "VIGIL_CRS_HENKEE_KEY",
             "model": "claude-opus-4-7",
             "api_mode": "anthropic_messages",
             "provider_key": "crs-henkee",
@@ -331,13 +331,13 @@ class TestCustomProviderModelSwitch:
         assert "api_key" not in entry, (
             f"providers.crs-henkee gained an api_key field: {entry.get('api_key')!r}"
         )
-        assert entry["key_env"] == "HERMES_CRS_HENKEE_KEY"
+        assert entry["key_env"] == "VIGIL_CRS_HENKEE_KEY"
         assert entry["default_model"] == "claude-opus-4-7"
 
         # And the plaintext secret must never appear anywhere on disk.
         assert "cr_live_secret_xyz" not in saved_text
         # The synthesized template is also redundant here — key_env owns it.
-        assert "${HERMES_CRS_HENKEE_KEY}" not in saved_text
+        assert "${VIGIL_CRS_HENKEE_KEY}" not in saved_text
 
     @pytest.mark.parametrize(
         "stored_provider",
@@ -401,24 +401,24 @@ class TestCustomProviderModelSwitch:
             "  crs-henkee:\n"
             "    name: CRS Henkee\n"
             "    base_url: http://127.0.0.1:3000/api/v1\n"
-            "    api_key: ${HERMES_CRS_HENKEE_KEY}\n"
-            "    key_env: HERMES_CRS_HENKEE_KEY\n"
+            "    api_key: ${VIGIL_CRS_HENKEE_KEY}\n"
+            "    key_env: VIGIL_CRS_HENKEE_KEY\n"
             "    transport: anthropic_messages\n"
             "    model: claude-opus-4-7\n"
             "    default_model: claude-opus-4-7\n"
             "custom_providers: []\n"
         )
-        monkeypatch.setenv("HERMES_CRS_HENKEE_KEY", "cr_live_secret_xyz")
+        monkeypatch.setenv("VIGIL_CRS_HENKEE_KEY", "cr_live_secret_xyz")
 
         provider_info = {
             "name": "CRS Henkee",
             "base_url": "http://127.0.0.1:3000/api/v1",
             "api_key": "cr_live_secret_xyz",  # expanded by load_config
-            "key_env": "HERMES_CRS_HENKEE_KEY",
+            "key_env": "VIGIL_CRS_HENKEE_KEY",
             "model": "claude-opus-4-7",
             "api_mode": "anthropic_messages",
             "provider_key": "crs-henkee",
-            "api_key_ref": "${HERMES_CRS_HENKEE_KEY}",  # raw template preserved
+            "api_key_ref": "${VIGIL_CRS_HENKEE_KEY}",  # raw template preserved
         }
 
         with patch(
@@ -435,12 +435,12 @@ class TestCustomProviderModelSwitch:
         entry = saved["providers"]["crs-henkee"]
         # Existing api_key template must survive (the resolved secret must not
         # clobber it via _preserve_env_ref_templates).
-        assert entry["api_key"] == "${HERMES_CRS_HENKEE_KEY}"
+        assert entry["api_key"] == "${VIGIL_CRS_HENKEE_KEY}"
         assert "cr_live_secret_xyz" not in saved_text
 
 
 class TestCustomProviderDiscoverModels:
-    """#18726: honor ``discover_models: false`` in the terminal ``hermes model``
+    """#18726: honor ``discover_models: false`` in the terminal ``vigil model``
     named-custom flow so the picker shows the configured ``models:`` subset
     instead of the endpoint's full live catalog."""
 

@@ -2,7 +2,7 @@
 // Patch spectrum-ts' iMessage inbound mapper until upstream preserves mixed
 // text + attachment Apple events. The mapper returns only
 // buildAttachmentMessage(...) whenever attachments are present, which drops
-// `message.content.text` before Hermes can see it. We rewrite the two inbound
+// `message.content.text` before Vigil can see it. We rewrite the two inbound
 // mappers — `rebuildFromAppleMessage` (used by `space.getMessage`) and
 // `toInboundMessages` (used by the live stream) — so a bubble carrying both
 // text and attachment(s) surfaces as a group whose first child is the typed

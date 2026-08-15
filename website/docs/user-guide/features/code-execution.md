@@ -6,14 +6,14 @@ description: "Programmatic Python execution with RPC tool access — collapse mu
 
 # Code Execution (Programmatic Tool Calling)
 
-The `execute_code` tool lets the agent write Python scripts that call Hermes tools programmatically, collapsing multi-step workflows into a single LLM turn. The script runs in a child process on the agent host, communicating with Hermes over a Unix domain socket RPC.
+The `execute_code` tool lets the agent write Python scripts that call Vigil tools programmatically, collapsing multi-step workflows into a single LLM turn. The script runs in a child process on the agent host, communicating with Vigil over a Unix domain socket RPC.
 
 ## How It Works
 
 1. The agent writes a Python script using `from hermes_tools import ...`
-2. Hermes generates a `hermes_tools.py` stub module with RPC functions
-3. Hermes opens a Unix domain socket and starts an RPC listener thread
-4. The script runs in a child process — tool calls travel over the socket back to Hermes
+2. Vigil generates a `hermes_tools.py` stub module with RPC functions
+3. Vigil opens a Unix domain socket and starts an RPC listener thread
+4. The script runs in a child process — tool calls travel over the socket back to Vigil
 5. Only the script's `print()` output is returned to the LLM; intermediate tool results never enter the context window
 
 ```python
@@ -128,19 +128,19 @@ print(json.dumps(report, indent=2))
 
 ## Execution Mode
 
-`execute_code` has two execution modes controlled by `code_execution.mode` in `~/.hermes/config.yaml`:
+`execute_code` has two execution modes controlled by `code_execution.mode` in `~/.vigil/config.yaml`:
 
 | Mode | Working directory | Python interpreter |
 |------|-------------------|--------------------|
-| **`project`** (default) | The session's working directory (same as `terminal()`) | Active `VIRTUAL_ENV` / `CONDA_PREFIX` python, falling back to Hermes's own python |
-| `strict` | A temp staging directory isolated from the user's project | `sys.executable` (Hermes's own python) |
+| **`project`** (default) | The session's working directory (same as `terminal()`) | Active `VIRTUAL_ENV` / `CONDA_PREFIX` python, falling back to Vigil's own python |
+| `strict` | A temp staging directory isolated from the user's project | `sys.executable` (Vigil's own python) |
 
 **When to leave it on `project`:** you want `import pandas`, `from my_project import foo`, or relative paths like `open(".env")` to work the same way they do in `terminal()`. This is almost always what you want.
 
 **When to flip to `strict`:** you need maximum reproducibility — you want the same interpreter every session regardless of which venv the user activated, and you want scripts quarantined from the project tree (no risk of accidentally reading project files through a relative path).
 
 ```yaml
-# ~/.hermes/config.yaml
+# ~/.vigil/config.yaml
 code_execution:
   mode: project   # or "strict"
 ```
@@ -167,7 +167,7 @@ Switching mode changes where scripts run and which interpreter runs them, not wh
 All limits are configurable via `config.yaml`:
 
 ```yaml
-# In ~/.hermes/config.yaml
+# In ~/.vigil/config.yaml
 code_execution:
   mode: project      # project (default) | strict
   timeout: 300       # Max seconds per script (default: 300)
@@ -219,28 +219,28 @@ terminal:
 
 See the [Security guide](/user-guide/security#environment-variable-passthrough) for full details.
 
-### `HERMES_*` variables in the child
+### `VIGIL_*` variables in the child
 
-The child process receives only a small, fixed set of operational `HERMES_*`
+The child process receives only a small, fixed set of operational `VIGIL_*`
 variables by exact name:
 
-- `HERMES_HOME`
-- `HERMES_PROFILE`
-- `HERMES_CONFIG`
-- `HERMES_ENV`
+- `VIGIL_HOME`
+- `VIGIL_PROFILE`
+- `VIGIL_CONFIG`
+- `VIGIL_ENV`
 
-(plus `HERMES_RPC_DIR` / `HERMES_RPC_SOCKET` / `TZ` / `HOME`, which Hermes
+(plus `VIGIL_RPC_DIR` / `VIGIL_RPC_SOCKET` / `TZ` / `HOME`, which Vigil
 injects explicitly so the RPC channel works).
 
 :::note Behavior change
-Earlier versions passed **any** variable whose name began with `HERMES_`
+Earlier versions passed **any** variable whose name began with `VIGIL_`
 through to the child. That broad prefix was removed for security hardening: it
-could leak `HERMES_*`-named configuration that doesn't match a secret substring
-(for example `HERMES_BASE_URL`, `HERMES_KANBAN_DB`, or a `HERMES_*_WEBHOOK`
+could leak `VIGIL_*`-named configuration that doesn't match a secret substring
+(for example `VIGIL_BASE_URL`, `VIGIL_KANBAN_DB`, or a `VIGIL_*_WEBHOOK`
 endpoint) into arbitrary sandboxed code.
 
 If an `execute_code` script — or a repo/plugin module it imports at import time
-— relied on a `HERMES_*` variable outside the four operational names above, it
+— relied on a `VIGIL_*` variable outside the four operational names above, it
 will now find that variable **unset** in the child. The drop is intentional,
 not a bug.
 :::
@@ -256,8 +256,8 @@ be re-allowed this way):
    ```yaml
    terminal:
      env_passthrough:
-       - HERMES_KANBAN_DB
-       - HERMES_BASE_URL
+       - VIGIL_KANBAN_DB
+       - VIGIL_BASE_URL
    ```
 
 2. **Per-skill, in the skill's frontmatter** — declare it so it is registered
@@ -265,17 +265,17 @@ be re-allowed this way):
 
    ```yaml
    required_environment_variables:
-     - HERMES_KANBAN_DB
+     - VIGIL_KANBAN_DB
    ```
 
-**Diagnosing it.** When the child drops one or more non-allowlisted `HERMES_*`
-variables, Hermes emits a one-line `debug` log naming them and pointing at the
-`env_passthrough` escape hatch. Run with debug logging (`hermes logs --level
-DEBUG`, or check `~/.hermes/logs/agent.log`) and look for
-`execute_code: dropped N non-allowlisted HERMES_* var(s)` if a script behaves
-as though a `HERMES_*` variable is missing.
+**Diagnosing it.** When the child drops one or more non-allowlisted `VIGIL_*`
+variables, Vigil emits a one-line `debug` log naming them and pointing at the
+`env_passthrough` escape hatch. Run with debug logging (`vigil logs --level
+DEBUG`, or check `~/.vigil/logs/agent.log`) and look for
+`execute_code: dropped N non-allowlisted VIGIL_* var(s)` if a script behaves
+as though a `VIGIL_*` variable is missing.
 
-Hermes always writes the script and the auto-generated `hermes_tools.py` RPC stub into a temp staging directory that is cleaned up after execution. In `strict` mode the script also *runs* there; in `project` mode it runs in the session's working directory (the staging directory stays on `PYTHONPATH` so imports still resolve). The child process runs in its own process group so it can be cleanly killed on timeout or interruption.
+Vigil always writes the script and the auto-generated `hermes_tools.py` RPC stub into a temp staging directory that is cleaned up after execution. In `strict` mode the script also *runs* there; in `project` mode it runs in the session's working directory (the staging directory stays on `PYTHONPATH` so imports still resolve). The child process runs in its own process group so it can be cleanly killed on timeout or interruption.
 
 ## execute_code vs terminal
 
@@ -289,8 +289,8 @@ Hermes always writes the script and the auto-generated `hermes_tools.py` RPC stu
 | Interactive/background processes | ❌ | ✅ |
 | Needs API keys in environment | ⚠️ Only via [passthrough](/user-guide/security#environment-variable-passthrough) | ✅ (most pass through) |
 
-**Rule of thumb:** Use `execute_code` when you need to call Hermes tools programmatically with logic between calls. Use `terminal` for running shell commands, builds, and processes.
+**Rule of thumb:** Use `execute_code` when you need to call Vigil tools programmatically with logic between calls. Use `terminal` for running shell commands, builds, and processes.
 
 ## Platform Support
 
-Code execution is available on **Linux, macOS, and Windows**. On Linux and macOS the RPC channel uses a Unix domain socket; on Windows, where `AF_UNIX` is unreliable, Hermes automatically falls back to a loopback TCP socket for the sandbox RPC transport. Remote terminal backends (Docker/SSH/Modal/etc.) use a file-based RPC transport instead and additionally require Python 3 inside the backend.
+Code execution is available on **Linux, macOS, and Windows**. On Linux and macOS the RPC channel uses a Unix domain socket; on Windows, where `AF_UNIX` is unreliable, Vigil automatically falls back to a loopback TCP socket for the sandbox RPC transport. Remote terminal backends (Docker/SSH/Modal/etc.) use a file-based RPC transport instead and additionally require Python 3 inside the backend.

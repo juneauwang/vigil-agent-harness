@@ -51,7 +51,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 # Heavy google-cloud + googleapiclient imports are deferred to first
 # adapter use. Importing them eagerly here added ~110ms wall and ~33MB
 # RSS to *every* CLI invocation (the plugin loader imports this module at
-# ``model_tools`` import time, so ``hermes status``, ``hermes chat``, etc.
+# ``model_tools`` import time, so ``vigil status``, ``vigil chat``, etc.
 # all paid the cost even though they never instantiate the adapter).
 #
 # All names below are module globals that ``_load_google_modules()``
@@ -286,7 +286,7 @@ def _is_retryable_error(exc: BaseException) -> bool:
 # marker into the agent's real response. Two purposes:
 #   * ``send_typing`` checks for any value before posting — sentinel keeps
 #     ``_keep_typing`` (running on the base-class timer) from creating a
-#     fresh "Hermes is thinking…" card during the small window between
+#     fresh "Vigil is thinking…" card during the small window between
 #     ``send()`` finishing and the base-class cancelling its typing_task.
 #   * ``stop_typing`` checks for the sentinel and skips the API delete —
 #     otherwise the safety-net cleanup at base.py:_process_message_background
@@ -366,7 +366,7 @@ def _redact_sensitive(text: str) -> str:
 
 
 def _mime_for_message_type(mime: str) -> MessageType:
-    """Map a MIME string to a hermes MessageType.
+    """Map a MIME string to a vigil MessageType.
 
     Anything not image/audio/video falls through to DOCUMENT so the agent
     still receives the file.
@@ -714,7 +714,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         # Inbound message count per (chat_id, thread_name). Drives the
         # DM main-flow vs side-thread heuristic in _build_message_event
         # and the outbound thread routing in _resolve_thread_id.
-        # Persisted to ${HERMES_HOME}/google_chat_thread_counts.json so
+        # Persisted to ${VIGIL_HOME}/google_chat_thread_counts.json so
         # active side-threads survive gateway restarts (the bug that
         # made the in-memory version of this heuristic flaky for
         # multi-restart sessions).
@@ -722,7 +722,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
             from hermes_constants import get_hermes_home as _get_hermes_home
             _hermes_home = _get_hermes_home()
         except (ModuleNotFoundError, ImportError):
-            _hermes_home = _Path.home() / ".hermes"
+            _hermes_home = _Path.home() / ".vigil"
         self._thread_count_store = _ThreadCountStore(
             _hermes_home / "google_chat_thread_counts.json"
         )
@@ -734,7 +734,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         # Orphaned typing cards (created by background tasks that lost a
         # race with send() / another concurrent create). Cleaned up at
         # end-of-turn by on_processing_complete via patch-to-empty so
-        # they don't sit in the chat forever as "Hermes is thinking…".
+        # they don't sit in the chat forever as "Vigil is thinking…".
         self._orphan_typing_messages: Dict[str, List[str]] = {}
         # FlowControl knobs (env-configurable).
         try:
@@ -916,7 +916,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
     # ------------------------------------------------------------------
     def _bot_id_cache_path(self) -> _Path:
         """Location where the resolved bot user_id is cached across restarts."""
-        base = os.getenv("HERMES_HOME", str(_Path.home() / ".hermes"))
+        base = os.getenv("VIGIL_HOME", str(_Path.home() / ".vigil"))
         return _Path(base) / "google_chat_bot_id.json"
 
     def _load_cached_bot_id(self) -> Optional[str]:
@@ -1565,7 +1565,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
             if text.startswith("/setup-files") and event.source is not None:
                 # The sender's email (user_id_alt) is the per-user OAuth
                 # key — the bot stores this user's token at
-                # ${HERMES_HOME}/google_chat_user_tokens/<sanitized>.json
+                # ${VIGIL_HOME}/google_chat_user_tokens/<sanitized>.json
                 # so when User B asks for a file later in B's DM, B's
                 # token gets used (not the first person who set up files).
                 sender_email = (
@@ -1813,7 +1813,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
     async def _build_message_event(
         self, msg: Dict[str, Any], envelope: Dict[str, Any]
     ) -> Optional[MessageEvent]:
-        """Parse a Chat API message into a hermes MessageEvent."""
+        """Parse a Chat API message into a vigil MessageEvent."""
         space = envelope.get("space") or msg.get("space") or {}
         space_name = space.get("name") or ""  # "spaces/XXX"
         space_type = (space.get("type") or space.get("spaceType") or "").upper()
@@ -2625,7 +2625,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         return SendResult(success=True, message_id=resp.get("name"))
 
     async def send_typing(self, chat_id: str, metadata: Any = None) -> None:
-        """Post a visible 'Hermes is thinking…' marker message.
+        """Post a visible 'Vigil is thinking…' marker message.
 
         NOT ephemeral (Google Chat has no ephemeral text messages outside
         slash command responses). ``send()`` PATCHes this marker in-place
@@ -2649,7 +2649,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         keeps running and creates a card in Chat that we have NO way to
         track (the storage line never runs). Next ``_keep_typing`` tick
         sees an empty slot and creates a SECOND card. Result: one orphan
-        "Hermes is thinking…" stuck in chat forever, plus one card that
+        "Vigil is thinking…" stuck in chat forever, plus one card that
         gets patched into the reply.
 
         Fix: reserve the slot with an in-flight ``Event``, run the
@@ -2680,7 +2680,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         )
         body: Dict[str, Any] = {
             "text": getattr(self.config, "typing_status_text", None)
-            or "Hermes is thinking…"
+            or "Vigil is thinking…"
         }
         if thread_id:
             body["thread"] = {"name": thread_id}
@@ -2729,7 +2729,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
     async def stop_typing(self, chat_id: str) -> None:
         """Stop the typing indicator — NO-OP when a live card is tracked.
 
-        Google Chat has no separate typing API: the "Hermes is thinking…"
+        Google Chat has no separate typing API: the "Vigil is thinking…"
         marker is a real message that ``send()`` patches in-place with the
         agent's reply. Deleting the marker creates a "Message deleted by
         its author" tombstone, which is visual noise.
@@ -2781,7 +2781,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         when the API call takes longer than _keep_typing's wait_for
         timeout), the orphan id is stashed in ``self._orphan_typing_messages``.
         Patch each orphan with an empty-ish marker so the user doesn't
-        see "Hermes is thinking…" stuck forever.
+        see "Vigil is thinking…" stuck forever.
         """
         if event.source is None:
             return
@@ -2836,7 +2836,7 @@ class GoogleChatAdapter(BasePlatformAdapter):
         Leaves the SENTINEL in place when present: a previous ``send()``
         already consumed the typing card, and the SENTINEL must stay in
         the slot to keep the base class's ``_keep_typing`` loop from
-        creating a fresh "Hermes is thinking…" card during any subsequent
+        creating a fresh "Vigil is thinking…" card during any subsequent
         attachment send (which would later be reaped as "(no reply)").
         """
         current = self._typing_messages.get(chat_id)
@@ -3421,12 +3421,12 @@ def _env_enablement() -> Optional[Dict[str, Any]]:
 
 
 def interactive_setup() -> None:
-    """Walk the user through Google Chat configuration via ``hermes setup``.
+    """Walk the user through Google Chat configuration via ``vigil setup``.
 
     The setup wizard at ``hermes_cli/gateway.py`` calls this for plugin
     platforms instead of using the in-tree ``_PLATFORMS`` data block. The
     flow mirrors the in-tree built-ins: print the GCP setup instructions,
-    prompt for env vars, persist them to ``~/.hermes/.env`` so the next
+    prompt for env vars, persist them to ``~/.vigil/.env`` so the next
     gateway restart picks them up.
     """
     from hermes_cli.cli_output import (
@@ -3508,7 +3508,7 @@ def interactive_setup() -> None:
         save_env_value("GOOGLE_CHAT_HOME_CHANNEL", home.strip())
 
     print()
-    print_success("Google Chat configuration saved to ~/.hermes/.env")
+    print_success("Google Chat configuration saved to ~/.vigil/.env")
     print_info("Restart the gateway: vigil gateway restart")
 
 
@@ -3531,8 +3531,8 @@ async def _standalone_send(
     """POST a single Google Chat message via the REST API without the SDK.
 
     Used by ``tools/send_message_tool._send_via_adapter`` when the gateway
-    runner is not in this process (e.g. ``hermes cron`` running as a
-    separate process from ``hermes gateway``).  Without this hook,
+    runner is not in this process (e.g. ``vigil cron`` running as a
+    separate process from ``vigil gateway``).  Without this hook,
     ``deliver=google_chat`` cron jobs fail with ``No live adapter for
     platform``.
 
@@ -3672,7 +3672,7 @@ async def _standalone_send(
 
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system at startup.
+    """Plugin entry point — called by the Vigil plugin system at startup.
 
     Registers the Google Chat adapter under the ``google_chat`` name.
     The gateway's ``_create_adapter`` consults the platform registry
@@ -3710,7 +3710,7 @@ def register(ctx) -> None:
         allowed_users_env="GOOGLE_CHAT_ALLOWED_USERS",
         allow_all_env="GOOGLE_CHAT_ALLOW_ALL_USERS",
         # Chat caps text messages at 4096 chars; we leave margin to fit
-        # the "Hermes is thinking..." marker patches and edit overhead.
+        # the "Vigil is thinking..." marker patches and edit overhead.
         max_message_length=4000,
         emoji="💬",
         allow_update_command=True,
@@ -3727,7 +3727,7 @@ def register(ctx) -> None:
             "to a text notice with the host path. Do NOT generate interactive "
             "Card v2 buttons — Google Chat interactivity is not yet supported "
             "by this gateway; ask for typed confirmations instead. While you "
-            "are generating a response, a 'Hermes is thinking…' marker message "
+            "are generating a response, a 'Vigil is thinking…' marker message "
             "appears in the space and is deleted once your response is ready. "
             "You do NOT have access to Google Chat-specific APIs — you cannot "
             "search space history, list space members, or manage spaces. Do "

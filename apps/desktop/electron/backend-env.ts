@@ -66,7 +66,7 @@ function appendUniquePathEntries(entries, { delimiter = path.delimiter } = {}) {
  * There are two on-disk layouts. `scripts/install.ps1` unpacks portable Node
  * straight into `%LOCALAPPDATA%\hermes\node` (node.exe at the root, no `bin\`);
  * `scripts/install.sh` and the node-bootstrap helper use the POSIX
- * `$HERMES_HOME/node/bin`. Emit BOTH on every platform so mixed and migrated
+ * `$VIGIL_HOME/node/bin`. Emit BOTH on every platform so mixed and migrated
  * installs resolve, leading with the layout native to the current platform.
  *
  * This is the single source of truth for the ordering rule on the Node side —

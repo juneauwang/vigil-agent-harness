@@ -4,7 +4,7 @@ Covers:
 
 1. ``typescript-language-server`` install recipe pulls in ``typescript``
    alongside the server, so the npm install command targets both.
-2. ``hermes lsp status`` surfaces a ``Backend warnings`` section when
+2. ``vigil lsp status`` surfaces a ``Backend warnings`` section when
    bash-language-server is installed but ``shellcheck`` is missing.
 3. ``_check_lint`` returns ``skipped`` (not ``error``) when the linter
    command exists on PATH but couldn't actually run — e.g. ``npx tsc``
@@ -34,7 +34,7 @@ from agent.lsp.install import INSTALL_RECIPES
 
 def test_install_npm_works_without_extras(tmp_path, monkeypatch):
     """Backwards compat: pyright-style recipes (no extras) still install."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     captured = {}
 
@@ -63,7 +63,7 @@ def test_install_npm_works_without_extras(tmp_path, monkeypatch):
 
 def test_install_pip_finds_windows_scripts_launcher(tmp_path, monkeypatch):
     """pip console scripts can land in Scripts/ on native Windows."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     from agent.lsp import install as install_mod
 
@@ -86,7 +86,7 @@ def test_install_pip_finds_windows_scripts_launcher(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Fix 2: ``hermes lsp status`` surfaces shellcheck-missing for bash
+# Fix 2: ``vigil lsp status`` surfaces shellcheck-missing for bash
 # ---------------------------------------------------------------------------
 
 
@@ -96,7 +96,7 @@ def test_install_pip_finds_windows_scripts_launcher(tmp_path, monkeypatch):
 
 def test_backend_warnings_fires_when_bash_installed_but_shellcheck_missing(tmp_path, monkeypatch):
     """The exact scenario from the bug report."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     from agent.lsp import cli as lsp_cli
 
     def which(name):
@@ -113,7 +113,7 @@ def test_backend_warnings_fires_when_bash_installed_but_shellcheck_missing(tmp_p
 
 def test_status_output_includes_backend_warnings_section(tmp_path, monkeypatch):
     """End-to-end: status command output includes the warning section."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     # Pretend bash-language-server is installed but shellcheck is missing
     def which(name):

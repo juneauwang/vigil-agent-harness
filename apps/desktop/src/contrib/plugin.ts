@@ -43,7 +43,7 @@ export interface PluginStorage {
 export interface PluginOs {
   /** Native OS notification (Electron), attributed to this plugin. Gated by
    *  Settings ▸ Notifications ▸ "Plugin notifications" and fires only while
-   *  the user is away from Hermes — use `host.notify` for the in-app toast.
+   *  the user is away from Vigil — use `host.notify` for the in-app toast.
    *  Throttled per plugin; reserve it for genuinely notable events. */
   notify: (input: PluginNativeNotificationInput) => void
   /** Open a URL with the OS default handler (browser, mail client, custom

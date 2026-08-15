@@ -1,15 +1,15 @@
 """Unit tests for hermes_cli.toolset_validation (see #38798).
 
 Pure logic — the validity predicate is injected, so these tests need neither the
-tool registry nor a running Hermes.
+tool registry nor a running Vigil.
 """
 
 import pytest
 
 from hermes_cli.toolset_validation import validate_platform_toolsets
 
-# A representative set of real toolset names. `hermes` is deliberately absent —
-# that is the corruption #38798 reported (`hermes-cli` rewritten to `hermes`).
+# A representative set of real toolset names. `vigil` is deliberately absent —
+# that is the corruption #38798 reported (`hermes-cli` rewritten to `vigil`).
 _KNOWN = {
     "hermes-cli",
     "hermes-telegram",
@@ -26,9 +26,9 @@ def _is_valid(name):
 
 
 def test_38798_corruption_warns_and_suggests_correct_name():
-    # The exact reported shape: cli holds 'hermes' instead of 'hermes-cli'.
+    # The exact reported shape: cli holds 'vigil' instead of 'hermes-cli'.
     warnings = validate_platform_toolsets({"cli": ["hermes"]}, _is_valid)
-    unknown = [w for w in warnings if "unknown toolset 'hermes'" in w]
+    unknown = [w for w in warnings if "unknown toolset 'vigil'" in w]
     assert len(unknown) == 1
     # Actionable: points at the valid name the entry should have been.
     assert "did you mean 'hermes-cli'?" in unknown[0]

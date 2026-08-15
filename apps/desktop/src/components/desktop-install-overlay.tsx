@@ -24,7 +24,7 @@ import { FirstRunRemoteForm } from './first-run-remote-form'
 /**
  * DesktopInstallOverlay
  *
- * Renders the first-launch install progress for Hermes Agent. Mounted always;
+ * Renders the first-launch install progress for Vigil Agent. Mounted always;
  * shows itself only when main.ts reports an in-flight bootstrap (state.active)
  * OR an error from a completed-failed bootstrap (state.error). When the
  * bootstrap finishes successfully the overlay fades out and the rest of the
@@ -470,7 +470,7 @@ export function DesktopInstallOverlay({ enabled = true }: DesktopInstallOverlayP
   }
 
   // Unsupported-platform branch: macOS/Linux packaged builds hit this when
-  // there's no Hermes Agent installed yet and we can't drive install.sh
+  // there's no Vigil Agent installed yet and we can't drive install.sh
   // (no stage protocol equivalent yet). Show a copy-paste install command
   // and the docs URL; user runs it from Terminal and relaunches the app.
   if (state.unsupportedPlatform) {

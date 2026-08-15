@@ -8,7 +8,7 @@ import math
 from copy import deepcopy
 from typing import Any
 
-MOA_MARKER_PREFIX = "__HERMES_MOA_TURN_V1__"
+MOA_MARKER_PREFIX = "__VIGIL_MOA_TURN_V1__"
 DEFAULT_MOA_PRESET_NAME = "default"
 
 DEFAULT_MOA_REFERENCE_MODELS: list[dict[str, str]] = [
@@ -33,7 +33,7 @@ def _coerce_float_or_none(value: Any) -> float | None:
 
     Used for optional sampling params (reference_temperature /
     aggregator_temperature) where None means 'don't send the parameter —
-    provider default applies', matching how a single-model Hermes agent
+    provider default applies', matching how a single-model Vigil agent
     never sends temperature unless explicitly configured.
     """
     if value is None or value == "":

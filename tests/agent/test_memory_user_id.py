@@ -264,7 +264,7 @@ class TestAIAgentUserIdPropagation:
 
     def test_user_id_stored_on_agent(self):
         """AIAgent should store user_id as instance attribute."""
-        with patch.dict(os.environ, {"HERMES_HOME": "/tmp/test_hermes"}):
+        with patch.dict(os.environ, {"VIGIL_HOME": "/tmp/test_hermes"}):
             from run_agent import AIAgent
             agent = object.__new__(AIAgent)
             # Manually set the attribute as __init__ does
@@ -273,7 +273,7 @@ class TestAIAgentUserIdPropagation:
 
     def test_user_id_none_by_default(self):
         """AIAgent should have None user_id when not provided (CLI mode)."""
-        with patch.dict(os.environ, {"HERMES_HOME": "/tmp/test_hermes"}):
+        with patch.dict(os.environ, {"VIGIL_HOME": "/tmp/test_hermes"}):
             from run_agent import AIAgent
             agent = object.__new__(AIAgent)
             agent._user_id = None

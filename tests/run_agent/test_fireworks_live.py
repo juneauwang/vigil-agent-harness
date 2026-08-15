@@ -1,10 +1,10 @@
-"""Live Fireworks smoke test — exercises the Hermes runtime, not a raw SDK client.
+"""Live Fireworks smoke test — exercises the Vigil runtime, not a raw SDK client.
 
 Opt-in only:
-    HERMES_LIVE_TESTS=1 FIREWORKS_API_KEY=fw_... \\
+    VIGIL_LIVE_TESTS=1 FIREWORKS_API_KEY=fw_... \\
         pytest tests/run_agent/test_fireworks_live.py -q
 
-Unlike a bare OpenAI() client pointed at the endpoint, this drives Hermes'
+Unlike a bare OpenAI() client pointed at the endpoint, this drives Vigil'
 own provider resolution — ``resolve_provider_client('fireworks')`` — so it
 verifies the auth/config/base-URL/aux-model wiring that the
 bundled provider actually ships, then makes a real call through that client.
@@ -16,22 +16,22 @@ import os
 
 import pytest
 
-LIVE = os.environ.get("HERMES_LIVE_TESTS") == "1"
+LIVE = os.environ.get("VIGIL_LIVE_TESTS") == "1"
 FIREWORKS_KEY = os.environ.get("FIREWORKS_API_KEY", "")
 
 pytestmark = [
-    pytest.mark.skipif(not LIVE, reason="live-only: set HERMES_LIVE_TESTS=1"),
+    pytest.mark.skipif(not LIVE, reason="live-only: set VIGIL_LIVE_TESTS=1"),
     pytest.mark.skipif(not FIREWORKS_KEY, reason="FIREWORKS_API_KEY not configured"),
     pytest.mark.integration,
 ]
 
 
 def _resolve_runtime_client(provider="fireworks"):
-    """Build the Fireworks client the way the Hermes runtime does."""
+    """Build the Fireworks client the way the Vigil runtime does."""
     from agent.auxiliary_client import resolve_provider_client
 
     client, model = resolve_provider_client(provider)
-    assert client is not None, "Hermes failed to build a Fireworks client"
+    assert client is not None, "Vigil failed to build a Fireworks client"
     return client, model
 
 

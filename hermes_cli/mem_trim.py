@@ -1,4 +1,4 @@
-"""Rate-limited heap release for long-lived Hermes gateway processes.
+"""Rate-limited heap release for long-lived Vigil gateway processes.
 
 On Linux/glibc, ``malloc_trim(0)`` can return pages from freed Python/C
 allocations to the OS.  Other platforms and allocators are safe no-ops.
@@ -31,7 +31,7 @@ _trim_call_count = 0
 
 
 def _config_settings() -> tuple[bool, float, int, float]:
-    """Return fail-open settings from the normal Hermes config path."""
+    """Return fail-open settings from the normal Vigil config path."""
     enabled = True
     cooldown: Any = _DEFAULT_COOLDOWN_SECONDS
     log_every_n: Any = _DEFAULT_LOG_EVERY_N

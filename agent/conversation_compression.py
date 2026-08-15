@@ -1238,7 +1238,7 @@ def _adopt_live_compression_child(
 
         set_current_session_id(child_session_id)
     except Exception:
-        os.environ["HERMES_SESSION_ID"] = child_session_id
+        os.environ["VIGIL_SESSION_ID"] = child_session_id
     try:
         from hermes_logging import set_session_context
 
@@ -1677,7 +1677,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
             raise ValueError(
                 f"Auxiliary compression model {aux_model} has a context "
                 f"window of {aux_context:,} tokens, which is below the "
-                f"minimum {MINIMUM_CONTEXT_LENGTH:,} required by Hermes "
+                f"minimum {MINIMUM_CONTEXT_LENGTH:,} required by Vigil "
                 f"Agent.  Choose a compression model with at least "
                 f"{MINIMUM_CONTEXT_LENGTH // 1000}K context (set "
                 f"auxiliary.compression.model in config.yaml), or set "
@@ -1798,7 +1798,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
                     f"           model: <model-with-{old_threshold:,}+-context>\n"
                     f"  (Lowering compression.threshold cannot help here — "
                     f"with {_main_label}'s {main_ctx:,}-token window, "
-                    f"Hermes's small-context floor and output reservation "
+                    f"Vigil's small-context floor and output reservation "
                     f"would recompute the trigger to "
                     f"{recomputed_threshold:,} tokens, still above the "
                     f"compression model's {aux_context:,}.)"
@@ -2207,10 +2207,10 @@ def compress_context(
         pass
 
     # Codex app-server sessions: the codex agent owns the real thread context;
-    # Hermes' summarizer would only rewrite a local mirror without shrinking
+    # Vigil' summarizer would only rewrite a local mirror without shrinking
     # the actual thread (#36801). Route compaction to the app server's own
     # thread/compact mechanism. Behavior is controlled by
-    # ``compression.codex_app_server_auto`` (native|hermes|off).
+    # ``compression.codex_app_server_auto`` (native|vigil|off).
     # The memory-provider context handoff below is intentionally Hermes-only:
     # the app server does not expose its native summary prompt, so there is no
     # truthful injection point for ``on_pre_compress()`` return text here.
@@ -3251,7 +3251,7 @@ def compress_context(
                     # mirror _ensure_db_session's stamp ("default" persists as
                     # NULL). publish_compression_child additionally COALESCEs
                     # from the parent row, covering app-global remote sessions
-                    # whose thread lacks the HERMES_HOME context.
+                    # whose thread lacks the VIGIL_HOME context.
                     try:
                         from hermes_cli.profiles import get_active_profile_name
 
@@ -3270,7 +3270,7 @@ def compress_context(
                         parent_session_id=old_session_id,
                         child_session_id=new_session_id,
                         source=agent.platform
-                        or os.environ.get("HERMES_SESSION_SOURCE", "cli"),
+                        or os.environ.get("VIGIL_SESSION_SOURCE", "cli"),
                         model=agent.model,
                         model_config=agent._session_init_model_config,
                         system_prompt=new_system_prompt,
@@ -3286,7 +3286,7 @@ def compress_context(
 
                         set_current_session_id(agent.session_id)
                     except Exception:
-                        os.environ["HERMES_SESSION_ID"] = agent.session_id
+                        os.environ["VIGIL_SESSION_ID"] = agent.session_id
                     try:
                         from hermes_logging import set_session_context
 
@@ -3582,9 +3582,9 @@ def _compress_context_via_codex_app_server(
 ) -> Tuple[list, str]:
     """Route compaction to Codex app-server for Codex-owned threads.
 
-    Hermes' normal compressor rewrites the local OpenAI-style transcript.
+    Vigil' normal compressor rewrites the local OpenAI-style transcript.
     That does not shrink the actual Codex app-server thread context. For this
-    runtime, ask Codex to compact its own thread and keep Hermes' transcript
+    runtime, ask Codex to compact its own thread and keep Vigil' transcript
     unchanged.
     """
     auto_mode = str(

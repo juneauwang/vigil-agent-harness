@@ -12,7 +12,7 @@ Features:
 - Shared file store tools (upload, list, read, ingest, delete)
 - Explicit memory tools (profile, search, context, remember, forget)
 
-Config (env vars or hermes config.yaml under retaindb:):
+Config (env vars or vigil config.yaml under retaindb:):
   RETAINDB_API_KEY     — API key (required)
   RETAINDB_BASE_URL    — API endpoint (default: https://api.retaindb.com)
   RETAINDB_PROJECT     — Project identifier (optional — defaults to "default")
@@ -532,7 +532,7 @@ class RetainDBMemoryProvider(MemoryProvider):
         else:
             hermes_home = str(kwargs.get("hermes_home", ""))
             profile_name = os.path.basename(hermes_home) if hermes_home else ""
-            project = f"hermes-{profile_name}" if (profile_name and profile_name not in {"", ".hermes"}) else "default"
+            project = f"hermes-{profile_name}" if (profile_name and profile_name not in {"", ".vigil"}) else "default"
 
         self._client = _Client(api_key, base_url, project)
         self._session_id = session_id

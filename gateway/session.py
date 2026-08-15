@@ -33,7 +33,7 @@ def _now() -> datetime:
 # ``get_or_create_session`` — while it stays within this window of when
 # ``resume_pending`` was marked.  ``gateway/run.py`` bridges
 # ``config.yaml`` ``agent.gateway_auto_continue_freshness`` into
-# ``HERMES_AUTO_CONTINUE_FRESHNESS`` at startup.
+# ``VIGIL_AUTO_CONTINUE_FRESHNESS`` at startup.
 _AUTO_CONTINUE_FRESHNESS_SECS_DEFAULT = 60 * 60
 
 
@@ -42,13 +42,13 @@ def auto_continue_freshness_window() -> float:
 
     Single source of truth for both the resume scheduler (``gateway/run.py``)
     and the routing-time zombie gate in ``get_or_create_session``.  Reads
-    ``HERMES_AUTO_CONTINUE_FRESHNESS`` (bridged from ``config.yaml``
+    ``VIGIL_AUTO_CONTINUE_FRESHNESS`` (bridged from ``config.yaml``
     ``agent.gateway_auto_continue_freshness`` at gateway startup) and falls
     back to the module default when unset or malformed.  A non-positive value
     disables the freshness gate (restores the pre-fix "always fresh" behaviour
     for users who want to opt out).
     """
-    raw = os.environ.get("HERMES_AUTO_CONTINUE_FRESHNESS")
+    raw = os.environ.get("VIGIL_AUTO_CONTINUE_FRESHNESS")
     if raw is None or raw == "":
         return float(_AUTO_CONTINUE_FRESHNESS_SECS_DEFAULT)
     try:
@@ -361,7 +361,7 @@ def _slack_tools_loaded() -> bool:
     """True iff the agent will actually have Slack tools this session.
 
     Two independent paths grant Slack capability:
-      1. Native `slack` toolset enabled via `hermes tools` (opt-in, default
+      1. Native `slack` toolset enabled via `vigil tools` (opt-in, default
          OFF) AND `SLACK_BOT_TOKEN` set — the tool's `check_fn` gates on it
          at registry time, so config alone isn't enough.
       2. An MCP server that has ACTUALLY registered tools into the live
@@ -420,7 +420,7 @@ def _discord_tools_loaded() -> bool:
 
     Two conditions must hold:
       1. The `discord` or `discord_admin` toolset is enabled for the
-         Discord platform via `hermes tools` (opt-in, default OFF).
+         Discord platform via `vigil tools` (opt-in, default OFF).
       2. `DISCORD_BOT_TOKEN` is set — the tool's `check_fn` gates on it
          at registry time, so the toolset being enabled in config is not
          enough if the token isn't configured.
@@ -627,7 +627,7 @@ def build_session_context_prompt(
     elif context.source.platform == Platform.DISCORD:
         # Inject the Discord IDs block only when the agent actually has
         # Discord tools loaded this session — i.e. the user opted into
-        # `discord` / `discord_admin` via `hermes tools` AND the bot
+        # `discord` / `discord_admin` via `vigil tools` AND the bot
         # token is configured.  Otherwise keep the stale-API disclaimer
         # honest so we never promise tools the agent lacks.
         if _discord_tools_loaded():
@@ -1005,7 +1005,7 @@ def build_channel_continuity_note(
 
     where = "thread" if source.thread_id else "channel"
     return (
-        f"[System note: This {where} had an earlier Hermes session "
+        f"[System note: This {where} had an earlier Vigil session "
         f"(session_id: {prev}) that was auto-reset. If the user refers to "
         f"earlier work here, or the request depends on this {where}'s history, "
         f"use the session_search tool to recall that prior session before "
@@ -1555,10 +1555,10 @@ class SessionStore:
         data = {
             "_README": (
                 "LEGACY MIRROR of the gateway routing index (the primary copy "
-                "lives in the gateway_routing table in ~/.hermes/state.db). "
+                "lives in the gateway_routing table in ~/.vigil/state.db). "
                 "Maps messaging session keys (agent:main:<platform>:...) to "
                 "active session IDs. This is NOT the session list. ALL "
-                "sessions (CLI, TUI, and gateway) live in ~/.hermes/state.db "
+                "sessions (CLI, TUI, and gateway) live in ~/.vigil/state.db "
                 "and are shown by `vigil sessions list` and `/sessions`. "
                 "Disable this file with `gateway.write_sessions_json: false` "
                 "in config.yaml."

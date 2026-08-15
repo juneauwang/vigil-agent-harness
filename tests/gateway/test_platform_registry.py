@@ -215,12 +215,12 @@ class TestApplyYamlConfigFnDispatch:
     """End-to-end dispatch through load_gateway_config().
 
     Each test registers a temporary PlatformEntry, writes a config.yaml in
-    a tmp HERMES_HOME, calls load_gateway_config(), and asserts the hook
+    a tmp VIGIL_HOME, calls load_gateway_config(), and asserts the hook
     was invoked correctly.  Cleanup unregisters the entry.
     """
 
     def _write_config(self, tmp_path, content: str):
-        hermes_home = tmp_path / ".hermes"
+        hermes_home = tmp_path / ".vigil"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text(content, encoding="utf-8")
         return hermes_home
@@ -277,7 +277,7 @@ class TestApplyYamlConfigFnDispatch:
                 "mybadplat:\n  k: v\n"
                 "mygoodplat:\n  k: v\n",
             )
-            monkeypatch.setenv("HERMES_HOME", str(home))
+            monkeypatch.setenv("VIGIL_HOME", str(home))
 
             # Must not raise.
             from gateway.config import load_gateway_config
@@ -306,7 +306,7 @@ class TestApplyYamlConfigFnDispatch:
             home = self._write_config(
                 tmp_path, "myprecplat:\n  flag: yaml-value\n",
             )
-            monkeypatch.setenv("HERMES_HOME", str(home))
+            monkeypatch.setenv("VIGIL_HOME", str(home))
 
             from gateway.config import load_gateway_config
             load_gateway_config()
@@ -329,7 +329,7 @@ class TestPluginPlatformSharedKeyBridge:
     """
 
     def _write_config(self, tmp_path, content: str):
-        hermes_home = tmp_path / ".hermes"
+        hermes_home = tmp_path / ".vigil"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text(content, encoding="utf-8")
         return hermes_home
@@ -355,7 +355,7 @@ class TestPluginPlatformSharedKeyBridge:
                 "  reply_prefix: \"→ \"\n"
                 "  allow_from: [\"alice\", \"bob\"]\n",
             )
-            monkeypatch.setenv("HERMES_HOME", str(home))
+            monkeypatch.setenv("VIGIL_HOME", str(home))
 
             from gateway.config import load_gateway_config, Platform
             cfg = load_gateway_config()
@@ -384,7 +384,7 @@ class TestPluginEnablementGate:
     """
 
     def _write_config(self, tmp_path, content: str = ""):
-        hermes_home = tmp_path / ".hermes"
+        hermes_home = tmp_path / ".vigil"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text(content, encoding="utf-8")
         return hermes_home
@@ -411,7 +411,7 @@ class TestPluginEnablementGate:
         ))
         try:
             home = self._write_config(tmp_path)
-            monkeypatch.setenv("HERMES_HOME", str(home))
+            monkeypatch.setenv("VIGIL_HOME", str(home))
 
             from gateway.config import load_gateway_config, Platform
             cfg = load_gateway_config()
@@ -448,7 +448,7 @@ class TestPluginEnablementGate:
         ))
         try:
             home = self._write_config(tmp_path)
-            monkeypatch.setenv("HERMES_HOME", str(home))
+            monkeypatch.setenv("VIGIL_HOME", str(home))
 
             from gateway.config import load_gateway_config, Platform
             cfg = load_gateway_config()
@@ -480,7 +480,7 @@ class TestPluginEnablementGate:
         ))
         try:
             home = self._write_config(tmp_path)
-            monkeypatch.setenv("HERMES_HOME", str(home))
+            monkeypatch.setenv("VIGIL_HOME", str(home))
 
             from gateway.config import load_gateway_config, Platform
             cfg = load_gateway_config()

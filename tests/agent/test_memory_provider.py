@@ -317,7 +317,7 @@ class TestPluginMemoryDiscovery:
 
 
 class TestUserInstalledProviderDiscovery:
-    """Memory providers installed to $HERMES_HOME/plugins/ should be found.
+    """Memory providers installed to $VIGIL_HOME/plugins/ should be found.
 
     Regression test for issues #4956 and #9099: load_memory_provider() and
     discover_memory_providers() only scanned the bundled plugins/memory/
@@ -346,7 +346,7 @@ class TestUserInstalledProviderDiscovery:
 
 
     def test_load_user_plugin(self, tmp_path, monkeypatch):
-        """load_memory_provider() can load from $HERMES_HOME/plugins/."""
+        """load_memory_provider() can load from $VIGIL_HOME/plugins/."""
         from plugins.memory import load_memory_provider
         self._make_user_memory_plugin(tmp_path, "myexternal")
         monkeypatch.setattr(

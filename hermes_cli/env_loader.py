@@ -1,4 +1,4 @@
-"""Helpers for loading Hermes .env files consistently across entrypoints."""
+"""Helpers for loading Vigil .env files consistently across entrypoints."""
 
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ _WARNED_UTF32_PATHS: set[str] = set()
 
 # Map of env-var name → source label ("bitwarden", etc.) for credentials
 # that were injected by an external secret source during load_hermes_dotenv().
-# Used by setup / `hermes model` flows to label detected credentials so
+# Used by setup / `vigil model` flows to label detected credentials so
 # users understand WHERE a key came from when their .env doesn't contain it
 # directly (otherwise the "credentials detected ✓" line looks identical to
 # the .env case and they don't know Bitwarden is wired up).
@@ -41,7 +41,7 @@ _SECRET_SOURCES: dict[str, str] = {}
 # across profiles and may be overwritten by a later home's source apply.
 _SECRET_SOURCE_VALUES_BY_HOME: dict[str, dict[str, str]] = {}
 
-# HERMES_HOME paths we've already pulled external secrets for during this
+# VIGIL_HOME paths we've already pulled external secrets for during this
 # process.  ``load_hermes_dotenv()`` is called at module-import time from
 # several hot modules (cli.py, hermes_cli/main.py, run_agent.py,
 # trajectory_compressor.py, gateway/run.py, ...), so without this guard the
@@ -53,7 +53,7 @@ _SECRET_SOURCE_CACHE_LOCK = threading.RLock()
 
 
 def _known_hermes_env_keys() -> set[str]:
-    """Return the combined set of known Hermes env-var keys.
+    """Return the combined set of known Vigil env-var keys.
 
     Includes both ``OPTIONAL_ENV_VARS`` (setup-flow vars with metadata) and
     ``_EXTRA_ENV_KEYS`` (provider/platform keys managed outside the setup
@@ -66,7 +66,7 @@ def _known_hermes_env_keys() -> set[str]:
     return set(OPTIONAL_ENV_VARS.keys()) | set(_EXTRA_ENV_KEYS)
 
 
-# Behavioral routing keys a parent Hermes process injects into child env and
+# Behavioral routing keys a parent Vigil process injects into child env and
 # that silently redirect a profile onto the wrong provider path (ACP auth
 # method, copilot-ACP endpoints). These — and ONLY these — are scrubbed from
 # os.environ at startup when absent from the profile's .env. Credential keys
@@ -74,10 +74,10 @@ def _known_hermes_env_keys() -> set[str]:
 # documented way to supply them, and read-time secret-scope checks
 # (agent/secret_scope.py) own cross-profile credential isolation.
 _PROFILE_MANAGED_ENV_KEYS: frozenset[str] = frozenset({
-    "HERMES_ACP_AUTH_METHOD",
-    "HERMES_ACP_AUTO_APPROVE",
-    "HERMES_COPILOT_ACP_COMMAND",
-    "HERMES_COPILOT_ACP_ARGS",
+    "VIGIL_ACP_AUTH_METHOD",
+    "VIGIL_ACP_AUTO_APPROVE",
+    "VIGIL_COPILOT_ACP_COMMAND",
+    "VIGIL_COPILOT_ACP_ARGS",
     "COPILOT_CLI_PATH",
     "COPILOT_ACP_BASE_URL",
 })
@@ -112,7 +112,7 @@ def _env_keys_defined_in_dotenv(path: Path) -> set[str]:
 
 
 def _clear_known_keys_missing_from_dotenv(path: Path) -> None:
-    """Remove inherited profile-managed Hermes keys absent from ``.env``.
+    """Remove inherited profile-managed Vigil keys absent from ``.env``.
 
     After the profile's ``.env`` has been loaded with ``override=True``,
     scan the file for which profile-managed keys it explicitly defines and
@@ -121,14 +121,14 @@ def _clear_known_keys_missing_from_dotenv(path: Path) -> None:
 
     Scope is deliberately NARROW: only ``_PROFILE_MANAGED_ENV_KEYS`` —
     behavioral routing keys (ACP auth method, copilot-ACP endpoints) that a
-    parent Hermes process injects and that silently change *which provider
+    parent Vigil process injects and that silently change *which provider
     path* a profile uses. Provider API keys (OPENAI_API_KEY, …) are
     intentionally excluded: users legitimately export those in their shell
     (``export OPENAI_API_KEY=…`` is a documented flow — see
     ``tests/hermes_cli/test_dump_env_visibility.py``), and a startup scrub
     cannot distinguish a shell export from parent-process leakage. Clearing
     the full known-key set would delete user-exported credentials on every
-    ``hermes`` invocation.
+    ``vigil`` invocation.
 
     Cross-profile *credential* isolation is handled at read time by
     ``agent.secret_scope.get_secret`` (scope authoritative under
@@ -217,7 +217,7 @@ def _hydrate_profile_secret_sources(home: Path) -> dict[str, str]:
         if op_env.exists():
             for _name, _value in load_env_file(op_env).items():
                 local_env.setdefault(_name, _value)
-        local_env["HERMES_HOME"] = str(home)
+        local_env["VIGIL_HOME"] = str(home)
         report = apply_all(cfg, home, environ=local_env)
     except Exception:  # noqa: BLE001 — preserve fail-open startup behavior
         return {}
@@ -239,7 +239,7 @@ def _hydrate_profile_secret_sources(home: Path) -> dict[str, str]:
 
 
 def reset_secret_source_cache() -> None:
-    """Forget which HERMES_HOME paths have already had external secrets applied.
+    """Forget which VIGIL_HOME paths have already had external secrets applied.
 
     The first call to ``_apply_external_secret_sources(home_path)`` in a
     process pulls from Bitwarden (or other configured backend), records the
@@ -464,10 +464,10 @@ def load_hermes_dotenv(
     hermes_home: str | os.PathLike | None = None,
     project_env: str | os.PathLike | None = None,
 ) -> list[Path]:
-    """Load Hermes environment files with user config taking precedence.
+    """Load Vigil environment files with user config taking precedence.
 
     Behavior:
-    - `~/.hermes/.env` overrides stale shell-exported values when present.
+    - `~/.vigil/.env` overrides stale shell-exported values when present.
     - project `.env` acts as a dev fallback and only fills missing values when
       the user env exists.
     - if no user env exists, the project `.env` also overrides stale shell vars.
@@ -488,7 +488,7 @@ def load_hermes_dotenv(
     if user_env.exists():
         _load_dotenv_with_fallback(user_env, override=True)
         loaded.append(user_env)
-        # Mirror reload_env() known-key cleanup so inherited Hermes keys
+        # Mirror reload_env() known-key cleanup so inherited Vigil keys
         # absent from this profile's .env do not leak into the runtime.
         _clear_known_keys_missing_from_dotenv(user_env)
 
@@ -499,7 +499,7 @@ def load_hermes_dotenv(
     # .op.env is gitignored — the service-account token never enters the
     # committed .env file.
     # Users on systemd can alternatively use:
-    #   EnvironmentFile=-/path/to/.hermes/.op.env
+    #   EnvironmentFile=-/path/to/.vigil/.op.env
     # in their gateway unit, which takes precedence (override=False below
     # ensures .op.env never clobbers a token already in the environment).
     op_env = home_path / ".op.env"
@@ -515,8 +515,8 @@ def load_hermes_dotenv(
 
     # config.yaml is the documented source of truth for terminal.* settings,
     # but the dotenv loads above run with override=True — so a stale
-    # TERMINAL_ENV=docker left in ~/.hermes/.env (e.g. written by an older
-    # `hermes setup` before the user switched terminal.backend in config.yaml)
+    # TERMINAL_ENV=docker left in ~/.vigil/.env (e.g. written by an older
+    # `vigil setup` before the user switched terminal.backend in config.yaml)
     # silently wins again on every reload. Startup launchers bridge
     # config→env once, but long-lived processes (gateway per-turn reload,
     # cron standalone runs) call load_hermes_dotenv() repeatedly and used to
@@ -541,7 +541,7 @@ def _reapply_terminal_config_bridge(home_path: Path) -> None:
     config.yaml's ``terminal`` section override env values; a config.yaml
     without a terminal section leaves .env/shell selections untouched.
 
-    Scoped to the process HERMES_HOME: the shared bridge reads the
+    Scoped to the process VIGIL_HOME: the shared bridge reads the
     process-global config, so re-applying it for a *different* profile's
     ``load_hermes_dotenv(hermes_home=...)`` call would bridge the wrong
     profile's config. Fail-open — a config problem must never break dotenv
@@ -560,7 +560,7 @@ def _reapply_terminal_config_bridge(home_path: Path) -> None:
 def _apply_managed_env() -> None:
     """Apply the managed-scope .env last, with override, so it beats user/shell.
 
-    Managed scope is machine-global (independent of HERMES_HOME / profile). v1
+    Managed scope is machine-global (independent of VIGIL_HOME / profile). v1
     enforcement is "applied last with override=True" — at the end of startup load
     ``os.environ`` holds the managed value for every managed key, beating both the
     user ``.env`` and any pre-existing shell export. This deliberately inverts the
@@ -593,14 +593,14 @@ def _apply_external_secret_sources(home_path: Path) -> None:
     """Pull secrets from every enabled external source into env.
 
     Runs AFTER dotenv loads so .env values are visible (sources use them
-    to locate bootstrap tokens) but BEFORE the rest of Hermes reads
+    to locate bootstrap tokens) but BEFORE the rest of Vigil reads
     ``os.environ`` for credentials.  Any failure here is logged and
     swallowed — external secret sources must never block startup.
 
     The heavy lifting (source ordering, mapped-beats-bulk precedence,
     first-claim-wins conflict handling, override semantics, provenance)
     lives in ``agent.secret_sources.registry.apply_all``; this wrapper
-    owns the once-per-HERMES_HOME guard, the post-apply ASCII
+    owns the once-per-VIGIL_HOME guard, the post-apply ASCII
     sanitization sweep, the ``_SECRET_SOURCES`` provenance map that
     UI surfaces read, and the startup status lines.
 
@@ -658,7 +658,7 @@ def _apply_external_secret_sources(home_path: Path) -> None:
         # user-supplied and might have the same copy-paste corruption as
         # a manually edited .env (see #6843).
         _sanitize_loaded_credentials()
-        # Remember where each var came from so setup / `hermes model`
+        # Remember where each var came from so setup / `vigil model`
         # flows can label detected credentials with "(from Bitwarden)" /
         # "(from 1Password)" — otherwise users see "credentials ✓" with
         # no hint the value came from a vault rather than .env.
@@ -717,7 +717,7 @@ def _load_secrets_config(home_path: Path) -> dict:
     if not config_path.exists():
         return {}
     # Prefer the shared (mtime, size)-keyed raw-config cache — this is the
-    # first config.yaml read in a normal `hermes` startup, so populating the
+    # first config.yaml read in a normal `vigil` startup, so populating the
     # shared cache here lets main.py's early bridge and hermes_logging reuse
     # the same parse (one parse per process instead of 3-4). Falls back to a
     # direct isolated parse if the shared reader is unavailable, preserving
@@ -744,7 +744,7 @@ def _load_secrets_config(home_path: Path) -> dict:
 
 
 def _process_hermes_home() -> Path:
-    """The HERMES_HOME the shared config cache is keyed to."""
+    """The VIGIL_HOME the shared config cache is keyed to."""
     try:
         from hermes_constants import get_hermes_home
 

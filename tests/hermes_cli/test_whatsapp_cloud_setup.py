@@ -92,12 +92,12 @@ class TestWabaIdValidator:
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
-    """Redirect HERMES_HOME so save_env_value writes into a temp .env."""
+    """Redirect VIGIL_HOME so save_env_value writes into a temp .env."""
     home = tmp_path / "home"
-    hermes = home / ".hermes"
+    hermes = home / ".vigil"
     hermes.mkdir(parents=True)
     monkeypatch.setattr(Path, "home", lambda: home)
-    monkeypatch.setenv("HERMES_HOME", str(hermes))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes))
     for key in list(os.environ):
         if key.startswith("WHATSAPP_CLOUD_"):
             monkeypatch.delenv(key, raising=False)

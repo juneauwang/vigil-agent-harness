@@ -94,7 +94,7 @@ class TestCmdUpdateNpmLockfileCache:
 
     def test_package_json_only_edit_defeats_skip(self, tmp_path, monkeypatch):
         """Reviewer scenario (#61580): dev edits package.json WITHOUT running
-        npm — lockfile unchanged. `hermes update` must still install (the
+        npm — lockfile unchanged. `vigil update` must still install (the
         npm-install fallback is what syncs node_modules in that state)."""
         from hermes_cli import main as hm
 
@@ -126,7 +126,7 @@ class TestCmdUpdateNpmLockfileCache:
         checkout = tmp_path / "checkout"
         checkout.mkdir()
         (checkout / "package.json").write_text("{}")
-        shared_root = tmp_path / ".hermes"
+        shared_root = tmp_path / ".vigil"
         named_profile = shared_root / "profiles" / "work"
         named_profile.mkdir(parents=True)
 
@@ -142,10 +142,10 @@ class TestCmdUpdateNpmLockfileCache:
             "_npm_lockfile_changed",
             side_effect=lambda root: cache_roots.append(root) or False,
         ):
-            monkeypatch.setenv("HERMES_HOME", str(shared_root))
+            monkeypatch.setenv("VIGIL_HOME", str(shared_root))
             hm._update_node_dependencies()
 
-            monkeypatch.setenv("HERMES_HOME", str(named_profile))
+            monkeypatch.setenv("VIGIL_HOME", str(named_profile))
             hm._update_node_dependencies()
 
         assert cache_roots == [shared_root, shared_root]
@@ -187,7 +187,7 @@ class TestCmdUpdateTermuxUvBootstrap:
 
         pkg_uv = "/data/data/com.termux/files/usr/bin/uv"
         monkeypatch.setattr(hm, "_is_termux_env", lambda env=None: True)
-        # Production resolve_uv only checks $HERMES_HOME/bin/uv; model an empty
+        # Production resolve_uv only checks $VIGIL_HOME/bin/uv; model an empty
         # managed dir so the PATH probe is what surfaces the packaged uv.
         monkeypatch.setattr("hermes_cli.managed_uv.resolve_uv", lambda: None)
         monkeypatch.setattr("shutil.which", lambda name: pkg_uv if name == "uv" else None)
@@ -212,7 +212,7 @@ class TestCmdUpdateBranchFallback:
         """Regression for issue #26172: forks whose local HEAD already matches
         origin/main must still consult upstream/main before printing
         "Already up to date!" — otherwise a fork that's caught up to its own
-        origin but behind NousResearch/hermes-agent silently misses updates.
+        origin but behind juneauwang/vigil-agent-harness silently misses updates.
         """
         from hermes_cli import main as hm
 
@@ -360,7 +360,7 @@ class TestCmdUpdateProfileSkillSync:
             branch="main", verify_ok=True, commit_count="1"
         )
 
-        default_p = SimpleNamespace(name="default", path=Path("/fake/.hermes"))
+        default_p = SimpleNamespace(name="default", path=Path("/fake/.vigil"))
         active_p = SimpleNamespace(name="bit", path=Path("/fake/.hermes/profiles/bit"))
         other_p = SimpleNamespace(name="work", path=Path("/fake/.hermes/profiles/work"))
         all_profiles = [default_p, active_p, other_p]
@@ -398,7 +398,7 @@ class TestCmdUpdateProfileSkillSync:
             branch="main", verify_ok=True, commit_count="1"
         )
 
-        default_p = SimpleNamespace(name="default", path=Path("/fake/.hermes"))
+        default_p = SimpleNamespace(name="default", path=Path("/fake/.vigil"))
         synced_paths = []
 
         def fake_seed(path, quiet=False):
@@ -418,7 +418,7 @@ class TestCmdUpdateProfileSkillSync:
 
 
 class TestCmdUpdateBranchFlag:
-    """``hermes update --branch <name>`` targets the requested branch.
+    """``vigil update --branch <name>`` targets the requested branch.
 
     The CLI default stays 'main'; --branch lets callers pick a different
     target without monkey-patching the implementation.
@@ -505,7 +505,7 @@ class TestCmdUpdateBranchFlag:
 
 
 class TestCmdUpdateCheckBranchFlag:
-    """``hermes update --check --branch <name>`` honors the branch override.
+    """``vigil update --check --branch <name>`` honors the branch override.
 
     The check path used to call ``git rev-list HEAD..origin/<branch> --count``
     with ``check=True``. When the branch didn't exist on origin, the fetch
@@ -632,7 +632,7 @@ class TestCmdUpdateCheckBranchFlag:
 
 
 class TestCmdUpdateZipBranchRefusal:
-    """``hermes update --branch=<non-main>`` must refuse on the ZIP fallback path.
+    """``vigil update --branch=<non-main>`` must refuse on the ZIP fallback path.
 
     The ZIP fallback hard-codes a GitHub archive URL for main.zip; honoring
     --branch arbitrarily would require remote-branch existence checks the

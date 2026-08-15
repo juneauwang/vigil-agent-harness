@@ -3,7 +3,7 @@ vigil fallback — manage the fallback provider chain.
 
 Fallback providers are tried in order when the primary model fails with
 rate-limit, overload, or connection errors. See:
-https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers
+https://github.com/juneauwang/vigil-agent-harness
 
 Subcommands:
   vigil fallback [list]   Show the current fallback chain (default when no subcommand)
@@ -12,7 +12,7 @@ Subcommands:
   vigil fallback remove   Pick an entry to delete from the chain
   vigil fallback clear    Remove all fallback entries
 
-Storage: ``fallback_providers`` in ``~/.hermes/config.yaml`` (top-level, list of
+Storage: ``fallback_providers`` in ``~/.vigil/config.yaml`` (top-level, list of
 ``{provider, model, base_url?, api_mode?}`` dicts).  The legacy single-dict
 ``fallback_model`` format is migrated to the new list format on first add.
 """
@@ -128,7 +128,7 @@ def cmd_fallback_list(args) -> None:  # noqa: ARG001
         print(f"    {i}. {_format_entry(entry)}")
     print()
     print("  Tried in order when the primary fails (rate-limit, 5xx, connection errors).")
-    print("  Docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers")
+    print("  Docs: https://github.com/juneauwang/vigil-agent-harness")
     print()
 
 

@@ -1,6 +1,6 @@
 """Cross-process regression coverage for MCP discovery serialization.
 
-Two independent Hermes processes can start MCP discovery at the same time
+Two independent Vigil processes can start MCP discovery at the same time
 (dashboard and gateway startup).  The losing process must wait for the shared
 lock and then perform its own local discovery; another process's registry is
 not usable because ``_servers`` is process-local.
@@ -115,7 +115,7 @@ def test_two_processes_each_complete_local_mcp_discovery(tmp_path):
     )
 
     env = os.environ.copy()
-    env["HERMES_HOME"] = str(hermes_home)
+    env["VIGIL_HOME"] = str(hermes_home)
 
     holder_started = tmp_path / "holder-started"
     holder = subprocess.Popen(

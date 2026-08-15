@@ -1,11 +1,11 @@
 /**
- * Hermes skin → DesktopTheme converter.
+ * Vigil skin → DesktopTheme converter.
  *
- * A "skin" is the CLI/TUI theme unit: a YAML file in `$HERMES_HOME/skins/` (or a
+ * A "skin" is the CLI/TUI theme unit: a YAML file in `$VIGIL_HOME/skins/` (or a
  * built-in) resolved by `hermes_cli/skin_engine.py` and pushed to every surface
  * over JSON-RPC (`gateway.ready`, `skin.changed`, `config.get skin`). This is the
  * one place the desktop turns that CLI-shaped palette into a `DesktopTheme`, so a
- * skin Hermes authors from a prompt lights up all three surfaces from one file.
+ * skin Vigil authors from a prompt lights up all three surfaces from one file.
  *
  * Skins carry terminal-oriented keys (banner/status/completion). We seed the
  * desktop model from the load-bearing few (background, foreground, accent, error)

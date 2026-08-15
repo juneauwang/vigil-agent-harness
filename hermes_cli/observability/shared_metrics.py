@@ -1,4 +1,4 @@
-"""Durable aggregation and local export for Hermes shared metrics."""
+"""Durable aggregation and local export for Vigil shared metrics."""
 
 from __future__ import annotations
 
@@ -299,7 +299,7 @@ class SharedMetricsStore:
 
     def _ensure_schema(self) -> None:
         with self._connection(busy_timeout_ms=_SCHEMA_BUSY_TIMEOUT_MS) as connection:
-            # Serialize first-run creation and upgrades across Hermes processes.
+            # Serialize first-run creation and upgrades across Vigil processes.
             with write_txn(connection):
                 self._ensure_schema_in_transaction(connection)
 

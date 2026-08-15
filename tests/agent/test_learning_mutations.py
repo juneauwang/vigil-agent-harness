@@ -1,7 +1,7 @@
 """Behavior contracts for journey node edit/delete (agent.learning_mutations).
 
 Exercises the real on-disk resolution (skills dir + MEMORY.md/USER.md chunking)
-against a temp HERMES_HOME, never mocks — the id→file mapping is the whole point.
+against a temp VIGIL_HOME, never mocks — the id→file mapping is the whole point.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ def home():
 def test_parse_node_kind():
     assert lm.parse_node_kind("memory:memory:0") == "memory"
     assert lm.parse_node_kind("memory:profile:3") == "memory"
-    assert lm.parse_node_kind("debugging-hermes") == "skill"
+    assert lm.parse_node_kind("debugging-vigil") == "skill"
 
 
 

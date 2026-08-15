@@ -106,7 +106,7 @@ class TestCliResumeCommand:
 
 class TestCliResumeRestoresCwd:
     """Mid-chat /resume must retarget the working directory to where the
-    session was started — the same contract as a startup ``hermes -c`` /
+    session was started — the same contract as a startup ``vigil -c`` /
     ``--resume``.
 
     Regression coverage for #38562: ``_restore_session_cwd()`` was wired into

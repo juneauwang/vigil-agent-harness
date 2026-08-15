@@ -5,10 +5,10 @@ Authentication
 --------------
 The tool registers when **either** xAI credential path is available:
 
-* ``XAI_API_KEY`` is set in ``~/.hermes/.env`` or the process environment
+* ``XAI_API_KEY`` is set in ``~/.vigil/.env`` or the process environment
   (paid xAI API key), OR
 * The user is signed in via xAI Grok OAuth — SuperGrok subscription —
-  i.e. ``hermes auth add xai-oauth`` has been run and the stored refresh
+  i.e. ``vigil auth add xai-oauth`` has been run and the stored refresh
   token still works.
 
 Credential preference at call time matches

@@ -1,5 +1,5 @@
 """
-Cron subcommand for hermes CLI.
+Cron subcommand for vigil CLI.
 
 Handles standalone cron management commands like list, create, edit,
 pause/resume/run/remove, status, and tick.
@@ -20,7 +20,7 @@ from hermes_cli.colors import Colors, color
 # model tool via ``cron.jobs.create_job``) without a circular import. Re-export
 # ``_contains_gateway_lifecycle_command`` here for back-compat: ``tools/
 # terminal_tool.py`` imports it from this module to hard-block the same
-# commands at execution time when ``_HERMES_GATEWAY=1``.
+# commands at execution time when ``_VIGIL_GATEWAY=1``.
 from cron.lifecycle_guard import (  # noqa: F401  (re-exported for terminal_tool)
     contains_gateway_lifecycle_command as _contains_gateway_lifecycle_command,
 )
@@ -66,8 +66,8 @@ def _active_cron_provider_name() -> str:
 def _read_process_environ(pid: int) -> Optional[str]:
     """Read ``/proc/<pid>/environ`` (NUL-separated), or None when unavailable.
 
-    systemd unit 的 ``Environment=HERMES_HOME=...`` 会出现在进程环境里——
-    是区分安装归属（Vigil vs upstream Hermes）最可靠的信号。
+    systemd unit 的 ``Environment=VIGIL_HOME=...`` 会出现在进程环境里——
+    是区分安装归属（Vigil vs upstream Vigil）最可靠的信号。
     """
     path = Path(f"/proc/{pid}/environ")
     try:
@@ -80,8 +80,8 @@ def _pid_belongs_to_home(pid: int, home: Path) -> bool:
     """True when the PID is THIS installation's (``home``) gateway process.
 
     优先级（OPS-DELTA #12 缺陷 4/5 的归属判定）：
-      1. ``/proc/<pid>/environ`` 的 ``HERMES_HOME=<home>`` 精确匹配——最可靠；
-      2. 环境读不到时回退命令行 ``--profile`` / ``HERMES_HOME=`` 匹配
+      1. ``/proc/<pid>/environ`` 的 ``VIGIL_HOME=<home>`` 精确匹配——最可靠；
+      2. 环境读不到时回退命令行 ``--profile`` / ``VIGIL_HOME=`` 匹配
          （``gateway.status._command_line_belongs_to_profile``）；
       3. 两者都读不到（权限/平台）→ 保留（无法判定时宁可多报，不误杀）。
     """
@@ -89,8 +89,8 @@ def _pid_belongs_to_home(pid: int, home: Path) -> bool:
     if env is not None:
         home_value = None
         for line in env.split("\x00"):
-            if line.startswith("HERMES_HOME="):
-                home_value = line[len("HERMES_HOME="):]
+            if line.startswith("VIGIL_HOME="):
+                home_value = line[len("VIGIL_HOME="):]
                 break
         if home_value:
             try:
@@ -111,11 +111,11 @@ def _pid_belongs_to_home(pid: int, home: Path) -> bool:
 
 
 def _vigil_owned_gateway_pids() -> List[int]:
-    """Gateway PIDs belonging to THIS installation (filtered by HERMES_HOME).
+    """Gateway PIDs belonging to THIS installation (filtered by VIGIL_HOME).
 
     ``hermes_cli.gateway.find_gateway_pids()`` 的 systemd 服务扫描
-    （``hermes-gateway*`` 单位）不区分安装归属——upstream Hermes 的
-    ``hermes-gateway.service`` 会被当成自己的。这里逐 PID 按 HERMES_HOME /
+    （``hermes-gateway*`` 单位）不区分安装归属——upstream Vigil 的
+    ``hermes-gateway.service`` 会被当成自己的。这里逐 PID 按 VIGIL_HOME /
     --profile 过滤：upstream 一律不算，cron status 不再把别人的常驻进程当
     自己的调度载体（假健康）。
     """
@@ -307,7 +307,7 @@ def cron_status():
 
     pids = _vigil_owned_gateway_pids()
     # Gateway 进程存活 ≠ 调度健康：ticker 线程可能已死或每轮失败（#32612,
-    # #32895），且 gateway PID 必须属于本安装（#12 缺陷 4/5——upstream Hermes
+    # #32895），且 gateway PID 必须属于本安装（#12 缺陷 4/5——upstream agent harness
     # 的 gateway 一律不算）。Gateway 状态与 Ticker 状态分开显示。
     from cron.jobs import (
         get_ticker_heartbeat_age,

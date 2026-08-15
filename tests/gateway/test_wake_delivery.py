@@ -3,7 +3,7 @@
 Two strategies:
 * push-capable adapters keep the synthetic MessageEvent / handle_message path;
 * the stateless API server (supports_async_delivery=False) self-POSTs
-  /v1/chat/completions with the RAW session id in X-Hermes-Session-Id, so the
+  /v1/chat/completions with the RAW session id in X-Vigil-Session-Id, so the
   wake turn resumes the REAL session instead of a parallel invisible one
   keyed by build_session_key().
 """
@@ -76,7 +76,7 @@ def test_deliver_wake_non_push_self_posts_raw_session_id(monkeypatch):
     seen = {}
 
     async def handler(request):
-        seen["session_id"] = request.headers.get("X-Hermes-Session-Id")
+        seen["session_id"] = request.headers.get("X-Vigil-Session-Id")
         seen["auth"] = request.headers.get("Authorization")
         seen["body"] = await request.json()
         return web.json_response({"choices": [{"message": {"content": "ok"}}]})

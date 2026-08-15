@@ -103,7 +103,7 @@ def _is_pausable_gateway(cmdline: str) -> bool:
     ``hermes-setup``, so the CLI updater's own
     ``_pause_windows_gateways_for_update()`` — which exists precisely to
     stop these processes (and is always active: ``hermes-setup`` invokes
-    ``hermes update --yes --gateway``) — never gets the chance to run.
+    ``vigil update --yes --gateway``) — never gets the chance to run.
 
     Only gateway invocations are exempted. Anything else running from the
     venv (an operator's REPL, a stray script, a ``serve`` backend that

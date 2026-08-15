@@ -1,4 +1,4 @@
-"""Tests for the auxiliary-model configuration UI in ``hermes model``.
+"""Tests for the auxiliary-model configuration UI in ``vigil model``.
 
 Covers the helper functions:
   - ``_save_aux_choice`` writes to config.yaml without touching main model config
@@ -58,9 +58,9 @@ def test_title_generation_present_in_default_config():
 def test_save_aux_choice_persists_to_config_yaml(tmp_path, monkeypatch):
     """Saving a task writes provider/model/base_url/api_key to auxiliary.<task>."""
     from pathlib import Path
-    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    (tmp_path / ".hermes").mkdir(exist_ok=True)
+    (tmp_path / ".vigil").mkdir(exist_ok=True)
 
     _save_aux_choice(
         "vision", provider="openrouter", model="google/gemini-2.5-flash",
@@ -90,9 +90,9 @@ def test_save_aux_choice_persists_to_config_yaml(tmp_path, monkeypatch):
 def test_leave_unchanged_replaces_cancel_label(tmp_path, monkeypatch):
     """The bottom cancel entry now reads 'Leave unchanged' (UX polish)."""
     from pathlib import Path
-    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    (tmp_path / ".hermes").mkdir(exist_ok=True)
+    (tmp_path / ".vigil").mkdir(exist_ok=True)
 
     from hermes_cli import main as main_mod
 

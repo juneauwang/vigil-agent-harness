@@ -79,7 +79,7 @@ SINGLE_HANDLER_CASES = [
 
 
 def test_config_get_unset_subcommands_parse():
-    """`hermes config get/unset` parse key args (and --json for get)."""
+    """`vigil config get/unset` parse key args (and --json for get)."""
     parser = argparse.ArgumentParser(prog="hermes")
     sub = parser.add_subparsers(dest="command")
     handler = _h("config")
@@ -99,11 +99,11 @@ def test_config_get_unset_subcommands_parse():
 
 
 
-# ── deprecated `hermes login` fails gracefully, not with argparse error ────
+# ── deprecated `vigil login` fails gracefully, not with argparse error ────
 #
-# `hermes login` is a removed command; its handler (`login_command` in
-# `hermes_cli/auth.py`) prints a deprecation notice pointing at `hermes auth` /
-# `hermes model` and exits 0.  Two behavior contracts guard the UX:
+# `vigil login` is a removed command; its handler (`login_command` in
+# `hermes_cli/auth.py`) prints a deprecation notice pointing at `vigil auth` /
+# `vigil model` and exits 0.  Two behavior contracts guard the UX:
 #   1. ANY `--provider <value>` (including ones the user actually wants, like
 #      `anthropic`) must parse and reach the handler — never crash in argparse
 #      with `invalid choice` before the friendly redirect is printed (#24756).
@@ -120,7 +120,7 @@ def _login_parser():
 
 
 def test_login_subparser_help_is_suppressed():
-    """The deprecated `login` row must not appear in `hermes --help`.
+    """The deprecated `login` row must not appear in `vigil --help`.
 
     Must hold without leaking argparse's literal `==SUPPRESS==` placeholder,
     which `help=argparse.SUPPRESS` emits for a top-level subparser on 3.12+.

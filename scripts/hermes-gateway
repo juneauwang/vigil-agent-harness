@@ -234,7 +234,7 @@ def install_launchd():
     print(f"✓ Service installed and loaded")
     print(f"")
     print(f"To view logs:")
-    print(f"  tail -f ~/.hermes/logs/gateway.log")
+    print(f"  tail -f ~/.vigil/logs/gateway.log")
     print(f"")
     print(f"To manage the service:")
     print(f"  launchctl start ai.hermes.gateway")
@@ -332,7 +332,7 @@ Configuration:
     - DISCORD_BOT_TOKEN
     - WHATSAPP_ENABLED
     
-    Or create ~/.hermes/gateway.json for advanced configuration.
+    Or create ~/.vigil/gateway.json for advanced configuration.
 """
     )
     

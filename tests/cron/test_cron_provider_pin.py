@@ -13,7 +13,7 @@ The fix has two halves:
     delivers a loud actionable error.
 
 These tests exercise the full run_job path (real imports, mocked AIAgent +
-resolve_runtime_provider against a temp HERMES_HOME) and the create_job
+resolve_runtime_provider against a temp VIGIL_HOME) and the create_job
 snapshot capture. They are load-bearing: without the guard, cases (b) call the
 agent and "succeed" instead of failing closed.
 """

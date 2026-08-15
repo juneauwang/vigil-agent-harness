@@ -1,8 +1,8 @@
 """Tests for _web_ui_build_needed — staleness check for the web UI dist.
 
 The freshness check uses a SHA-256 content hash of the web source tree
-(mirroring the desktop build), recorded in a stamp file under $HERMES_HOME,
-NOT mtime comparison — so ``git pull`` / ``hermes update`` that rewrite
+(mirroring the desktop build), recorded in a stamp file under $VIGIL_HOME,
+NOT mtime comparison — so ``git pull`` / ``vigil update`` that rewrite
 source mtimes without changing content no longer fool it.
 
 Critical invariant: the dashboard Vite build outputs to hermes_cli/web_dist/
@@ -34,7 +34,7 @@ from hermes_cli.main import (
 @pytest.fixture(autouse=True)
 def _isolated_hermes_home(tmp_path, monkeypatch):
     """Keep web-build-stamp writes inside the test's tmp dir, never the real home."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "_hermes_home"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "_hermes_home"))
 
 
 def _touch(path: Path, offset: float = 0.0) -> None:
@@ -76,7 +76,7 @@ class TestWebUIBuildNeeded:
 
     def test_mtime_only_change_is_not_stale(self, tmp_path):
         """The whole point: bumping mtimes without changing bytes (what
-        ``git pull`` / ``hermes update`` do) must NOT report stale."""
+        ``git pull`` / ``vigil update`` do) must NOT report stale."""
         web_dir, dist_dir = _make_web_dir(tmp_path)
         src = web_dir / "src" / "App.tsx"
         src.parent.mkdir(parents=True, exist_ok=True)

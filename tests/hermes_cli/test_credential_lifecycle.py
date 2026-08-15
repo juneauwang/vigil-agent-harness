@@ -3,7 +3,7 @@
 A provider API key can live in .env, auth.json's credential_pool, and
 config.yaml mirrors at once. These tests drive the REAL dashboard endpoint
 handlers (PUT/DELETE /api/env) against real on-disk fixtures in a temp
-HERMES_HOME (tests/conftest.py isolation) and assert every store agrees
+VIGIL_HOME (tests/conftest.py isolation) and assert every store agrees
 afterwards.
 
 All fake secrets are constructed at runtime so no key-shaped literal ever
@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient
 from hermes_cli.web_server import _SESSION_TOKEN, app
 
 client = TestClient(app)
-HEADERS = {"X-Hermes-Session-Token": _SESSION_TOKEN}
+HEADERS = {"X-Vigil-Session-Token": _SESSION_TOKEN}
 
 # Runtime-constructed fake credentials (never literal key-shaped strings).
 FAKE_ZAI_KEY = "zk-" + "a" * 24
@@ -28,10 +28,10 @@ NEW_KEY = "zk-" + "c" * 24
 
 @pytest.fixture
 def hermes_home(monkeypatch, tmp_path):
-    """Fresh HERMES_HOME with .env + auth.json + config.yaml fixtures."""
+    """Fresh VIGIL_HOME with .env + auth.json + config.yaml fixtures."""
     home = tmp_path / "cred_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     from hermes_cli.config import invalidate_env_cache
 
     invalidate_env_cache()

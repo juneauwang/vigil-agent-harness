@@ -1,4 +1,4 @@
-"""Migrate Hermes' MCP server config and Codex's installed curated plugins
+"""Migrate Vigil' MCP server config and Codex's installed curated plugins
 to the format Codex expects in ~/.codex/config.toml.
 
 When the user enables the codex_app_server runtime, the codex subprocess
@@ -7,7 +7,7 @@ Asana, plus per-account ChatGPT apps via app/list). For both of those to
 be useful, the user's choices need to be visible to codex too. This
 module:
 
-  1. Reads Hermes' YAML and writes equivalent [mcp_servers.<name>]
+  1. Reads Vigil' YAML and writes equivalent [mcp_servers.<name>]
      entries to ~/.codex/config.toml.
   2. Queries codex's `plugin/list` for the openai-curated marketplace
      and writes [plugins."<name>@<marketplace>"] entries for any plugin
@@ -19,17 +19,17 @@ module:
      don't get an approval prompt on every write attempt.
 
 What translates (MCP servers):
-  Hermes mcp_servers.<n>.command/args/env  → codex stdio transport
-  Hermes mcp_servers.<n>.url/headers       → codex streamable_http transport
-  Hermes mcp_servers.<n>.timeout           → codex tool_timeout_sec
-  Hermes mcp_servers.<n>.connect_timeout   → codex startup_timeout_sec
+  Vigil mcp_servers.<n>.command/args/env  → codex stdio transport
+  Vigil mcp_servers.<n>.url/headers       → codex streamable_http transport
+  Vigil mcp_servers.<n>.timeout           → codex tool_timeout_sec
+  Vigil mcp_servers.<n>.connect_timeout   → codex startup_timeout_sec
 
 What does NOT translate (warned + skipped):
-  Hermes-specific keys (sampling, etc.) — codex's MCP client has no
+  Vigil-specific keys (sampling, etc.) — codex's MCP client has no
   equivalent. Listed in the per-server skipped[] field of the report.
 
 What's NOT migrated (intentional):
-  AGENTS.md — codex respects this file natively in its cwd. Hermes' own
+  AGENTS.md — codex respects this file natively in its cwd. Vigil' own
   AGENTS.md (project-level) is already in the worktree, so codex picks
   it up without translation. No code needed.
 """
@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 # Marker comments wrapping the managed section so re-runs can detect
 # what's ours and what's user-edited. Both must appear or strip is a no-op.
 MIGRATION_MARKER = (
-    "# managed by hermes-agent — `hermes codex-runtime migrate` regenerates this section"
+    "# managed by hermes-agent — `vigil codex-runtime migrate` regenerates this section"
 )
 MIGRATION_END_MARKER = (
     "# end hermes-agent managed section"
@@ -84,7 +84,7 @@ class MigrationReport:
                 )
                 lines.append(f"  - {name}{note}")
         else:
-            lines.append("No MCP servers found in Hermes config.")
+            lines.append("No MCP servers found in Vigil config.")
         if self.migrated_plugins:
             lines.append(
                 f"Migrated {len(self.migrated_plugins)} native Codex plugin(s):"
@@ -103,10 +103,10 @@ class MigrationReport:
         return "\n".join(lines)
 
 
-# Hermes keys that codex's MCP schema doesn't support — dropped during
+# Vigil keys that codex's MCP schema doesn't support — dropped during
 # migration with a warning. Anything not on the keep list AND not the
 # transport keys is added to skipped.
-_KNOWN_HERMES_KEYS = {
+_KNOWN_VIGIL_KEYS = {
     # transport — stdio
     "command", "args", "env", "cwd",
     # transport — http
@@ -119,7 +119,7 @@ _KNOWN_HERMES_KEYS = {
 
 # Subset that have a direct codex equivalent.
 _KEYS_DROPPED_WITH_WARNING = {
-    # Hermes' sampling subsection — codex MCP has no equivalent
+    # Vigil' sampling subsection — codex MCP has no equivalent
     "sampling",
 }
 
@@ -127,7 +127,7 @@ _KEYS_DROPPED_WITH_WARNING = {
 def _translate_one_server(
     name: str, hermes_cfg: dict
 ) -> tuple[Optional[dict], list[str]]:
-    """Translate one Hermes MCP server config to the codex inline-table dict
+    """Translate one Vigil MCP server config to the codex inline-table dict
     representation. Returns (codex_entry, skipped_keys).
 
     codex_entry is a dict ready for TOML serialization, or None when the
@@ -164,7 +164,7 @@ def _translate_one_server(
         headers = hermes_cfg.get("headers") or {}
         if headers:
             out["http_headers"] = {str(k): str(v) for k, v in headers.items()}
-        # Hermes' transport: sse hint is informational; codex auto-negotiates
+        # Vigil' transport: sse hint is informational; codex auto-negotiates
         if hermes_cfg.get("transport") == "sse":
             skipped.append("transport=sse (codex auto-negotiates)")
     else:
@@ -190,8 +190,8 @@ def _translate_one_server(
     for key in hermes_cfg:
         if key in _KEYS_DROPPED_WITH_WARNING:
             skipped.append(f"{key} (no codex equivalent)")
-        elif key not in _KNOWN_HERMES_KEYS:
-            skipped.append(f"{key} (unknown Hermes key)")
+        elif key not in _KNOWN_VIGIL_KEYS:
+            skipped.append(f"{key} (unknown Vigil key)")
 
     return out, skipped
 
@@ -212,7 +212,7 @@ def _format_toml_value(value: Any) -> str:
         # because TOML basic strings don't allow literal control chars
         # — passing them through would produce invalid TOML that codex
         # would refuse to load. Paths usually don't contain control
-        # chars but env-var passthrough (HERMES_HOME, PYTHONPATH) could
+        # chars but env-var passthrough (VIGIL_HOME, PYTHONPATH) could
         # in pathological cases.
         escaped = (
             value
@@ -263,7 +263,7 @@ def render_codex_toml_section(
     """
     out = [MIGRATION_MARKER]
     if not servers and not plugins and not default_permission_profile:
-        out.append("# (no MCP servers, plugins, or permissions configured by Hermes)")
+        out.append("# (no MCP servers, plugins, or permissions configured by Vigil)")
         out.append(MIGRATION_END_MARKER)
         return "\n".join(out) + "\n"
 
@@ -305,7 +305,7 @@ def render_codex_toml_section(
 
 
 def _insert_managed_block_at_top_level(user_text: str, managed_block: str) -> str:
-    """Insert Hermes' managed Codex TOML block while keeping root keys root-scoped.
+    """Insert Vigil' managed Codex TOML block while keeping root keys root-scoped.
 
     TOML has no syntax to return to the document root after a table header.
     Therefore appending a root key like `default_permissions = ...` after a
@@ -340,7 +340,7 @@ def _strip_unmanaged_plugin_tables(toml_text: str) -> str:
     managed block.
 
     Codex itself writes these tables when the user runs ``codex plugins enable``
-    directly (i.e. before Hermes' migrate has ever touched the file). When we
+    directly (i.e. before Vigil' migrate has ever touched the file). When we
     later run migrate, ``_query_codex_plugins()`` reports the same plugins via
     the live ``plugin/list`` RPC and we re-emit them inside the managed block.
     The result without this strip is duplicate ``[plugins."X@Y"]`` table
@@ -412,7 +412,7 @@ def _strip_existing_managed_block(toml_text: str) -> str:
     follows, we fall back to the heuristic that swallows lines until we
     hit a section that's not [mcp_servers.*]/[plugins.*]/[permissions]/
     a `default_permissions =` key. This matches what older versions of
-    this code wrote so re-runs don't break configs from prior Hermes
+    this code wrote so re-runs don't break configs from prior Vigil
     versions."""
     lines = toml_text.splitlines(keepends=True)
     out: list[str] = []
@@ -534,12 +534,12 @@ def _looks_like_test_tempdir(path: str) -> bool:
     pytest tempdirs live under ``pytest-of-<user>/pytest-<n>/`` (created via
     ``tmp_path`` / ``tmp_path_factory``) and are reaped between sessions.
     macOS routes ``/tmp`` through ``/private/var/folders/<…>/T`` which is
-    what pytest's tempdir factory uses by default. If a HERMES_HOME pointing
+    what pytest's tempdir factory uses by default. If a VIGIL_HOME pointing
     at one of those paths is burned into ``~/.codex/config.toml``, every
     codex-routed hermes-tools call fails silently once the directory is GC'd.
 
     We err on the side of refusing — losing a (very unlikely) real
-    ``~/.hermes`` symlink that happens to live under ``/private/var/folders``
+    ``~/.vigil`` symlink that happens to live under ``/private/var/folders``
     is much less harmful than silently bricking codex's tool surface.
     """
     if not path:
@@ -555,43 +555,43 @@ def _looks_like_test_tempdir(path: str) -> bool:
 
 
 def _build_hermes_tools_mcp_entry() -> dict:
-    """Build the codex stdio-transport entry that launches Hermes' own
+    """Build the codex stdio-transport entry that launches Vigil' own
     tool surface as an MCP server. Codex's subprocess will call back into
     this for browser/web/delegate_task/vision/memory/skills tools.
 
     The command runs the worktree's Python via the current sys.executable
-    so a hermes installed under /opt/, /usr/local/, or a venv all work.
-    HERMES_HOME and PYTHONPATH are passed through so the spawned process
+    so a vigil installed under /opt/, /usr/local/, or a venv all work.
+    VIGIL_HOME and PYTHONPATH are passed through so the spawned process
     sees the same config + module layout the user is running."""
     import sys
 
     env: dict[str, str] = {}
-    # HERMES_HOME passes through IF SET so the MCP subprocess sees the same
+    # VIGIL_HOME passes through IF SET so the MCP subprocess sees the same
     # config / auth / sessions DB as the parent CLI. Read from os.environ
     # (not get_hermes_home()) on purpose: when the env var is unset we want
-    # codex's subprocess to inherit whatever HERMES_HOME its launcher sets
+    # codex's subprocess to inherit whatever VIGIL_HOME its launcher sets
     # at runtime (systemd unit, gateway, kanban dispatcher, custom shell),
     # rather than burning the migrate-time resolved default into config.toml
-    # — that would override the launcher's HERMES_HOME and pin the subprocess
+    # — that would override the launcher's VIGIL_HOME and pin the subprocess
     # to the wrong profile.
     #
     # The pytest-tempdir guard below catches the issue #26250 Bug C scenario:
-    # a sibling test's monkeypatch.setenv("HERMES_HOME", tmp_path) would
+    # a sibling test's monkeypatch.setenv("VIGIL_HOME", tmp_path) would
     # otherwise leak a transient pytest tempdir into the user's real
     # ~/.codex/config.toml and silently brick codex once the tempdir is GC'd.
-    hermes_home = os.environ.get("HERMES_HOME") or ""
+    hermes_home = os.environ.get("VIGIL_HOME") or ""
     if hermes_home and _looks_like_test_tempdir(hermes_home):
         hermes_home = ""
     if hermes_home:
-        env["HERMES_HOME"] = hermes_home
-    # PYTHONPATH passes through so a worktree-launched hermes finds the
+        env["VIGIL_HOME"] = hermes_home
+    # PYTHONPATH passes through so a worktree-launched vigil finds the
     # branch's modules instead of the installed package.
     pythonpath = os.environ.get("PYTHONPATH")
     if pythonpath:
         env["PYTHONPATH"] = pythonpath
     # Quiet mode + redaction defaults so the MCP wire stays clean.
-    env["HERMES_QUIET"] = "1"
-    env["HERMES_REDACT_SECRETS"] = env.get("HERMES_REDACT_SECRETS", "true")
+    env["VIGIL_QUIET"] = "1"
+    env["VIGIL_REDACT_SECRETS"] = env.get("VIGIL_REDACT_SECRETS", "true")
 
     out: dict[str, Any] = {
         "command": sys.executable,
@@ -615,11 +615,11 @@ def migrate(
     default_permission_profile: Optional[str] = ":workspace",
     expose_hermes_tools: bool = True,
 ) -> MigrationReport:
-    """Translate Hermes mcp_servers config + Codex curated plugins into
+    """Translate Vigil mcp_servers config + Codex curated plugins into
     ~/.codex/config.toml.
 
     Args:
-        hermes_config: full ~/.hermes/config.yaml dict
+        hermes_config: full ~/.vigil/config.yaml dict
         codex_home: override CODEX_HOME (defaults to ~/.codex)
         dry_run: skip the actual write; report what would happen
         discover_plugins: when True (default), query `plugin/list` against
@@ -635,10 +635,10 @@ def migrate(
             configured in their own [permissions.<name>] table. Set None
             to leave permissions unset and let codex use its compiled-in
             default (which is read-only).
-        expose_hermes_tools: when True (default), register Hermes' own
+        expose_hermes_tools: when True (default), register Vigil' own
             tool surface (web_search, browser_*, delegate_task, vision,
             memory, skills, etc.) as an MCP server in ~/.codex/config.toml
-            so the codex subprocess can call back into Hermes for tools
+            so the codex subprocess can call back into Vigil for tools
             codex doesn't have built in. Set False to opt out.
     """
     report = MigrationReport(dry_run=dry_run)
@@ -649,7 +649,7 @@ def migrate(
     hermes_servers = (hermes_config or {}).get("mcp_servers") or {}
     if not isinstance(hermes_servers, dict):
         report.errors.append(
-            "mcp_servers in Hermes config is not a dict; cannot migrate."
+            "mcp_servers in Vigil config is not a dict; cannot migrate."
         )
         return report
 
@@ -687,8 +687,8 @@ def migrate(
     if default_permission_profile:
         report.wrote_permissions_default = default_permission_profile
 
-    # Inject Hermes' own tool surface as an MCP server so the spawned
-    # codex subprocess can call back into Hermes for the tools codex
+    # Inject Vigil' own tool surface as an MCP server so the spawned
+    # codex subprocess can call back into Vigil for the tools codex
     # doesn't ship with — web_search, browser_*, delegate_task, vision,
     # memory, skills, session_search, image_generate, text_to_speech.
     # The server itself is agent/transports/hermes_tools_mcp_server.py

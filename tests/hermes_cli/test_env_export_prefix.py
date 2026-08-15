@@ -50,7 +50,7 @@ def test_config_load_env_strips_export_prefix(tmp_path):
 
 
 def test_skills_tool_load_env_strips_export_prefix(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     (tmp_path / ".env").write_text(
         "export SOME_SKILL_KEY=skillval\nPLAIN=plainval\n", encoding="utf-8"
     )
@@ -83,7 +83,7 @@ def test_has_any_provider_configured_with_export_prefix(tmp_path, monkeypatch):
     for key in list(__import__("os").environ):
         if key.endswith(("_API_KEY", "_TOKEN")) and key != "BWS_ACCESS_TOKEN":
             monkeypatch.delenv(key, raising=False)
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     (tmp_path / ".env").write_text(
         "export OPENAI_API_KEY=sk-export-only-123\n", encoding="utf-8"
     )
@@ -91,7 +91,7 @@ def test_has_any_provider_configured_with_export_prefix(tmp_path, monkeypatch):
     import hermes_cli.main as hmain
 
     importlib.reload(hmain)
-    # get_env_path() derives from HERMES_HOME (set above) → tmp_path/.env, so
+    # get_env_path() derives from VIGIL_HOME (set above) → tmp_path/.env, so
     # no patching is needed. Re-clear os.environ provider keys that
     # load_hermes_dotenv may have populated at import/reload time, forcing the
     # function down its .env-reading branch.

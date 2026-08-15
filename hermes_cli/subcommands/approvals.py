@@ -1,4 +1,4 @@
-"""``hermes approvals`` subcommand parser.
+"""``vigil approvals`` subcommand parser.
 
 Follows the cron/security pattern: parser construction lives here, the
 handler is injected by ``main.py`` so this module never imports ``main``

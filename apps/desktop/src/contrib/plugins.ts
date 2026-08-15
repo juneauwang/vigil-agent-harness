@@ -5,7 +5,7 @@
  *    `HermesPlugin` registers automatically (vite glob — drop a folder in).
  *    None ship in-tree today; reference/demo plugins live in the companion
  *    `hermes-example-plugins` repo.
- *  - RUNTIME: the on-disk door (`<hermes home>/desktop-plugins/<name>/plugin.js`)
+ *  - RUNTIME: the on-disk door (`<vigil home>/desktop-plugins/<name>/plugin.js`)
  *    — the agent's/user's door, watched + hot-reloaded by the runtime loader.
  */
 

@@ -2,8 +2,8 @@
 OpenAI-compatible API server platform adapter.
 
 Exposes an HTTP server with endpoints:
-- POST /v1/chat/completions        — OpenAI Chat Completions format (stateless; opt-in session continuity via X-Hermes-Session-Id header; opt-in long-term memory scoping via X-Hermes-Session-Key header)
-- POST /v1/responses               — OpenAI Responses API format (stateful via previous_response_id; X-Hermes-Session-Key supported)
+- POST /v1/chat/completions        — OpenAI Chat Completions format (stateless; opt-in session continuity via X-Vigil-Session-Id header; opt-in long-term memory scoping via X-Vigil-Session-Key header)
+- POST /v1/responses               — OpenAI Responses API format (stateful via previous_response_id; X-Vigil-Session-Key supported)
 - GET  /v1/responses/{response_id} — Retrieve a stored response
 - DELETE /v1/responses/{response_id} — Delete a stored response
 - GET  /v1/models                  — lists hermes-agent and any configured model_routes aliases
@@ -346,7 +346,7 @@ def _resolve_request_runtime_agent_kwargs(provider: str, target_model: Optional[
 
     model_cfg = _get_model_config()
     max_tokens = None
-    env_max_tokens = os.environ.get("HERMES_MAX_TOKENS")
+    env_max_tokens = os.environ.get("VIGIL_MAX_TOKENS")
     if env_max_tokens:
         try:
             max_tokens = int(env_max_tokens)
@@ -845,7 +845,7 @@ class ResponseStore:
             self._conn = sqlite3.connect(":memory:", check_same_thread=False)
             self._db_path = None
         # Use shared WAL-fallback helper so response_store.db degrades
-        # gracefully on NFS/SMB/FUSE-mounted HERMES_HOME (same filesystem
+        # gracefully on NFS/SMB/FUSE-mounted VIGIL_HOME (same filesystem
         # issue addressed for state.db/kanban.db — see
         # hermes_state._WAL_INCOMPAT_MARKERS).
         from hermes_state import apply_wal_with_fallback
@@ -2051,11 +2051,11 @@ class APIServerAdapter(BasePlatformAdapter):
     def _parse_session_key_header(
         self, request: "web.Request"
     ) -> tuple[Optional[str], Optional["web.Response"]]:
-        """Extract and validate the ``X-Hermes-Session-Key`` header.
+        """Extract and validate the ``X-Vigil-Session-Key`` header.
 
         The session key is a stable per-channel identifier that scopes
         long-term memory (e.g. Honcho sessions) across transcripts.  It
-        is independent of ``X-Hermes-Session-Id``: callers may send
+        is independent of ``X-Vigil-Session-Id``: callers may send
         either, both, or neither.
 
         Returns ``(session_key, None)`` on success (with an empty/absent
@@ -2067,18 +2067,18 @@ class APIServerAdapter(BasePlatformAdapter):
         unauthenticated client on a local-only server can't inject itself
         into another user's long-term memory scope by guessing a key.
         """
-        raw = request.headers.get("X-Hermes-Session-Key", "").strip()
+        raw = request.headers.get("X-Vigil-Session-Key", "").strip()
         if not raw:
             return None, None
 
         if not self._api_key:
             logger.warning(
-                "X-Hermes-Session-Key rejected: no API key configured. "
+                "X-Vigil-Session-Key rejected: no API key configured. "
                 "Set API_SERVER_KEY to enable long-term memory scoping."
             )
             return None, web.json_response(
                 _openai_error(
-                    "X-Hermes-Session-Key requires API key authentication. "
+                    "X-Vigil-Session-Key requires API key authentication. "
                     "Configure API_SERVER_KEY to enable this feature."
                 ),
                 status=403,
@@ -2129,7 +2129,7 @@ class APIServerAdapter(BasePlatformAdapter):
     def _ensure_session_db(self):
         """Lazily initialise and return the SessionDB for the active profile home.
 
-        Sessions are persisted to ``state.db`` so that ``hermes sessions list``
+        Sessions are persisted to ``state.db`` so that ``vigil sessions list``
         shows API-server conversations alongside CLI and gateway ones.
 
         Under multiplex ``/p/<profile>/`` requests the profile runtime scope
@@ -2552,7 +2552,7 @@ class APIServerAdapter(BasePlatformAdapter):
         gateway platforms), falling back to the hermes-api-server default.
 
         ``gateway_session_key`` is a stable per-channel identifier supplied
-        by the client (via ``X-Hermes-Session-Key``).  Unlike ``session_id``
+        by the client (via ``X-Vigil-Session-Key``).  Unlike ``session_id``
         which scopes the short-term transcript and rotates on /new, this
         key is meant to persist across transcripts so long-term memory
         providers (e.g. Honcho) can scope their per-chat state correctly
@@ -2760,7 +2760,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 )
 
         # When the config has no model.default but a provider was resolved
-        # (e.g. user ran `hermes auth add openai-codex` without `hermes model`),
+        # (e.g. user ran `vigil auth add openai-codex` without `vigil model`),
         # fall back to the provider's first catalog model so the API call
         # doesn't fail with "model must be a non-empty string". Mirrors
         # run.py::_resolve_session_agent_runtime. Runs after the selection
@@ -3067,8 +3067,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 "skills_api": True,
                 "audio_api": False,
                 "realtime_voice": False,
-                "session_continuity_header": "X-Hermes-Session-Id",
-                "session_key_header": "X-Hermes-Session-Key",
+                "session_continuity_header": "X-Vigil-Session-Id",
+                "session_key_header": "X-Vigil-Session-Key",
                 "cors": bool(self._cors_origins),
             },
             "endpoints": {
@@ -3602,9 +3602,9 @@ class APIServerAdapter(BasePlatformAdapter):
         )
         effective_session_id = result.get("session_id") if isinstance(result, dict) else session_id
         final_response = _resolve_media_to_data_urls(result.get("final_response", "") if isinstance(result, dict) else "")
-        headers = {"X-Hermes-Session-Id": effective_session_id or session_id}
+        headers = {"X-Vigil-Session-Id": effective_session_id or session_id}
         if gateway_session_key:
-            headers["X-Hermes-Session-Key"] = gateway_session_key
+            headers["X-Vigil-Session-Key"] = gateway_session_key
         runtime = {}
         if isinstance(result, dict):
             runtime = result.get("runtime") or {}
@@ -3821,10 +3821,10 @@ class APIServerAdapter(BasePlatformAdapter):
             "Content-Type": "text/event-stream",
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
-            "X-Hermes-Session-Id": session_id,
+            "X-Vigil-Session-Id": session_id,
         }
         if gateway_session_key:
-            headers["X-Hermes-Session-Key"] = gateway_session_key
+            headers["X-Vigil-Session-Key"] = gateway_session_key
         response = web.StreamResponse(status=200, headers=headers)
         await response.prepare(request)
         try:
@@ -3946,26 +3946,26 @@ class APIServerAdapter(BasePlatformAdapter):
             )
 
         # Allow caller to scope long-term memory (e.g. Honcho) with a
-        # stable per-channel identifier via X-Hermes-Session-Key.  This
-        # is independent of X-Hermes-Session-Id: the key persists across
+        # stable per-channel identifier via X-Vigil-Session-Key.  This
+        # is independent of X-Vigil-Session-Id: the key persists across
         # transcripts while the id rotates when the caller starts a new
         # transcript (i.e. /new semantics).  See _parse_session_key_header.
         gateway_session_key, key_err = self._parse_session_key_header(request)
         if key_err is not None:
             return key_err
 
-        # Allow caller to continue an existing session by passing X-Hermes-Session-Id.
+        # Allow caller to continue an existing session by passing X-Vigil-Session-Id.
         # When provided, history is loaded from state.db instead of from the request body.
         #
         # Security: session continuation exposes conversation history, so it is
         # only allowed when the API key is configured and the request is
         # authenticated.  Without this gate, any unauthenticated client could
         # read arbitrary session history by guessing/enumerating session IDs.
-        provided_session_id = request.headers.get("X-Hermes-Session-Id", "").strip()
+        provided_session_id = request.headers.get("X-Vigil-Session-Id", "").strip()
         if provided_session_id:
             if not self._api_key:
                 logger.warning(
-                    "Session continuation via X-Hermes-Session-Id rejected: "
+                    "Session continuation via X-Vigil-Session-Id rejected: "
                     "no API key configured.  Set API_SERVER_KEY to enable "
                     "session continuity."
                 )
@@ -4186,10 +4186,10 @@ class APIServerAdapter(BasePlatformAdapter):
             finish_reason = "stop"
 
         response_headers = {
-            "X-Hermes-Session-Id": result.get("session_id", session_id),
+            "X-Vigil-Session-Id": result.get("session_id", session_id),
         }
         if gateway_session_key:
-            response_headers["X-Hermes-Session-Key"] = gateway_session_key
+            response_headers["X-Vigil-Session-Key"] = gateway_session_key
 
         # Hard-fail path: no usable assistant text AND a real failure → 5xx
         # with OpenAI-style error envelope so SDK clients raise instead of
@@ -4205,8 +4205,8 @@ class APIServerAdapter(BasePlatformAdapter):
                 "partial": is_partial,
                 "failed": is_failed,
             }
-            response_headers["X-Hermes-Completed"] = "false"
-            response_headers["X-Hermes-Partial"] = "true" if is_partial else "false"
+            response_headers["X-Vigil-Completed"] = "false"
+            response_headers["X-Vigil-Partial"] = "true" if is_partial else "false"
             return web.json_response(err_body, status=502, headers=response_headers)
 
         # Soft-partial path: we have *some* text but the run did not complete
@@ -4241,10 +4241,10 @@ class APIServerAdapter(BasePlatformAdapter):
                 "error": err_msg,
                 "error_code": "output_truncated" if finish_reason == "length" else "agent_error",
             }
-            response_headers["X-Hermes-Completed"] = "false"
-            response_headers["X-Hermes-Partial"] = "true" if is_partial else "false"
+            response_headers["X-Vigil-Completed"] = "false"
+            response_headers["X-Vigil-Partial"] = "true" if is_partial else "false"
             if err_msg:
-                response_headers["X-Hermes-Error"] = _redact_api_error_text(err_msg, limit=200)
+                response_headers["X-Vigil-Error"] = _redact_api_error_text(err_msg, limit=200)
 
         return web.json_response(response_data, headers=response_headers)
 
@@ -4271,9 +4271,9 @@ class APIServerAdapter(BasePlatformAdapter):
         if cors:
             sse_headers.update(cors)
         if session_id:
-            sse_headers["X-Hermes-Session-Id"] = session_id
+            sse_headers["X-Vigil-Session-Id"] = session_id
         if gateway_session_key:
-            sse_headers["X-Hermes-Session-Key"] = gateway_session_key
+            sse_headers["X-Vigil-Session-Key"] = gateway_session_key
         response = web.StreamResponse(status=200, headers=sse_headers)
         await response.prepare(request)
 
@@ -4497,9 +4497,9 @@ class APIServerAdapter(BasePlatformAdapter):
         if cors:
             sse_headers.update(cors)
         if session_id:
-            sse_headers["X-Hermes-Session-Id"] = session_id
+            sse_headers["X-Vigil-Session-Id"] = session_id
         if gateway_session_key:
-            sse_headers["X-Hermes-Session-Key"] = gateway_session_key
+            sse_headers["X-Vigil-Session-Key"] = gateway_session_key
         response = web.StreamResponse(status=200, headers=sse_headers)
         await response.prepare(request)
 
@@ -5320,7 +5320,7 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # Persist the effective session ID surfaced by _run_agent so that
         # compression-triggered session rotations propagate to the stored
-        # response and the X-Hermes-Session-Id header.  Without this,
+        # response and the X-Vigil-Session-Id header.  Without this,
         # previous_response_id chaining keeps resuming the pre-rotation
         # session and re-triggers compression on every subsequent request.
         _effective_session_id = session_id
@@ -5365,9 +5365,9 @@ class APIServerAdapter(BasePlatformAdapter):
             if conversation:
                 self._response_store.set_conversation(conversation, response_id)
 
-        response_headers = {"X-Hermes-Session-Id": _effective_session_id}
+        response_headers = {"X-Vigil-Session-Id": _effective_session_id}
         if gateway_session_key:
-            response_headers["X-Hermes-Session-Key"] = gateway_session_key
+            response_headers["X-Vigil-Session-Key"] = gateway_session_key
         return web.json_response(response_data, headers=response_headers)
 
     # ------------------------------------------------------------------
@@ -6057,7 +6057,7 @@ class APIServerAdapter(BasePlatformAdapter):
                         "total_tokens": getattr(agent, "session_total_tokens", 0) or 0,
                     }
                     # Include the effective session ID in the result so callers
-                    # (e.g. X-Hermes-Session-Id header) can track compression-
+                    # (e.g. X-Vigil-Session-Id header) can track compression-
                     # triggered session rotations. (#16938)
                     _eff_sid = getattr(agent, "session_id", session_id)
                     if isinstance(_eff_sid, str) and _eff_sid:
@@ -6516,11 +6516,11 @@ class APIServerAdapter(BasePlatformAdapter):
                             approval_token = set_current_session_key(approval_session_key)
                             session_tokens = self._bind_api_server_session(
                                 # chat_id carries the raw session id (the
-                                # X-Hermes-Session-Id equivalent) exactly like
+                                # X-Vigil-Session-Id equivalent) exactly like
                                 # the other agent-entry routes bind it via
                                 # _run_agent(). Without it,
                                 # tools.async_delegation reads an empty
-                                # HERMES_SESSION_CHAT_ID on /v1/runs and
+                                # VIGIL_SESSION_CHAT_ID on /v1/runs and
                                 # background delegations stay forced-sync
                                 # (no wake target).
                                 chat_id=session_id or "",
@@ -6700,7 +6700,7 @@ class APIServerAdapter(BasePlatformAdapter):
             task.add_done_callback(self._background_tasks.discard)
 
         response_headers = (
-            {"X-Hermes-Session-Key": gateway_session_key} if gateway_session_key else {}
+            {"X-Vigil-Session-Key": gateway_session_key} if gateway_session_key else {}
         )
         return web.json_response(
             {"run_id": run_id, "status": "started"},
@@ -7056,7 +7056,7 @@ class APIServerAdapter(BasePlatformAdapter):
             # unsandboxed local terminal backend. The API server can drive the
             # agent's terminal/file tools as the host user; on a public bind
             # that is the exact surface the hermes-0day campaign abused to write
-            # ~/.hermes/config.yaml and plant persistence. Sandboxing (Docker /
+            # ~/.vigil/config.yaml and plant persistence. Sandboxing (Docker /
             # remote backend) contains the blast radius. Warn, don't refuse —
             # the operator may have an external firewall / strong key.
             if is_network_accessible(self._host):

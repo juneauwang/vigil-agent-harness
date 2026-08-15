@@ -1,4 +1,4 @@
-"""CLI handlers for ``hermes secrets onepassword ...``.
+"""CLI handlers for ``vigil secrets onepassword ...``.
 
 Subcommands:
     setup    — verify the op CLI, set account / token env var, enable
@@ -9,7 +9,7 @@ Subcommands:
     disable  — flip ``secrets.onepassword.enabled`` to False
 
 Unlike Bitwarden, the ``op`` binary is NOT auto-installed: 1Password publishes
-the CLI through OS package managers and signed installers, so Hermes expects
+the CLI through OS package managers and signed installers, so Vigil expects
 an already-installed, already-authenticated ``op`` and never downloads one.
 """
 
@@ -119,7 +119,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     console.print(
         Panel.fit(
             "[bold]1Password secret source setup[/bold]\n\n"
-            "Hermes resolves [cyan]op://vault/item/field[/cyan] references through your\n"
+            "Vigil resolves [cyan]op://vault/item/field[/cyan] references through your\n"
             "already-installed, already-authenticated 1Password CLI (`op`).\n\n"
             f"Don't have it yet? Install + sign in: [cyan]{_DOCS_URL}[/cyan]",
             border_style="cyan",
@@ -244,7 +244,7 @@ def cmd_status(args: argparse.Namespace) -> int:
         else:
             console.print(
                 f"\n  [yellow]No active op session and {token_env} is unset — "
-                "Hermes will warn and skip 1Password on next startup.[/yellow]"
+                "Vigil will warn and skip 1Password on next startup.[/yellow]"
             )
     if not references:
         console.print(
@@ -351,7 +351,7 @@ def cmd_token(args: argparse.Namespace) -> int:
     op_src.clear_caches()
     console.print(
         f"[green]✓[/green] stored in {get_env_path()} as {token_env}.  "
-        "Takes effect on the next Hermes invocation."
+        "Takes effect on the next Vigil invocation."
     )
     if not op_cfg.get("enabled"):
         console.print(
@@ -464,7 +464,7 @@ def cmd_disable(args: argparse.Namespace) -> int:
     save_config(cfg)
     console.print(
         "[green]Disabled.[/green]  1Password references will NOT be resolved on the "
-        "next Hermes invocation.\n"
+        "next Vigil invocation.\n"
         "  Your reference mappings are left in config.yaml — remove them with "
         "[cyan]vigil secrets onepassword remove ENV_VAR[/cyan] if you no longer "
         "need them."

@@ -1,7 +1,7 @@
 """
-Email platform adapter for the Hermes gateway.
+Email platform adapter for the Vigil gateway.
 
-Allows users to interact with Hermes by sending emails.
+Allows users to interact with Vigil by sending emails.
 Uses IMAP to receive and SMTP to send messages.
 
 Environment variables:
@@ -473,7 +473,7 @@ class EmailAdapter(BasePlatformAdapter):
         # Resolve connection settings from the env vars first, then fall back to
         # PlatformConfig.extra (address/imap_host/smtp_host) — the canonical dict
         # gateway.config populates and that the "connected" check, the
-        # send-helper, and `hermes config show` already read. Without the
+        # send-helper, and `vigil config show` already read. Without the
         # fallback a config.yaml-only setup left these empty. Host/address values
         # are stripped: a stray space or newline made IMAP4_SSL raise the
         # misleading ``[Errno 8] nodename nor servname`` (an unresolvable name)
@@ -976,7 +976,7 @@ class EmailAdapter(BasePlatformAdapter):
 
         # Thread context for reply
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject", "Vigil Agent")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1090,7 +1090,7 @@ class EmailAdapter(BasePlatformAdapter):
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject", "Vigil Agent")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1170,7 +1170,7 @@ class EmailAdapter(BasePlatformAdapter):
         msg["To"] = to_addr
 
         ctx = self._thread_context.get(to_addr, {})
-        subject = ctx.get("subject", "Hermes Agent")
+        subject = ctx.get("subject", "Vigil Agent")
         if not subject.startswith("Re:"):
             subject = f"Re: {subject}"
         msg["Subject"] = subject
@@ -1264,7 +1264,7 @@ async def _standalone_send(
         msg = MIMEText(message, "plain", "utf-8")
         msg["From"] = address
         msg["To"] = chat_id
-        msg["Subject"] = "Hermes Agent"
+        msg["Subject"] = "Vigil Agent"
         msg["Date"] = formatdate(localtime=True)
 
         server = smtplib.SMTP(smtp_host, smtp_port)
@@ -1298,7 +1298,7 @@ def _build_adapter(config):
 
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system."""
+    """Plugin entry point — called by the Vigil plugin system."""
     ctx.register_platform(
         name="email",
         label="Email",

@@ -93,7 +93,7 @@ def is_container_startup_environment() -> bool:
 
 
 def active_profile_may_override_home(hermes_root: str) -> bool:
-    """Cheap probe: does an active non-default profile redirect HERMES_HOME?"""
+    """Cheap probe: does an active non-default profile redirect VIGIL_HOME?"""
     active_profile = os.path.join(hermes_root, "active_profile")
     try:
         if os.path.exists(active_profile):
@@ -119,12 +119,12 @@ def container_mode_may_be_active() -> bool:
     host's version instead of the container's. Hence: any profile
     ambiguity → assume container mode may be active.
     """
-    if os.environ.get("HERMES_DEV") == "1":
+    if os.environ.get("VIGIL_DEV") == "1":
         return False
     if is_container_startup_environment():
         return False
 
-    hermes_home = os.environ.get("HERMES_HOME", "").strip()
+    hermes_home = os.environ.get("VIGIL_HOME", "").strip()
     if hermes_home:
         if os.path.exists(os.path.join(hermes_home, ".container-mode")):
             return True
@@ -167,7 +167,7 @@ def read_install_method() -> str | None:
     order) — the managed/git/pip fallbacks need heavier imports and stay on
     the slow path. On the fast path home ambiguity is already excluded:
     ``container_mode_may_be_active()`` bails to the slow path whenever a
-    non-default profile might redirect HERMES_HOME.
+    non-default profile might redirect VIGIL_HOME.
     """
     stamp = os.path.join(_resolved_home(), ".install_method")
     try:
@@ -195,10 +195,10 @@ def print_fast_version_info() -> None:
 
 
 def try_fast_version(argv: list[str] | None = None) -> bool:
-    """Handle ``hermes --version`` before the heavy import wall.
+    """Handle ``vigil --version`` before the heavy import wall.
 
     Termux keeps its historical contract (also accepts the ``version``
-    subcommand + the HERMES_TERMUX_DISABLE_FAST_CLI escape hatch). Everywhere
+    subcommand + the VIGIL_TERMUX_DISABLE_FAST_CLI escape hatch). Everywhere
     else: only ``--version``/``-V`` (the ``version`` subcommand stays on the
     slow path for full output incl. update check), and never when container
     mode may need to route the command into the container.
@@ -206,7 +206,7 @@ def try_fast_version(argv: list[str] | None = None) -> bool:
     if argv is None:
         argv = sys.argv[1:]
     is_termux = is_termux_env()
-    if is_termux and os.environ.get("HERMES_TERMUX_DISABLE_FAST_CLI") == "1":
+    if is_termux and os.environ.get("VIGIL_TERMUX_DISABLE_FAST_CLI") == "1":
         return False
     if is_termux:
         if not is_termux_fast_version_argv(argv):

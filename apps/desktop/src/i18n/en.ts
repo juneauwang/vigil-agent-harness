@@ -618,7 +618,7 @@ export const en: Translations = {
         `Connection used only when “${profile}” is the active profile. Choose Use default gateway to remove its override.`,
       envOverrideTitle: 'Environment variables are controlling this desktop session.',
       envOverrideDesc:
-        'Unset HERMES_DESKTOP_REMOTE_URL and HERMES_DESKTOP_REMOTE_TOKEN to use the saved setting below.',
+        'Unset VIGIL_DESKTOP_REMOTE_URL and VIGIL_DESKTOP_REMOTE_TOKEN to use the saved setting below.',
       modeTitle: 'Connection mode',
       localTitle: 'Local gateway',
       localDesc: 'Start a private Hermes backend on localhost. This is the default and works offline.',
@@ -736,7 +736,7 @@ export const en: Translations = {
       sshErrHostKey:
         'The host key has CHANGED since you last connected. Verify this is expected, then run ssh-keygen -R <host> and reconnect.',
       sshErrNotInstalled:
-        'Hermes is not installed on the remote host. Install it there (curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sh) or set the Hermes path.',
+        'Hermes is not installed on the remote host. Install it there (curl -fsSL https://github.com/juneauwang/vigil-agent-harness | sh) or set the Vigil path.',
       sshErrPlatform:
         'Unsupported remote platform. Hermes Desktop SSH mode supports Linux, macOS, and Windows remote hosts.',
       sshErrTimeout: 'SSH connection timed out. The host may be unreachable or asleep.',
@@ -2767,7 +2767,7 @@ export const en: Translations = {
       reject: 'Reject',
       alwaysTitle: 'Always allow this command?',
       alwaysDescription: pattern =>
-        `This adds the “${pattern}” pattern to your permanent allowlist (~/.hermes/config.yaml). Hermes won’t ask again for commands like this — in this session or any future one.`,
+        `This adds the “${pattern}” pattern to your permanent allowlist (~/.vigil/config.yaml). Hermes won’t ask again for commands like this — in this session or any future one.`,
       alwaysAllow: 'Always allow'
     },
     clarify: {

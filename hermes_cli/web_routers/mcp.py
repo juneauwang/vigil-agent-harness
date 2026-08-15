@@ -161,7 +161,7 @@ async def test_mcp_server(name: str, profile: Optional[str] = None):
         # skills lock for its ENTIRE body. Holding that across the probe
         # serialized every other endpoint (config/skills/toolsets all take the
         # same lock), so a slow server made unrelated requests time out at 15s.
-        # The probe touches no skills globals; it only needs the HERMES_HOME
+        # The probe touches no skills globals; it only needs the VIGIL_HOME
         # override for .env interpolation + OAuth token resolution, which the
         # contextvar provides (copied into this to_thread worker; and
         # _run_on_mcp_loop re-wraps it onto the MCP event-loop thread).
@@ -299,7 +299,7 @@ async def mcp_oauth_callback(
         None,
     )
     if flow is None:
-        return HTMLResponse("<h1>OAuth flow expired</h1><p>Return to Hermes and try again.</p>", status_code=404)
+        return HTMLResponse("<h1>OAuth flow expired</h1><p>Return to Vigil and try again.</p>", status_code=404)
     try:
         flow.deliver_callback(code=code, state=state, error=error)
     except ValueError as exc:
@@ -311,8 +311,8 @@ async def mcp_oauth_callback(
             status_code=status_code,
         )
     if error:
-        return HTMLResponse("<h1>Authorization failed</h1><p>Return to Hermes for details.</p>", status_code=400)
-    return HTMLResponse("<h1>Authorization received</h1><p>You can close this tab and return to Hermes.</p>")
+        return HTMLResponse("<h1>Authorization failed</h1><p>Return to Vigil for details.</p>", status_code=400)
+    return HTMLResponse("<h1>Authorization received</h1><p>You can close this tab and return to Vigil.</p>")
 
 
 @router.put("/api/mcp/servers/{name}/enabled")
@@ -343,7 +343,7 @@ async def list_mcp_catalog(profile: Optional[str] = None):
 
     Each entry reports whether it's already installed and enabled so the UI
     can show install / enabled state inline.  This is the same catalog
-    `hermes mcp catalog` / `hermes mcp install` read.  ``profile`` scopes
+    `vigil mcp catalog` / `vigil mcp install` read.  ``profile`` scopes
     the installed/enabled annotations (the catalog itself is repo-shipped
     and identical for every profile).
     """
@@ -441,7 +441,7 @@ async def install_mcp_catalog_entry(body: MCPCatalogInstall, profile: Optional[s
 
     # Git-bootstrap entries can take a while to clone — run via the background
     # action path so the request returns immediately and the UI can tail logs.
-    # The -p subprocess rebinds HERMES_HOME-derived paths in the child.
+    # The -p subprocess rebinds VIGIL_HOME-derived paths in the child.
     if entry.install is not None:
         # Unique per-entry action name: a shared "mcp-install" would let a
         # re-click (or a second entry) overwrite the tracked process/log while

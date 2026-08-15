@@ -4,19 +4,19 @@ Bypasses cli.py entirely.  No banner, no spinner, no session_id line,
 no stderr chatter.  Just the agent's final text to stdout.
 
 Toolsets = explicit --toolsets when provided, otherwise whatever the user has
-configured for "cli" in `hermes tools`.
+configured for "cli" in `vigil tools`.
 Rules / memory / AGENTS.md / preloaded skills = same as a normal chat turn.
-Approvals = auto-bypassed (HERMES_YOLO_MODE=1 is set for the call).
+Approvals = auto-bypassed (VIGIL_YOLO_MODE=1 is set for the call).
 Working directory = the user's CWD (AGENTS.md etc. resolve from there as usual).
 
-Model / provider selection mirrors `hermes chat`:
+Model / provider selection mirrors `vigil chat`:
     - Both optional. If omitted, use the user's configured default.
     - If both given, pair them exactly as given.
     - If only --model given, auto-detect the provider that serves it.
     - If only --provider given, error out (ambiguous — caller must pick a model).
 
 Env var fallbacks (used when the corresponding arg is not passed):
-    - HERMES_INFERENCE_MODEL
+    - VIGIL_INFERENCE_MODEL
 """
 
 from __future__ import annotations
@@ -178,7 +178,7 @@ def run_oneshot(
 
     Args:
         prompt: The user message to send.
-        model: Optional model override. Falls back to HERMES_INFERENCE_MODEL
+        model: Optional model override. Falls back to VIGIL_INFERENCE_MODEL
             env var, then config.yaml's model.default / model.model.
         provider: Optional provider override. Falls back to config.yaml's
             model.provider, then "auto".
@@ -202,10 +202,10 @@ def run_oneshot(
     # not host it), and silently picking the provider's catalog default hides
     # the mismatch.  Require the caller to be explicit.  Validate BEFORE the
     # stderr redirect so the message actually reaches the terminal.
-    env_model_early = os.getenv("HERMES_INFERENCE_MODEL", "").strip()
+    env_model_early = os.getenv("VIGIL_INFERENCE_MODEL", "").strip()
     if provider and not ((model or "").strip() or env_model_early):
         sys.stderr.write(
-            "vigil -z: --provider requires --model (or HERMES_INFERENCE_MODEL). "
+            "vigil -z: --provider requires --model (or VIGIL_INFERENCE_MODEL). "
             "Pass both explicitly, or neither to use your configured defaults.\n"
         )
         return 2
@@ -218,8 +218,8 @@ def run_oneshot(
 
     # Auto-approve any shell / tool approvals.  Non-interactive by
     # definition — a prompt would hang forever.
-    os.environ["HERMES_YOLO_MODE"] = "1"
-    os.environ["HERMES_ACCEPT_HOOKS"] = "1"
+    os.environ["VIGIL_YOLO_MODE"] = "1"
+    os.environ["VIGIL_ACCEPT_HOOKS"] = "1"
 
     # One-shot prints a single final response and exits: there is no later turn
     # for a detached subagent's completion to re-enter, and nothing here drains
@@ -295,7 +295,7 @@ def run_oneshot(
 
 
 def _create_session_db_for_oneshot():
-    """Best-effort SessionDB for ``hermes -z`` / oneshot mode.
+    """Best-effort SessionDB for ``vigil -z`` / oneshot mode.
 
     Oneshot bypasses ``HermesCLI._init_agent()``, so it must wire the SQLite
     session store itself. Without this, the ``session_search``/recall tool is
@@ -319,7 +319,7 @@ def _run_agent(
 ) -> tuple[str, dict]:
     """Build an AIAgent exactly like a normal CLI chat turn would, then
     run a single conversation.  Returns ``(final_response, run_result)``."""
-    # Imports are local so they don't run when hermes is invoked for
+    # Imports are local so they don't run when vigil is invoked for
     # other commands (keeps top-level CLI startup cheap).
     from hermes_cli.config import load_config
     from hermes_cli.models import detect_provider_for_model
@@ -336,7 +336,7 @@ def _run_agent(
     else:
         cfg_model = model_cfg.get("default") or model_cfg.get("model") or ""
 
-    env_model = os.getenv("HERMES_INFERENCE_MODEL", "").strip()
+    env_model = os.getenv("VIGIL_INFERENCE_MODEL", "").strip()
     effective_model = (model or "").strip() or env_model or cfg_model
 
     # Resolve effective provider: explicit arg → (auto-detect from model if
@@ -375,7 +375,7 @@ def _run_agent(
                     cfg_provider = str(model_cfg.get("provider") or "").strip().lower()
                 current_provider = (
                     cfg_provider
-                    or os.getenv("HERMES_INFERENCE_PROVIDER", "").strip().lower()
+                    or os.getenv("VIGIL_INFERENCE_PROVIDER", "").strip().lower()
                     or "auto"
                 )
                 detected = detect_provider_for_model(explicit_model, current_provider)
@@ -440,10 +440,10 @@ def _run_agent(
             #                so the agent continues instead of stalling on
             #                the tool's built-in "not available" error
             #   - sudo password prompt → terminal_tool gates on
-            #                HERMES_INTERACTIVE which we never set
-            #   - shell-hook approval → auto-approved via HERMES_ACCEPT_HOOKS=1
+            #                VIGIL_INTERACTIVE which we never set
+            #   - shell-hook approval → auto-approved via VIGIL_ACCEPT_HOOKS=1
             #                (set above); also falls back to deny on non-tty
-            #   - dangerous-command approval → bypassed via HERMES_YOLO_MODE=1
+            #   - dangerous-command approval → bypassed via VIGIL_YOLO_MODE=1
             #   - skill secret capture → returns gracefully when no callback set
             clarify_callback=_oneshot_clarify_callback,
         )

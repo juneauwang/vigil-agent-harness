@@ -24,7 +24,7 @@ def ensure_install_id(config: Dict[str, Any]) -> str:
     (read-only home, managed scope), the ephemeral id is still returned and
     a new one is minted next start.
 
-    Clearing ``monitoring.install_id`` (e.g. ``hermes config set
+    Clearing ``monitoring.install_id`` (e.g. ``vigil config set
     monitoring.install_id ""``) rotates the id on the next gateway start.
     """
     mon = config.get("monitoring") if isinstance(config, dict) else None

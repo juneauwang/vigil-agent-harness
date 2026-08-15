@@ -101,13 +101,13 @@ const API_KEY_OPTIONS: ApiKeyOption[] = [
     id: 'local',
     name: 'Local / custom endpoint',
     envKey: 'OPENAI_BASE_URL',
-    docsUrl: 'https://github.com/NousResearch/hermes-agent#bring-your-own-endpoint',
+    docsUrl: 'https://github.com/juneauwang/vigil-agent-harness',
     placeholder: 'http://127.0.0.1:8000/v1'
   }
 ]
 
 // Build the FULL API-key provider catalog from the backend model options so the
-// onboarding / Providers key form lists every `api_key` provider `hermes model`
+// onboarding / Providers key form lists every `api_key` provider `vigil model`
 // knows about — not just the hand-curated five. Curated entries keep their
 // richer copy + placeholders and float to the top (recommended defaults); every
 // other api_key provider is appended with a generic "paste {KEY}" affordance.

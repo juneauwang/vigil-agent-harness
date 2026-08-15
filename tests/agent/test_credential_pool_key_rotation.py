@@ -14,13 +14,13 @@ def _write_auth_store(tmp_path, payload: dict) -> None:
 def test_key_rotation_clears_exhausted_status(tmp_path, monkeypatch):
     """Replacing an exhausted API key via _upsert_entry resets last_status.
 
-    Regression: `hermes setup` saves a new OPENROUTER_API_KEY to .env, which
+    Regression: `vigil setup` saves a new OPENROUTER_API_KEY to .env, which
     triggers _seed_from_env → _upsert_entry.  If the existing pool entry was
     marked exhausted (e.g. from a rate-limit on the old key), the stale status
     was preserved on the new key — making the pool appear unusable even though
     a fresh valid key was present.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_auth_store(
         tmp_path,
         {
@@ -66,7 +66,7 @@ def test_key_rotation_clears_exhausted_status(tmp_path, monkeypatch):
 
 def test_same_key_preserves_exhausted_status(tmp_path, monkeypatch):
     """If the key has NOT changed, _upsert_entry does not clear exhaustion state."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
 
     from agent.credential_pool import PooledCredential, _upsert_entry
 

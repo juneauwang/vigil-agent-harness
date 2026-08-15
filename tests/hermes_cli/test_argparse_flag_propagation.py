@@ -1,7 +1,7 @@
 """Tests for parent→subparser flag propagation.
 
 When flags like --yolo, -w, -s exist on both the parent parser and the 'chat'
-subparser, placing the flag BEFORE the subcommand (e.g. 'hermes --yolo chat')
+subparser, placing the flag BEFORE the subcommand (e.g. 'vigil --yolo chat')
 must not silently drop the flag value.
 
 Regression test for: argparse subparser default=False overwriting parent's
@@ -19,7 +19,7 @@ import pytest
 
 
 def _build_parser():
-    """Build the hermes argument parser from the real code.
+    """Build the vigil argument parser from the real code.
 
     We import the real main() and extract the parser it builds.
     Since main() is a large function that does much more than parse args,
@@ -103,27 +103,27 @@ class TestChatVerboseArg:
 
 
 class TestYoloEnvVar:
-    """Verify --yolo sets HERMES_YOLO_MODE regardless of flag position.
+    """Verify --yolo sets VIGIL_YOLO_MODE regardless of flag position.
 
     This tests the actual cmd_chat logic pattern (getattr → os.environ).
     """
 
     @pytest.fixture(autouse=True)
     def _clean_env(self):
-        os.environ.pop("HERMES_YOLO_MODE", None)
+        os.environ.pop("VIGIL_YOLO_MODE", None)
         yield
-        os.environ.pop("HERMES_YOLO_MODE", None)
+        os.environ.pop("VIGIL_YOLO_MODE", None)
 
     def _simulate_cmd_chat_yolo_check(self, args):
         """Replicate the exact check from cmd_chat in main.py."""
         if getattr(args, "yolo", False):
-            os.environ["HERMES_YOLO_MODE"] = "1"
+            os.environ["VIGIL_YOLO_MODE"] = "1"
 
     def test_yolo_before_chat_sets_env(self):
         parser = _build_parser()
         args = parser.parse_args(["--yolo", "chat"])
         self._simulate_cmd_chat_yolo_check(args)
-        assert os.environ.get("HERMES_YOLO_MODE") == "1"
+        assert os.environ.get("VIGIL_YOLO_MODE") == "1"
 
 
 class TestAcceptHooksOnAgentSubparsers:
@@ -131,7 +131,7 @@ class TestAcceptHooksOnAgentSubparsers:
     position (before the subcommand, between group/subcommand, and
     after the leaf subcommand) for gateway/cron/mcp/acp.  Regression
     against prior behaviour where the flag only worked on the root
-    parser and `chat`, so `hermes gateway run --accept-hooks` failed
+    parser and `chat`, so `vigil gateway run --accept-hooks` failed
     with `unrecognized arguments`."""
 
     ARGVS = [
@@ -164,7 +164,7 @@ import hermes_cli.main as main_mod
 argvs = json.loads(sys.argv[1])
 results = []
 for argv in argvs:
-    sys.argv = ["hermes", *argv]
+    sys.argv = ["vigil", *argv]
     out, err = io.StringIO(), io.StringIO()
     code = 0
     try:
@@ -180,7 +180,7 @@ print(json.dumps(results))
 """
 
     def test_accepted_at_every_position(self):
-        """Every `hermes <argv>` must exit 0 (help) rather than failing
+        """Every `vigil <argv>` must exit 0 (help) rather than failing
         with `unrecognized arguments`."""
         import json
         import subprocess
@@ -206,7 +206,7 @@ class TestChatSubparserInheritedValueFlags:
     """Verify -t/--toolsets, -m/--model and --provider survive parent→chat
     subparser dispatch.
 
-    Regression test for #28780: `hermes -t web chat` silently dropped the
+    Regression test for #28780: `vigil -t web chat` silently dropped the
     toolset because the chat subparser re-declared `-t/--toolsets` with
     `default=None`, which clobbered the top-level parser's value during
     subparser dispatch.
@@ -267,7 +267,7 @@ class TestChatSubparserInheritedValueFlags:
         assert not offenders, (
             "Chat subparser redeclares these top-level flags without "
             "default=argparse.SUPPRESS; they will silently clobber the "
-            "top-level value when used as `hermes <flag> <value> chat`:\n  "
+            "top-level value when used as `vigil <flag> <value> chat`:\n  "
             + "\n  ".join(f"{opts} dest={dest} default={d!r}"
                           for opts, dest, d in offenders)
         )

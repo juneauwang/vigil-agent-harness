@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stand-in for ssh inside the dev sandbox.
 #
-# install.sh and `hermes update` clone over ssh first (git@github.com:...), so
+# install.sh and `vigil update` clone over ssh first (git@github.com:...), so
 # the sandbox needs an `ssh` that answers. Rather than run a real sshd, this
 # ignores the host, user, and command git asked for and speaks the
 # upload-pack protocol directly against the sandbox's bare repo -- which is

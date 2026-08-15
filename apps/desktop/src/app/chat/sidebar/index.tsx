@@ -733,7 +733,7 @@ export function ChatSidebar({
   const [scopedRepoWorktrees] = useRepoWorktreeMap(scopedRepoPaths, inEnteredProject)
 
   // Re-probe worktree lanes on out-of-band git changes the renderer can't see.
-  // A turn can `git worktree add/remove` in the terminal (e.g. you ask Hermes to
+  // A turn can `git worktree add/remove` in the terminal (e.g. you ask Vigil to
   // "remove that worktree"), and the window never blurs during an in-app chat,
   // so nothing would otherwise re-run the visual probe. Re-sync when a working
   // session settles (its turn finished) or the window refocuses (an external

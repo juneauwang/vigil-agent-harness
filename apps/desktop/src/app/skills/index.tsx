@@ -459,7 +459,7 @@ export function SkillsView({ setStatusbarItemGroup: _setStatusbarItemGroup, ...p
 
   // Learned/local skills are editable + archivable, mirroring the memory
   // graph (same /api/learning/node endpoints — delete archives, restorable
-  // via `hermes curator restore`).
+  // via `vigil curator restore`).
   const [skillEditor, setSkillEditor] = useState<null | { content: string; name: string }>(null)
   const [skillDraft, setSkillDraft] = useState('')
   const [skillSaving, setSkillSaving] = useState(false)

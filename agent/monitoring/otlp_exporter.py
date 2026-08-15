@@ -1,7 +1,7 @@
 """Export monitoring events to an OpenTelemetry Collector over OTLP/HTTP.
 
 Maps gateway monitoring events to OTel spans and sends them to the endpoint
-configured under ``monitoring.export.otlp``. Lets an operator stream Hermes
+configured under ``monitoring.export.otlp``. Lets an operator stream Vigil
 gateway health into their own observability stack (OTEL Collector, DataDog,
 and similar).
 
@@ -161,7 +161,7 @@ def _span_attrs(ev: Dict[str, Any]) -> Dict[str, Any]:
                     v = (redact_for_export(v) or "[redacted]")[:500]
                 except Exception:
                     v = "[redaction-unavailable]"
-            attrs[f"hermes.{col}"] = v
+            attrs[f"vigil.{col}"] = v
     return attrs
 
 
@@ -171,7 +171,7 @@ def export_batch(provider, batch: List[Dict[str, Any]]) -> int:
     n = 0
     for ev in batch:
         try:
-            name = f"hermes.{ev.get('event', 'event')}"
+            name = f"vigil.{ev.get('event', 'event')}"
             span = tracer.start_span(name, attributes=_span_attrs(ev))
             span.end()
             n += 1

@@ -1,12 +1,12 @@
-"""``hermes debug`` debug tools for Hermes Agent.
+"""``vigil debug`` debug tools for Vigil Agent.
 
 Currently supports:
-    hermes debug share    Upload debug report (system info + logs) to a
+    vigil debug share    Upload debug report (system info + logs) to a
                           paste service and print a shareable URL.
                           By default, log content is run through
                           ``agent.redact.redact_sensitive_text`` with
                           ``force=True`` before upload so credentials in
-                          ``~/.hermes/logs/*.log`` are not leaked into
+                          ``~/.vigil/logs/*.log`` are not leaked into
                           the public paste service. Pass ``--no-redact``
                           to disable.
                           Pass ``--nous`` to upload instead to Nous-internal
@@ -70,16 +70,16 @@ _AUTO_DELETE_SECONDS = 21600
 # ---------------------------------------------------------------------------
 
 def _pending_file() -> Path:
-    """Path to ``~/.hermes/pastes/pending.json``.
+    """Path to ``~/.vigil/pastes/pending.json``.
 
     Each entry: ``{"url": "...", "expire_at": <unix_ts>}``.  Scheduled
     DELETEs used to be handled by spawning a detached Python process per
     paste that slept for 6 hours; those accumulated forever if the user
-    ran ``hermes debug share`` repeatedly.
+    ran ``vigil debug share`` repeatedly.
 
     Deletion is now driven by the gateway's cron ticker
     (``gateway/run.py::_start_cron_ticker``) which calls
-    ``_sweep_expired_pastes`` once per hour.  ``hermes debug share`` also
+    ``_sweep_expired_pastes`` once per hour.  ``vigil debug share`` also
     runs an opportunistic sweep on entry as a fallback for CLI-only users
     who never start the gateway.
     """
@@ -111,7 +111,7 @@ def _save_pending(entries: list[dict]) -> None:
         tmp.write_text(json.dumps(entries, indent=2), encoding="utf-8")
         atomic_replace(tmp, path)
     except OSError:
-        # Non-fatal — worst case the user has to run ``hermes debug delete``
+        # Non-fatal — worst case the user has to run ``vigil debug delete``
         # manually.
         pass
 
@@ -141,7 +141,7 @@ def _sweep_expired_pastes(now: Optional[float] = None) -> tuple[int, int]:
 
     Returns ``(deleted, remaining)``.  Best-effort: failed deletes stay in
     the pending file and will be retried on the next sweep.  Silent —
-    intended to be called from every ``hermes debug`` invocation with
+    intended to be called from every ``vigil debug`` invocation with
     minimal noise.
     """
     entries = _load_pending()
@@ -258,12 +258,12 @@ def _schedule_auto_delete(urls: list[str], delay_seconds: int = _AUTO_DELETE_SEC
 
     Previously this spawned a detached Python subprocess per call that slept
     for 6 hours and then issued DELETE requests.  Those subprocesses leaked —
-    every ``hermes debug share`` invocation added ~20 MB of resident Python
+    every ``vigil debug share`` invocation added ~20 MB of resident Python
     interpreters that never exited until the sleep completed.
 
-    The replacement is stateless: we append to ``~/.hermes/pastes/pending.json``
+    The replacement is stateless: we append to ``~/.vigil/pastes/pending.json``
     and the gateway's cron ticker sweeps expired entries once per hour.
-    ``hermes debug share`` also runs an opportunistic sweep as a fallback
+    ``vigil debug share`` also runs an opportunistic sweep as a fallback
     for CLI-only users.  If neither runs again, paste.rs's own retention
     policy handles cleanup.
     """
@@ -373,13 +373,13 @@ def _primary_log_path(log_name: str) -> Optional[Path]:
 
 
 # Logs written by a client process rather than by this backend. When the
-# desktop app talks to a remote/docker/SSH backend, `hermes debug share` runs
+# desktop app talks to a remote/docker/SSH backend, `vigil debug share` runs
 # on the *backend* and can never see them — a bare "(file not found)" then
 # reads as "the app logged nothing" and sends triage down a dead end, which is
 # exactly the wrong answer when the client is the thing being debugged.
 _CLIENT_SIDE_LOGS = {
     "desktop": (
-        "written by Hermes Desktop on the machine running the app, not by this "
+        "written by Vigil Desktop on the machine running the app, not by this "
         "backend. If the desktop connects to a remote/docker/SSH backend, collect "
         "it on that client machine"
     ),
@@ -456,7 +456,7 @@ def _capture_log_snapshot(
     ``full_text`` are run through ``_redact_log_text`` so the snapshot
     returned is upload-safe. The on-disk log file is never modified.
     Pass ``redact=False`` to capture original log content (used by
-    ``hermes debug share --no-redact``).
+    ``vigil debug share --no-redact``).
     """
     log_path = _resolve_log_path(log_name)
     if log_path is None:
@@ -562,7 +562,7 @@ def _capture_default_log_snapshots(
 # ---------------------------------------------------------------------------
 
 def _capture_dump() -> str:
-    """Run ``hermes dump`` and return its stdout as a string."""
+    """Run ``vigil dump`` and return its stdout as a string."""
     from hermes_cli.dump import run_dump
 
     class _FakeArgs:
@@ -593,7 +593,7 @@ def collect_debug_report(
     log_lines
         Number of recent lines to include per log file.
     dump_text
-        Pre-captured dump output.  If empty, ``hermes dump`` is run
+        Pre-captured dump output.  If empty, ``vigil dump`` is run
         internally.
 
     Returns the report as a plain-text string ready for upload.
@@ -759,7 +759,7 @@ def build_debug_share(
 ) -> DebugShareResult:
     """Collect the debug report + full logs, upload each, return the URLs.
 
-    This is the shared core behind ``hermes debug share`` (CLI) and the
+    This is the shared core behind ``vigil debug share`` (CLI) and the
     dashboard ``POST /api/ops/debug-share`` endpoint. It performs blocking
     network I/O (paste uploads) — callers inside an event loop must run it in
     a worker thread.
@@ -909,7 +909,7 @@ def run_debug_share(args):
     # Manual delete fallback
     print("To delete now:  vigil debug delete <url>")
 
-    print("\nShare these links with the Hermes team for support.")
+    print("\nShare these links with the Vigil team for support.")
 
 
 _NOUS_PRIVACY_NOTICE = """\
@@ -928,7 +928,7 @@ _NOUS_PRIVACY_NOTICE = """\
 
 
 def _run_debug_share_nous(args, *, log_lines: int, redact: bool) -> None:
-    """Handle ``hermes debug share --nous``: upload the bundle to Nous-S3.
+    """Handle ``vigil debug share --nous``: upload the bundle to Nous-S3.
 
     Collects the same force-redacted bundle as the paste path, gzips it into
     the Nous envelope, requests a signed URL from NAS, uploads, and prints the
@@ -1011,10 +1011,10 @@ def run_debug_delete(args):
 
 def run_debug(args):
     """Route debug subcommands."""
-    # Opportunistic sweep of expired pastes on every ``hermes debug`` call.
+    # Opportunistic sweep of expired pastes on every ``vigil debug`` call.
     # Replaces the old per-paste sleeping subprocess that used to leak as
     # one orphaned Python interpreter per scheduled deletion.  Silent and
-    # best-effort — any failure is swallowed so ``hermes debug`` stays
+    # best-effort — any failure is swallowed so ``vigil debug`` stays
     # reliable even when offline.
     try:
         _sweep_expired_pastes()

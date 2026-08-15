@@ -1,6 +1,6 @@
 """Tests for cross-profile auth fallback.
 
-When ``HERMES_HOME`` points to a named profile, ``read_credential_pool()``
+When ``VIGIL_HOME`` points to a named profile, ``read_credential_pool()``
 and ``get_provider_auth_state()`` fall back to the global-root
 ``auth.json`` per-provider when the profile has no entries for that
 provider.  Writes still target the profile only.
@@ -30,21 +30,21 @@ def _make_auth_store(pool: dict | None = None, providers: dict | None = None) ->
 
 @pytest.fixture()
 def profile_env(tmp_path, monkeypatch):
-    """Set up a global root + an active profile under Path.home()/.hermes/profiles/coder.
+    """Set up a global root + an active profile under Path.home()/.vigil/profiles/coder.
 
     * Path.home() -> tmp_path
-    * Global root -> tmp_path/.hermes            (has its own auth.json fixture)
-    * Profile     -> tmp_path/.hermes/profiles/coder   (active, HERMES_HOME points here)
+    * Global root -> tmp_path/.vigil            (has its own auth.json fixture)
+    * Profile     -> tmp_path/.vigil/profiles/coder   (active, VIGIL_HOME points here)
 
     This mirrors the real "named profile mounted under the default root"
     layout that profile users actually have on disk.
     """
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    global_root = tmp_path / ".hermes"
+    global_root = tmp_path / ".vigil"
     global_root.mkdir()
     profile_dir = global_root / "profiles" / "coder"
     profile_dir.mkdir(parents=True)
-    monkeypatch.setenv("HERMES_HOME", str(profile_dir))
+    monkeypatch.setenv("VIGIL_HOME", str(profile_dir))
     return {"global": global_root, "profile": profile_dir}
 
 
@@ -143,7 +143,7 @@ def test_provider_auth_state_returns_none_when_neither_has_it(profile_env):
 # ``resolve_nous_access_token``) call ``_load_provider_state`` directly with
 # a profile-loaded auth store rather than going through
 # ``get_provider_auth_state``. Without the fallback wired into
-# ``_load_provider_state`` itself, those helpers raise ``"Hermes is not
+# ``_load_provider_state`` itself, those helpers raise ``"Vigil is not
 # logged into Nous Portal"`` even though the user has a valid global Nous
 # login. These tests pin the per-provider shadowing into the helper.
 # ---------------------------------------------------------------------------
@@ -238,13 +238,13 @@ def test_auth_lock_reentrancy_is_scoped_after_profile_context_switch(profile_env
 
 @pytest.fixture()
 def classic_env(tmp_path, monkeypatch):
-    """Classic single-root layout (HERMES_HOME != ~/.hermes, no profiles)."""
+    """Classic single-root layout (VIGIL_HOME != ~/.vigil, no profiles)."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     hermes_home = tmp_path / "classic"
     hermes_home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
     return hermes_home
 
 

@@ -48,12 +48,12 @@ def test_extract_markdown_entries_promotes_heading_context():
 
 ### Active Projects
 
-- Hermes Agent
+- Vigil Agent
 """
     entries = mod.extract_markdown_entries(text)
     assert "Tyler Williams: Founder of VANTA Research" in entries
     assert "Tyler Williams: Timezone: America/Los_Angeles" in entries
-    assert "Tyler Williams > Active Projects: Hermes Agent" in entries
+    assert "Tyler Williams > Active Projects: Vigil Agent" in entries
 
 
 
@@ -80,7 +80,7 @@ def test_merge_entries_respects_limit_and_reports_overflow():
 def test_migrator_copies_skill_and_merges_allowlist(tmp_path: Path):
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
 
     (source / "workspace" / "skills" / "demo-skill").mkdir(parents=True)
@@ -127,7 +127,7 @@ def test_migrator_copies_skill_and_merges_allowlist(tmp_path: Path):
 def _allowlist_migrator(mod, tmp_path: Path, existing_config: str):
     """Migrator wired to merge an exec-approvals allowlist into config.yaml."""
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
     source.mkdir(parents=True)
     (source / "exec-approvals.json").write_text(
@@ -146,7 +146,7 @@ def _allowlist_migrator(mod, tmp_path: Path, existing_config: str):
     ), target / "config.yaml"
 
 
-MALFORMED_HERMES_CONFIG = """\
+MALFORMED_VIGIL_CONFIG = """\
 model: hermes-4-405b
 api_key_env: OPENROUTER_API_KEY
 command_allowlist:
@@ -169,7 +169,7 @@ def test_unreadable_config_is_refused_not_overwritten(tmp_path: Path):
     """
     mod = load_module()
     migrator, config_path = _allowlist_migrator(
-        mod, tmp_path, MALFORMED_HERMES_CONFIG)
+        mod, tmp_path, MALFORMED_VIGIL_CONFIG)
     before = config_path.read_bytes()
 
     report = migrator.migrate()
@@ -185,7 +185,7 @@ def test_unreadable_config_blocks_later_config_steps_instead_of_partial_writes(
     """One refusal flips the existing _config_apply_blocked short-circuit."""
     mod = load_module()
     migrator, config_path = _allowlist_migrator(
-        mod, tmp_path, MALFORMED_HERMES_CONFIG)
+        mod, tmp_path, MALFORMED_VIGIL_CONFIG)
 
     report = migrator.migrate()
 
@@ -196,7 +196,7 @@ def test_unreadable_config_blocks_later_config_steps_instead_of_partial_writes(
     }
     # Nothing claimed a successful config write.
     assert "migrated" not in statuses
-    assert config_path.read_text(encoding="utf-8") == MALFORMED_HERMES_CONFIG
+    assert config_path.read_text(encoding="utf-8") == MALFORMED_VIGIL_CONFIG
 
 
 def test_readable_config_keeps_every_pre_existing_key(tmp_path: Path):
@@ -228,7 +228,7 @@ def test_absent_config_is_still_created(tmp_path: Path):
     """
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
     source.mkdir()
     (source / "openclaw.json").write_text(
@@ -248,7 +248,7 @@ def test_absent_config_is_still_created(tmp_path: Path):
 
 
 def test_symlinked_config_stays_a_symlink(tmp_path: Path):
-    """Managed deployments symlink ~/.hermes/config.yaml into a dotfiles repo.
+    """Managed deployments symlink ~/.vigil/config.yaml into a dotfiles repo.
 
     A plain ``os.replace`` onto the link would detach it into a regular file;
     ``dump_yaml_file`` resolves the link first, as ``utils.atomic_replace`` does.
@@ -274,7 +274,7 @@ def test_unreadable_config_refused_by_model_config_too(tmp_path: Path):
     """The refusal is at the shared helper, so every config step inherits it."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
     source.mkdir()
     (source / "openclaw.json").write_text(
@@ -282,7 +282,7 @@ def test_unreadable_config_refused_by_model_config_too(tmp_path: Path):
         encoding="utf-8",
     )
     config_path = target / "config.yaml"
-    config_path.write_text(MALFORMED_HERMES_CONFIG, encoding="utf-8")
+    config_path.write_text(MALFORMED_VIGIL_CONFIG, encoding="utf-8")
 
     report = mod.Migrator(
         source_root=source, target_root=target, execute=True,
@@ -290,7 +290,7 @@ def test_unreadable_config_refused_by_model_config_too(tmp_path: Path):
         output_dir=None, selected_options={"model-config"},
     ).migrate()
 
-    assert config_path.read_text(encoding="utf-8") == MALFORMED_HERMES_CONFIG
+    assert config_path.read_text(encoding="utf-8") == MALFORMED_VIGIL_CONFIG
     items = [i for i in report["items"] if i["kind"] == "model-config"]
     assert items and items[0]["status"] == mod.STATUS_ERROR
 
@@ -298,7 +298,7 @@ def test_unreadable_config_refused_by_model_config_too(tmp_path: Path):
 def test_migrator_optionally_imports_supported_secrets_and_messaging_settings(tmp_path: Path):
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
 
     (source / "credentials").mkdir(parents=True)
     (source / "openclaw.json").write_text(
@@ -344,7 +344,7 @@ def test_source_candidate_finds_files_in_custom_workspace(tmp_path: Path):
     be discovered there as a fallback."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     custom_ws = tmp_path / "my-custom-workspace"
 
     target.mkdir()
@@ -411,7 +411,7 @@ def test_slack_settings_migrated(tmp_path: Path):
     """Slack bot/app tokens and allowlist migrate to .env."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
     source.mkdir()
 
@@ -446,7 +446,7 @@ def test_model_config_migrated(tmp_path: Path):
     """Default model setting migrates to config.yaml."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
     source.mkdir()
 
@@ -477,7 +477,7 @@ def test_shared_skills_migrated(tmp_path: Path):
     """Shared skills from ~/.openclaw/skills/ are migrated."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
 
     # Create a shared skill (not in workspace/skills/)
@@ -501,7 +501,7 @@ def test_daily_memory_merged(tmp_path: Path):
     """Daily memory notes from workspace/memory/*.md are merged into MEMORY.md."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
 
     mem_dir = source / "workspace" / "memory"
@@ -532,7 +532,7 @@ def test_provider_keys_require_migrate_secrets_flag(tmp_path: Path):
     """Provider keys migration is double-gated: needs option + --migrate-secrets."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     target.mkdir()
     source.mkdir()
 
@@ -591,7 +591,7 @@ def test_skill_installs_cleanly_under_skills_guard():
     # python_os_environ  — reads MIGRATION_JSON_OUTPUT to enable JSON output mode
     #                      (feature flag, not an env dump)
     # hermes_config_mod  — print statements in the post-migration summary that
-    #                      tell the user to *review* ~/.hermes/config.yaml;
+    #                      tell the user to *review* ~/.vigil/config.yaml;
     #                      the script never writes to that file
     #
     # Accept "caution" or "safe" — just not "dangerous" from a *real* threat.
@@ -606,15 +606,15 @@ def test_skill_installs_cleanly_under_skills_guard():
 
 def test_rebrand_text_replaces_openclaw_variants():
     mod = load_module()
-    # Mixed-case / capitalized matches → capital-H ``Hermes``.
-    assert mod.rebrand_text("OpenClaw prefers Python 3.11") == "Hermes prefers Python 3.11"
-    assert mod.rebrand_text("I told Open Claw to use dark mode") == "I told Hermes to use dark mode"
-    assert mod.rebrand_text("Open-Claw config is great") == "Hermes config is great"
-    assert mod.rebrand_text("OPENCLAW uses tools well") == "Hermes uses tools well"
-    # All-lowercase matches → lowercase ``hermes``; this preserves the
-    # real filesystem path ``~/.hermes`` (Hermes home) when rebranding
+    # Mixed-case / capitalized matches → capital-H ``Vigil``.
+    assert mod.rebrand_text("OpenClaw prefers Python 3.11") == "Vigil prefers Python 3.11"
+    assert mod.rebrand_text("I told Open Claw to use dark mode") == "I told Vigil to use dark mode"
+    assert mod.rebrand_text("Open-Claw config is great") == "Vigil config is great"
+    assert mod.rebrand_text("OPENCLAW uses tools well") == "Vigil uses tools well"
+    # All-lowercase matches → lowercase ``vigil``; this preserves the
+    # real filesystem path ``~/.vigil`` (Vigil home) when rebranding
     # memory entries that reference ``~/.openclaw`` or ``openclaw`` prose.
-    assert mod.rebrand_text("openclaw should always respond concisely") == "hermes should always respond concisely"
+    assert mod.rebrand_text("openclaw should always respond concisely") == "vigil should always respond concisely"
 
 
 
@@ -638,7 +638,7 @@ def _run_model_migration(tmp_path: Path, openclaw_json: dict) -> dict:
 
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     source.mkdir(parents=True)
     target.mkdir(parents=True)
     (source / "openclaw.json").write_text(json.dumps(openclaw_json), encoding="utf-8")
@@ -695,7 +695,7 @@ def test_command_allowlist_handles_invalid_utf8_bytes(tmp_path: Path):
     valid patterns elsewhere in the same file must still be imported."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     source.mkdir()
     target.mkdir()
 
@@ -725,7 +725,7 @@ def test_messaging_settings_handles_invalid_utf8_in_telegram_allowlist(tmp_path:
     valid user IDs elsewhere in the same file must still be imported."""
     mod = load_module()
     source = tmp_path / ".openclaw"
-    target = tmp_path / ".hermes"
+    target = tmp_path / ".vigil"
     source.mkdir()
     target.mkdir()
 

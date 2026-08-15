@@ -1,7 +1,7 @@
 """Tests for hermes_cli.uninstall.remove_node_symlinks.
 
 Regression for #34536: the POSIX installer drops node/npm/npx symlinks in
-~/.local/bin pointing into $HERMES_HOME/node and prepends ~/.local/bin to
+~/.local/bin pointing into $VIGIL_HOME/node and prepends ~/.local/bin to
 PATH, shadowing an existing nvm. Uninstall must remove those symlinks, but
 only when they still resolve into the Hermes-managed node dir.
 """
@@ -26,7 +26,7 @@ def fake_home(tmp_path, monkeypatch):
 
 
 def _make_hermes_node(hermes_home: Path) -> Path:
-    """Create a fake $HERMES_HOME/node/bin/{node,npm,npx} tree."""
+    """Create a fake $VIGIL_HOME/node/bin/{node,npm,npx} tree."""
     node_bin = hermes_home / "node" / "bin"
     node_bin.mkdir(parents=True)
     for name in ("node", "npm", "npx"):
@@ -39,7 +39,7 @@ def _make_hermes_node(hermes_home: Path) -> Path:
 
 def test_leaves_unrelated_symlinks_untouched(fake_home):
     """A node symlink the user repointed at nvm must survive uninstall."""
-    hermes_home = fake_home / ".hermes"
+    hermes_home = fake_home / ".vigil"
     _make_hermes_node(hermes_home)
     local_bin = fake_home / ".local" / "bin"
 
@@ -70,7 +70,7 @@ def test_removes_fhs_symlinks_in_usr_local_bin(fake_home, tmp_path, monkeypatch)
     We monkeypatch _node_symlink_candidate_dirs to return a temp dir standing
     in for /usr/local/bin so the test doesn't need real root privileges.
     """
-    hermes_home = fake_home / ".hermes"
+    hermes_home = fake_home / ".vigil"
     node_bin = _make_hermes_node(hermes_home)
 
     # Fake /usr/local/bin as a temp dir with our symlinks.

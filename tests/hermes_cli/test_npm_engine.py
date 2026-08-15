@@ -1,7 +1,7 @@
 """Tests for npm ``EBADENGINE`` recovery (``hermes_cli/npm_engine.py``).
 
 The behaviour under test is a contract about *reacting* to npm's own engine
-check: npm states the range it wants in the failure, Hermes upgrades only an
+check: npm states the range it wants in the failure, Vigil upgrades only an
 npm it owns, and every other case leaves the original failure alone.
 """
 
@@ -86,19 +86,19 @@ class TestDetection:
 
 class TestManagedDetection:
     """The upgrade must fire for every spelling of the managed npm, and for
-    no other npm — this is the boundary between "Hermes fixes it" and "the
+    no other npm — this is the boundary between "Vigil fixes it" and "the
     user's own toolchain is left alone"."""
 
     @pytest.fixture
     def managed_tree(self, tmp_path, monkeypatch):
-        home = tmp_path / ".hermes"
+        home = tmp_path / ".vigil"
         node = home / "node"
         (node / "bin").mkdir(parents=True)
         (node / "lib" / "node_modules" / "npm" / "bin").mkdir(parents=True)
         cli = node / "lib" / "node_modules" / "npm" / "bin" / "npm-cli.js"
         cli.write_text("#!/usr/bin/env node\n", encoding="utf-8")
         (node / "bin" / "npm").symlink_to(cli)
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         return home
 
     def test_direct_managed_bin_is_managed(self, managed_tree):
@@ -132,13 +132,13 @@ class TestRepairDecision:
 
     @pytest.fixture
     def managed_npm(self, tmp_path, monkeypatch):
-        home = tmp_path / ".hermes"
+        home = tmp_path / ".vigil"
         bin_dir = home / "node" / "bin"
         bin_dir.mkdir(parents=True)
         npm = bin_dir / "npm"
         npm.write_text("#!/bin/sh\n", encoding="utf-8")
         npm.chmod(0o755)
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         return npm
 
     def test_upgrades_managed_npm_with_the_range_npm_asked_for(
@@ -193,10 +193,10 @@ class TestRepairDecision:
     def test_foreign_npm_provisions_managed_runtime_instead(
         self, tmp_path, monkeypatch
     ):
-        """A system/nvm/brew/Nix npm is never modified — Hermes provisions its
+        """A system/nvm/brew/Nix npm is never modified — Vigil provisions its
         own managed tree, upgrades THAT npm into range, and returns it."""
-        home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         system_npm = tmp_path / "usr-bin-npm"
         system_npm.write_text("#!/bin/sh\n", encoding="utf-8")
 
@@ -232,8 +232,8 @@ class TestRepairDecision:
     def test_foreign_npm_failed_bootstrap_prints_manual_fix(
         self, tmp_path, monkeypatch, capsys
     ):
-        home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         system_npm = tmp_path / "usr-bin-npm"
         system_npm.write_text("#!/bin/sh\n", encoding="utf-8")
 
@@ -261,8 +261,8 @@ class TestRepairDecision:
         """A too-old system NODE can't be fixed by any npm upgrade, but the
         managed tree ships a supported Node — provisioning covers it. The
         managed npm is still upgraded to the repo's own engines.npm range."""
-        home = tmp_path / ".hermes"
-        monkeypatch.setenv("HERMES_HOME", str(home))
+        home = tmp_path / ".vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(home))
         system_npm = tmp_path / "usr-bin-npm"
         system_npm.write_text("#!/bin/sh\n", encoding="utf-8")
 

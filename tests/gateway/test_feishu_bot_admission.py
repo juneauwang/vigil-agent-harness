@@ -340,7 +340,7 @@ def test_hydrate_bot_identity_populates_self_ids_from_bot_v3_info(monkeypatch):
         captured["uri"] = getattr(request, "uri", None)
         captured["http_method"] = getattr(request, "http_method", None)
         return SimpleNamespace(raw=SimpleNamespace(
-            content=b'{"code":0,"bot":{"app_name":"Hermes","open_id":"ou_hydrated"}}'
+            content=b'{"code":0,"bot":{"app_name":"Vigil","open_id":"ou_hydrated"}}'
         ))
 
     adapter._client = SimpleNamespace(request=_fake_request)

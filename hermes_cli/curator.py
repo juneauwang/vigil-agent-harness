@@ -1,4 +1,4 @@
-"""CLI subcommand: `hermes curator <subcommand>`.
+"""CLI subcommand: `vigil curator <subcommand>`.
 
 Thin shell around agent/curator.py and tools/skill_usage.py. Renders a status
 table, triggers a run, pauses/resumes, and pins/unpins skills.
@@ -524,7 +524,7 @@ def _cmd_backup(args) -> int:
     if snap is None:
         print("curator: snapshot failed — check logs (backup disabled or IO error)")
         return 1
-    print(f"curator: snapshot created at ~/.hermes/skills/.curator_backups/{snap.name}")
+    print(f"curator: snapshot created at ~/.vigil/skills/.curator_backups/{snap.name}")
     return 0
 
 
@@ -577,7 +577,7 @@ def _cmd_rollback(args) -> int:
                 reason = cron.get("reason", "not captured")
                 print(f"  cron jobs:   not in snapshot ({reason})")
     print(
-        "\nThis will replace the current ~/.hermes/skills/ tree (a safety "
+        "\nThis will replace the current ~/.vigil/skills/ tree (a safety "
         "snapshot of the current state is taken first so this is undoable). "
         "Cron jobs that still exist will have their skills/skill fields "
         "restored from the snapshot; all other cron fields are left alone."

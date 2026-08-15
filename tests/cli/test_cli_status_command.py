@@ -95,11 +95,11 @@ def test_show_session_status_prints_gateway_style_summary():
 
 
 def test_profile_command_reports_custom_root_profile(monkeypatch, tmp_path, capsys):
-    """Profile detection works for custom-root deployments (not under ~/.hermes)."""
+    """Profile detection works for custom-root deployments (not under ~/.vigil)."""
     cli_obj = _make_cli()
     profile_home = tmp_path / "profiles" / "coder"
 
-    monkeypatch.setenv("HERMES_HOME", str(profile_home))
+    monkeypatch.setenv("VIGIL_HOME", str(profile_home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "unrelated-home")
 
     cli_obj._handle_profile_command()

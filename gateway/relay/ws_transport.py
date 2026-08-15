@@ -137,7 +137,7 @@ def _normalize_slack_parent_command(
     text: str,
     message_type: MessageType,
 ) -> tuple[str, MessageType]:
-    """Mirror native Slack ``/hermes`` routing for authenticated relay text."""
+    """Mirror native Slack ``/vigil`` routing for authenticated relay text."""
     stripped = text.strip()
     parent_parts = stripped.split(maxsplit=1)
     if not parent_parts or parent_parts[0] != "/hermes":
@@ -208,7 +208,7 @@ def _event_from_wire(raw: Dict[str, Any]) -> MessageEvent:
         scope_id=src.get("scope_id"),
         parent_chat_id=src.get("parent_chat_id"),
         message_id=src.get("message_id"),
-        # The HERMES profile this event is routed to (multiplex mode). The
+        # The VIGIL profile this event is routed to (multiplex mode). The
         # connector stamps it on the wire source when NAS resolves the target
         # profile for a Team-Gateway message; absent for a single-profile
         # gateway, where it stays None and session keys keep the legacy
@@ -246,7 +246,7 @@ def _event_from_wire(raw: Dict[str, Any]) -> MessageEvent:
     text = raw.get("text", "")
     if platform_enum == Platform.SLACK:
         # Team Gateway carries Slack slash text over the authenticated message
-        # relay, bypassing Hermes' native Slack command callback. Normalize at
+        # relay, bypassing Vigil' native Slack command callback. Normalize at
         # the wire boundary so adapter-level active-session gates see the real
         # gateway command rather than the legacy `hermes` parent name.
         text, msg_type = _normalize_slack_parent_command(text, msg_type)

@@ -1,12 +1,12 @@
 """Cross-process update mutual exclusion (``hermes_cli.update_lock``).
 
-Three surfaces can start an update of one install tree: a terminal ``hermes
+Three surfaces can start an update of one install tree: a terminal ``vigil
 update``, the dashboard's Update button (which spawns that same command
 detached), and the desktop's Update button (Tauri updater → install-mode
 bootstrap on its failure screen). Before the shared lock, two of them could run
 concurrently and rewrite source under a live interpreter — observed in the wild
 as an installer ``git checkout`` rewinding the checkout ~9k commits while a
-dashboard-spawned ``hermes update`` was mid-``npm install``, which then failed
+dashboard-spawned ``vigil update`` was mid-``npm install``, which then failed
 against the rewound tree's manifests.
 
 These exercise the real marker file against a temp home — no mocks — because
@@ -44,10 +44,10 @@ def marker(tmp_path):
 def test_marker_path_follows_process_hermes_home(tmp_path, monkeypatch):
     """The lock must land where the Rust updater and Electron gate look.
 
-    All three resolve the *process* HERMES_HOME; a profile-scoped path would
+    All three resolve the *process* VIGIL_HOME; a profile-scoped path would
     put the lock somewhere the other two owners never read.
     """
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     assert update_marker_path() == tmp_path / ".hermes-update-in-progress"
 
 
@@ -179,10 +179,10 @@ def test_unwritable_marker_location_does_not_block_the_update(tmp_path):
 
 
 class TestHandoffFromOrchestratingUpdater:
-    """The Tauri updater holds the marker, then spawns ``hermes update``.
+    """The Tauri updater holds the marker, then spawns ``vigil update``.
 
     The regression: the child saw its own parent's live marker and exited 2,
-    so every GUI update failed with "Hermes is still running" and retrying
+    so every GUI update failed with "Vigil is still running" and retrying
     just re-ran the same self-deadlock. The parent names its pid in
     HANDOFF_PID_ENV; a live holder matching it is our own orchestrator.
     """
@@ -229,7 +229,7 @@ class TestHandoffFromOrchestratingUpdater:
 class TestAncestryHandoff:
     """Staged updaters older than the HANDOFF_PID_ENV export never send it.
 
-    ``hermes-setup`` under ``~/.hermes`` is only refreshed by a full installer
+    ``hermes-setup`` under ``~/.vigil`` is only refreshed by a full installer
     run, so an updated checkout (new lock) driven by a pre-handoff staged
     updater (old parent) deadlocks on exit 2 forever unless the child also
     recognizes a live holder that is its own process ancestor.

@@ -318,8 +318,8 @@ class TestSendMessageTool:
         # not auto-accepted by the trust window. (Recency trust is covered
         # in test_platform_base.py. The public default flipped to non-strict
         # in 2026-05; this test pins strict on explicitly.)
-        monkeypatch.setenv("HERMES_MEDIA_DELIVERY_STRICT", "1")
-        monkeypatch.setenv("HERMES_MEDIA_TRUST_RECENT_FILES", "0")
+        monkeypatch.setenv("VIGIL_MEDIA_DELIVERY_STRICT", "1")
+        monkeypatch.setenv("VIGIL_MEDIA_TRUST_RECENT_FILES", "0")
         config, telegram_cfg = _make_config()
         secret = tmp_path / "secret.pdf"
         secret.write_bytes(b"%PDF secret")
@@ -697,7 +697,7 @@ class TestSendToPlatformWhatsapp:
                     Platform.WHATSAPP,
                     SimpleNamespace(enabled=True, token=None, extra={"bridge_port": 3000}),
                     chat_id,
-                    "hello from hermes",
+                    "hello from vigil",
                 )
             )
         finally:
@@ -708,7 +708,7 @@ class TestSendToPlatformWhatsapp:
         async_mock.assert_awaited_once()
         _call = async_mock.await_args
         assert _call.args[1] == chat_id
-        assert _call.args[2] == "hello from hermes"
+        assert _call.args[2] == "hello from vigil"
 
 
 class TestSendTelegramHtmlDetection:
@@ -1625,8 +1625,8 @@ class _FakePlatform:
 class TestSendViaAdapterStandaloneFallback:
     """Coverage for the out-of-process plugin-platform send path.
 
-    When the gateway runner is not in this process (e.g. ``hermes cron``
-    runs separately from ``hermes gateway``), ``_send_via_adapter`` should
+    When the gateway runner is not in this process (e.g. ``vigil cron``
+    runs separately from ``vigil gateway``), ``_send_via_adapter`` should
     fall through to the plugin's ``standalone_sender_fn`` registered on
     its ``PlatformEntry``.  Without the hook, the existing error string
     is returned (with a more helpful tail).
@@ -1708,23 +1708,23 @@ class TestCheckSendMessage:
     """The tool's check_fn governs whether the model sees ``send_message`` as
     callable for a given session. The four passing conditions are:
 
-    1. ``HERMES_KANBAN_TASK`` is set (worker spawned by the kanban dispatcher
+    1. ``VIGIL_KANBAN_TASK`` is set (worker spawned by the kanban dispatcher
        — parent gateway is by definition running, but the worker's
-       ``HERMES_HOME`` may be a profile dir without a ``gateway.pid``).
-    2. ``HERMES_SESSION_PLATFORM`` resolves to a non-empty, non-``local`` value
+       ``VIGIL_HOME`` may be a profile dir without a ``gateway.pid``).
+    2. ``VIGIL_SESSION_PLATFORM`` resolves to a non-empty, non-``local`` value
        (the session is wired to a messaging platform like Telegram).
     3. ``is_gateway_running()`` returns True (CLI / orchestrator profile with
-       a live gateway colocated under the same ``HERMES_HOME``).
+       a live gateway colocated under the same ``VIGIL_HOME``).
     4. None of the above → False, tool is hidden.
     """
 
     def test_kanban_task_env_grants_access(self, monkeypatch):
-        """Workers spawned by the dispatcher (HERMES_KANBAN_TASK set) must be
+        """Workers spawned by the dispatcher (VIGIL_KANBAN_TASK set) must be
         allowed regardless of session_platform / gateway-pid state."""
         from tools.send_message_tool import _check_send_message
 
-        monkeypatch.setenv("HERMES_KANBAN_TASK", "t_abc12345")
-        monkeypatch.delenv("HERMES_SESSION_PLATFORM", raising=False)
+        monkeypatch.setenv("VIGIL_KANBAN_TASK", "t_abc12345")
+        monkeypatch.delenv("VIGIL_SESSION_PLATFORM", raising=False)
 
         with patch("gateway.session_context.get_session_env", return_value=""), \
              patch("gateway.status.is_gateway_running", return_value=False):
@@ -1736,7 +1736,7 @@ class TestCheckSendMessage:
         install), the check returns False rather than raising."""
         from tools.send_message_tool import _check_send_message
 
-        monkeypatch.delenv("HERMES_KANBAN_TASK", raising=False)
+        monkeypatch.delenv("VIGIL_KANBAN_TASK", raising=False)
 
         with patch("gateway.session_context.get_session_env", return_value=""), \
              patch("gateway.status.is_gateway_running",

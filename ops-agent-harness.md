@@ -1,5 +1,5 @@
 1. 只允许在 /home/your-name/projects/vigil-agent 内工作；
-禁止读取/修改 ~/.hermes、~/.ssh、~/.kube、任何 .env 文件
+禁止读取/修改 ~/.vigil、~/.ssh、~/.kube、任何 .env 文件
 2. 开工前先 git commit 一个 baseline（回滚锚点），
 之后随便改，随时能 reset
 3. 依赖装进项目 venv，不碰系统 Python；
@@ -10,7 +10,7 @@
 
 > 给 IT 运维用的 Agent Harness。Fork 自 Vigil Agent（MIT License）。
 > 代码交付给 Codex 实现，本文档是唯一交接材料（数据契约 + 改动地图）。
-> 源码位置: /home/your-name/projects/hermes-source_1（upstream: NousResearch/hermes-agent）
+> 源码位置: /home/your-name/projects/hermes-source_1（upstream: juneauwang/vigil-agent-harness）
 
 ## 0. 决策记录
 
@@ -248,11 +248,11 @@ D. 权限 gate —— 命令审批钩子升级成分级矩阵（现有 approval 
    git remote add upstream 保留仅参考（不 merge）；安全补丁走依赖扫描
    （pip-audit/trivy）+ SECURITY 公告自补
 2. 实现顺序：A（注入）→ B（工具）→ C（约束）→ D（权限 gate）
-3. 每步验证：临时 HERMES_HOME 起 session，检查 system prompt 出现 TOPO 段；
+3. 每步验证：临时 VIGIL_HOME 起 session，检查 system prompt 出现 TOPO 段；
    topo_query/topo_update 用测试拓扑文件跑通
 4. 数据契约：本文 §2.2 schema v0.1 + §3 权限矩阵
 5. 约束：不碰 conversation_loop / 上下文压缩 / prompt 缓存逻辑；
-   新配置走 config.yaml，不加 HERMES_* env var（upstream 约定）
+   新配置走 config.yaml，不加 VIGIL_* env var（upstream 约定）
 
 ## 7. 防屎山纪律（硬约束，Codex 必须遵守）
 

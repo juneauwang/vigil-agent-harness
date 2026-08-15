@@ -25,7 +25,7 @@ from agent.trace_upload import (
 
 def _sample_messages():
     return [
-        {"role": "system", "content": "you are hermes"},
+        {"role": "system", "content": "you are vigil"},
         {"role": "user", "content": "list files"},
         {"role": "assistant", "content": "Listing.", "tool_calls": [
             {"id": "call_1", "function": {"name": "terminal", "arguments": '{"command": "ls"}'}},

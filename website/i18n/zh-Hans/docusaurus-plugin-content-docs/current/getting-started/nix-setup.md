@@ -1,12 +1,12 @@
 ---
 sidebar_position: 3
 title: "Nix & NixOS 安装配置"
-description: "使用 Nix 安装和部署 Hermes Agent——从快速 `nix run` 到完全声明式的 NixOS 模块（含容器模式）"
+description: "使用 Nix 安装和部署 Vigil——从快速 `nix run` 到完全声明式的 NixOS 模块（含容器模式）"
 ---
 
 # Nix & NixOS 安装配置
 
-Hermes Agent 提供了一个 Nix flake，支持三个层级的集成：
+Vigil 提供了一个 Nix flake，支持三个层级的集成：
 
 | 层级 | 适用对象 | 提供内容 |
 |-------|-------------|--------------|
@@ -17,9 +17,9 @@ Hermes Agent 提供了一个 Nix flake，支持三个层级的集成：
 :::info 与标准安装的区别
 `curl | bash` 安装程序自行管理 Python、Node 及依赖项。Nix flake 替代了所有这些——每个 Python 依赖都是由 [uv2nix](https://github.com/pyproject-nix/uv2nix) 构建的 Nix derivation，运行时工具（Node.js、git、ripgrep、ffmpeg）已封装进二进制文件的 PATH 中。不需要运行时 pip，不需要激活 venv，不需要 `npm install`。
 
-**对于非 NixOS 用户**，这只影响安装步骤。之后的操作（`hermes setup`、`hermes gateway install`、编辑配置）与标准安装完全相同。
+**对于非 NixOS 用户**，这只影响安装步骤。之后的操作（`vigil setup`、`vigil gateway install`、编辑配置）与标准安装完全相同。
 
-**对于 NixOS 模块用户**，整个生命周期有所不同：配置存放在 `configuration.nix` 中，密钥通过 sops-nix/agenix 管理，服务是一个 systemd 单元，CLI 配置命令被屏蔽。管理 hermes 的方式与管理其他 NixOS 服务相同。
+**对于 NixOS 模块用户**，整个生命周期有所不同：配置存放在 `configuration.nix` 中，密钥通过 sops-nix/agenix 管理，服务是一个 systemd 单元，CLI 配置命令被屏蔽。管理 vigil 的方式与管理其他 NixOS 服务相同。
 :::
 
 ## 前提条件
@@ -35,22 +35,22 @@ Hermes Agent 提供了一个 Nix flake，支持三个层级的集成：
 
 ```bash
 # 直接运行（首次使用时构建，之后使用缓存）
-nix run github:NousResearch/hermes-agent -- setup
-nix run github:NousResearch/hermes-agent -- chat
+nix run github:juneauwang/vigil-agent-harness -- setup
+nix run github:juneauwang/vigil-agent-harness -- chat
 
 # 或持久化安装
-nix profile install github:NousResearch/hermes-agent
-hermes setup
-hermes chat
+nix profile install github:juneauwang/vigil-agent-harness
+vigil setup
+vigil chat
 ```
 
-执行 `nix profile install` 后，`hermes`、`hermes-agent` 和 `hermes-acp` 将出现在你的 PATH 中。之后的工作流与[标准安装](./installation.md)完全相同——`hermes setup` 引导你完成提供商选择，`hermes gateway install` 设置 launchd（macOS）或 systemd 用户服务，配置存放在 `~/.hermes/`。
+执行 `nix profile install` 后，`vigil`、`hermes-agent` 和 `hermes-acp` 将出现在你的 PATH 中。之后的工作流与[标准安装](./installation.md)完全相同——`vigil setup` 引导你完成提供商选择，`vigil gateway install` 设置 launchd（macOS）或 systemd 用户服务，配置存放在 `~/.vigil/`。
 
 <details>
 <summary><strong>从本地克隆构建</strong></summary>
 
 ```bash
-git clone https://github.com/NousResearch/hermes-agent.git
+git clone https://github.com/juneauwang/vigil-agent-harness
 cd hermes-agent
 nix build
 ./result/bin/hermes setup
@@ -75,7 +75,7 @@ nix build
 {
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    hermes-agent.url = "github:NousResearch/hermes-agent";
+    hermes-agent.url = "github:juneauwang/vigil-agent-harness";
   };
 
   outputs = { nixpkgs, hermes-agent, ... }: {
@@ -104,13 +104,13 @@ nix build
 }
 ```
 
-就这些。`nixos-rebuild switch` 会创建 `hermes` 用户、生成 `config.yaml`、连接密钥并启动 gateway——这是一个长期运行的服务，将 Agent 连接到消息平台（Telegram、Discord 等）并监听传入消息。
+就这些。`nixos-rebuild switch` 会创建 `vigil` 用户、生成 `config.yaml`、连接密钥并启动 gateway——这是一个长期运行的服务，将 Agent 连接到消息平台（Telegram、Discord 等）并监听传入消息。
 
 :::warning 密钥是必需的
 上面的 `environmentFiles` 行假设你已配置 [sops-nix](https://github.com/Mic92/sops-nix) 或 [agenix](https://github.com/ryantm/agenix)。该文件至少应包含一个 LLM 提供商密钥（例如 `OPENROUTER_API_KEY=sk-or-...`）。完整设置请参阅[密钥管理](#secrets-management)。如果你还没有密钥管理器，可以先使用普通文件——只需确保它不是全局可读的：
 
 ```bash
-echo "OPENROUTER_API_KEY=sk-or-your-key" | sudo install -m 0600 -o hermes /dev/stdin /var/lib/hermes/env
+echo "OPENROUTER_API_KEY=sk-or-your-key" | sudo install -m 0600 -o vigil /dev/stdin /var/lib/hermes/env
 ```
 
 ```nix
@@ -119,20 +119,20 @@ services.hermes-agent.environmentFiles = [ "/var/lib/hermes/env" ];
 :::
 
 :::tip addToSystemPackages
-设置 `addToSystemPackages = true` 有两个作用：将 `hermes` CLI 添加到系统 PATH，**并**在系统范围内设置 `HERMES_HOME`，使交互式 CLI 与 gateway 服务共享状态（会话、技能、cron）。不设置此项时，在 shell 中运行 `hermes` 会创建独立的 `~/.hermes/` 目录。
+设置 `addToSystemPackages = true` 有两个作用：将 `vigil` CLI 添加到系统 PATH，**并**在系统范围内设置 `VIGIL_HOME`，使交互式 CLI 与 gateway 服务共享状态（会话、技能、cron）。不设置此项时，在 shell 中运行 `vigil` 会创建独立的 `~/.vigil/` 目录。
 :::
 
 ### 容器感知 CLI
 
 :::info
-当 `container.enable = true` 且 `addToSystemPackages = true` 时，主机上的**所有** `hermes` 命令都会自动路由到托管容器中执行。这意味着你的交互式 CLI 会话在与 gateway 服务相同的环境中运行——可以访问所有容器内安装的包和工具。
+当 `container.enable = true` 且 `addToSystemPackages = true` 时，主机上的**所有** `vigil` 命令都会自动路由到托管容器中执行。这意味着你的交互式 CLI 会话在与 gateway 服务相同的环境中运行——可以访问所有容器内安装的包和工具。
 
-- 路由是透明的：`hermes chat`、`hermes sessions list`、`hermes version` 等命令都会在底层 exec 进容器
+- 路由是透明的：`vigil chat`、`vigil sessions list`、`vigil version` 等命令都会在底层 exec 进容器
 - 所有 CLI 参数原样转发
 - 如果容器未运行，CLI 会短暂重试（交互式使用时显示 5 秒 spinner，脚本中静默等待 10 秒），然后以明确的错误退出——不会静默回退
-- 对于在 hermes 代码库上工作的开发者，设置 `HERMES_DEV=1` 可绕过容器路由，直接运行本地检出版本
+- 对于在 vigil 代码库上工作的开发者，设置 `VIGIL_DEV=1` 可绕过容器路由，直接运行本地检出版本
 
-设置 `container.hostUsers` 可创建 `~/.hermes` 到服务状态目录的符号链接，使主机 CLI 和容器共享会话、配置和记忆：
+设置 `container.hostUsers` 可创建 `~/.vigil` 到服务状态目录的符号链接，使主机 CLI 和容器共享会话、配置和记忆：
 
 ```nix
 services.hermes-agent = {
@@ -142,7 +142,7 @@ services.hermes-agent = {
 };
 ```
 
-`hostUsers` 中列出的用户会自动加入 `hermes` 组以获得文件权限访问。
+`hostUsers` 中列出的用户会自动加入 `vigil` 组以获得文件权限访问。
 
 **Podman 用户：** NixOS 服务以 root 身份运行容器。Docker 用户通过 `docker` 组 socket 获得访问权限，但 Podman 的 rootful 容器需要 sudo。为你的容器运行时授予免密 sudo：
 
@@ -156,7 +156,7 @@ security.sudo.extraRules = [{
 }];
 ```
 
-CLI 会自动检测何时需要 sudo 并透明地使用它。没有此配置，你需要手动运行 `sudo hermes chat`。
+CLI 会自动检测何时需要 sudo 并透明地使用它。没有此配置，你需要手动运行 `sudo vigil chat`。
 :::
 
 ### 验证运行状态
@@ -171,8 +171,8 @@ systemctl status hermes-agent
 journalctl -u hermes-agent -f
 
 # 如果 addToSystemPackages 为 true，测试 CLI
-hermes version
-hermes config       # 显示生成的配置
+vigil version
+vigil config       # 显示生成的配置
 ```
 
 ### 选择部署模式
@@ -229,7 +229,7 @@ services.hermes-agent.settings = {
 两者在求值时深度合并。Nix 声明的键始终优先于磁盘上现有 `config.yaml` 中的键，但 **Nix 未涉及的用户添加键会被保留**。这意味着如果 Agent 或手动编辑添加了 `skills.disabled` 或 `streaming.enabled` 等键，它们在 `nixos-rebuild switch` 后仍会保留。
 
 :::note 模型命名
-`settings.model.default` 使用你的提供商所期望的模型标识符。使用 [OpenRouter](https://openrouter.ai)（默认）时，格式如 `"anthropic/claude-sonnet-4"` 或 `"google/gemini-3-flash"`。如果直接使用提供商（Anthropic、OpenAI），请将 `settings.model.base_url` 指向其 API，并使用其原生模型 ID（例如 `"claude-sonnet-4-20250514"`）。未设置 `base_url` 时，Hermes 默认使用 OpenRouter。
+`settings.model.default` 使用你的提供商所期望的模型标识符。使用 [OpenRouter](https://openrouter.ai)（默认）时，格式如 `"anthropic/claude-sonnet-4"` 或 `"google/gemini-3-flash"`。如果直接使用提供商（Anthropic、OpenAI），请将 `settings.model.base_url` 指向其 API，并使用其原生模型 ID（例如 `"claude-sonnet-4-20250514"`）。未设置 `base_url` 时，Vigil 默认使用 OpenRouter。
 :::
 
 :::tip 查找可用配置键
@@ -306,7 +306,7 @@ services.hermes-agent.settings = {
 services.hermes-agent.configFile = /etc/hermes/config.yaml;
 ```
 
-这会完全绕过 `settings`——不合并，不生成。每次激活时，该文件会原样复制到 `$HERMES_HOME/config.yaml`。
+这会完全绕过 `settings`——不合并，不生成。每次激活时，该文件会原样复制到 `$VIGIL_HOME/config.yaml`。
 
 ### 自定义速查表
 
@@ -325,7 +325,7 @@ Nix 用户最常见自定义需求的快速参考：
 | 在主机 CLI 和容器间共享状态 | `container.hostUsers` | `[ "sidbin" ]` |
 | 为 Agent 提供额外工具 | `extraPackages` | `[ pkgs.pandoc pkgs.imagemagick ]` |
 | 使用自定义基础镜像 | `container.image` | `"ubuntu:24.04"` |
-| 覆盖 hermes 包 | `package` | `inputs.hermes-agent.packages.${system}.default.override { ... }` |
+| 覆盖 vigil 包 | `package` | `inputs.hermes-agent.packages.${system}.default.override { ... }` |
 | 更改状态目录 | `stateDir` | `"/opt/hermes"` |
 | 设置 Agent 的工作目录 | `workingDirectory` | `"/home/user/projects"` |
 
@@ -337,7 +337,7 @@ Nix 用户最常见自定义需求的快速参考：
 Nix 表达式中的值会进入 `/nix/store`，该目录是全局可读的。请始终使用带有密钥管理器的 `environmentFiles`。
 :::
 
-`environment`（非密钥变量）和 `environmentFiles`（密钥文件）在激活时（`nixos-rebuild switch`）都会合并到 `$HERMES_HOME/.env` 中。Hermes 在每次启动时读取此文件，因此更改在 `systemctl restart hermes-agent` 后生效——无需重建容器。
+`environment`（非密钥变量）和 `environmentFiles`（密钥文件）在激活时（`nixos-rebuild switch`）都会合并到 `$VIGIL_HOME/.env` 中。Vigil 在每次启动时读取此文件，因此更改在 `systemctl restart hermes-agent` 后生效——无需重建容器。
 
 ### sops-nix
 
@@ -396,12 +396,12 @@ hermes-env: |
 
 ## 文档
 
-`documents` 选项将文件安装到 Agent 的工作目录（即 `workingDirectory`，Agent 将其作为工作区读取）。Hermes 按约定查找特定文件名：
+`documents` 选项将文件安装到 Agent 的工作目录（即 `workingDirectory`，Agent 将其作为工作区读取）。Vigil 按约定查找特定文件名：
 
 - **`USER.md`** — 关于 Agent 正在交互的用户的上下文信息。
 - 你放置在此处的任何其他文件对 Agent 都可见，作为工作区文件。
 
-Agent 身份文件是独立的：Hermes 从 `$HERMES_HOME/SOUL.md` 加载其主要 `SOUL.md`，在 NixOS 模块中对应 `${services.hermes-agent.stateDir}/.hermes/SOUL.md`。将 `SOUL.md` 放入 `documents` 只会创建一个工作区文件，不会替换主角色文件。
+Agent 身份文件是独立的：Vigil 从 `$VIGIL_HOME/SOUL.md` 加载其主要 `SOUL.md`，在 NixOS 模块中对应 `${services.hermes-agent.stateDir}/.hermes/SOUL.md`。将 `SOUL.md` 放入 `documents` 只会创建一个工作区文件，不会替换主角色文件。
 
 ```nix
 {
@@ -438,7 +438,7 @@ Agent 身份文件是独立的：Hermes 从 `$HERMES_HOME/SOUL.md` 加载其主�
 ```
 
 :::tip
-`env` 值中的环境变量在运行时从 `$HERMES_HOME/.env` 解析。使用 `environmentFiles` 注入密钥——切勿将 token 直接放入 Nix 配置。
+`env` 值中的环境变量在运行时从 `$VIGIL_HOME/.env` 解析。使用 `environmentFiles` 注入密钥——切勿将 token 直接放入 Nix 配置。
 :::
 
 ### HTTP 传输（远程服务器）
@@ -455,7 +455,7 @@ Agent 身份文件是独立的：Hermes 从 `$HERMES_HOME/SOUL.md` 加载其主�
 
 ### 带 OAuth 的 HTTP 传输
 
-对于使用 OAuth 2.1 的服务器，设置 `auth = "oauth"`。Hermes 实现了完整的 PKCE 流程——元数据发现、动态客户端注册、token 交换和自动刷新。
+对于使用 OAuth 2.1 的服务器，设置 `auth = "oauth"`。Vigil 实现了完整的 PKCE 流程——元数据发现、动态客户端注册、token 交换和自动刷新。
 
 ```nix
 {
@@ -466,23 +466,23 @@ Agent 身份文件是独立的：Hermes 从 `$HERMES_HOME/SOUL.md` 加载其主�
 }
 ```
 
-Token 存储在 `$HERMES_HOME/mcp-tokens/<server-name>.json` 中，在重启和重建后持久保留。
+Token 存储在 `$VIGIL_HOME/mcp-tokens/<server-name>.json` 中，在重启和重建后持久保留。
 
 <details>
 <summary><strong>无头服务器上的初始 OAuth 授权</strong></summary>
 
-首次 OAuth 授权需要基于浏览器的同意流程。在无头部署中，Hermes 将授权 URL 打印到 stdout/日志，而不是打开浏览器。
+首次 OAuth 授权需要基于浏览器的同意流程。在无头部署中，Vigil 将授权 URL 打印到 stdout/日志，而不是打开浏览器。
 
-**方案 A：交互式引导** — 通过 `docker exec`（容器）或 `sudo -u hermes`（原生）运行一次流程：
+**方案 A：交互式引导** — 通过 `docker exec`（容器）或 `sudo -u vigil`（原生）运行一次流程：
 
 ```bash
 # 容器模式
 docker exec -it hermes-agent \
-  hermes mcp add my-oauth-server --url https://mcp.example.com/mcp --auth oauth
+  vigil mcp add my-oauth-server --url https://mcp.example.com/mcp --auth oauth
 
 # 原生模式
-sudo -u hermes HERMES_HOME=/var/lib/hermes/.hermes \
-  hermes mcp add my-oauth-server --url https://mcp.example.com/mcp --auth oauth
+sudo -u vigil VIGIL_HOME=/var/lib/hermes/.vigil \
+  vigil mcp add my-oauth-server --url https://mcp.example.com/mcp --auth oauth
 ```
 
 容器使用 `--network=host`，因此 `127.0.0.1` 上的 OAuth 回调监听器可从主机浏览器访问。
@@ -490,10 +490,10 @@ sudo -u hermes HERMES_HOME=/var/lib/hermes/.hermes \
 **方案 B：预置 token** — 在工作站上完成流程，然后复制 token：
 
 ```bash
-hermes mcp add my-oauth-server --url https://mcp.example.com/mcp --auth oauth
-scp ~/.hermes/mcp-tokens/my-oauth-server{,.client}.json \
+vigil mcp add my-oauth-server --url https://mcp.example.com/mcp --auth oauth
+scp ~/.vigil/mcp-tokens/my-oauth-server{,.client}.json \
     server:/var/lib/hermes/.hermes/mcp-tokens/
-# 确保：chown hermes:hermes，chmod 0600
+# 确保：chown vigil:vigil，chmod 0600
 ```
 
 </details>
@@ -522,20 +522,20 @@ scp ~/.hermes/mcp-tokens/my-oauth-server{,.client}.json \
 
 ## 托管模式
 
-当 hermes 通过 NixOS 模块运行时，以下 CLI 命令会被**屏蔽**，并显示指向 `configuration.nix` 的描述性错误：
+当 vigil 通过 NixOS 模块运行时，以下 CLI 命令会被**屏蔽**，并显示指向 `configuration.nix` 的描述性错误：
 
 | 被屏蔽的命令 | 原因 |
 |---|---|
-| `hermes setup` | 配置是声明式的——请在 Nix 配置中编辑 `settings` |
-| `hermes config edit` | 配置由 `settings` 生成 |
-| `hermes config set <key> <value>` | 配置由 `settings` 生成 |
-| `hermes gateway install` | systemd 服务由 NixOS 管理 |
-| `hermes gateway uninstall` | systemd 服务由 NixOS 管理 |
+| `vigil setup` | 配置是声明式的——请在 Nix 配置中编辑 `settings` |
+| `vigil config edit` | 配置由 `settings` 生成 |
+| `vigil config set <key> <value>` | 配置由 `settings` 生成 |
+| `vigil gateway install` | systemd 服务由 NixOS 管理 |
+| `vigil gateway uninstall` | systemd 服务由 NixOS 管理 |
 
 这可以防止 Nix 声明的内容与磁盘上实际内容之间产生漂移。检测使用两个信号：
 
-1. **`HERMES_MANAGED=true`** 环境变量——由 systemd 服务设置，对 gateway 进程可见
-2. **`.managed` 标记文件**，位于 `HERMES_HOME` 中——由激活脚本设置，对交互式 shell 可见（例如 `docker exec -it hermes-agent hermes config set ...` 也会被屏蔽）
+1. **`VIGIL_MANAGED=true`** 环境变量——由 systemd 服务设置，对 gateway 进程可见
+2. **`.managed` 标记文件**，位于 `VIGIL_HOME` 中——由激活脚本设置，对交互式 shell 可见（例如 `docker exec -it hermes-agent vigil config set ...` 也会被屏蔽）
 
 要更改配置，请编辑你的 Nix 配置并运行 `sudo nixos-rebuild switch`。
 
@@ -547,18 +547,18 @@ scp ~/.hermes/mcp-tokens/my-oauth-server{,.client}.json \
 本节仅在使用 `container.enable = true` 时相关。原生模式部署可跳过。
 :::
 
-启用容器模式后，hermes 在持久化 Ubuntu 容器内运行，Nix 构建的二进制文件以只读方式从主机绑定挂载：
+启用容器模式后，vigil 在持久化 Ubuntu 容器内运行，Nix 构建的二进制文件以只读方式从主机绑定挂载：
 
 ```
 主机                                    容器
 ────                                    ─────────
 /nix/store/...-hermes-agent-0.1.0  ──►  /nix/store/... (ro)
-~/.hermes -> /var/lib/hermes/.hermes       （符号链接桥接，按 hostUsers）
+~/.vigil -> /var/lib/hermes/.vigil       （符号链接桥接，按 hostUsers）
 /var/lib/hermes/                    ──►  /data/          (rw)
   ├── current-package -> /nix/store/...    （符号链接，每次重建更新）
   ├── .gc-root -> /nix/store/...           （防止 nix-collect-garbage）
   ├── .container-identity                  （sha256 哈希，触发重建）
-  ├── .hermes/                             （HERMES_HOME）
+  ├── .hermes/                             （VIGIL_HOME）
   │   ├── .env                             （从 environment + environmentFiles 合并）
   │   ├── config.yaml                      （Nix 生成，激活时深度合并）
   │   ├── .managed                         （标记文件）
@@ -587,7 +587,7 @@ Nix 构建的二进制文件能在 Ubuntu 容器内运行，是因为 `/nix/stor
 | 卷/选项变更 | **是** | 保留 | 保留 | **丢失** |
 | `environment`/`environmentFiles` 变更 | 否 | 保留 | 保留 | 保留 |
 
-仅当容器的**身份哈希**发生变化时才会重建容器。哈希涵盖：schema 版本、镜像、`extraVolumes`、`extraOptions` 和入口点脚本。环境变量、settings、文档或 hermes 包本身的变更**不会**触发重建。
+仅当容器的**身份哈希**发生变化时才会重建容器。哈希涵盖：schema 版本、镜像、`extraVolumes`、`extraOptions` 和入口点脚本。环境变量、settings、文档或 vigil 包本身的变更**不会**触发重建。
 
 :::warning 可写层丢失
 当身份哈希发生变化（镜像升级、新卷、新容器选项）时，容器会被销毁并从 `container.image` 的全新拉取重建。可写层中通过 `apt install`、`pip install` 或 `npm install` 安装的包将丢失。`/data` 和 `/home/hermes` 中的状态会保留（这些是绑定挂载）。
@@ -597,13 +597,13 @@ Nix 构建的二进制文件能在 Ubuntu 容器内运行，是因为 `/nix/stor
 
 ### GC Root 保护
 
-`preStart` 脚本在 `${stateDir}/.gc-root` 创建一个指向当前 hermes 包的 GC root。这可以防止 `nix-collect-garbage` 删除正在运行的二进制文件。如果 GC root 损坏，重启服务会重新创建它。
+`preStart` 脚本在 `${stateDir}/.gc-root` 创建一个指向当前 vigil 包的 GC root。这可以防止 `nix-collect-garbage` 删除正在运行的二进制文件。如果 GC root 损坏，重启服务会重新创建它。
 
 ---
 
 ## 插件
 
-NixOS 模块支持声明式插件安装——无需命令式的 `hermes plugins install`。
+NixOS 模块支持声明式插件安装——无需命令式的 `vigil plugins install`。
 
 ### 目录插件（`extraPlugins`）
 
@@ -620,20 +620,20 @@ services.hermes-agent.extraPlugins = [
 ];
 ```
 
-插件在激活时以符号链接方式安装到 `$HERMES_HOME/plugins/`。Hermes 通过其正常的目录扫描发现它们。从列表中移除插件并运行 `nixos-rebuild switch` 会删除符号链接。
+插件在激活时以符号链接方式安装到 `$VIGIL_HOME/plugins/`。Vigil 通过其正常的目录扫描发现它们。从列表中移除插件并运行 `nixos-rebuild switch` 会删除符号链接。
 
 ### 入口点插件（`extraPythonPackages`）
 
-对于通过 `[project.entry-points."hermes_agent.plugins"]` 注册的 pip 打包插件（例如 [rtk-hermes](https://github.com/ogallotti/rtk-hermes)）：
+对于通过 `[project.entry-points."hermes_agent.plugins"]` 注册的 pip 打包插件（例如 [rtk-vigil](https://github.com/ogallotti/rtk-vigil)）：
 
 ```nix
 services.hermes-agent.extraPythonPackages = [
   (pkgs.python312Packages.buildPythonPackage {
-    pname = "rtk-hermes";
+    pname = "rtk-vigil";
     version = "1.0.0";
     src = pkgs.fetchFromGitHub {
       owner = "ogallotti";
-      repo = "rtk-hermes";
+      repo = "rtk-vigil";
       rev = "v1.0.0";
       hash = "sha256-...";
     };
@@ -643,7 +643,7 @@ services.hermes-agent.extraPythonPackages = [
 ];
 ```
 
-该包的 `site-packages` 会添加到 hermes wrapper 的 PYTHONPATH 中。`importlib.metadata` 在会话启动时发现入口点。
+该包的 `site-packages` 会添加到 vigil wrapper 的 PYTHONPATH 中。`importlib.metadata` 在会话启动时发现入口点。
 
 ### 可选依赖组（`extraDependencyGroups`）
 
@@ -685,7 +685,7 @@ services.hermes-agent = {
 
 ```nix
 {
-  inputs.hermes-agent.url = "github:NousResearch/hermes-agent";
+  inputs.hermes-agent.url = "github:juneauwang/vigil-agent-harness";
   outputs = { hermes-agent, nixpkgs, ... }: {
     nixpkgs.overlays = [ hermes-agent.overlays.default ];
     # 然后：
@@ -707,7 +707,7 @@ services.hermes-agent.settings.plugins.enabled = [
 ```
 
 :::note
-构建时冲突检查可防止插件包覆盖核心 hermes 依赖。如果插件提供了封闭 venv 中已有的包，`nixos-rebuild` 会以明确的错误失败。
+构建时冲突检查可防止插件包覆盖核心 vigil 依赖。如果插件提供了封闭 venv 中已有的包，`nixos-rebuild` 会以明确的错误失败。
 :::
 
 ---
@@ -727,8 +727,8 @@ nix develop
 #   - Node.js 22、ripgrep、git、openssh、ffmpeg 在 PATH 上
 #   - 戳记文件优化：依赖未变更时重新进入几乎即时
 
-hermes setup
-hermes chat
+vigil setup
+vigil chat
 ```
 
 ### direnv（推荐）
@@ -753,7 +753,7 @@ nix flake check
 nix build .#checks.x86_64-linux.package-contents   # 二进制文件存在 + 版本
 nix build .#checks.x86_64-linux.entry-points-sync  # pyproject.toml ↔ Nix 包同步
 nix build .#checks.x86_64-linux.cli-commands        # gateway/config 子命令
-nix build .#checks.x86_64-linux.managed-guard       # HERMES_MANAGED 屏蔽变更操作
+nix build .#checks.x86_64-linux.managed-guard       # VIGIL_MANAGED 屏蔽变更操作
 nix build .#checks.x86_64-linux.bundled-skills      # 包中存在 skills
 nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户键
 ```
@@ -763,11 +763,11 @@ nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户�
 
 | 检查 | 测试内容 |
 |---|---|
-| `package-contents` | `hermes` 和 `hermes-agent` 二进制文件存在且 `hermes version` 可运行 |
+| `package-contents` | `vigil` 和 `hermes-agent` 二进制文件存在且 `vigil version` 可运行 |
 | `entry-points-sync` | `pyproject.toml` 中 `[project.scripts]` 的每个条目在 Nix 包中都有对应的封装二进制文件 |
-| `cli-commands` | `hermes --help` 暴露 `gateway` 和 `config` 子命令 |
-| `managed-guard` | `HERMES_MANAGED=true hermes config set ...` 打印 NixOS 错误 |
-| `bundled-skills` | skills 目录存在，包含 SKILL.md 文件，wrapper 中设置了 `HERMES_BUNDLED_SKILLS` |
+| `cli-commands` | `vigil --help` 暴露 `gateway` 和 `config` 子命令 |
+| `managed-guard` | `VIGIL_MANAGED=true vigil config set ...` 打印 NixOS 错误 |
+| `bundled-skills` | skills 目录存在，包含 SKILL.md 文件，wrapper 中设置了 `VIGIL_BUNDLED_SKILLS` |
 | `config-roundtrip` | 7 种合并场景：全新安装、Nix 覆盖、用户键保留、混合合并、MCP 累加合并、嵌套深度合并、幂等性 |
 
 </details>
@@ -782,12 +782,12 @@ nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户�
 |---|---|---|---|
 | `enable` | `bool` | `false` | 启用 hermes-agent 服务 |
 | `package` | `package` | `hermes-agent` | 使用的 hermes-agent 包 |
-| `user` | `str` | `"hermes"` | 系统用户 |
-| `group` | `str` | `"hermes"` | 系统组 |
+| `user` | `str` | `"vigil"` | 系统用户 |
+| `group` | `str` | `"vigil"` | 系统组 |
 | `createUser` | `bool` | `true` | 自动创建用户/组 |
-| `stateDir` | `str` | `"/var/lib/hermes"` | 状态目录（`HERMES_HOME` 的父目录） |
+| `stateDir` | `str` | `"/var/lib/hermes"` | 状态目录（`VIGIL_HOME` 的父目录） |
 | `workingDirectory` | `str` | `"${stateDir}/workspace"` | Agent 工作目录（`MESSAGING_CWD`） |
-| `addToSystemPackages` | `bool` | `false` | 将 `hermes` CLI 添加到系统 PATH 并在系统范围内设置 `HERMES_HOME` |
+| `addToSystemPackages` | `bool` | `false` | 将 `vigil` CLI 添加到系统 PATH 并在系统范围内设置 `VIGIL_HOME` |
 
 ### 配置
 
@@ -800,7 +800,7 @@ nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户�
 
 | 选项 | 类型 | 默认值 | 描述 |
 |---|---|---|---|
-| `environmentFiles` | `listOf str` | `[]` | 包含密钥的 env 文件路径。激活时合并到 `$HERMES_HOME/.env` |
+| `environmentFiles` | `listOf str` | `[]` | 包含密钥的 env 文件路径。激活时合并到 `$VIGIL_HOME/.env` |
 | `environment` | `attrsOf str` | `{}` | 非密钥环境变量。**在 Nix store 中可见**——请勿在此放置密钥 |
 | `authFile` | `null` 或 `path` | `null` | OAuth 凭据预置文件。仅在首次部署时复制 |
 | `authFileForceOverwrite` | `bool` | `false` | 每次激活时始终从 `authFile` 覆盖 `auth.json` |
@@ -832,9 +832,9 @@ nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户�
 
 | 选项 | 类型 | 默认值 | 描述 |
 |---|---|---|---|
-| `extraArgs` | `listOf str` | `[]` | `hermes gateway` 的额外参数 |
-| `extraPackages` | `listOf package` | `[]` | Agent 可用的额外包。添加到 hermes 用户的每用户 profile，终端命令、skills 和 cron 任务均可见 |
-| `extraPlugins` | `listOf package` | `[]` | 以符号链接方式安装到 `$HERMES_HOME/plugins/` 的目录插件包。每个包必须包含 `plugin.yaml` |
+| `extraArgs` | `listOf str` | `[]` | `vigil gateway` 的额外参数 |
+| `extraPackages` | `listOf package` | `[]` | Agent 可用的额外包。添加到 vigil 用户的每用户 profile，终端命令、skills 和 cron 任务均可见 |
+| `extraPlugins` | `listOf package` | `[]` | 以符号链接方式安装到 `$VIGIL_HOME/plugins/` 的目录插件包。每个包必须包含 `plugin.yaml` |
 | `extraPythonPackages` | `listOf package` | `[]` | 添加到 PYTHONPATH 用于入口点插件发现的 Python 包。使用 `python312Packages` 构建 |
 | `extraDependencyGroups` | `listOf str` | `[]` | 包含到封闭 venv 中的 pyproject.toml 可选 extras（例如 `["hindsight"]`）。由 uv 解析——无冲突 |
 | `restart` | `str` | `"always"` | systemd `Restart=` 策略 |
@@ -849,7 +849,7 @@ nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户�
 | `container.image` | `str` | `"ubuntu:24.04"` | 基础镜像（运行时拉取） |
 | `container.extraVolumes` | `listOf str` | `[]` | 额外卷挂载（`host:container:mode`） |
 | `container.extraOptions` | `listOf str` | `[]` | 传递给 `docker create` 的额外参数 |
-| `container.hostUsers` | `listOf str` | `[]` | 获得 `~/.hermes` 符号链接（指向服务 stateDir）的交互式用户，自动加入 `hermes` 组 |
+| `container.hostUsers` | `listOf str` | `[]` | 获得 `~/.vigil` 符号链接（指向服务 stateDir）的交互式用户，自动加入 `vigil` 组 |
 
 ---
 
@@ -858,8 +858,8 @@ nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户�
 ### 原生模式
 
 ```
-/var/lib/hermes/                     # stateDir（归 hermes:hermes 所有，权限 0750）
-├── .hermes/                         # HERMES_HOME
+/var/lib/hermes/                     # stateDir（归 vigil:vigil 所有，权限 0750）
+├── .hermes/                         # VIGIL_HOME
 │   ├── config.yaml                  # Nix 生成（每次重建深度合并）
 │   ├── .managed                     # 标记：CLI 配置变更被屏蔽
 │   ├── .env                         # 从 environment + environmentFiles 合并
@@ -884,7 +884,7 @@ nix build .#checks.x86_64-linux.config-roundtrip    # 合并脚本保留用户�
 
 | 容器路径 | 主机路径 | 模式 | 说明 |
 |---|---|---|---|
-| `/nix/store` | `/nix/store` | `ro` | Hermes 二进制文件 + 所有 Nix 依赖 |
+| `/nix/store` | `/nix/store` | `ro` | Vigil 二进制文件 + 所有 Nix 依赖 |
 | `/data` | `/var/lib/hermes` | `rw` | 所有状态、配置、工作区 |
 | `/home/hermes` | `${stateDir}/home` | `rw` | 持久化 Agent home——`pip install --user`、工具缓存 |
 | `/usr`、`/usr/local`、`/tmp` | （可写层） | `rw` | `apt`/`pip`/`npm` 安装——重启后持久，重建后丢失 |
@@ -949,7 +949,7 @@ sudo systemctl start hermes-agent
 
 ```bash
 # 原生模式
-sudo -u hermes cat /var/lib/hermes/.hermes/.env
+sudo -u vigil cat /var/lib/hermes/.hermes/.env
 
 # 容器模式
 docker exec hermes-agent cat /data/.hermes/.env
@@ -967,9 +967,9 @@ nix-store --query --roots $(docker exec hermes-agent readlink /data/current-pack
 |---|---|---|
 | `Cannot save configuration: managed by NixOS` | CLI 守卫已激活 | 编辑 `configuration.nix` 并执行 `nixos-rebuild switch` |
 | 容器意外重建 | `extraVolumes`、`extraOptions` 或 `image` 发生变更 | 预期行为——可写层重置。重新安装包或使用自定义镜像 |
-| `hermes version` 显示旧版本 | 容器未重启 | `systemctl restart hermes-agent` |
-| `/var/lib/hermes` 权限拒绝 | 状态目录为 `0750 hermes:hermes` | 使用 `docker exec` 或 `sudo -u hermes` |
-| `nix-collect-garbage` 删除了 hermes | GC root 缺失 | 重启服务（preStart 会重新创建 GC root） |
+| `vigil version` 显示旧版本 | 容器未重启 | `systemctl restart hermes-agent` |
+| `/var/lib/hermes` 权限拒绝 | 状态目录为 `0750 vigil:vigil` | 使用 `docker exec` 或 `sudo -u vigil` |
+| `nix-collect-garbage` 删除了 vigil | GC root 缺失 | 重启服务（preStart 会重新创建 GC root） |
 | `no container with name or ID "hermes-agent"`（Podman） | Podman rootful 容器对普通用户不可见 | 为 podman 添加免密 sudo（参见[容器模式](#container-mode)章节） |
-| `unable to find user hermes` | 容器仍在启动中（入口点尚未创建用户） | 等待几秒后重试——CLI 会自动重试 |
+| `unable to find user vigil` | 容器仍在启动中（入口点尚未创建用户） | 等待几秒后重试——CLI 会自动重试 |
 | 通过 `extraPackages` 添加的工具在终端中找不到 | 需要 `nixos-rebuild switch` 更新每用户 profile | 重建并重启：`nixos-rebuild switch && systemctl restart hermes-agent` |

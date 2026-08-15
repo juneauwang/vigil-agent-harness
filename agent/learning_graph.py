@@ -49,7 +49,7 @@ def _frontmatter(text: str) -> dict[str, Any]:
 
 
 def _hermes_meta(fm: dict[str, Any]) -> dict[str, Any]:
-    """``metadata.hermes`` as a dict, tolerant of the string-valued frontmatter
+    """``metadata.vigil`` as a dict, tolerant of the string-valued frontmatter
     that ``parse_frontmatter``'s malformed-YAML fallback produces."""
     meta = fm.get("metadata")
     hermes = meta.get("hermes") if isinstance(meta, dict) else None

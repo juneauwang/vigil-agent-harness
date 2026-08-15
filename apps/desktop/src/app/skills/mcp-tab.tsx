@@ -68,7 +68,7 @@ const wrapDoc = (entries: McpServers) => pretty({ mcpServers: entries })
 const isServerShape = (value: Record<string, unknown>) =>
   typeof value.command === 'string' || typeof value.url === 'string'
 
-// Cursor/Claude write `type`; Hermes reads `transport`. Normalize on the way
+// Cursor/Claude write `type`; Vigil reads `transport`. Normalize on the way
 // in so pasted configs behave identically under the CLI/TUI loader.
 function normalizeEntry(entry: Record<string, unknown>): Record<string, unknown> {
   if (typeof entry.type === 'string' && entry.transport === undefined) {
@@ -108,7 +108,7 @@ function getServers(config: HermesConfigRecord | null): McpServers {
   return raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as McpServers) : {}
 }
 
-// The runtime gate is `enabled: false` — the same flag `hermes mcp` and the
+// The runtime gate is `enabled: false` — the same flag `vigil mcp` and the
 // agent's MCP loader read.
 const serverEnabled = (server: Record<string, unknown>) => server.enabled !== false
 

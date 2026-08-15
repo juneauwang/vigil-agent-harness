@@ -121,7 +121,7 @@ class TestScopedLockTakeoverReapsChildren:
         replacer_home = tmp_path / "replacer"
         target_home = tmp_path / "target"
         replacer_home.mkdir()
-        monkeypatch.setenv("HERMES_HOME", str(replacer_home))
+        monkeypatch.setenv("VIGIL_HOME", str(replacer_home))
         record = self._owner_record(target_home)
         alive = iter(alive_polls)
         monkeypatch.setattr(status, "_pid_exists", lambda _pid: next(alive))
@@ -173,7 +173,7 @@ async def test_start_gateway_replace_reaps_old_gateway_children_posix(
 ):
     """--replace snapshots the old gateway's children before SIGTERM and
     reaps them after the main PID is confirmed dead (POSIX path)."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
 
     events = []
     kids = [_FakeChild(401, ppid=1)]

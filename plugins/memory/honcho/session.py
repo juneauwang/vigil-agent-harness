@@ -72,7 +72,7 @@ class HonchoSessionManager:
     """
     Manages conversation sessions using Honcho.
 
-    Runs alongside hermes' existing SQLite state and file-based memory,
+    Runs alongside vigil' existing SQLite state and file-based memory,
     adding persistent cross-session user modeling via Honcho's AI-native memory.
     """
 
@@ -763,7 +763,7 @@ class HonchoSessionManager:
         except Exception as e:
             logger.warning("Failed to fetch user context from Honcho: %s", e)
 
-        # Also fetch AI peer's own representation so Hermes knows itself.
+        # Also fetch AI peer's own representation so Vigil knows itself.
         try:
             ai_ctx = self._fetch_peer_context(session.assistant_peer_id, target=session.assistant_peer_id)
             result["ai_representation"] = ai_ctx["representation"]
@@ -854,7 +854,7 @@ class HonchoSessionManager:
 
         Args:
             session_key: The session key to associate files with.
-            memory_dir: Path to the memories directory (~/.hermes/memories/).
+            memory_dir: Path to the memories directory (~/.vigil/memories/).
 
         Returns:
             True if at least one file was uploaded, False otherwise.

@@ -1,4 +1,4 @@
-"""Hermes update pipeline — extracted from ``hermes_cli/main.py``.
+"""Vigil update pipeline — extracted from ``hermes_cli/main.py``.
 
 Mechanical move (main.py decomposition): ``_cmd_update_impl``, ``_cmd_update_check``
 and every module-level helper used only by the update path, plus the update-only
@@ -64,7 +64,7 @@ _UPDATE_RUNTIME_RELOAD_MODULES = (
 def _reload_updated_runtime_modules() -> None:
     """Reload update-sensitive modules after the checkout changes in-place.
 
-    ``hermes update`` keeps running in the pre-pull Python process. After a
+    ``vigil update`` keeps running in the pre-pull Python process. After a
     large update, modules already present in ``sys.modules`` can still expose
     old symbols even though their source files on disk are new. Refresh the
     small module set used by lazy-backend refresh before that step imports
@@ -85,7 +85,7 @@ def _reload_updated_runtime_modules() -> None:
     except Exception as exc:
         logger.debug("Could not refresh update runtime modules: %s", exc)
 
-# Critical files that Hermes must be able to import immediately after an
+# Critical files that Vigil must be able to import immediately after an
 # update/install. Most are imported on every CLI startup; ``web_server.py``
 # is the desktop/dashboard backend path that a fresh Windows install launches
 # right away. If any of these fail to parse after a pull, the user can be
@@ -120,7 +120,7 @@ def _capture_head_sha(git_cmd, cwd) -> str | None:
 def _validate_critical_files_syntax(root) -> tuple[bool, str | None, str | None]:
     """Compile each file in ``_UPDATE_CRITICAL_FILES`` to catch SyntaxErrors.
 
-    These are the files imported on every ``hermes`` startup; if any of them
+    These are the files imported on every ``vigil`` startup; if any of them
     has a syntax error (orphan merge-conflict markers, bad ref to a name
     that no longer exists, etc.) the CLI can't bootstrap at all. We validate
     them after a successful ``git pull`` so we can auto-roll-back instead of
@@ -190,7 +190,7 @@ def _validate_critical_modules_import(root) -> tuple[bool, str | None, str | Non
     against the half-updated tree. Costs ~0.4s.
 
     Uses the project venv's interpreter when there is one (matching
-    ``_venv_core_imports_healthy``): ``hermes update`` can be driven by a
+    ``_venv_core_imports_healthy``): ``vigil update`` can be driven by a
     different Python than the install's own, and probing the wrong
     interpreter would test a tree the user never runs.
 
@@ -255,7 +255,7 @@ def _gateway_prompt(prompt_text: str, default: str = "", timeout: float = 300.0)
     Writes a prompt marker file so the gateway can forward the question to the
     user, then polls for a response file.  Falls back to *default* on timeout.
 
-    Used by ``hermes update --gateway`` so interactive prompts (stash restore,
+    Used by ``vigil update --gateway`` so interactive prompts (stash restore,
     config migration) are forwarded to the messenger instead of being silently
     skipped.
     """
@@ -331,7 +331,7 @@ def _web_toolchain_roots(web_dir: Path) -> tuple[Path, ...]:
     return (web_dir, web_dir.parent)
 
 def _print_curator_first_run_notice() -> None:
-    """Print a short heads-up about the skill curator after `hermes update`.
+    """Print a short heads-up about the skill curator after `vigil update`.
 
     Only fires when the curator is enabled AND has no recorded run yet, which
     is exactly the window where the gateway ticker used to fire Curator
@@ -367,11 +367,11 @@ def _print_curator_first_run_notice() -> None:
     print("  Preview now:  vigil curator run --dry-run")
     print("  Pause it:     vigil curator pause")
     print(
-        "  Docs:         https://hermes-agent.nousresearch.com/docs/user-guide/features/curator"
+        "  Docs:         https://github.com/juneauwang/vigil-agent-harness"
     )
 
 def _print_fts_optimize_available_notice() -> None:
-    """Advertise the opt-in v23 search-index optimization after `hermes update`.
+    """Advertise the opt-in v23 search-index optimization after `vigil update`.
 
     Only fires when the current profile's state.db is still on the legacy
     (pre-v23) inline FTS layout. Leads with the reclaimable-space figure and
@@ -488,11 +488,11 @@ def _print_curator_recent_run_notice() -> None:
 
     The curator runs in the background (gateway tick + CLI session start),
     so users learn about skill consolidations only by stumbling into a
-    rename. ``hermes update`` is a high-attention surface — surface the
+    rename. ``vigil update`` is a high-attention surface — surface the
     most recent run's rename map here, once.
 
     Show-once: state stamps ``last_run_summary_shown_at`` after printing.
-    Subsequent ``hermes update`` invocations skip the block until a newer
+    Subsequent ``vigil update`` invocations skip the block until a newer
     curator run lands. Silent when the curator has never run, when the
     most recent summary has already been shown, or when the summary has
     no rename information to display (no archives).
@@ -638,7 +638,7 @@ def _discard_staged(staged) -> None:
 
     Without this a phase-1 failure (typically disk exhaustion) orphans one
     staging copy per entry already processed — up to a full second copy of
-    the tree. The user then follows the "re-run `hermes update`" advice with
+    the tree. The user then follows the "re-run `vigil update`" advice with
     *less* free space than before and the retry fails harder than the
     original attempt.
     """
@@ -717,13 +717,13 @@ def _print_update_completion(message: str) -> None:
     with an action id, a terminal receipt line the Desktop can match after
     the dashboard restarts (see #47359 / #58764)."""
     print(message)
-    action_id = os.environ.get("HERMES_ACTION_ID", "")
+    action_id = os.environ.get("VIGIL_ACTION_ID", "")
     if len(action_id) == 32 and all(char in "0123456789abcdef" for char in action_id):
         print(f"=== hermes-update completed {action_id} ===")
 
 
 def _update_via_zip(args):
-    """Update Hermes Agent by downloading a ZIP archive.
+    """Update Vigil Agent by downloading a ZIP archive.
 
     Used on Windows when git file I/O is broken (antivirus, NTFS filter
     drivers causing 'Invalid argument' errors on file creation).
@@ -752,7 +752,7 @@ def _update_via_zip(args):
         )
         _m().sys.exit(1)
     zip_url = (
-        f"https://github.com/NousResearch/hermes-agent/archive/refs/heads/{branch}.zip"
+        f"https://github.com/juneauwang/vigil-agent-harness/archive/refs/heads/{branch}.zip"
     )
 
     print("→ Downloading latest version...")
@@ -876,7 +876,7 @@ def _update_via_zip(args):
         print("  Your existing install was left in place.")
         print(
             "  Re-run `vigil update` to retry; if the agent won't start, "
-            "reinstall from https://hermes-agent.nousresearch.com"
+            "reinstall from https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/main/setup-vigil.sh"
         )
         _m().sys.exit(1)
     finally:
@@ -1253,7 +1253,7 @@ def _restore_stashed_changes(
         print(
             "  Restoring them may reapply local customizations onto the updated codebase."
         )
-        print("  Review the result afterward if Hermes behaves unexpectedly.")
+        print("  Review the result afterward if Vigil behaves unexpectedly.")
         print("Restore local changes now? [Y/n]")
         if input_fn is not None:
             response = input_fn("Restore local changes now? [Y/n]", "y")
@@ -1312,7 +1312,7 @@ def _restore_stashed_changes(
         print(f"  Stash ref: {stash_ref}")
 
         # Always reset to clean state — leaving conflict markers in source
-        # files makes hermes completely unrunnable (SyntaxError on import).
+        # files makes vigil completely unrunnable (SyntaxError on import).
         # The user's changes are safe in the stash for manual recovery.
         subprocess.run(
             git_cmd + ["reset", "--hard", "HEAD"],
@@ -1329,7 +1329,7 @@ def _restore_stashed_changes(
     stash_selector = _resolve_stash_selector(git_cmd, cwd, stash_ref)
     if stash_selector is None:
         print(
-            "⚠ Local changes were restored, but Hermes couldn't find the stash entry to drop."
+            "⚠ Local changes were restored, but Vigil couldn't find the stash entry to drop."
         )
         print(
             "  The stash was left in place. You can remove it manually after checking the result."
@@ -1344,7 +1344,7 @@ def _restore_stashed_changes(
         )
         if drop.returncode != 0:
             print(
-                "⚠ Local changes were restored, but Hermes couldn't drop the saved stash entry."
+                "⚠ Local changes were restored, but Vigil couldn't drop the saved stash entry."
             )
             if drop.stdout.strip():
                 print(drop.stdout.strip())
@@ -1356,7 +1356,7 @@ def _restore_stashed_changes(
             _print_stash_cleanup_guidance(stash_ref, stash_selector)
 
     print("⚠ Local changes were restored on top of the updated codebase.")
-    print("  Review `git diff` / `git status` if Hermes behaves unexpectedly.")
+    print("  Review `git diff` / `git status` if Vigil behaves unexpectedly.")
     return True
 
 def _discard_stashed_changes(
@@ -1382,7 +1382,7 @@ def _discard_stashed_changes(
     if stash_selector is None:
         print(
             "⚠ Configured to discard local changes on non-interactive update, "
-            "but Hermes couldn't find the stash entry to drop."
+            "but Vigil couldn't find the stash entry to drop."
         )
         _print_stash_cleanup_guidance(stash_ref)
         return False
@@ -1395,7 +1395,7 @@ def _discard_stashed_changes(
     )
     if drop.returncode != 0:
         print(
-            "⚠ Configured to discard local changes, but Hermes couldn't drop "
+            "⚠ Configured to discard local changes, but Vigil couldn't drop "
             "the saved stash entry."
         )
         if drop.stderr.strip():
@@ -1407,13 +1407,13 @@ def _discard_stashed_changes(
     return True
 
 OFFICIAL_REPO_URLS = {
-    "https://github.com/NousResearch/hermes-agent.git",
-    "git@github.com:NousResearch/hermes-agent.git",
-    "https://github.com/NousResearch/hermes-agent",
-    "git@github.com:NousResearch/hermes-agent",
+    "https://github.com/juneauwang/vigil-agent-harness.git",
+    "git@github.com:juneauwang/vigil-agent-harness.git",
+    "https://github.com/juneauwang/vigil-agent-harness",
+    "git@github.com:juneauwang/vigil-agent-harness",
 }
 
-OFFICIAL_REPO_URL = "https://github.com/NousResearch/hermes-agent.git"
+OFFICIAL_REPO_URL = "https://github.com/juneauwang/vigil-agent-harness.git"
 
 SKIP_UPSTREAM_PROMPT_FILE = ".skip_upstream_prompt"
 
@@ -1538,8 +1538,8 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
 
         # Ask user if they want to add upstream
         print()
-        print("ℹ Your fork is not tracking the official Hermes repository.")
-        print("  This means you may miss updates from NousResearch/hermes-agent.")
+        print("ℹ Your fork is not tracking the official Vigil repository.")
+        print("  This means you may miss updates from juneauwang/vigil-agent-harness.")
         print()
         try:
             response = (
@@ -1553,7 +1553,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
             print("→ Adding upstream remote...")
             if _add_upstream_remote(git_cmd, cwd):
                 print(
-                    "  ✓ Added upstream: https://github.com/NousResearch/hermes-agent.git"
+                    "  ✓ Added upstream: https://github.com/juneauwang/vigil-agent-harness.git"
                 )
                 has_upstream = True
             else:
@@ -1561,7 +1561,7 @@ def _sync_with_upstream_if_needed(git_cmd: list[str], cwd: Path) -> None:
                 return
         else:
             print(
-                "  Skipped. Run 'git remote add upstream https://github.com/NousResearch/hermes-agent.git' to add later."
+                "  Skipped. Run 'git remote add upstream https://github.com/juneauwang/vigil-agent-harness.git' to add later."
             )
             _mark_skip_upstream_prompt()
             return
@@ -1640,7 +1640,7 @@ def _invalidate_update_cache():
     reports a stale "commits behind" count after a successful update.
 
     The git repo is shared across profiles — when one profile runs
-    ``hermes update``, every profile is now current.
+    ``vigil update``, every profile is now current.
     """
     homes = []
     # Default profile home (Docker-aware — uses /opt/data in Docker)
@@ -1694,7 +1694,7 @@ def _format_concurrent_instances_message(
     lines.append(f"  Updating now would fail to overwrite {shim} because")
     lines.append("  Windows blocks REPLACE on a running executable.")
     lines.append("")
-    lines.append("  Close Hermes Desktop, exit any open `vigil` REPLs, and")
+    lines.append("  Close Vigil Desktop, exit any open `vigil` REPLs, and")
     lines.append("  stop the gateway (`vigil gateway stop`) before retrying.")
     lines.append("")
     if matches:
@@ -1735,7 +1735,7 @@ def _refresh_active_lazy_features(
 
     When pyproject.toml's ``[all]`` extra was slimmed down (May 2026), most
     optional backends moved to ``tools/lazy_deps.py`` and only install on
-    first use. ``hermes update`` runs ``uv pip install -e .[all]`` which
+    first use. ``vigil update`` runs ``uv pip install -e .[all]`` which
     leaves those packages untouched — so if we bump a pin in
     :data:`LAZY_DEPS` (CVE response, transitive bug fix), users who already
     activated the backend keep the stale version forever.
@@ -1835,7 +1835,7 @@ def _refresh_active_memory_provider_dependencies() -> None:
 
     Memory-provider bridge packages are declared in each provider's
     ``plugin.yaml`` (plus mode-dependent extras like Hindsight's
-    ``hindsight-all``), NOT in Hermes' editable-install extras or
+    ``hindsight-all``), NOT in Vigil' editable-install extras or
     ``LAZY_DEPS`` alone — so the core dependency reinstall above can strip
     or downgrade them (#53272 mem0ai, #70636 hindsight-embed). Re-run the
     provider's declared install for the ACTIVE provider only, after the
@@ -1920,7 +1920,7 @@ def _ensure_uv_for_termux(pip_cmd: list[str]) -> str | None:
     """Best-effort uv bootstrap on Termux for faster update installs.
 
     The normal path (``ensure_uv()`` in managed_uv) installs the managed
-    standalone uv into ``$HERMES_HOME/bin/uv``, but on Termux the official
+    standalone uv into ``$VIGIL_HOME/bin/uv``, but on Termux the official
     installer may not work (glibc vs bionic).  Prefer a uv already on PATH
     (e.g. ``pkg install uv``); only if there is none do we fall back to a
     wheel-only ``pip install uv`` so we never source-build the Rust crate.
@@ -1957,7 +1957,7 @@ def _npm_manifest_paths() -> tuple[Path, ...]:
 
     The lockfile alone is NOT a sufficient key: on a local checkout a dev
     can edit package.json (root or a workspace) without running npm — the
-    lockfile is then unchanged but `hermes update` is exactly the step
+    lockfile is then unchanged but `vigil update` is exactly the step
     expected to sync node_modules (via the `npm install` fallback in
     _run_npm_install_deterministic).
 
@@ -2012,7 +2012,7 @@ def _npm_lockfile_changed(hermes_root: Path) -> bool:
     if not (_m().PROJECT_ROOT / "node_modules").is_dir():
         return True
     # A matching lockfile hash over a tree whose web build toolchain never
-    # landed must NOT skip the reinstall — otherwise every later `hermes
+    # landed must NOT skip the reinstall — otherwise every later `vigil
     # update` keeps rebuilding against a half-installed tree and serving a
     # stale dist.
     web_dir = _m().PROJECT_ROOT / "web"
@@ -2076,8 +2076,8 @@ def _update_node_dependencies() -> list[str]:
     from hermes_constants import get_default_hermes_root
 
     # This cache describes PROJECT_ROOT/node_modules, which is shared by every
-    # Hermes profile using this checkout. Keep one per-checkout cache under the
-    # shared Hermes root rather than rerunning npm once per named profile.
+    # Vigil profile using this checkout. Keep one per-checkout cache under the
+    # shared Vigil root rather than rerunning npm once per named profile.
     shared_hermes_root = get_default_hermes_root()
     if not _m()._npm_lockfile_changed(shared_hermes_root):
         logger.info("npm lockfile unchanged, skipping npm install")
@@ -2086,7 +2086,7 @@ def _update_node_dependencies() -> list[str]:
     # With a single workspace lockfile the root install would cover ALL
     # workspaces — but apps/desktop pulls in Electron as a devDependency,
     # and its postinstall downloads a ~200MB binary.  Most users don't
-    # need desktop during `hermes update`, so we install root-only first
+    # need desktop during `vigil update`, so we install root-only first
     # then add just the workspaces the CLI/TUI/web build actually requires.
     # Desktop deps are installed on demand by the desktop launcher
     # (see _desktop_build_needed).
@@ -2109,7 +2109,7 @@ def _update_node_dependencies() -> list[str]:
     # NOTE: capture_output=False here is deliberate (#18840) — optional
     # postinstall scripts (e.g. @askjo/camofox-browser's browser-binary fetch)
     # print download progress, and capturing it makes a long download look
-    # hung. The chatty npm-deprecation noise during `hermes update` comes from
+    # hung. The chatty npm-deprecation noise during `vigil update` comes from
     # the *desktop* build, not this step; that one is captured to update.log.
     root_args = [*extra_args, "--workspaces=false"]
     root_result = _m()._run_npm_install_deterministic(
@@ -2148,9 +2148,9 @@ def _update_node_dependencies() -> list[str]:
     return _partial_update_failure("ui-tui, web workspaces")
 
 def _log_only_write(text: str) -> None:
-    """Write ``text`` to ``~/.hermes/logs/update.log`` only, never the terminal.
+    """Write ``text`` to ``~/.vigil/logs/update.log`` only, never the terminal.
 
-    During ``hermes update`` ``sys.stdout`` is an ``_UpdateOutputStream`` that
+    During ``vigil update`` ``sys.stdout`` is an ``_UpdateOutputStream`` that
     mirrors to both the terminal and ``update.log``. Loud, low-signal
     subprocess output (npm installs, the Electron/vite build, the cua-driver
     installer's "Next steps" wall) should be captured and tucked into the log
@@ -2190,7 +2190,7 @@ def _run_logged_subprocess(cmd, *, cwd=None, env=None):
     return result
 
 def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
-    """Implement ``hermes update --check``: fetch and report without installing.
+    """Implement ``vigil update --check``: fetch and report without installing.
 
     ``branch`` selects which branch the check compares against. Default is
     "main"; callers can pass another branch to ask "are there new commits
@@ -2204,7 +2204,7 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     method = detect_install_method(_m().PROJECT_ROOT)
     if method == "docker":
         # Docker can't ``git fetch`` from within the container.  Surface the
-        # same long-form ``docker pull`` guidance ``hermes update`` (apply
+        # same long-form ``docker pull`` guidance ``vigil update`` (apply
         # path) uses — telling the user to "reinstall via curl" or that
         # ".git is missing" would point them at the wrong remediation.
         from hermes_cli.config import format_docker_update_message
@@ -2364,16 +2364,16 @@ def _ensure_fhs_path_guard() -> None:
 
     Mirrors the post-symlink probe added to ``scripts/install.sh`` so that
     existing FHS-layout root installs on RHEL/CentOS/Rocky/Alma 8+ get
-    repaired on ``hermes update`` without requiring a reinstall.  The
+    repaired on ``vigil update`` without requiring a reinstall.  The
     installer's assumption that ``/usr/local/bin`` is on PATH for every
     standard shell breaks on those distros in non-login interactive shells
     (su, sudo -s, tmux panes, some web terminals): /etc/bashrc doesn't
     add /usr/local/bin and /root/.bash_profile doesn't either.  Symptom:
-    ``hermes`` prints ``command not found`` even though the symlink lives
+    ``vigil`` prints ``command not found`` even though the symlink lives
     at /usr/local/bin/hermes.
 
     Silent no-op on: non-Linux, non-root, non-FHS installs, and any system
-    where ``bash -i -c 'command -v hermes'`` already resolves.  Idempotent.
+    where ``bash -i -c 'command -v vigil'`` already resolves.  Idempotent.
     """
     if _m().sys.platform != "linux":
         return
@@ -2383,7 +2383,7 @@ def _ensure_fhs_path_guard() -> None:
     except AttributeError:
         return
     # Only act when this is actually an FHS-layout install (command link at
-    # /usr/local/bin/hermes, code at /usr/local/lib/hermes-agent).
+    # /usr/local/bin/vigil, code at /usr/local/lib/hermes-agent).
     fhs_link = Path("/usr/local/bin/hermes")
     if not fhs_link.is_symlink() and not fhs_link.exists():
         return
@@ -2402,7 +2402,7 @@ def _ensure_fhs_path_guard() -> None:
                 "bash",
                 "-i",
                 "-c",
-                "command -v hermes",
+                "command -v vigil",
             ],
             capture_output=True,
             text=True, encoding="utf-8", errors="replace",
@@ -2415,7 +2415,7 @@ def _ensure_fhs_path_guard() -> None:
 
     path_line = 'export PATH="/usr/local/bin:$PATH"'
     path_comment = (
-        "# Hermes Agent — ensure /usr/local/bin is on PATH " "(RHEL non-login shells)"
+        "# Vigil Agent — ensure /usr/local/bin is on PATH " "(RHEL non-login shells)"
     )
     wrote_any = False
     for candidate in (".bashrc", ".bash_profile"):
@@ -2448,23 +2448,23 @@ def _ensure_fhs_path_guard() -> None:
         print("    (reload your shell or run 'source ~/.bashrc' to pick it up)")
 
 def _ensure_acp_launcher() -> None:
-    """Self-heal: install a ``hermes-acp`` launcher next to the ``hermes`` one.
+    """Self-heal: install a ``hermes-acp`` launcher next to the ``vigil`` one.
 
     Mirrors the launcher block in ``scripts/install.sh`` so existing installs
-    gain the ACP command on ``hermes update`` without a reinstall.  ACP hosts
+    gain the ACP command on ``vigil update`` without a reinstall.  ACP hosts
     (Zed, JetBrains, Buzz Desktop) spawn the agent by resolving the
     ``hermes-acp`` command name against the login-shell PATH; the console
     script of that name lives inside the install's venv, which is not on that
-    PATH, so those hosts report Hermes as not installed even when it is.
+    PATH, so those hosts report Vigil as not installed even when it is.
 
-    The shim simply delegates to the sibling ``hermes`` launcher with the
+    The shim simply delegates to the sibling ``vigil`` launcher with the
     ``acp`` subcommand, which makes it correct for every install layout
     (venv wrapper, FHS symlink, pipx/pip console script) without having to
     reconstruct interpreter/entrypoint paths.
 
     No-op on Windows (install.ps1 puts ``venv\\Scripts`` on the user PATH, so
     ``hermes-acp.exe`` already resolves) and wherever a ``hermes-acp`` is
-    already present next to the ``hermes`` command.  Unwritable directories
+    already present next to the ``vigil`` command.  Unwritable directories
     (e.g. ``/usr/local/bin`` as non-root) are skipped silently.  Idempotent.
     """
     if _m().sys.platform == "win32":
@@ -2483,7 +2483,7 @@ def _ensure_acp_launcher() -> None:
                 continue
             shim = (
                 "#!/usr/bin/env bash\n"
-                "# Hermes Agent — ACP launcher (written by `vigil update`).\n"
+                "# Vigil Agent — ACP launcher (written by `vigil update`).\n"
                 "# ACP hosts (Zed, JetBrains, Buzz) resolve the agent by this\n"
                 "# command name on the login-shell PATH.\n"
                 f'exec "{hermes_cmd}" acp "$@"\n'
@@ -2558,8 +2558,8 @@ def _run_pre_update_backup(args) -> Optional[str]:
       under ``state-snapshots/``. Files over 1 GiB are skipped with a
       warning so a bloated state.db can never stall the update
       (issues #15733, #34600 are the reason this safety net exists).
-    - ``full``  — the quick snapshot PLUS a full zip of HERMES_HOME under
-      ``backups/`` (restorable via ``hermes import``; the #48200 wrong-path
+    - ``full``  — the quick snapshot PLUS a full zip of VIGIL_HOME under
+      ``backups/`` (restorable via ``vigil import``; the #48200 wrong-path
       wipe is the reason this level exists).
 
     ``--backup`` forces ``full`` for one run; ``--no-backup`` forces ``off``.
@@ -2699,7 +2699,7 @@ def _run_pre_update_backup(args) -> Optional[str]:
         size_bytes /= 1024
         size_str = f"{size_bytes:.1f} {unit}"
 
-    # Render path using display_hermes_home so the user sees ~/.hermes/...
+    # Render path using display_hermes_home so the user sees ~/.vigil/...
     try:
         from hermes_constants import get_hermes_home, display_hermes_home
 
@@ -2775,11 +2775,11 @@ def _venv_core_imports_healthy() -> tuple[bool, str]:
     """Probe the project venv for the core imports the backend needs to boot.
 
     Runs a tiny import check inside the venv interpreter (NOT this process —
-    ``hermes update`` may be driven by a different Python). Catches the
+    ``vigil update`` may be driven by a different Python). Catches the
     half-updated-venv state: git checkout current but a dependency sync that
     failed or was killed partway (e.g. Windows access-denied on a loaded
     .pyd), leaving imports like ``fastapi``'s new transitive deps missing.
-    Without this probe, ``hermes update`` on a current checkout prints
+    Without this probe, ``vigil update`` on a current checkout prints
     "Already up to date!" and returns without ever re-syncing dependencies —
     the user's install stays broken no matter how many times they update
     (ryanc's incident, July 2026).
@@ -2791,7 +2791,7 @@ def _venv_core_imports_healthy() -> tuple[bool, str]:
     venv_python = venv_python_path(venv_dir, windows=_m()._is_windows())
     if not venv_python.exists():
         # No venv interpreter at all. In a dev checkout that's normal (the
-        # dev may run hermes from any interpreter), so report healthy to
+        # dev may run vigil from any interpreter), so report healthy to
         # avoid forcing reinstalls. But on a MANAGED install (the Windows
         # installer / desktop bootstrap stamps `.hermes-bootstrap-complete`,
         # and an interrupted update leaves `.update-incomplete`), the venv
@@ -2855,7 +2855,7 @@ def _detect_venv_python_processes(
     backend and respawns it within seconds — so the caller should refuse and
     tell the user to close the app instead. Returns ``(pid, name, cmdline)``
     tuples; empty off-Windows / without psutil / when nothing matches. The
-    calling process and its ancestors are always excluded (a CLI ``hermes
+    calling process and its ancestors are always excluded (a CLI ``vigil
     update`` itself runs from the venv python). Never raises.
     """
     if not _m()._is_windows():
@@ -2927,13 +2927,13 @@ def _detect_venv_python_processes(
 def _format_venv_python_holders_message(matches: list[tuple[int, str, str]]) -> str:
     """Explain which venv processes block the update and how to clear them."""
     lines = [
-        "✗ Other Hermes processes are running from this install's venv:",
+        "✗ Other Vigil processes are running from this install's venv:",
     ]
     for pid, name, cmdline in matches[:6]:
         hint = ""
         low = cmdline.lower()
         if "serve" in low or "dashboard" in low:
-            hint = "  ← Hermes Desktop backend (close the desktop app)"
+            hint = "  ← Vigil Desktop backend (close the desktop app)"
         elif "gateway" in low:
             hint = "  ← gateway"
         lines.append(f"  PID {pid}  {name}  {cmdline}{hint}")
@@ -2947,7 +2947,7 @@ def _format_venv_python_holders_message(matches: list[tuple[int, str, str]]) -> 
         "  dependency update would fail partway and leave a broken install."
     )
     lines.append(
-        "  Close the Hermes desktop app / other Hermes terminals, then re-run:"
+        "  Close the Vigil desktop app / other Vigil terminals, then re-run:"
     )
     lines.append("    vigil update")
     lines.append("  (or use `vigil update --force-venv` to proceed anyway at your own risk)")
@@ -2990,7 +2990,7 @@ def _venv_launcher_ancestors(pids: list[int]) -> list[int]:
     except OSError:
         venv_prefix = str(venv_dir).lower().rstrip(os.sep) + os.sep
 
-    # Never return ourselves or our own ancestry: a CLI ``hermes update``
+    # Never return ourselves or our own ancestry: a CLI ``vigil update``
     # runs from the venv python and would otherwise nominate itself.
     skip: set[int] = {os.getpid()}
     try:
@@ -3153,7 +3153,7 @@ def _pause_windows_gateways_for_update() -> dict | None:
     # update even though the gateway itself is stopped.
     launcher_pids = _m()._venv_launcher_ancestors(mapped_pids)
 
-    print("→ Stopping Windows gateway process(es) before updating Hermes...")
+    print("→ Stopping Windows gateway process(es) before updating Vigil...")
     try:
         drain_timeout = max(float(_get_restart_drain_timeout()), 1.0)
     except Exception:
@@ -3223,7 +3223,7 @@ def _cold_start_windows_gateway_after_update() -> None:
     is installed, signalling the user wants a gateway. Unlike the relaunch
     paths — which watch an old PID and respawn once it exits — this is a direct
     fresh spawn via the same hidden-console + breakaway path that
-    ``hermes gateway start`` uses (``gateway_windows._spawn_detached``).
+    ``vigil gateway start`` uses (``gateway_windows._spawn_detached``).
 
     Best-effort and idempotent: re-checks that nothing is running first so a
     concurrent start (e.g. the autostart entry firing) can't produce a
@@ -3314,7 +3314,7 @@ def _refresh_windows_gateway_launchers() -> None:
 
     The Scheduled Task / Startup-folder launchers (``gateway.cmd`` +
     ``gateway.vbs``) are persistence artifacts written once at install time —
-    ``hermes update`` never touched them, so installs created before the
+    ``vigil update`` never touched them, so installs created before the
     hidden-console rework (aa2ae36c3f) kept launching the gateway through
     ``pythonw.exe`` forever: every descendant spawn flashed a conhost
     (#54220/#56747) and, since #70344, the console-less gateway died at
@@ -3413,7 +3413,7 @@ def _discard_lockfile_churn(git_cmd, repo_root):
 
     npm rewrites lockfiles non-deterministically at install/build time. On a
     managed install those diffs are never intentional, so we discard them so
-    ``hermes update`` sees a clean tree instead of autostashing every run.
+    ``vigil update`` sees a clean tree instead of autostashing every run.
     Best-effort; only ever touches files named ``package-lock.json``.
     """
     try:
@@ -3459,7 +3459,7 @@ def _normalize_managed_eol(git_cmd, repo_root):
     overwritten", so ``install.ps1`` pins ``core.autocrlf=false`` on the managed
     clone (#67730). Checkouts created before that landed never got the pin and
     cannot receive it — the bootstrap installer reuses its build-pinned
-    ``install.ps1`` forever — so ``hermes update``, which ships with the checkout
+    ``install.ps1`` forever — so ``vigil update``, which ships with the checkout
     itself, is the only path left that can fix them.
 
     The pin and the cleanup are one operation. Under ``autocrlf=true`` git
@@ -3596,7 +3596,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             logger.debug("Could not read updates.non_interactive_local_changes: %s", exc)
             discard_local_changes = False
 
-    print("⚕ Updating Hermes Agent...")
+    print("⚕ Updating Vigil Agent...")
     print()
 
     # On Windows, abort early if another hermes.exe is holding the venv shim
@@ -3627,7 +3627,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         )
 
     # With gateways paused, anything still running from the venv interpreter
-    # (most commonly the Desktop app's `hermes serve` backend) will keep .pyd
+    # (most commonly the Desktop app's `vigil serve` backend) will keep .pyd
     # files locked and corrupt the dependency sync below. Refuse rather than
     # race: killing the desktop backend is futile (the app supervises and
     # respawns it), so the user must close the app. Deliberately NOT bypassed
@@ -3678,7 +3678,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         else:
             print("✗ Not a git repository. Please reinstall:")
             print(
-                "  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash"
+                "  curl -fsSL https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/main/setup-vigil.sh | bash"
             )
             sys.exit(1)
 
@@ -3929,7 +3929,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     _print_update_completion("✓ Update complete!")
                 else:
                     print(f"⚠ Venv still unhealthy after repair: {detail_after}")
-                    print("  Close all Hermes windows/gateways and re-run: vigil update")
+                    print("  Close all Vigil windows/gateways and re-run: vigil update")
             else:
                 _print_update_completion("✓ Already up to date!")
             if runtime_repaired is not None and not _m()._is_windows():
@@ -3938,7 +3938,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     "⚠ Restart required to finish the managed Python runtime repair."
                 )
                 print(
-                    "  Any running Hermes gateways, Desktop backends, or other "
+                    "  Any running Vigil gateways, Desktop backends, or other "
                     "long-lived processes still use the previous runtime."
                 )
                 print("  Restart each of them to pick up the repaired runtime.")
@@ -3952,7 +3952,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # Capture the pre-pull SHA so we can auto-roll-back if the new code
         # has a syntax error in a critical-path file (PR #28452 incident:
         # orphan merge-conflict markers in hermes_cli/config.py bricked
-        # every user who ran ``hermes update`` for the 7 minutes between
+        # every user who ran ``vigil update`` for the 7 minutes between
         # the bad commit and the fix landing).
         pre_pull_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
         try:
@@ -3994,7 +3994,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # parse before declaring the update successful. If a bad commit
             # made it through CI (e.g. admin-merge bypass of a failing
             # ruff check), this catches it on the user side and rolls back
-            # so the CLI stays bootable. The user can then retry ``hermes
+            # so the CLI stays bootable. The user can then retry ``vigil
             # update`` later once a fix lands upstream.
             syntax_ok, failing_path, syntax_error = _validate_critical_files_syntax(
                 _m().PROJECT_ROOT
@@ -4081,7 +4081,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         #
         # Drop the core-install breadcrumb BEFORE touching the venv. If the
         # install is killed mid-flight (Ctrl-C, terminal close, WSL OOM), the
-        # marker survives and the next ``hermes`` launch finishes the install
+        # marker survives and the next ``vigil`` launch finishes the install
         # via ``_recover_from_interrupted_install``. Cleared after the core
         # ``.[all]`` install completes — lazy refresh uses a separate marker.
         _write_update_incomplete_marker()
@@ -4198,24 +4198,24 @@ def _cmd_update_impl(args, gateway_mode: bool):
             print(f"  ⚠ {failing_module} still fails to import after updating:")
             print(f"      {import_error}")
             print("    Run `vigil update` again — if it persists, reinstall:")
-            print("    https://hermes-agent.nousresearch.com")
+            print("    https://github.com/juneauwang/vigil-agent-harness")
 
         node_failures = _update_node_dependencies()
         _m()._build_web_ui(_m().PROJECT_ROOT / "web")
 
         # Rebuild the desktop app if the source tree changed since the last
-        # build.  ``hermes desktop --build-only`` uses the content-hash stamp
+        # build.  ``vigil desktop --build-only`` uses the content-hash stamp
         # internally, so this is effectively a no-op when nothing changed.
         # Only bother if the user has a desktop app installed (indicated by
         # an existing packaged executable or desktop dist); people who have
-        # never run ``hermes desktop`` shouldn't be forced into a full
-        # Electron build by ``hermes update``.
+        # never run ``vigil desktop`` shouldn't be forced into a full
+        # Electron build by ``vigil update``.
         desktop_dir = _m().PROJECT_ROOT / "apps" / "desktop"
         has_desktop_app = _m()._desktop_packaged_executable(desktop_dir) is not None or _m()._desktop_dist_exists(desktop_dir)
         if (desktop_dir / "package.json").exists() and _m()._resolve_node_runtime_npm() and has_desktop_app:
             print("→ Checking if desktop app needs rebuilding...")
             # Consult the content-hash stamp IN-PROCESS first. The spawned
-            # `hermes desktop --build-only` subprocess re-imports the whole
+            # `vigil desktop --build-only` subprocess re-imports the whole
             # CLI stack (~1-3 s) just to reach the same _m()._desktop_build_needed
             # check; when the stamp already says "up to date" we can skip the
             # spawn entirely. The update path never passes --source, so the
@@ -4239,9 +4239,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # catch — then surface the captured tail so the failure is
                 # debuggable.
                 #
-                # Start the build subprocess with the Hermes-managed Node on PATH:
-                # when `hermes update` runs inside the desktop updater chain
-                # (Desktop → hermes-setup → hermes update), the shell PATH
+                # Start the build subprocess with the Vigil-managed Node on PATH:
+                # when `vigil update` runs inside the desktop updater chain
+                # (Desktop → hermes-setup → vigil update), the shell PATH
                 # customizations are lost, so a bare-PATH child would fail with
                 # `node: not found` before cmd_gui can self-heal.
                 from hermes_constants import with_hermes_node_path
@@ -4341,7 +4341,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # Seed the model-catalog disk cache from the freshly-pulled checkout.
         # The repo ships the canonical catalog at
         # website/static/api/model-catalog.json, and `git pull` just made it
-        # current — so copy it straight over ~/.hermes/cache/model_catalog.json
+        # current — so copy it straight over ~/.vigil/cache/model_catalog.json
         # instead of waiting on a network fetch (which can be bot-gated or hit a
         # Portal hiccup). Keeps the model picker's curated/free lists in sync
         # with the version the user just installed. Non-fatal on failure: the
@@ -4386,10 +4386,10 @@ def _cmd_update_impl(args, gateway_mode: bool):
             logger.debug("Skills sync during update failed: %s", e)
 
         # Sync bundled skills to all profiles (including the active one).
-        # seed_profile_skills() uses subprocess with an explicit HERMES_HOME so
-        # it is not affected by sync_skills()'s module-level HERMES_HOME cache,
+        # seed_profile_skills() uses subprocess with an explicit VIGIL_HOME so
+        # it is not affected by sync_skills()'s module-level VIGIL_HOME cache,
         # which means the active profile is reliably synced regardless of whether
-        # the caller's HERMES_HOME env var points at the default or a named profile.
+        # the caller's VIGIL_HOME env var points at the default or a named profile.
         try:
             from hermes_cli.profiles import (
                 list_profiles,
@@ -4627,7 +4627,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # Most-recent curator run notice — show-once per run. Surfaces the
         # rename map (`old-name → umbrella`) on the high-attention update
         # surface so users learn about consolidations without having to
-        # check `hermes curator status`. Self-stamps after printing so it
+        # check `vigil curator status`. Self-stamps after printing so it
         # never repeats for the same run.
         try:
             _print_curator_recent_run_notice()
@@ -4642,7 +4642,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             logger.debug("FHS PATH guard check failed: %s", e)
 
         # Self-heal the hermes-acp launcher for installs that predate it, so
-        # ACP hosts (Zed, JetBrains, Buzz) can resolve Hermes on PATH without
+        # ACP hosts (Zed, JetBrains, Buzz) can resolve Vigil on PATH without
         # a reinstall.  No-op on Windows and when already present.
         try:
             _ensure_acp_launcher()
@@ -4652,7 +4652,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # Refresh the cua-driver binary used by the Computer Use toolset.
         # The upstream installer is gated on supported platforms and on the
         # binary already being on PATH, so this is a no-op for users who
-        # don't have it. Tying the refresh to ``hermes update`` gives users a
+        # don't have it. Tying the refresh to ``vigil update`` gives users a
         # predictable cadence (matches when they pull new agent code) without
         # adding startup latency or a per-launch GitHub API call.
         try:
@@ -4681,8 +4681,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # silent) upstream installer when the driver's native
                 # check-update verb positively reports a newer release.
                 # An indeterminate check (offline, rate-limited, old
-                # driver) keeps the installed version — `hermes update`
-                # must stay fast; `hermes computer-use install --upgrade`
+                # driver) keeps the installed version — `vigil update`
+                # must stay fast; `vigil computer-use install --upgrade`
                 # remains the force path.
                 install_cua_driver(
                     upgrade=True,
@@ -4693,7 +4693,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             logger.debug("cua-driver refresh failed: %s", e)
 
         # Write exit code *before* the gateway restart attempt.
-        # When running as ``hermes update --gateway`` (spawned by the gateway's
+        # When running as ``vigil update --gateway`` (spawned by the gateway's
         # /update command), this process lives inside the gateway's systemd
         # cgroup.  A graceful SIGUSR1 restart keeps the drain loop alive long
         # enough for the exit-code marker to be written below, but the
@@ -5108,7 +5108,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         # the RestartSec backoff and leave the unit
                         # dead.  Clearing the failed state first makes
                         # the restart idempotent.  Mirrors the recovery
-                        # path in `hermes gateway restart`
+                        # path in `vigil gateway restart`
                         # (`systemd_restart()`) as of PR #20949.
                         subprocess.run(
                             _manage_cmd + ["reset-failed", svc_name],
@@ -5380,11 +5380,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
         _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
 
-        # Warn if legacy Hermes gateway unit files are still installed.
+        # Warn if legacy upstream gateway unit files are still installed.
         # When both hermes.service (from a pre-rename install) and the
         # current hermes-gateway.service are enabled, they SIGTERM-fight
         # for the same bot token (see PR #11909). Flagging here means
-        # every `hermes update` surfaces the issue until the user migrates.
+        # every `vigil update` surfaces the issue until the user migrates.
         try:
             from hermes_cli.gateway import (
                 has_legacy_hermes_units,
@@ -5394,7 +5394,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
 
             if supports_systemd_services() and has_legacy_hermes_units():
                 print()
-                print("⚠ Legacy Hermes gateway unit(s) detected:")
+                print("⚠ Legacy upstream gateway unit(s) detected:")
                 for name, path, is_sys in _find_legacy_hermes_units():
                     scope = "system" if is_sys else "user"
                     print(f"    {path}  ({scope} scope)")

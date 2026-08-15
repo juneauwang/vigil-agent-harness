@@ -18,7 +18,7 @@ CONFIG_SCHEMA = ProviderConfigSchema(
             label="Mode",
             kind=KIND_SELECT,
             default="cloud",
-            description="How Hermes connects to Hindsight.",
+            description="How Vigil connects to Hindsight.",
             options=(
                 ProviderFieldOption(
                     "cloud",

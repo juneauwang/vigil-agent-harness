@@ -14,10 +14,10 @@ description: "使用 qmd 在本地搜索个人知识库、笔记、文档和会�
 
 | | |
 |---|---|
-| 来源 | 可选 — 通过 `hermes skills install official/research/qmd` 安装 |
+| 来源 | 可选 — 通过 `vigil skills install official/research/qmd` 安装 |
 | 路径 | `optional-skills/research/qmd` |
 | 版本 | `1.0.0` |
-| 作者 | Hermes Agent + Teknium |
+| 作者 | Vigil + Teknium |
 | 许可证 | MIT |
 | 平台 | macos, linux |
 | 标签 | `Search`, `Knowledge-Base`, `RAG`, `Notes`, `MCP`, `Local-AI` |
@@ -26,7 +26,7 @@ description: "使用 qmd 在本地搜索个人知识库、笔记、文档和会�
 ## 参考：完整 SKILL.md
 
 :::info
-以下是 Hermes 在触发此 skill 时加载的完整 skill 定义。这是 agent 在 skill 激活时所看到的指令内容。
+以下是 Vigil 在触发此 skill 时加载的完整 skill 定义。这是 agent 在 skill 激活时所看到的指令内容。
 :::
 
 # QMD — Query Markup Documents
@@ -232,11 +232,11 @@ qmd multi-get "journals/*.md" --json  # Batch retrieve by glob
 
 ## MCP 集成（推荐）
 
-qmd 提供 MCP 服务器，可通过原生 MCP 客户端直接向 Hermes Agent 提供搜索工具。这是推荐的集成方式 — 配置完成后，agent 无需每次加载此 skill 即可自动获得 qmd 工具。
+qmd 提供 MCP 服务器，可通过原生 MCP 客户端直接向 Vigil 提供搜索工具。这是推荐的集成方式 — 配置完成后，agent 无需每次加载此 skill 即可自动获得 qmd 工具。
 
 ### 方案 A：Stdio 模式（简单）
 
-在 `~/.hermes/config.yaml` 中添加：
+在 `~/.vigil/config.yaml` 中添加：
 
 ```yaml
 mcp_servers:
@@ -262,7 +262,7 @@ qmd mcp --http --daemon
 # Runs on http://localhost:8181 by default
 ```
 
-然后配置 Hermes Agent 通过 HTTP 连接：
+然后配置 Vigil 通过 HTTP 连接：
 
 ```yaml
 mcp_servers:

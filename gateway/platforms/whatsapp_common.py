@@ -74,7 +74,7 @@ class WhatsAppBehaviorMixin:
     MAX_MESSAGE_LENGTH: int = 4096
     supports_code_blocks = True  # WhatsApp renders fenced code blocks (monospace)
 
-    DEFAULT_REPLY_PREFIX: str = "⚕ *Hermes Agent*\n────────────\n"
+    DEFAULT_REPLY_PREFIX: str = "⚕ *Vigil Agent*\n────────────\n"
 
     _OUTBOUND_INVISIBLE_CHARS_RE = re.compile(r"[\u200b\u2060\u2063\ufeff]")
     _OUTBOUND_ODD_SPACE_RE = re.compile(r"[\u00a0\u1680\u180e\u2000-\u200a\u202f\u205f\u3000]")
@@ -504,10 +504,10 @@ class WhatsAppBehaviorMixin:
 # ---------------------------------------------------------------------------
 
 def resolve_whatsapp_bridge_dir() -> Path:
-    """Resolve the WhatsApp bridge directory, mirroring to HERMES_HOME if needed.
+    """Resolve the WhatsApp bridge directory, mirroring to VIGIL_HOME if needed.
 
-    When the install tree is read-only (e.g., Docker /opt/hermes), this function
-    mirrors the bridge source to a writable HERMES_HOME location and returns that
+    When the install tree is read-only (e.g., Docker /opt/vigil), this function
+    mirrors the bridge source to a writable VIGIL_HOME location and returns that
     path. This ensures npm install works in Docker environments.
 
     Returns the resolved bridge directory path.
@@ -519,7 +519,7 @@ def resolve_whatsapp_bridge_dir() -> Path:
     from hermes_constants import get_hermes_home
     install_bridge = _Path(__file__).resolve().parents[2] / "scripts" / "whatsapp-bridge"
 
-    # Try HERMES_HOME location first
+    # Try VIGIL_HOME location first
     hermes_home = get_hermes_home()
     hermes_home_bridge = hermes_home / "scripts" / "whatsapp-bridge"
 
@@ -535,11 +535,11 @@ def resolve_whatsapp_bridge_dir() -> Path:
     if install_writable:
         return install_bridge
 
-    # Install dir is read-only, mirror to HERMES_HOME if needed
+    # Install dir is read-only, mirror to VIGIL_HOME if needed
     if hermes_home_bridge.exists():
         return hermes_home_bridge
 
-    # Mirror the bridge source to HERMES_HOME
+    # Mirror the bridge source to VIGIL_HOME
     try:
         hermes_home_bridge.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(

@@ -1,4 +1,4 @@
-# Hermes static-message catalog -- Arabic (العربية)
+# Vigil static-message catalog -- Arabic (العربية)
 #
 # Mirrors locales/en.yaml key-for-key.  Only user-facing static prose is
 # translated: command names, /slash commands, config keys, paths, URLs, model
@@ -410,7 +410,7 @@ gateway:
     mode_new:              "⚙️ تقدّم الأدوات: **NEW** — يُعرض عند تغيّر الأداة (طول المعاينة: `display.tool_preview_length`، افتراضي 40)."
     mode_all:              "⚙️ تقدّم الأدوات: **ALL** — يُعرض كل استدعاء أداة (طول المعاينة: `display.tool_preview_length`، افتراضي 40)."
     mode_verbose:          "⚙️ تقدّم الأدوات: **VERBOSE** — كل استدعاء أداة مع وسائطه الكاملة."
-    mode_log:              "⚙️ تقدّم الأدوات: **LOG** — صامت في المحادثة؛ تُكتب استدعاءات الأدوات إلى ~/.hermes/logs/tool_calls.log."
+    mode_log:              "⚙️ تقدّم الأدوات: **LOG** — صامت في المحادثة؛ تُكتب استدعاءات الأدوات إلى ~/.vigil/logs/tool_calls.log."
     saved_suffix:          "_(حُفظ لـ **{platform}** — يسري على الرسالة التالية)_"
     save_failed:           "_(تعذّر الحفظ في الإعدادات: {error})_"
 

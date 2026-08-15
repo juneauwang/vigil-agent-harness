@@ -11,7 +11,7 @@ Original PR #1811 by benfrank241, adapted to MemoryProvider ABC.
 
 Config via environment variables:
   HINDSIGHT_API_KEY                — API key for Hindsight Cloud
-  HINDSIGHT_BANK_ID                — memory bank identifier (default: hermes)
+  HINDSIGHT_BANK_ID                — memory bank identifier (default: vigil)
   HINDSIGHT_BUDGET                 — recall budget: low/mid/high (default: mid)
   HINDSIGHT_API_URL                — API endpoint
   HINDSIGHT_MODE                   — cloud or local (default: cloud)
@@ -24,7 +24,7 @@ Config via environment variables:
   HINDSIGHT_RETAIN_USER_PREFIX     — label used before user turns in retained transcripts
   HINDSIGHT_RETAIN_ASSISTANT_PREFIX — label used before assistant turns in retained transcripts
 
-Or via $HERMES_HOME/hindsight/config.json (profile-scoped), falling back to
+Or via $VIGIL_HOME/hindsight/config.json (profile-scoped), falling back to
 ~/.hindsight/config.json (legacy, shared) for backward compatibility.
 """
 
@@ -132,14 +132,14 @@ def _check_local_runtime() -> tuple[bool, str | None]:
 
     On older CPUs, importing the local Hindsight stack can raise a runtime
     error from NumPy before the daemon starts. Treat that as "unavailable"
-    so Hermes can degrade gracefully instead of repeatedly trying to start
+    so Vigil can degrade gracefully instead of repeatedly trying to start
     a broken local memory backend.
 
     The embedded daemon computes embeddings via ``sentence_transformers``
     (transformers + huggingface-hub). Importing ``hindsight`` /
     ``hindsight_embed`` alone succeeds even when that stack is broken, so
     without importing it here the probe would falsely report the backend
-    healthy and ``hermes memory status`` would stay green while the daemon
+    healthy and ``vigil memory status`` would stay green while the daemon
     aborts at startup on every retain/recall. Import it too so the probe (and
     status) reports the real ImportError.
     """
@@ -362,7 +362,7 @@ def _load_config() -> dict:
     """Load config from profile-scoped path, legacy path, or env vars.
 
     Resolution order:
-      1. $HERMES_HOME/hindsight/config.json  (profile-scoped)
+      1. $VIGIL_HOME/hindsight/config.json  (profile-scoped)
       2. ~/.hindsight/config.json             (legacy, shared)
       3. Environment variables
     """
@@ -497,7 +497,7 @@ def _utc_timestamp() -> str:
 
 
 def _embedded_profile_name(config: dict[str, Any]) -> str:
-    """Return the Hindsight embedded profile name for this Hermes config."""
+    """Return the Hindsight embedded profile name for this Vigil config."""
     profile = config.get("profile", "hermes")
     return str(profile or "hermes")
 
@@ -508,7 +508,7 @@ def _load_simple_env(path) -> dict[str, str]:
         return {}
 
     values: dict[str, str] = {}
-    # utf-8-sig, not plain utf-8: this is also used on the Hermes .env during
+    # utf-8-sig, not plain utf-8: this is also used on the Vigil .env during
     # post_setup, and a Notepad BOM would otherwise stick to the first key.
     for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         if not line or line.startswith("#") or "=" not in line:
@@ -645,14 +645,14 @@ def _resolve_bank_id_template(template: str, fallback: str, **placeholders: str)
     """Resolve a bank_id template string with the given placeholders.
 
     Supported placeholders (each is sanitized before substitution):
-      {profile}   — active Hermes profile name (from agent_identity)
-      {workspace} — Hermes workspace name (from agent_workspace)
+      {profile}   — active Vigil profile name (from agent_identity)
+      {workspace} — Vigil workspace name (from agent_workspace)
       {platform}  — "cli", "telegram", "discord", etc.
       {user}      — platform user id (gateway sessions)
       {session}   — current session id
 
     Missing/empty placeholders are rendered as the empty string and then
-    collapsed — e.g. ``hermes-{user}`` with no user becomes ``hermes``.
+    collapsed — e.g. ``hermes-{user}`` with no user becomes ``vigil``.
 
     If the template is empty, resolution falls back to *fallback*.
     Returns the sanitized bank id.
@@ -771,7 +771,7 @@ class HindsightMemoryProvider(MemoryProvider):
         # path.
         self._prefetch_waits_for_retain = True
         self._prefetch_retain_drain_timeout = 10.0
-        self._retain_context = "conversation between Hermes Agent and the User"
+        self._retain_context = "conversation between Vigil Agent and the User"
         self._turn_counter = 0
         self._session_turns: list[str] = []  # accumulates ALL turns for the session
         # How many turns the last append-mode retain already shipped. Used to
@@ -823,7 +823,7 @@ class HindsightMemoryProvider(MemoryProvider):
             return False
 
     def save_config(self, values, hermes_home):
-        """Write config to $HERMES_HOME/hindsight/config.json."""
+        """Write config to $VIGIL_HOME/hindsight/config.json."""
         import json
         from pathlib import Path
         config_dir = Path(hermes_home) / "hindsight"
@@ -909,7 +909,7 @@ class HindsightMemoryProvider(MemoryProvider):
 
         print("\n  Checking dependencies...")
         # Environment-aware install: sealed hosted venvs redirect to the durable
-        # data-volume target instead of writing to /opt/hermes (NS-605).
+        # data-volume target instead of writing to /opt/vigil (NS-605).
         from tools.lazy_deps import install_specs
 
         outcome = install_specs(deps_to_install, timeout=120)
@@ -1089,7 +1089,7 @@ class HindsightMemoryProvider(MemoryProvider):
             {"key": "retain_async","description": "Process retain asynchronously on the Hindsight server", "default": True},
             {"key": "prefetch_waits_for_retain", "description": "Have the background next-turn prefetch wait for the just-completed retain to become recall-visible on the server (local queue drain + async operation completion) before recalling, so recall includes the just-completed turn (runs off the reply path, adds no response latency)", "default": True},
             {"key": "prefetch_retain_drain_timeout", "description": "Max seconds the background prefetch waits for the retain to become recall-visible (queue drain + server-side completion) before recalling anyway", "default": 10.0},
-            {"key": "retain_context", "description": "Context label for retained memories", "default": "conversation between Hermes Agent and the User"},
+            {"key": "retain_context", "description": "Context label for retained memories", "default": "conversation between Vigil Agent and the User"},
             {"key": "recall_max_tokens", "description": "Maximum tokens for recall results", "default": 4096},
             {"key": "recall_max_input_chars", "description": "Maximum input query length for auto-recall", "default": 800},
             {"key": "recall_prompt_preamble", "description": "Custom preamble for recalled memories in context"},
@@ -1472,7 +1472,7 @@ class HindsightMemoryProvider(MemoryProvider):
                 logger.warning("hindsight-client %s is outdated (need >=%s), attempting upgrade...",
                                installed, _MIN_CLIENT_VERSION)
                 # Environment-aware install: sealed hosted venvs redirect to the
-                # durable data-volume target instead of /opt/hermes (NS-605).
+                # durable data-volume target instead of /opt/vigil (NS-605).
                 from tools.lazy_deps import install_specs
                 outcome = install_specs([f"hindsight-client>={_MIN_CLIENT_VERSION}"], timeout=120)
                 if outcome.ok:
@@ -1579,7 +1579,7 @@ class HindsightMemoryProvider(MemoryProvider):
         # Retain controls
         self._auto_retain = self._config.get("auto_retain", True)
         self._retain_every_n_turns = max(1, int(self._config.get("retain_every_n_turns", 1)))
-        self._retain_context = self._config.get("retain_context", "conversation between Hermes Agent and the User")
+        self._retain_context = self._config.get("retain_context", "conversation between Vigil Agent and the User")
 
         # Recall controls
         self._auto_recall = self._config.get("auto_recall", True)
@@ -1635,13 +1635,13 @@ class HindsightMemoryProvider(MemoryProvider):
                 msg = (
                     "Hindsight local_embedded mode cannot run as root "
                     "(PostgreSQL initdb refuses root). Skipping the embedded "
-                    "memory daemon. Run Hermes as a non-root user, or switch "
+                    "memory daemon. Run Vigil as a non-root user, or switch "
                     "to cloud / local_external mode via 'vigil memory setup'."
                 )
                 logger.warning(msg)
                 # Surface to the terminal too — a daemon that never starts
                 # would otherwise fail silently and the user would only see
-                # Hermes get sluggish. (issue #13125)
+                # Vigil get sluggish. (issue #13125)
                 try:
                     print(f"  ⚠ {msg}", file=sys.stderr, flush=True)
                 except Exception:
@@ -2193,7 +2193,7 @@ class HindsightMemoryProvider(MemoryProvider):
             try:
                 if self._mode == "local_embedded":
                     # HindsightEmbedded.close() delegates to its sync client.close().
-                    # When Hermes created/used that client on the shared async loop,
+                    # When Vigil created/used that client on the shared async loop,
                     # closing it from this thread can raise "attached to a different
                     # loop" before aiohttp releases the session. Close the embedded
                     # inner async client on the shared loop first, then let the

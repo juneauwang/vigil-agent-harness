@@ -125,8 +125,8 @@ def _unauth_response(request: Request, *, reason: str) -> Response:
     navigation to ``/sessions`` (etc.) without a cookie comes back to
     ``/sessions`` after login.
 
-    Under a reverse proxy with ``X-Forwarded-Prefix: /hermes``, the
-    ``login_url`` is prefixed (``/hermes/login?next=...``) so the
+    Under a reverse proxy with ``X-Forwarded-Prefix: /vigil``, the
+    ``login_url`` is prefixed (``/vigil/login?next=...``) so the
     browser's window.location.assign / Location: follow lands on the
     proxied login page rather than the bare ``/login`` (which the
     proxy doesn't route to the dashboard).

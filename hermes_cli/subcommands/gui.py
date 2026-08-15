@@ -1,4 +1,4 @@
-"""``hermes gui`` subcommand parser.
+"""``vigil gui`` subcommand parser.
 
 Extracted verbatim from ``hermes_cli/main.py:main()`` (god-file Phase 2).
 Handler injected to avoid importing ``main``.
@@ -17,7 +17,7 @@ def build_gui_parser(subparsers, *, cmd_gui: Callable) -> None:
         aliases=["gui"],
         help="Build and launch the native desktop app",
         description=(
-            "Launch the Hermes Electron desktop app. By default this installs "
+            "Launch the Vigil Electron desktop app. By default this installs "
             "workspace Node dependencies, builds the current OS's unpacked "
             "Electron app, then launches that packaged artifact."
         ),
@@ -44,11 +44,11 @@ def build_gui_parser(subparsers, *, cmd_gui: Callable) -> None:
     )
     gui_parser.add_argument(
         "--hermes-root",
-        help="Override the Hermes source root used by Desktop (sets HERMES_DESKTOP_HERMES_ROOT)",
+        help="Override the Vigil source root used by Desktop (sets VIGIL_DESKTOP_VIGIL_ROOT)",
     )
     gui_parser.add_argument(
         "--cwd",
-        help="Initial project directory for Desktop chat sessions (sets HERMES_DESKTOP_CWD)",
+        help="Initial project directory for Desktop chat sessions (sets VIGIL_DESKTOP_CWD)",
     )
     gui_parser.add_argument(
         "--skip-build",

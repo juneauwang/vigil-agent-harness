@@ -126,7 +126,7 @@ class TestTencentTokenhubModelCatalog:
 
 
 # =============================================================================
-# CANONICAL_PROVIDERS (hermes model picker)
+# CANONICAL_PROVIDERS (vigil model picker)
 # =============================================================================
 
 
@@ -222,9 +222,9 @@ class TestTencentTokenhubProvidersModule:
     """Test Tencent TokenHub in the unified providers module."""
 
     def test_overlay_exists(self):
-        from hermes_cli.providers import HERMES_OVERLAYS
-        assert "tencent-tokenhub" in HERMES_OVERLAYS
-        overlay = HERMES_OVERLAYS["tencent-tokenhub"]
+        from hermes_cli.providers import VIGIL_OVERLAYS
+        assert "tencent-tokenhub" in VIGIL_OVERLAYS
+        overlay = VIGIL_OVERLAYS["tencent-tokenhub"]
         assert overlay.transport == "openai_chat"
         assert overlay.base_url_env_var == "TOKENHUB_BASE_URL"
         assert not overlay.is_aggregator
@@ -275,8 +275,8 @@ class TestTencentTokenhubAgentInit:
         importlib.import_module("run_agent")
 
     def test_api_mode_is_chat_completions(self):
-        from hermes_cli.providers import HERMES_OVERLAYS, TRANSPORT_TO_API_MODE
-        overlay = HERMES_OVERLAYS["tencent-tokenhub"]
+        from hermes_cli.providers import VIGIL_OVERLAYS, TRANSPORT_TO_API_MODE
+        overlay = VIGIL_OVERLAYS["tencent-tokenhub"]
         api_mode = TRANSPORT_TO_API_MODE[overlay.transport]
         assert api_mode == "chat_completions"
 

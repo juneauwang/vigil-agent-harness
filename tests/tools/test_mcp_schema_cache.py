@@ -78,7 +78,7 @@ class TestCacheFileLocation:
     def test_cache_lives_under_hermes_home_cache_dir_with_0600(
         self, monkeypatch, tmp_path
     ):
-        # Real path (no _cache_path monkeypatch): HERMES_HOME/cache/…, 0o600,
+        # Real path (no _cache_path monkeypatch): VIGIL_HOME/cache/…, 0o600,
         # matching the discovery-cache precedent in tools/registry.py.
         import hermes_constants
 

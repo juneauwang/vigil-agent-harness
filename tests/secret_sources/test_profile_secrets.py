@@ -46,7 +46,7 @@ def _clean_registry():
     registry._reset_registry_for_tests()
 
 
-def _apply(secrets, cfg_extra=None, home=Path("/tmp/x/.hermes"), env=None):
+def _apply(secrets, cfg_extra=None, home=Path("/tmp/x/.vigil"), env=None):
     registry.register_source(_FakeBulk(secrets), replace=True)
     cfg = {"fakebulk": {"enabled": True}}
     cfg.update(cfg_extra or {})

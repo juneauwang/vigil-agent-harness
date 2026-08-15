@@ -313,13 +313,13 @@ def _setup_platform(hermes_home: str, config: dict, flags: dict[str, str]) -> No
     provider_config["host"] = ""
     # The json-file clear above can't help when the host comes from the
     # environment: _load_config() seeds ``host`` from MEM0_HOST, and the
-    # docs tell self-hosted users to put MEM0_HOST in ~/.hermes/.env. Warn
+    # docs tell self-hosted users to put MEM0_HOST in ~/.vigil/.env. Warn
     # so the user knows platform mode won't take effect until it's removed.
     if os.environ.get("MEM0_HOST", "").strip():
         print(
             "\n  ⚠ MEM0_HOST is set in your environment "
             f"({os.environ['MEM0_HOST']}). It overrides platform mode — "
-            "remove it from ~/.hermes/.env (or unset it) or Hermes will keep "
+            "remove it from ~/.vigil/.env (or unset it) or Vigil will keep "
             "routing to the self-hosted server."
         )
 
@@ -802,7 +802,7 @@ def _setup_oss_interactive(hermes_home: str, config: dict) -> None:
     user_id = input(f"  User ID [{os.getenv('USER', 'hermes-user')}]: ").strip()
     user_id = user_id or os.getenv("USER", "hermes-user")
 
-    agent_id = input("  Agent ID [hermes]: ").strip()
+    agent_id = input("  Agent ID [vigil]: ").strip()
     agent_id = agent_id or "hermes"
 
     flags = {
@@ -864,7 +864,7 @@ def _install_provider_deps(llm_id: str, embedder_id: str, vector_id: str) -> Non
         try:
             print(f"  Installing {dep}...")
             # Environment-aware install: sealed hosted venvs redirect to the
-            # durable data-volume target instead of /opt/hermes (NS-605).
+            # durable data-volume target instead of /opt/vigil (NS-605).
             from tools.lazy_deps import install_specs
 
             outcome = install_specs([dep], timeout=60)
@@ -962,7 +962,7 @@ def _check_min_dep_version() -> None:
 
 
 def post_setup(hermes_home: str, config: dict) -> None:
-    """Entry point called by hermes memory setup framework.
+    """Entry point called by vigil memory setup framework.
 
     Routes on --mode (platform / selfhosted / oss); with no flag it shows an
     interactive picker with all three modes. Platform keeps the framework's

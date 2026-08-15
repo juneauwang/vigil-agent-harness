@@ -92,7 +92,7 @@ def _find_git_root(start: Path) -> Optional[Path]:
     return None
 
 
-_HERMES_MD_NAMES = (".hermes.md", "HERMES.md")
+_VIGIL_MD_NAMES = (".hermes.md", "HERMES.md")
 
 
 def _find_hermes_md(cwd: Path) -> Optional[Path]:
@@ -110,7 +110,7 @@ def _find_hermes_md(cwd: Path) -> Optional[Path]:
     search_dirs = [current, *current.parents] if stop_at else [current]
 
     for directory in search_dirs:
-        for name in _HERMES_MD_NAMES:
+        for name in _VIGIL_MD_NAMES:
             candidate = directory / name
             if candidate.is_file():
                 return candidate
@@ -142,7 +142,7 @@ def _strip_yaml_frontmatter(content: str) -> str:
 # =========================================================================
 
 DEFAULT_AGENT_IDENTITY = (
-    "You are Hermes Agent, an intelligent AI assistant created by Nous Research. "
+    "You are Vigil Agent, an intelligent AI assistant created by Nous Research. "
     "You are helpful, knowledgeable, and direct. You assist users with a wide "
     "range of tasks including answering questions, writing and editing code, "
     "analyzing information, creative work, and executing actions via your tools. "
@@ -151,11 +151,11 @@ DEFAULT_AGENT_IDENTITY = (
     "Be targeted and efficient in your exploration and investigations."
 )
 
-HERMES_AGENT_HELP_GUIDANCE = (
-    "You run on Hermes Agent (by Nous Research). When the user needs help with "
-    "Hermes itself — configuring, setting up, using, extending, or troubleshooting "
+VIGIL_AGENT_HELP_GUIDANCE = (
+    "You run on Vigil Agent (by Nous Research). When the user needs help with "
+    "Vigil itself — configuring, setting up, using, extending, or troubleshooting "
     "it — or when you need to understand your own features, tools, or capabilities, "
-    "the documentation at https://hermes-agent.nousresearch.com/docs is your "
+    "the documentation at https://github.com/juneauwang/vigil-agent-harness is your "
     "authoritative reference and always holds the latest, most up-to-date "
     "information. Load the `hermes-agent` skill with skill_view(name='hermes-agent') "
     "for additional guidance and proven workflows, but treat the docs as the source "
@@ -214,8 +214,8 @@ SKILLS_GUIDANCE = (
 KANBAN_GUIDANCE = (
     "# Kanban task execution protocol\n"
     "You have been assigned ONE task from "
-    "the shared board at `~/.hermes/kanban.db`. Your task id is in "
-    "`$HERMES_KANBAN_TASK`; your workspace is `$HERMES_KANBAN_WORKSPACE`. "
+    "the shared board at `~/.vigil/kanban.db`. Your task id is in "
+    "`$VIGIL_KANBAN_TASK`; your workspace is `$VIGIL_KANBAN_WORKSPACE`. "
     "The `kanban_*` tools in your schema are your primary coordination surface — "
     "they write directly to the shared SQLite DB and work regardless of terminal "
     "backend (local/docker/modal/ssh).\n"
@@ -227,7 +227,7 @@ KANBAN_GUIDANCE = (
     "metadata), any prior attempts on this task if you're a retry, the full "
     "comment thread, and a pre-formatted `worker_context` you can treat as "
     "ground truth.\n"
-    "2. **Work inside the workspace.** `cd $HERMES_KANBAN_WORKSPACE` before "
+    "2. **Work inside the workspace.** `cd $VIGIL_KANBAN_WORKSPACE` before "
     "any file operations. The workspace is yours for this run. Don't modify "
     "files outside it unless the task explicitly asks.\n"
     "3. **Heartbeat on long operations.** Call `kanban_heartbeat(note=...)` "
@@ -272,11 +272,11 @@ KANBAN_GUIDANCE = (
     "\n"
     "## Reference details that change outcomes\n"
     "\n"
-    "- **Workspace.** `cd $HERMES_KANBAN_WORKSPACE` first. For a `worktree` kind "
+    "- **Workspace.** `cd $VIGIL_KANBAN_WORKSPACE` first. For a `worktree` kind "
     "with no `.git`, `git worktree add <path> "
-    "${HERMES_KANBAN_BRANCH:-wt/$HERMES_KANBAN_TASK}` from the main repo, then "
+    "${VIGIL_KANBAN_BRANCH:-wt/$VIGIL_KANBAN_TASK}` from the main repo, then "
     "cd there. For a project-linked task the workspace is a fresh "
-    "`<repo>/.worktrees/<task-id>` and `$HERMES_KANBAN_BRANCH` a deterministic "
+    "`<repo>/.worktrees/<task-id>` and `$VIGIL_KANBAN_BRANCH` a deterministic "
     "`<project-slug>/<task-id>` — the main repo is two levels up, so run "
     "`git worktree add` from there.\n"
     "- **Deliverables.** Files a human wants go in "
@@ -611,7 +611,7 @@ def computer_use_guidance(platform_name: Optional[str] = None) -> str:
         "targets. Browser setup is a separately approved action; attaching an "
         "existing profile is enforced by cua-driver's immutable permission "
         "mode: standard requires a certified protected host and fails closed "
-        "when Hermes has none; explicit Hermes YOLO uses a private unrestricted "
+        "when Vigil has none; explicit Vigil YOLO uses a private unrestricted "
         "daemon after the user's launch/session risk acceptance.\n\n"
         "## Background mode rules\n"
         "- Do NOT use `raise_window=true` on `focus_app` unless the user "
@@ -678,7 +678,7 @@ def format_steer_marker(steer_text: str) -> str:
 
 STEER_CHANNEL_NOTE = (
     "## Mid-turn user steering\n"
-    "While you work, the user can send an out-of-band message that Hermes "
+    "While you work, the user can send an out-of-band message that Vigil "
     "appends to the end of a tool result, wrapped exactly as:\n"
     f"{STEER_MARKER_OPEN}\n<their message>\n{STEER_MARKER_CLOSE}\n"
     "Text inside that marker is a genuine message from the user delivered "
@@ -911,7 +911,7 @@ PLATFORM_HINTS = {
         "default-deliver cron job will message them in this session."
     ),
     "tui": (
-        "You are running in the Hermes terminal UI (TUI). "
+        "You are running in the Vigil terminal UI (TUI). "
         "Cron jobs scheduled from this session are LOCAL-ONLY: their output is "
         "saved (viewable via cronjob action='list') but is NOT delivered back "
         "into this TUI session — there is no live-delivery channel here. If the "
@@ -921,7 +921,7 @@ PLATFORM_HINTS = {
         "default-deliver cron job will message them in this session."
     ),
     "desktop": (
-        "You are chatting inside the Hermes desktop app — a graphical chat "
+        "You are chatting inside the Vigil desktop app — a graphical chat "
         "surface, not a terminal. Use markdown freely: it renders with full "
         "GitHub flavor (tables, code blocks with syntax highlighting, math "
         "via $...$, task lists, blockquote callouts). "
@@ -1043,7 +1043,7 @@ PLATFORM_HINTS = {
         "in your response text instead of a MEDIA: tag."
     ),
     "webui": (
-        "You are in the Hermes WebUI, a browser-based chat interface. "
+        "You are in the Vigil WebUI, a browser-based chat interface. "
         "Full Markdown rendering is supported — headings, bold, italic, code "
         "blocks, tables, math (LaTeX), and Mermaid diagrams all render natively. "
         "To display local or remote media/files inline, include "
@@ -1097,7 +1097,7 @@ WSL_ENVIRONMENT_HINT = (
 
 # Non-local terminal backends that run commands (and therefore every file
 # tool: read_file, write_file, patch, search_files) inside a separate
-# container / remote host rather than on the machine where Hermes itself
+# container / remote host rather than on the machine where Vigil itself
 # runs. For these backends, host info (Windows/Linux/macOS, $HOME, cwd) is
 # misleading — the agent should only see the machine it can actually touch.
 _REMOTE_TERMINAL_BACKENDS = frozenset({
@@ -1125,7 +1125,7 @@ _BACKEND_FALLBACK_DESCRIPTIONS: dict[str, str] = {
 # on the first prompt build of a session. Keyed by (env_type, cwd_hint) so
 # a mid-process backend switch rebuilds the string. Kept in-module (not on
 # disk) because the probe captures live backend state that may change
-# across Hermes restarts.
+# across Vigil restarts.
 _BACKEND_PROBE_CACHE: dict[tuple[str, str], str] = {}
 
 
@@ -1146,7 +1146,7 @@ def _probe_remote_backend(env_type: str) -> str | None:
     Returns a pre-formatted multi-line string describing the backend's OS,
     $HOME, cwd, and user — or None if the probe failed. Result is cached
     per process. Used only for non-local backends where the agent's tools
-    operate on a different machine than the host Hermes runs on.
+    operate on a different machine than the host Vigil runs on.
     """
     cwd_hint = os.getenv("TERMINAL_CWD", "")
     cache_key = (env_type, cwd_hint)
@@ -1337,8 +1337,8 @@ def build_environment_hints() -> str:
                 f"Terminal backend: {backend}. Your `terminal`, `read_file`, "
                 f"`write_file`, `patch`, and `search_files` tools all operate "
                 f"inside this {backend} environment — NOT on the machine "
-                f"where Hermes itself is running. The host OS, home, and cwd "
-                f"of the Hermes process are irrelevant; only the following "
+                f"where Vigil itself is running. The host OS, home, and cwd "
+                f"of the Vigil process are irrelevant; only the following "
                 f"backend state matters:\n{probe}"
             )
         else:
@@ -1348,7 +1348,7 @@ def build_environment_hints() -> str:
             hints.append(
                 f"Terminal backend: {backend}. Your `terminal`, `read_file`, "
                 f"`write_file`, `patch`, and `search_files` tools all operate "
-                f"inside {description} — NOT on the machine where Hermes "
+                f"inside {description} — NOT on the machine where Vigil "
                 f"itself runs. The backend probe didn't respond at "
                 f"prompt-build time, so the sandbox's current user, $HOME, "
                 f"and working directory are unknown from here. If you need "
@@ -1359,14 +1359,14 @@ def build_environment_hints() -> str:
     if is_wsl():
         hints.append(WSL_ENVIRONMENT_HINT)
 
-    # Embedder-supplied environment description. Lets a host that wraps Hermes
+    # Embedder-supplied environment description. Lets a host that wraps Vigil
     # (e.g. a sandbox runner / managed platform) explain the environment the
     # agent is running in — proxy, credential handling, mount layout — without
     # forking the identity slot (SOUL.md). Read once at prompt-build time, so
     # it's part of the stable, cache-safe system prompt. The env var is the
     # build-time/embedder mechanism (set in a container ENV); config.yaml
     # ``agent.environment_hint`` is the user-facing surface. Env var wins.
-    extra = (os.getenv("HERMES_ENVIRONMENT_HINT") or "").strip()
+    extra = (os.getenv("VIGIL_ENVIRONMENT_HINT") or "").strip()
     if not extra:
         try:
             from hermes_cli.config import load_config_readonly
@@ -1688,7 +1688,7 @@ def _skill_should_show(
 
 def _current_session_platform_hint() -> str:
     """Return the active platform without importing the gateway package on CLI startup."""
-    platform = os.environ.get("HERMES_PLATFORM") or os.environ.get("HERMES_SESSION_PLATFORM")
+    platform = os.environ.get("VIGIL_PLATFORM") or os.environ.get("VIGIL_SESSION_PLATFORM")
     if platform:
         return platform
 
@@ -1697,7 +1697,7 @@ def _current_session_platform_hint() -> str:
     if get_session_env is None:
         return ""
     try:
-        return get_session_env("HERMES_SESSION_PLATFORM") or ""
+        return get_session_env("VIGIL_SESSION_PLATFORM") or ""
     except Exception:
         return ""
 
@@ -1717,7 +1717,7 @@ def build_skills_system_prompt(
     Falls back to a full filesystem scan when both layers miss.
 
     External skill directories (``skills.external_dirs`` in config.yaml) are
-    scanned alongside the local ``~/.hermes/skills/`` directory.  External dirs
+    scanned alongside the local ``~/.vigil/skills/`` directory.  External dirs
     are read-only — they appear in the index but new skills are always created
     in the local dir.  Local skills take precedence when names collide.
 
@@ -1967,7 +1967,7 @@ def build_skills_system_prompt(
             "for tasks like code review, planning, and testing — load them even for tasks you "
             "already know how to do, because the skill defines how it should be done here.\n"
             "Whenever the user asks you to configure, set up, install, enable, disable, modify, "
-            "or troubleshoot Hermes Agent itself — its CLI, config, models, providers, tools, "
+            "or troubleshoot Vigil Agent itself — its CLI, config, models, providers, tools, "
             "skills, voice, gateway, plugins, or any feature — load the `hermes-agent` skill "
             "first. It has the actual commands (e.g. `vigil config set …`, `vigil tools`, "
             "`vigil setup`) so you don't have to guess or invent workarounds.\n"
@@ -2105,7 +2105,7 @@ def _truncate_content(
 
 
 def load_soul_md(context_length: Optional[int] = None) -> Optional[str]:
-    """Load SOUL.md from HERMES_HOME and return its content, or None.
+    """Load SOUL.md from VIGIL_HOME and return its content, or None.
 
     Used as the agent identity (slot #1 in the system prompt).  When this
     returns content, ``build_context_files_prompt`` should be called with
@@ -2115,7 +2115,7 @@ def load_soul_md(context_length: Optional[int] = None) -> Optional[str]:
         from hermes_cli.config import ensure_hermes_home
         ensure_hermes_home()
     except Exception as e:
-        logger.debug("Could not ensure HERMES_HOME before loading SOUL.md: %s", e)
+        logger.debug("Could not ensure VIGIL_HOME before loading SOUL.md: %s", e)
 
     soul_path = get_hermes_home() / "SOUL.md"
     if not soul_path.exists():
@@ -2246,7 +2246,7 @@ def build_context_files_prompt(
       3. CLAUDE.md / claude.md   (cwd only)
       4. .cursorrules / .cursor/rules/*.mdc  (cwd only)
 
-    SOUL.md from HERMES_HOME is independent and always included when present.
+    SOUL.md from VIGIL_HOME is independent and always included when present.
 
     Each context source is capped before injection. The cap defaults to the
     model's context window (scaled — see ``_dynamic_context_file_max_chars``)
@@ -2265,14 +2265,14 @@ def build_context_files_prompt(
     cwd_path = Path(cwd).resolve()
     sections = []
 
-    # Never let a FALLBACK-picked directory inside the Hermes install/source
+    # Never let a FALLBACK-picked directory inside the Vigil install/source
     # tree gain system-prompt authority. A backend that self-spawns into that
     # tree (the desktop app default) would otherwise load this repo's
     # contributor AGENTS.md as authoritative project context (#64590). An
-    # explicitly configured cwd is honored verbatim — the Hermes tree is a
+    # explicitly configured cwd is honored verbatim — the Vigil tree is a
     # legitimate workspace when the user deliberately points a session at it —
     # and CLI-style surfaces pass allow_install_tree_fallback=True because
-    # their launch dir IS the user's shell cwd (developing Hermes in-tree).
+    # their launch dir IS the user's shell cwd (developing Vigil in-tree).
     from agent.runtime_cwd import _is_install_tree
 
     if (
@@ -2282,7 +2282,7 @@ def build_context_files_prompt(
     ):
         logger.warning(
             "skipping project-context discovery: working-directory resolution "
-            "fell back to the Hermes install tree (%s) — set terminal.cwd to "
+            "fell back to the Vigil install tree (%s) — set terminal.cwd to "
             "your project directory",
             cwd_path,
         )
@@ -2298,7 +2298,7 @@ def build_context_files_prompt(
     if project_context:
         sections.append(project_context)
 
-    # SOUL.md from HERMES_HOME only — skip when already loaded as identity
+    # SOUL.md from VIGIL_HOME only — skip when already loaded as identity
     if not skip_soul:
         soul_content = load_soul_md(context_length)
         if soul_content:

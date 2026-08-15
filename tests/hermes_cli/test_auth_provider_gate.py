@@ -30,7 +30,7 @@ def _clean_anthropic_env(monkeypatch):
 
 def test_ambient_pool_source_does_not_count_as_explicit(tmp_path, monkeypatch):
     """gh_cli-seeded Copilot pool entries are ambient, not explicit config (#56974)."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     monkeypatch.delenv("COPILOT_GITHUB_TOKEN", raising=False)
     monkeypatch.delenv("GH_TOKEN", raising=False)
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -54,7 +54,7 @@ def test_ambient_pool_source_does_not_count_as_explicit(tmp_path, monkeypatch):
 
 def test_returns_true_when_moa_reference_slot_uses_provider(tmp_path, monkeypatch):
     """MoA advisor slots are explicit provider selections for auth gating."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     _write_config(tmp_path, {
         "model": {"provider": "openai-codex", "default": "gpt-5.5"},
         "moa": {
@@ -79,7 +79,7 @@ def test_stale_env_pool_entry_does_not_count_when_var_unset(tmp_path, monkeypatc
     """An env-seeded pool entry left in auth.json after the env var was removed
     must not mark the provider configured (#55790): the picker showed removed
     providers forever because the record existed even though no secret resolves."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes"))
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
     _write_auth_store(tmp_path, {
         "version": 1,

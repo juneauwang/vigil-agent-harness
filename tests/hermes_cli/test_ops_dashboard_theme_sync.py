@@ -1,4 +1,4 @@
-"""UI 壳第四批：新前端完全自绘（无 Hermes 主题系统），``dashboard.theme`` 保持
+"""UI 壳第四批：新前端完全自绘（无 Vigil 主题系统），``dashboard.theme`` 保持
 API 兼容——后端 ``_BUILTIN_DASHBOARD_THEMES`` 与 ``GET /api/dashboard/themes``
 仍返回正常结构（新前端不使用主题机，仅保证不破坏既有 API）。
 

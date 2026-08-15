@@ -1,7 +1,7 @@
 /**
  * Pinned regression for the multi-line composer cursor-drift bug.
  *
- * Symptom: in `hermes --tui`, typing into the composer until the input
+ * Symptom: in `vigil --tui`, typing into the composer until the input
  * wraps across multiple visual rows would leave several blank cells
  * between the last typed character and the (hardware) cursor block.
  * Worse on narrow terminals (the Cursor IDE built-in terminal in

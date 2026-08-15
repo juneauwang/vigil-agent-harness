@@ -35,7 +35,7 @@ def _patch_setup_io(monkeypatch, prompts, saved, removed, existing):
 
 def test_interactive_setup_saves_home_channel(monkeypatch, tmp_path):
     """interactive_setup() saves SLACK_HOME_CHANNEL when the user provides one."""
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     saved, removed = {}, []
     # prompts: bot token, app token, allowed users (empty), home channel
     _patch_setup_io(
@@ -56,7 +56,7 @@ class TestSlackHomeChannelClear:
     """Blank home-channel answer must clear SLACK_HOME_CHANNEL (#12423)."""
 
     def test_blank_removes_existing_home_channel(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         saved, removed = {}, []
         _patch_setup_io(
             monkeypatch,

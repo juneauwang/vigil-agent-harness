@@ -74,7 +74,7 @@ def test_session_cookies_use_host_prefix_on_https_direct():
 
 
 def test_session_cookies_use_secure_prefix_when_proxied():
-    """HTTPS + /hermes prefix → __Secure- prefix (__Host- forbids
+    """HTTPS + /vigil prefix → __Secure- prefix (__Host- forbids
     Path != "/"; __Secure- keeps the Secure-required hardening)."""
     client = TestClient(_build_app(use_https=True, prefix="/hermes"))
     r = client.get("/set")

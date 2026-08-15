@@ -1,4 +1,4 @@
-"""Surfacing tests — managed scope shown in `config show` and `hermes doctor`."""
+"""Surfacing tests — managed scope shown in `config show` and `vigil doctor`."""
 import pytest
 
 
@@ -8,8 +8,8 @@ def homes(tmp_path, monkeypatch):
     home.mkdir()
     managed = tmp_path / "managed"
     managed.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.setenv("VIGIL_MANAGED_DIR", str(managed))
     (home / "config.yaml").write_text("model:\n  default: user/model\n", encoding="utf-8")
     (managed / "config.yaml").write_text(
         "model:\n  default: managed/model\n", encoding="utf-8"
@@ -29,8 +29,8 @@ def test_config_show_no_managed_scope_silent(tmp_path, monkeypatch, capsys):
     """With no managed scope, the managed header must not appear."""
     home = tmp_path / "home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(tmp_path / "nope"))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.setenv("VIGIL_MANAGED_DIR", str(tmp_path / "nope"))
     (home / "config.yaml").write_text("model:\n  default: user/model\n", encoding="utf-8")
     import hermes_cli.config as cfg
     from hermes_cli import managed_scope
@@ -48,7 +48,7 @@ def test_config_show_no_managed_scope_silent(tmp_path, monkeypatch, capsys):
 
 
 def test_doctor_silent_with_no_managed_scope(tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(tmp_path / "nope"))
+    monkeypatch.setenv("VIGIL_MANAGED_DIR", str(tmp_path / "nope"))
     from hermes_cli import managed_scope, doctor
 
     managed_scope.invalidate_managed_cache()

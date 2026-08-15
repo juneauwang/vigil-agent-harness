@@ -302,7 +302,7 @@ class TestResolveProviderClientAzureFoundry:
     ):
         """When azure-foundry is requested but cannot be resolved
         (e.g. no model + no key), we return (None, None) and log a
-        clear warning pointing at ``hermes doctor``."""
+        clear warning pointing at ``vigil doctor``."""
         import logging
         from agent.auxiliary_client import resolve_provider_client
 

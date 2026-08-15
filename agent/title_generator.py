@@ -255,7 +255,7 @@ def auto_title_session(
     Never lets an exception escape: this is a daemon-thread target, and an
     escaping exception would spray a raw traceback into the user's terminal
     via the default threading excepthook. The canonical trigger is the
-    post-``hermes update`` stale-module window, where this function's lazy
+    post-``vigil update`` stale-module window, where this function's lazy
     imports read NEW source from disk while already-cached modules
     (``agent.portal_tags`` etc.) are still the OLD version — the resulting
     ImportError repeats on every auto-title attempt until the long-running
@@ -277,7 +277,7 @@ def auto_title_session(
         # names the likely cause so "restart the process" is discoverable.
         logger.warning(
             "Auto-title failed (harmless; if this started after an update, "
-            "restart the running Hermes process): %s",
+            "restart the running Vigil process): %s",
             e,
         )
         logger.debug("Auto-title traceback", exc_info=True)

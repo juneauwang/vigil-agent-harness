@@ -136,7 +136,7 @@ def is_paused() -> bool:
 # ---------------------------------------------------------------------------
 
 def _load_config() -> Dict[str, Any]:
-    """Read curator.* config from ~/.hermes/config.yaml. Tolerates missing file."""
+    """Read curator.* config from ~/.vigil/config.yaml. Tolerates missing file."""
     try:
         from hermes_cli.config import load_config_readonly
         cfg = load_config_readonly()
@@ -194,7 +194,7 @@ def get_prune_builtins() -> bool:
 
     ON by default. When on, built-ins become curation candidates and are
     archived after the same inactivity period as agent-created skills, with a
-    suppression list keeping them archived across `hermes update` re-seeds.
+    suppression list keeping them archived across `vigil update` re-seeds.
     Hub-installed skills are never pruned regardless of this flag.
     """
     cfg = _load_config()
@@ -210,7 +210,7 @@ def get_consolidate() -> bool:
     no aux-model cost. Set ``curator.consolidate: true`` to opt back into the
     LLM pass that merges overlapping skills into class-level umbrellas.
 
-    The explicit ``hermes curator run --consolidate`` flag overrides this for
+    The explicit ``vigil curator run --consolidate`` flag overrides this for
     a single invocation regardless of the config value.
     """
     cfg = _load_config()
@@ -242,9 +242,9 @@ def should_run_now(now: Optional[datetime] = None) -> bool:
     install that predates the curator), we DO NOT run immediately. The
     curator is designed to run after at least ``interval_hours`` (7 days by
     default) of skill activity, not on the first background tick after
-    ``hermes update``. On first observation we seed ``last_run_at`` to "now"
+    ``vigil update``. On first observation we seed ``last_run_at`` to "now"
     and defer the first real pass by one full interval. Users who want to
-    run it sooner can always invoke ``hermes curator run`` (with or without
+    run it sooner can always invoke ``vigil curator run`` (with or without
     ``--dry-run``) explicitly — that path bypasses this gate.
 
     The idle check (min_idle_hours) is applied at the call site where we know
@@ -398,7 +398,7 @@ CURATOR_DRY_RUN_BANNER = (
     "write_file, or remove_file.\n"
     "  • DO NOT call terminal to mv skill directories into .archive/.\n"
     "  • DO NOT call terminal to mv, cp, rm, or rewrite any file under "
-    "~/.hermes/skills/.\n"
+    "~/.vigil/skills/.\n"
     "  • skills_list and skill_view are FINE — read as much as you need.\n"
     "\n"
     "Your output IS the deliverable. Produce the exact same "
@@ -415,7 +415,7 @@ CURATOR_DRY_RUN_BANNER = (
 
 
 CURATOR_REVIEW_PROMPT = (
-    "You are running as Hermes' background skill CURATOR. This is an "
+    "You are running as Vigil' background skill CURATOR. This is an "
     "UMBRELLA-BUILDING consolidation pass, not a passive audit and not a "
     "duplicate-finder.\n\n"
     "The goal of the skill collection is a LIBRARY OF CLASS-LEVEL "
@@ -436,7 +436,7 @@ CURATOR_REVIEW_PROMPT = (
     "to local curator-managed skills only; external skills are externally "
     "owned and read-only to this background curator.\n"
     "2. DO NOT delete any skill. Archiving (moving the skill's directory "
-    "into ~/.hermes/skills/.archive/) is the maximum destructive action. "
+    "into ~/.vigil/skills/.archive/) is the maximum destructive action. "
     "Archives are recoverable; deletion is not.\n"
     "3. DO NOT touch skills shown as pinned=yes. Skip them entirely.\n"
     "3b. DO NOT archive, delete, consolidate, move, or otherwise modify any "
@@ -494,7 +494,7 @@ CURATOR_REVIEW_PROMPT = (
     "      • `scripts/<name>.<ext>` for statically re-runnable actions "
     "(verification scripts, fixture generators, probes)\n"
     "      Then archive the old sibling. Use `terminal` with `mkdir -p "
-    "~/.hermes/skills/<umbrella>/references/ && mv ... <umbrella>/"
+    "~/.vigil/skills/<umbrella>/references/ && mv ... <umbrella>/"
     "references/<topic>.md` (or templates/ / scripts/).\n\n"
     "Package integrity — not optional:\n"
     "Before demoting or archiving a skill, inspect it as a COMPLETE "
@@ -577,10 +577,10 @@ CURATOR_REVIEW_PROMPT = (
 def _reports_root() -> Path:
     """Directory where curator run reports are written.
 
-    Lives under the profile-aware logs dir (``~/.hermes/logs/curator/``)
+    Lives under the profile-aware logs dir (``~/.vigil/logs/curator/``)
     alongside ``agent.log`` and ``gateway.log`` so it's found by anyone
     looking for operational telemetry, not mixed in with the user's
-    authored skill data in ``~/.hermes/skills/``.
+    authored skill data in ``~/.vigil/skills/``.
 
     ``ensure_hermes_home()`` pre-creates this dir on every CLI launch and
     the v22→v23 migration backfills it for existing profiles, but we
@@ -770,7 +770,7 @@ def _parse_structured_summary(
 
     body = match.group(1)
 
-    # Prefer PyYAML when available — every hermes install already has it
+    # Prefer PyYAML when available — every vigil install already has it
     # (config.yaml loader). Fall back to a hand parser for paranoia.
     try:
         import yaml  # type: ignore
@@ -1022,8 +1022,8 @@ def _build_rename_summary(
           • docx-extraction → document-tools
           • flaky-thing — pruned (stale)
           • old-utility → spreadsheet-ops
-        full report: hermes curator status
-        keep an umbrella stable: hermes curator pin document-tools
+        full report: vigil curator status
+        keep an umbrella stable: vigil curator pin document-tools
 
     Cap is 10 entries so a 50-skill consolidation doesn't blow up
     agent.log; the full list is always in REPORT.md. The pin hint only
@@ -1327,7 +1327,7 @@ def _render_report_markdown(p: Dict[str, Any]) -> str:
     lines.append("")
 
     # Consolidated list — content absorbed into an umbrella. The directory
-    # on disk still lives under ~/.hermes/skills/.archive/ (every removal is
+    # on disk still lives under ~/.vigil/skills/.archive/ (every removal is
     # recoverable by design), but the "live" content for these skills
     # continues to exist inside the destination umbrella.
     consolidated = p.get("consolidated") or []
@@ -1336,7 +1336,7 @@ def _render_report_markdown(p: Dict[str, Any]) -> str:
         lines.append(
             "_These skills were **absorbed into another skill** during this run — "
             "their content still lives, just under a different name. "
-            "The original directory was moved to `~/.hermes/skills/.archive/` for "
+            "The original directory was moved to `~/.vigil/skills/.archive/` for "
             "safety and can be restored via `vigil curator restore <name>` if the "
             "consolidation was wrong._\n"
         )
@@ -1372,7 +1372,7 @@ def _render_report_markdown(p: Dict[str, Any]) -> str:
         lines.append(
             "_These skills were archived without being merged into an umbrella "
             "(e.g. stale, unused, or judged irrelevant). "
-            "Directories live under `~/.hermes/skills/.archive/`. "
+            "Directories live under `~/.vigil/skills/.archive/`. "
             "Restore any via `vigil curator restore <name>`._\n"
         )
         SHOW = 50
@@ -1459,7 +1459,7 @@ def _render_report_markdown(p: Dict[str, Any]) -> str:
     # Recovery footer
     lines.append("## Recovery\n")
     lines.append("- Restore an archived skill: `vigil curator restore <name>`")
-    lines.append("- All archives live under `~/.hermes/skills/.archive/` and are recoverable by `mv`")
+    lines.append("- All archives live under `~/.vigil/skills/.archive/` and are recoverable by `mv`")
     lines.append("- See `run.json` in this directory for the full machine-readable record.")
     lines.append("")
 
@@ -1515,7 +1515,7 @@ def run_curator_review(
     *consolidate* gates the LLM umbrella-building pass. ``None`` (the default)
     reads ``curator.consolidate`` from config (OFF by default). Passing
     ``True``/``False`` overrides the config for this invocation — used by the
-    ``hermes curator run --consolidate`` flag. When consolidation is off, only
+    ``vigil curator run --consolidate`` flag. When consolidation is off, only
     the deterministic inactivity prune runs and the forked aux-model review is
     skipped entirely (no aux-model cost).
 
@@ -1572,7 +1572,7 @@ def run_curator_review(
     # Persist state before the LLM pass so a crash mid-review still records
     # the run and doesn't immediately re-trigger. In dry-run we do NOT bump
     # last_run_at or run_count — a preview shouldn't push the next scheduled
-    # real pass out. We still record a summary so `hermes curator status`
+    # real pass out. We still record a summary so `vigil curator status`
     # shows that a preview ran.
     state = load_state()
     if not dry_run:
@@ -1715,7 +1715,7 @@ def run_curator_review(
 
         # Write the per-run report. Runs in a best-effort try so a
         # reporting bug never breaks the curator itself. Report path is
-        # recorded in state so `hermes curator status` can point at it.
+        # recorded in state so `vigil curator status` can point at it.
         try:
             after_report = skill_usage.curated_report()
         except Exception:
@@ -1809,7 +1809,7 @@ def _resolve_review_model(cfg: Dict[str, Any]) -> tuple[str, str]:
     """Pick (provider, model) for the curator review fork.
 
     Curator is a regular auxiliary task slot — ``auxiliary.curator.{provider,model}``
-    — so it participates in the canonical aux-model plumbing (``hermes model`` →
+    — so it participates in the canonical aux-model plumbing (``vigil model`` →
     auxiliary picker, the dashboard Models tab, ``auxiliary.curator.{timeout,
     base_url,api_key,extra_body}``). ``provider: "auto"`` with an empty model
     means "use the main chat model" — same default as every other aux task.
@@ -1861,7 +1861,7 @@ def _run_llm_review(prompt: str) -> Dict[str, Any]:
     # providers and for pool-backed credentials.
     #
     # `_resolve_review_runtime()` honors `auxiliary.curator.{provider,model,...}`
-    # (canonical aux-task slot, wired through `hermes model` → auxiliary
+    # (canonical aux-task slot, wired through `vigil model` → auxiliary
     # picker and the dashboard Models tab), with a legacy fallback to
     # `curator.auxiliary.{provider,model,...}`. See docs/user-guide/features/curator.md.
     _api_key = None

@@ -18,7 +18,7 @@ the common "undo my last Ctrl+S" case is a single keystroke.
 Nothing is written to disk. Drafts frequently contain credentials, prompts
 under NDA, or pasted secrets, and a session-scoped stash keeps that material
 in memory only. Callers that later want cross-restart persistence must route
-through ``get_hermes_home()`` rather than hardcoding ``~/.hermes``.
+through ``get_hermes_home()`` rather than hardcoding ``~/.vigil``.
 """
 
 from __future__ import annotations

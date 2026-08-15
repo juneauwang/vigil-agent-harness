@@ -1,6 +1,6 @@
-"""Tests for the stale-dashboard handling run at the end of ``hermes update``.
+"""Tests for the stale-dashboard handling run at the end of ``vigil update``.
 
-``hermes update`` detects ``hermes dashboard`` processes left over from the
+``vigil update`` detects ``vigil dashboard`` processes left over from the
 previous version and kills them (SIGTERM + SIGKILL grace, or ``taskkill /F``
 on Windows).  Without this, the running backend silently serves stale Python
 against a freshly-updated JS bundle, producing 401s / empty data.
@@ -97,7 +97,7 @@ class TestFindStaleDashboardPids:
                 returncode=0,
                 stdout="\n".join([
                     _ps_line(os.getpid(), "python3 -m hermes_cli.main dashboard"),
-                    _ps_line(12345, "hermes dashboard --port 9119"),
+                    _ps_line(12345, "vigil dashboard --port 9119"),
                 ]) + "\n",
                 stderr="",
             )
@@ -246,7 +246,7 @@ class TestDashboardUpdateCleanup:
 
 class TestWindowsWmicEncoding:
     """Regression tests for #17049 — the Windows wmic branch must not crash
-    `hermes update` on non-UTF-8 system locales (e.g. cp936 on zh-CN).
+    `vigil update` on non-UTF-8 system locales (e.g. cp936 on zh-CN).
     """
 
     def test_wmic_invoked_with_utf8_ignore_errors(self, monkeypatch):
@@ -348,7 +348,7 @@ class TestManualBackendRespawn:
     def test_respawn_adds_no_open_to_dashboard_commands(self, tmp_path, monkeypatch):
         """Respawned `dashboard` argv gains --no-open; `serve` argv untouched."""
         live = self._live()
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
         spawned: list[list[str]] = []
 
         class _FakePopen:
@@ -367,7 +367,7 @@ class TestManualBackendRespawn:
 
     def test_respawn_failure_returned(self, tmp_path, monkeypatch, capsys):
         live = self._live()
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
 
         with patch.object(live.subprocess, "Popen", side_effect=OSError("no such file")):
             failed = live._respawn_dashboard_processes([["hermes", "serve"]])
@@ -413,7 +413,7 @@ class TestCmdlineCapture:
 
         def fake_run(args, *a, **kw):
             assert args == ["ps", "-p", "888", "-o", "command="]
-            return MagicMock(returncode=0, stdout="hermes serve --port 8300\n", stderr="")
+            return MagicMock(returncode=0, stdout="vigil serve --port 8300\n", stderr="")
 
         with patch.object(live.os.path, "exists", return_value=False), \
              patch("subprocess.run", side_effect=fake_run):

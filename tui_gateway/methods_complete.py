@@ -384,7 +384,7 @@ def _(rid, params: dict) -> dict:
         if not pconfig.api_key_env_vars:
             return _err(rid, 4004, f"no env var defined for {pconfig.name}")
 
-        # Save the key to ~/.hermes/.env via the unified credential lifecycle
+        # Save the key to ~/.vigil/.env via the unified credential lifecycle
         # so any stale config.yaml mirror of the previous key (model.api_key,
         # custom_providers[*].api_key) is rotated in the same action (#62269).
         env_var = pconfig.api_key_env_vars[0]

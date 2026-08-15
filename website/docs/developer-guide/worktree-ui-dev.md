@@ -6,7 +6,7 @@ description: "Run the Ink TUI and Electron desktop app from a git worktree witho
 
 # TUI & Desktop from Worktrees
 
-The Python core runs fine from any [git worktree](../user-guide/git-worktrees.md) — `cd` in and `hermes` just works. The two TypeScript surfaces do not: `ui-tui/` and `apps/desktop/` each need a populated `node_modules`, and a fresh `npm ci` per worktree is slow and duplicates gigabytes across every branch you have checked out.
+The Python core runs fine from any [git worktree](../user-guide/git-worktrees.md) — `cd` in and `vigil` just works. The two TypeScript surfaces do not: `ui-tui/` and `apps/desktop/` each need a populated `node_modules`, and a fresh `npm ci` per worktree is slow and duplicates gigabytes across every branch you have checked out.
 
 `htui` and `hgui` are two shell helpers that close that gap. Each launches its surface **from the current worktree** while borrowing `node_modules` from one canonical checkout — so a throwaway branch costs a symlink, not an install.
 
@@ -29,28 +29,28 @@ Two env vars name the canonical checkout:
 
 | Variable | Meaning |
 |----------|---------|
-| `HERMES_MAIN_CHECKOUT` | The deps checkout — where `node_modules` really lives, and whose `.venv/bin/python` runs the backend. |
-| `HERMES_GUI_DEPS_CHECKOUT` | Where the desktop deps (`apps/desktop/node_modules`) live. Defaults to `HERMES_MAIN_CHECKOUT`; override only if you keep desktop deps elsewhere. |
+| `VIGIL_MAIN_CHECKOUT` | The deps checkout — where `node_modules` really lives, and whose `.venv/bin/python` runs the backend. |
+| `VIGIL_GUI_DEPS_CHECKOUT` | Where the desktop deps (`apps/desktop/node_modules`) live. Defaults to `VIGIL_MAIN_CHECKOUT`; override only if you keep desktop deps elsewhere. |
 
-Neither is read by Hermes itself — they're private to these helpers. The variables Hermes *does* read are covered in [Environment Variables](../reference/environment-variables.md).
+Neither is read by Vigil itself — they're private to these helpers. The variables Vigil *does* read are covered in [Environment Variables](../reference/environment-variables.md).
 
 ## `htui` — TUI from the worktree
 
-The Ink TUI has a dev path already: `hermes --tui --dev` runs the TypeScript sources via `tsx` instead of the prebuilt bundle. `htui` is a one-liner over it that also points the run at the current worktree's `ui-tui/`:
+The Ink TUI has a dev path already: `vigil --tui --dev` runs the TypeScript sources via `tsx` instead of the prebuilt bundle. `htui` is a one-liner over it that also points the run at the current worktree's `ui-tui/`:
 
 ```bash
 htui() {
   local root
-  root="$(_hermes_root)" || { echo "htui: not in a Hermes checkout" >&2; return 1; }
+  root="$(_hermes_root)" || { echo "htui: not in a Vigil checkout" >&2; return 1; }
   ( cd "$root" && PYTHONPATH="$root" \
-      "$HERMES_MAIN_CHECKOUT/.venv/bin/python" -m hermes_cli.main --tui --dev "$@" )
+      "$VIGIL_MAIN_CHECKOUT/.venv/bin/python" -m hermes_cli.main --tui --dev "$@" )
 }
 ```
 
-`--dev` compiles from source, so it links `ui-tui/node_modules` from `HERMES_MAIN_CHECKOUT` when the root lockfile matches and installs locally otherwise (see [`_hermes_root` / linking helpers](#shared-helpers)).
+`--dev` compiles from source, so it links `ui-tui/node_modules` from `VIGIL_MAIN_CHECKOUT` when the root lockfile matches and installs locally otherwise (see [`_hermes_root` / linking helpers](#shared-helpers)).
 
-:::warning `--dev` and `HERMES_TUI_DIR` are mutually exclusive
-`HERMES_TUI_DIR` points Hermes at a *prebuilt* bundle (Nix, system packages), which has no source to hot-reload. If it's set in your shell, `hermes --tui --dev` exits with an error. Run `unset HERMES_TUI_DIR` before `htui`.
+:::warning `--dev` and `VIGIL_TUI_DIR` are mutually exclusive
+`VIGIL_TUI_DIR` points Vigil at a *prebuilt* bundle (Nix, system packages), which has no source to hot-reload. If it's set in your shell, `vigil --tui --dev` exits with an error. Run `unset VIGIL_TUI_DIR` before `htui`.
 :::
 
 ## `hgui` — desktop app from the worktree
@@ -60,8 +60,8 @@ The desktop app is heavier: it needs `node_modules` at both the repo root and `a
 ```bash
 hgui() {
   local root deps desktop
-  root="$(_hermes_root)" || { echo "hgui: not in a Hermes checkout" >&2; return 1; }
-  deps="${HERMES_GUI_DEPS_CHECKOUT:-$HERMES_MAIN_CHECKOUT}"
+  root="$(_hermes_root)" || { echo "hgui: not in a Vigil checkout" >&2; return 1; }
+  deps="${VIGIL_GUI_DEPS_CHECKOUT:-$VIGIL_MAIN_CHECKOUT}"
   desktop="$root/apps/desktop"
 
   # Borrow deps when locks match; otherwise install locally in the worktree.
@@ -80,10 +80,10 @@ hgui() {
 
   ( cd "$desktop"
     export PATH="$root/node_modules/.bin:$PATH"
-    HERMES_DESKTOP_HERMES_ROOT="$root" \
-    HERMES_DESKTOP_PYTHON="$HERMES_MAIN_CHECKOUT/.venv/bin/python" \
-    HERMES_DESKTOP_IGNORE_EXISTING=1 \
-    HERMES_DESKTOP_CWD="$root" \
+    VIGIL_DESKTOP_VIGIL_ROOT="$root" \
+    VIGIL_DESKTOP_PYTHON="$VIGIL_MAIN_CHECKOUT/.venv/bin/python" \
+    VIGIL_DESKTOP_IGNORE_EXISTING=1 \
+    VIGIL_DESKTOP_CWD="$root" \
     npm run dev )
 }
 ```
@@ -92,10 +92,10 @@ The desktop env vars it sets are all real backend-resolution knobs:
 
 | Variable | Role in `hgui` |
 |----------|----------------|
-| `HERMES_DESKTOP_HERMES_ROOT` | Runs the backend from **this worktree**, not the packaged/PATH `hermes`. |
-| `HERMES_DESKTOP_PYTHON` | Reuses the deps checkout's venv instead of re-resolving a Python. |
-| `HERMES_DESKTOP_IGNORE_EXISTING` | Ignores any `hermes` on `PATH` so it can't shadow the worktree. |
-| `HERMES_DESKTOP_CWD` | Opens the desktop chat rooted at the worktree. |
+| `VIGIL_DESKTOP_VIGIL_ROOT` | Runs the backend from **this worktree**, not the packaged/PATH `vigil`. |
+| `VIGIL_DESKTOP_PYTHON` | Reuses the deps checkout's venv instead of re-resolving a Python. |
+| `VIGIL_DESKTOP_IGNORE_EXISTING` | Ignores any `vigil` on `PATH` so it can't shadow the worktree. |
+| `VIGIL_DESKTOP_CWD` | Opens the desktop chat rooted at the worktree. |
 
 Two footguns `hgui` handles that a bare `npm run dev` does not:
 
@@ -107,7 +107,7 @@ Two footguns `hgui` handles that a bare `npm run dev` does not:
 Both functions resolve the enclosing checkout and link deps the same way:
 
 ```bash
-# The enclosing worktree, verified as a real Hermes checkout.
+# The enclosing worktree, verified as a real Vigil checkout.
 _hermes_root() {
   local root
   root="$(git rev-parse --show-toplevel 2>/dev/null)" || return 1
@@ -139,7 +139,7 @@ A symlink to a divergent `node_modules` is worse than no install — the worktre
 ## See also
 
 - [Git Worktrees](../user-guide/git-worktrees.md) — the isolation model these helpers build on
-- [TUI](../user-guide/tui.md) — `hermes --tui --dev` and the `HERMES_TUI_DIR` prebuild path
+- [TUI](../user-guide/tui.md) — `vigil --tui --dev` and the `VIGIL_TUI_DIR` prebuild path
 - [Desktop App](../user-guide/desktop.md) — building from source and the backend resolution ladder
-- [`apps/desktop/README.md`](https://github.com/NousResearch/hermes-agent/blob/main/apps/desktop/README.md) — dev server, sandbox script, and packaging
-- [Environment Variables](../reference/environment-variables.md) — every `HERMES_*` variable Hermes reads
+- [`apps/desktop/README.md`](https://github.com/juneauwang/vigil-agent-harness) — dev server, sandbox script, and packaging
+- [Environment Variables](../reference/environment-variables.md) — every `VIGIL_*` variable Vigil reads

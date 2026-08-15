@@ -5,7 +5,7 @@ read/wrote the dashboard process's own (root) ``.env`` via ``load_env()`` /
 ``save_env_value()`` — so a dashboard switched to a freshly created profile
 still displayed and persisted the ROOT install's messaging credentials.
 These tests pin the new behavior: reads and writes land in the REQUESTED
-profile's HERMES_HOME, and the dashboard's own profile stays untouched.
+profile's VIGIL_HOME, and the dashboard's own profile stays untouched.
 """
 import pytest
 import yaml
@@ -109,7 +109,7 @@ class TestProfileScopedMessagingReads:
             "read_runtime_status",
             # Accepts path= : the profile-scoped read now passes the
             # profile's own gateway_state.json explicitly rather than
-            # relying on process-level HERMES_HOME resolution (#71211).
+            # relying on process-level VIGIL_HOME resolution (#71211).
             lambda *a, **k: {
                 "gateway_state": "startup_failed",
                 "exit_reason": "all configured messaging platforms failed to connect",

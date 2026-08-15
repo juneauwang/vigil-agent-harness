@@ -153,7 +153,7 @@ export const fetchBoards = () => call<BoardsResponse>('/boards')
 
 export const fetchProfiles = () => call<{ profiles: KanbanProfile[] }>('/profiles')
 
-/** First-class Hermes projects, for scoping a board's default workspace. */
+/** First-class Vigil projects, for scoping a board's default workspace. */
 export const fetchProjects = () => call<{ projects: KanbanProject[] }>('/projects')
 
 export const fetchOrchestration = () => call<OrchestrationSettings>('/orchestration')

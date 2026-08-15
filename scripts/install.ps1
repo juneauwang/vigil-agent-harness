@@ -1,11 +1,11 @@
 # ============================================================================
-# Hermes Agent Installer for Windows
+# Vigil Agent Installer for Windows
 # ============================================================================
 # Installation script for Windows (PowerShell).
 # Uses uv for fast Python provisioning and package management.
 #
 # Usage:
-#   iex (irm https://hermes-agent.nousresearch.com/install.ps1)
+#   iex (irm https://github.com/juneauwang/vigil-agent-harness)
 #
 # Or download and run with options:
 #   .\install.ps1 -NoVenv -SkipSetup
@@ -29,8 +29,8 @@ param(
     # existing tree pass -ForceCommit.
     [switch]$ForceCommit,
     [string]$Tag = "",
-    [string]$HermesHome = $(if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }),
-    [string]$InstallDir = $(if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }),
+    [string]$HermesHome = $(if ($env:VIGIL_HOME) { $env:VIGIL_HOME } else { "$env:LOCALAPPDATA\hermes" }),
+    [string]$InstallDir = $(if ($env:VIGIL_HOME) { "$env:VIGIL_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }),
 
     # --- Stage protocol (additive; default invocation behaves as before) ----
     # See the "Stage protocol" section near the bottom of the file for the
@@ -70,7 +70,7 @@ param(
     #     on disk and fail. The recursive path omits the flag.
     #   * The canonical CLI one-liner (irm | iex) omits the flag too;
     #     terminal users don't need a desktop binary built for them, and
-    #     `hermes desktop` already builds on demand.
+    #     `vigil desktop` already builds on demand.
     [switch]$IncludeDesktop
 )
 
@@ -111,7 +111,7 @@ try {
 # STONE~1.ZEN), or an accented character ("Ruben" spelled with an acute e ->
 # RUBN~1). It can then expose %TEMP%, %TMP%, %LOCALAPPDATA%, %APPDATA% and
 # %USERPROFILE% -- plus everything derived from them, including the default
-# HERMES_HOME and InstallDir -- in that short form:
+# VIGIL_HOME and InstallDir -- in that short form:
 #   C:\Users\FIRST~1.LAS\AppData\Local\Temp
 #
 # PowerShell's FileSystem provider mishandles the aliased component when such a
@@ -335,14 +335,14 @@ if ($PSBoundParameters.ContainsKey('HermesHome')) {
     $HermesHome = ConvertTo-LongPath $HermesHome
 } else {
     $HermesHome = ConvertTo-LongPath $(
-        if ($env:HERMES_HOME) { $env:HERMES_HOME } else { "$env:LOCALAPPDATA\hermes" }
+        if ($env:VIGIL_HOME) { $env:VIGIL_HOME } else { "$env:LOCALAPPDATA\hermes" }
     )
 }
 if ($PSBoundParameters.ContainsKey('InstallDir')) {
     $InstallDir = ConvertTo-LongPath $InstallDir
 } else {
     $InstallDir = ConvertTo-LongPath $(
-        if ($env:HERMES_HOME) { "$env:HERMES_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }
+        if ($env:VIGIL_HOME) { "$env:VIGIL_HOME\hermes-agent" } else { "$env:LOCALAPPDATA\hermes\hermes-agent" }
     )
 }
 if ($script:NormalizedProfilePaths) {
@@ -373,8 +373,8 @@ $script:ResolvedPathReport = @{
 # Configuration
 # ============================================================================
 
-$RepoUrlSsh = "git@github.com:NousResearch/hermes-agent.git"
-$RepoUrlHttps = "https://github.com/NousResearch/hermes-agent.git"
+$RepoUrlSsh = "git@github.com:juneauwang/vigil-agent-harness.git"
+$RepoUrlHttps = "https://github.com/juneauwang/vigil-agent-harness"
 $PythonVersion = "3.11"
 # Minor versions the installer accepts when the requested $PythonVersion isn't
 # available, in preference order.  uv discovers both uv-managed and system
@@ -687,10 +687,10 @@ function Get-PowerShellHostExe {
 }
 
 function Install-Uv {
-    # Hermes owns its own uv at $HermesHome\bin\uv.exe.  Always install there --
+    # Vigil owns its own uv at $HermesHome\bin\uv.exe.  Always install there --
     # no PATH probing, no conda guards, no multi-location resolution chains.
     # The runtime update path (hermes_cli/managed_uv.py) looks in the same
-    # place, so install.ps1 and `hermes update` stay in sync.
+    # place, so install.ps1 and `vigil update` stay in sync.
     $managedUv = Join-Path $HermesHome "bin\uv.exe"
 
     if (Test-Path $managedUv) {
@@ -925,7 +925,7 @@ function Resolve-UvCmd {
     }
 
     # Fall back to PATH (covers edge cases where the installer ran in a
-    # sibling process and HERMES_HOME wasn't propagated).
+    # sibling process and VIGIL_HOME wasn't propagated).
     if (Get-Command uv -ErrorAction SilentlyContinue) {
         $script:UvCmd = "uv"
         return
@@ -1201,7 +1201,7 @@ function Install-Git {
     and re-running this installer fully recovers.
 
     After install we locate ``bash.exe`` and persist the path in
-    ``HERMES_GIT_BASH_PATH`` (User scope) so Hermes can find it in a fresh
+    ``VIGIL_GIT_BASH_PATH`` (User scope) so Hermes can find it in a fresh
     shell without a second PATH refresh.
     #>
     $script:GitInstallFailureReason = $null
@@ -1371,7 +1371,7 @@ function Set-GitBashEnvVar {
     <#
     .SYNOPSIS
     Locate ``bash.exe`` from an already-installed Git and persist the path in
-    ``HERMES_GIT_BASH_PATH`` (User env scope) so Hermes can find it even before
+    ``VIGIL_GIT_BASH_PATH`` (User env scope) so Hermes can find it even before
     PATH propagation completes in a newly-spawned shell.
     #>
     $script:GitBashPath = $null
@@ -1409,16 +1409,16 @@ function Set-GitBashEnvVar {
 
     foreach ($candidate in $candidates) {
         if ($candidate -and (Test-Path $candidate)) {
-            [Environment]::SetEnvironmentVariable("HERMES_GIT_BASH_PATH", $candidate, "User")
-            $env:HERMES_GIT_BASH_PATH = $candidate
+            [Environment]::SetEnvironmentVariable("VIGIL_GIT_BASH_PATH", $candidate, "User")
+            $env:VIGIL_GIT_BASH_PATH = $candidate
             $script:GitBashPath = $candidate
-            Write-Info "Set HERMES_GIT_BASH_PATH=$candidate"
+            Write-Info "Set VIGIL_GIT_BASH_PATH=$candidate"
             return
         }
     }
 
     Write-Warn "Could not locate bash.exe -- Hermes may not find Git Bash."
-    Write-Info "If needed, set HERMES_GIT_BASH_PATH manually to your bash.exe path."
+    Write-Info "If needed, set VIGIL_GIT_BASH_PATH manually to your bash.exe path."
 }
 
 # The dependency tree's real Node floor is >=22.22.0, set by react-router 8.3.0
@@ -1859,7 +1859,7 @@ function Install-Repository {
                     # -- the GUI "git checkout main failed (exit 1)" install
                     # failure. Clear the conflict markers with `git reset` first:
                     # working-tree changes are kept (and stashed just below); only
-                    # the index conflict state is dropped. Mirrors the `hermes
+                    # the index conflict state is dropped. Mirrors the `vigil
                     # update` path (#4735).
                     $unmergedOut = git -c windows.appendAtomically=false ls-files --unmerged 2>$null
                     if (-not [string]::IsNullOrWhiteSpace(($unmergedOut -join "`n"))) {
@@ -1915,7 +1915,7 @@ function Install-Repository {
                     if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed (exit $LASTEXITCODE)" }
                     # Managed installs should follow origin/$Branch exactly. If
                     # the checkout has diverged (or has local-only commits),
-                    # ff-only pull cannot succeed -- mirror ``hermes update`` and
+                    # ff-only pull cannot succeed -- mirror ``vigil update`` and
                     # reset to the fetched remote so bootstrap/install can recover.
                     git -c windows.appendAtomically=false pull --ff-only origin $Branch
                     if ($LASTEXITCODE -ne 0) {
@@ -2062,13 +2062,13 @@ function Install-Repository {
                 # for.  GitHub supports archive URLs for commits, tags, and
                 # branches; we honour Commit > Tag > Branch.
                 if ($Commit) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/$Commit.zip"
+                    $zipUrl = "https://github.com/juneauwang/vigil-agent-harness"
                     $zipLabel = $Commit
                 } elseif ($Tag) {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/tags/$Tag.zip"
+                    $zipUrl = "https://github.com/juneauwang/vigil-agent-harness"
                     $zipLabel = $Tag
                 } else {
-                    $zipUrl = "https://github.com/NousResearch/hermes-agent/archive/refs/heads/$Branch.zip"
+                    $zipUrl = "https://github.com/juneauwang/vigil-agent-harness"
                     $zipLabel = $Branch
                 }
                 $zipPath = "$env:TEMP\hermes-agent-$zipLabel.zip"
@@ -2098,7 +2098,7 @@ function Install-Repository {
                     # repo's LF text files to CRLF in the working tree during
                     # `checkout -f FETCH_HEAD` -- leaving this freshly-created
                     # managed checkout dirty vs HEAD and aborting the next
-                    # `hermes update` (see the notes at the shared clone-path
+                    # `vigil update` (see the notes at the shared clone-path
                     # config below and install.ps1:1461-1469). The later pin on
                     # the shared path is idempotent and still covers git clones.
                     git -c windows.appendAtomically=false config core.autocrlf false 2>$null
@@ -2157,7 +2157,7 @@ function Install-Repository {
     git -c windows.appendAtomically=false config windows.appendAtomically false 2>$null
     # Pin autocrlf=false on the managed clone so git never renormalizes the
     # repo's LF text files to CRLF in the working tree. Without this, the very
-    # next `hermes update` checkout aborts on a "dirty" tree the user never
+    # next `vigil update` checkout aborts on a "dirty" tree the user never
     # touched (see the update path above).
     git -c windows.appendAtomically=false config core.autocrlf false 2>$null
 
@@ -2225,7 +2225,7 @@ function Install-Venv {
     if (Test-Path "venv") {
         Write-Info "Virtual environment already exists, recreating..."
         # On Windows, native Python extensions (e.g. _bcrypt.pyd, tornado's
-        # speedups.pyd) are loaded as DLLs by any running hermes process.
+        # speedups.pyd) are loaded as DLLs by any running vigil process.
         # Windows denies deletion of loaded DLLs, so every process running out
         # of this venv must be stopped before removing it -- otherwise
         # Remove-Item fails with "Access to the path '...' is denied" and the
@@ -2372,7 +2372,7 @@ function Install-Venv {
         # user's gateway autostart in the disabled state. Same function scope,
         # so the list survives even under the stage-per-process bootstrap.
         # Deliberately NOT started here -- dependencies aren't installed yet;
-        # the task fires normally on next logon and `hermes update` / the
+        # the task fires normally on next logon and `vigil update` / the
         # gateway resume path handles the immediate restart.
         if ($gatewayTasksDisabled -and $gatewayTasksDisabled.Count -gt 0) {
             foreach ($tn in $gatewayTasksDisabled) {
@@ -2531,7 +2531,7 @@ except Exception:
     # isn't set, leaving venv\ empty and hermes.exe broken with
     # `ModuleNotFoundError: No module named 'dotenv'` on first run).
     # We probe via the venv's own python so a misdirected sync is caught
-    # here, not 30 seconds later when the user runs `hermes`.
+    # here, not 30 seconds later when the user runs `vigil`.
     if (-not $NoVenv) {
         $venvPython = "$InstallDir\venv\Scripts\python.exe"
         if (-not (Test-Path $venvPython)) {
@@ -2564,7 +2564,7 @@ except Exception:
         # uv on Windows can register hermes.exe in dist-info/RECORD but fail to
         # materialise the .exe (file lock during self-update, distlib edge case).
         # Catch it here so a fresh install/update does not finish with a broken
-        # `hermes` command while hermes-agent.exe / hermes-acp.exe exist
+        # `vigil` command while hermes-agent.exe / hermes-acp.exe exist
         $scriptsDir = Join-Path $InstallDir "venv\Scripts"
         $pythonExe = Join-Path $scriptsDir "python.exe"
         if ((Test-Path $scriptsDir) -and (Test-Path $pythonExe)) {
@@ -2603,7 +2603,7 @@ print(','.join(scripts))
     }
 
     # Verify the dashboard deps specifically -- they're the most common thing
-    # users hit and lazy-import errors from `hermes dashboard` are confusing.
+    # users hit and lazy-import errors from `vigil dashboard` are confusing.
     # If tier 1 failed (the common case), [web] was still picked up by tiers
     # 2-3; only tier 4 leaves you without it.
     $pythonExe = if (-not $NoVenv) { "$InstallDir\venv\Scripts\python.exe" } else { (& $UvCmd python find $PythonVersion) }
@@ -2655,7 +2655,7 @@ function Set-PathVariable {
         $hermesBin = "$InstallDir\venv\Scripts"
     }
     
-    # Add the venv Scripts dir to user PATH so hermes is globally available
+    # Add the venv Scripts dir to user PATH so vigil is globally available
     # On Windows, the hermes.exe in venv\Scripts\ has the venv Python baked in
     $currentPath = [Environment]::GetEnvironmentVariable("Path", "User")
     
@@ -2670,15 +2670,15 @@ function Set-PathVariable {
         Write-Info "PATH already configured"
     }
     
-    # Set HERMES_HOME so the Python code finds config/data in the right place.
+    # Set VIGIL_HOME so the Python code finds config/data in the right place.
     # Only needed on Windows where we install to %LOCALAPPDATA%\hermes instead
-    # of the Unix default ~/.hermes
-    $currentHermesHome = [Environment]::GetEnvironmentVariable("HERMES_HOME", "User")
+    # of the Unix default ~/.vigil
+    $currentHermesHome = [Environment]::GetEnvironmentVariable("VIGIL_HOME", "User")
     if (-not $currentHermesHome -or $currentHermesHome -ne $HermesHome) {
-        [Environment]::SetEnvironmentVariable("HERMES_HOME", $HermesHome, "User")
-        Write-Success "Set HERMES_HOME=$HermesHome"
+        [Environment]::SetEnvironmentVariable("VIGIL_HOME", $HermesHome, "User")
+        Write-Success "Set VIGIL_HOME=$HermesHome"
     }
-    $env:HERMES_HOME = $HermesHome
+    $env:VIGIL_HOME = $HermesHome
     
     # Update current session
     $env:Path = "$hermesBin;$env:Path"
@@ -2687,7 +2687,7 @@ function Set-PathVariable {
 }
 
 function Write-BootstrapMarker {
-    # Writes $InstallDir\.hermes-bootstrap-complete which tells the Hermes
+    # Writes $InstallDir\.hermes-bootstrap-complete which tells the Vigil
     # desktop app (apps/desktop/electron/main.ts) "install.ps1 ran
     # successfully -- DON'T trigger the legacy first-launch bootstrap
     # runner."
@@ -2701,7 +2701,7 @@ function Write-BootstrapMarker {
     # Hermes-Setup.exe) or fall back to whatever git resolves in the
     # checkout. The desktop validates schemaVersion + pinnedCommit
     # length but doesn't enforce that HEAD matches the pin (users
-    # update via `hermes update` which moves HEAD legitimately).
+    # update via `vigil update` which moves HEAD legitimately).
     if (-not (Test-Path $InstallDir)) {
         Write-Warn "Skipping bootstrap marker: $InstallDir doesn't exist"
         return
@@ -2766,7 +2766,7 @@ function Write-BootstrapMarker {
 function Copy-ConfigTemplates {
     Write-Info "Setting up configuration files..."
     
-    # Create the HERMES_HOME directory structure ($HermesHome, default %LOCALAPPDATA%\hermes)
+    # Create the VIGIL_HOME directory structure ($HermesHome, default %LOCALAPPDATA%\hermes)
     New-Item -ItemType Directory -Force -Path "$HermesHome\cron" | Out-Null
     New-Item -ItemType Directory -Force -Path "$HermesHome\sessions" | Out-Null
     New-Item -ItemType Directory -Force -Path "$HermesHome\logs" | Out-Null
@@ -2808,7 +2808,7 @@ function Copy-ConfigTemplates {
     # Create SOUL.md if it doesn't exist (global persona file).
     # IMPORTANT: write without a BOM.  Windows PowerShell 5.1's
     # ``Set-Content -Encoding UTF8`` writes UTF-8 WITH a byte-order-mark
-    # (the default PS5 behaviour), and Hermes's prompt-injection scanner
+    # (the default PS5 behaviour), and Vigil's prompt-injection scanner
     # flags the BOM as an invisible unicode character and refuses to
     # load the file.  PS7's ``-Encoding utf8NoBOM`` fixes that but we
     # don't control which PowerShell version the user has.  Go direct
@@ -3099,7 +3099,7 @@ function Install-NodeDeps {
 # the per-user Electron download cache - most often a partial download resumed
 # into the same file, leaving concatenated junk - makes electron-builder's
 # `app-builder unpack-electron` extract a tree MISSING the electron binary, so
-# the final `electron` -> `Hermes` rename dies with ENOENT and every re-run
+# the final `electron` -> `Vigil` rename dies with ENOENT and every re-run
 # repeats the broken extraction forever.
 #
 # We deliberately do not validate the zip ourselves: the common
@@ -3365,7 +3365,7 @@ function Install-Desktop {
     # apps/desktop/package.json's build.win block, electron-builder never
     # invokes signtool and therefore never fetches/extracts winCodeSign
     # (whose macOS symlinks crash 7-Zip on non-admin Windows -- a dead end we
-    # are NOT trying to work around). The Hermes icon + product name are
+    # are NOT trying to work around). The Vigil icon + product name are
     # stamped onto Hermes.exe by our own rcedit step (Set-DesktopExeIdentity)
     # AFTER this build, completely decoupled from electron-builder signing.
     #
@@ -3499,7 +3499,7 @@ function Install-Desktop {
         throw "Desktop build completed but no Hermes.exe was found under $desktopDir\release\*-unpacked\"
     }
 
-    # 3b. The Hermes icon + identity are stamped onto Hermes.exe by the
+    # 3b. The Vigil icon + identity are stamped onto Hermes.exe by the
     #     electron-builder `afterPack` hook (apps/desktop/scripts/after-pack.mjs)
     #     during `npm run pack` above -- for every build, so the installer's
     #     --update rebuild stays branded too. No separate stamp step needed here.
@@ -3525,7 +3525,7 @@ function Install-Desktop {
     }
 
     # 4. Create Start Menu + Desktop shortcuts pointing DIRECTLY at the packed
-    #    Hermes.exe. We deliberately do NOT point them at `hermes desktop`: that
+    #    Hermes.exe. We deliberately do NOT point them at `vigil desktop`: that
     #    command rebuilds (npm install + electron-builder) on every launch,
     #    which would cost minutes each time. The packed exe is the consumer --
     #    launching it directly is instant, and updates flow through the
@@ -3581,7 +3581,7 @@ function New-DesktopShortcuts {
         # Bust the Windows shell icon cache so the desktop/Start-Menu shortcut
         # repaints with the (possibly newly-stamped) icon instead of a stale
         # cached bitmap. Critical on the --update path: the exe was re-stamped
-        # with the Hermes icon, but without this the shortcut can keep drawing
+        # with the Vigil icon, but without this the shortcut can keep drawing
         # the old Electron icon until the user manually refreshes / reboots.
         # Best-effort and silent -- never fail the install over a cosmetic cache.
         try {
@@ -3596,7 +3596,7 @@ function New-DesktopShortcuts {
 
 function Install-PlatformSdks {
     # Ensure messaging-platform SDKs matching tokens the user added to
-    # ~/.hermes/.env are importable.  Two problems this solves:
+    # ~/.vigil/.env are importable.  Two problems this solves:
     #
     # 1. The tiered `uv pip install` cascade above can fall through to a
     #    lower tier when the first fails (common when RL git deps choke),
@@ -3723,7 +3723,7 @@ function Invoke-SetupWizard {
 
     Push-Location $InstallDir
 
-    # Run hermes setup using the venv Python directly (no activation needed)
+    # Run vigil setup using the venv Python directly (no activation needed)
     if (-not $NoVenv) {
         & ".\venv\Scripts\python.exe" -m hermes_cli.main setup
     } else {
@@ -4256,7 +4256,7 @@ try {
     Write-Err "Installation failed: $_"
     Write-Host ""
     Write-Info "If the error is unclear, try downloading and running the script directly:"
-    Write-Host "  Invoke-WebRequest -Uri 'https://hermes-agent.nousresearch.com/install.ps1' -OutFile install.ps1" -ForegroundColor Yellow
+    Write-Host "  Invoke-WebRequest -Uri 'https://github.com/juneauwang/vigil-agent-harness' -OutFile install.ps1" -ForegroundColor Yellow
     Write-Host "  .\install.ps1" -ForegroundColor Yellow
     Write-Host ""
 }

@@ -56,7 +56,7 @@ TIPS = [
     # --- Keybindings ---
     "Alt+Enter inserts a newline for multi-line input. (Windows Terminal intercepts Alt+Enter — use Ctrl+Enter instead.)",
     "Ctrl+C interrupts the agent. Double-press within 2 seconds to force exit.",
-    "Ctrl+Z suspends Hermes to the background — run fg in your shell to resume.",
+    "Ctrl+Z suspends Vigil to the background — run fg in your shell to resume.",
     "Tab accepts auto-suggestion ghost text or autocompletes slash commands.",
     "Type a new message while the agent is working to interrupt and redirect it.",
     "Alt+V pastes an image from your clipboard into the conversation.",
@@ -89,15 +89,15 @@ TIPS = [
     "vigil skills tap add myorg/skills-repo adds a custom GitHub skill source.",
     "vigil skills snapshot export setup.json exports your skill configuration for backup or sharing.",
     "vigil mcp add github --command npx adds MCP servers from the command line.",
-    "vigil mcp serve runs Hermes itself as an MCP server for other agents.",
+    "vigil mcp serve runs Vigil itself as an MCP server for other agents.",
     "vigil auth add lets you add multiple API keys for credential pool rotation.",
     "vigil completion bash >> ~/.bashrc enables tab completion for all commands and profiles.",
     "vigil logs -f follows agent.log in real time. --level WARNING --since 1h filters output.",
-    "vigil backup creates a zip backup of your entire Hermes home directory.",
+    "vigil backup creates a zip backup of your entire Vigil home directory.",
     "vigil profile create coder creates an isolated profile that becomes its own command.",
     "vigil profile create work --clone copies your current config and keys to a new profile.",
     "vigil update syncs new bundled skills to ALL profiles automatically.",
-    "vigil gateway install sets up Hermes as a system service (systemd/launchd).",
+    "vigil gateway install sets up Vigil as a system service (systemd/launchd).",
     "vigil memory setup lets you configure an external memory provider (Honcho, Mem0, etc.).",
     "vigil webhook subscribe creates event-driven webhook routes with HMAC validation.",
     "Save money: vigil tools disables unused tools, vigil skills config trims skills down.",
@@ -121,14 +121,14 @@ TIPS = [
     "Set worktree: true in config.yaml to always create a git worktree (same as vigil -w).",
     "Set security.website_blocklist.enabled: true to block specific domains from web tools.",
     "Set cron.wrap_response: false to deliver raw agent output without the cron header/footer.",
-    "HERMES_TIMEZONE overrides the server timezone with any IANA timezone string.",
+    "VIGIL_TIMEZONE overrides the server timezone with any IANA timezone string.",
     "Environment variable substitution works in config.yaml: use ${VAR_NAME} syntax.",
     "Quick commands in config.yaml run shell commands instantly with zero token usage.",
     "Custom personalities can be defined in config.yaml under agent.personalities.",
     "provider_routing controls OpenRouter provider sorting, whitelisting, and blacklisting.",
 
     # --- Tools & Capabilities ---
-    "execute_code runs Python scripts that call Hermes tools programmatically — results stay out of context.",
+    "execute_code runs Python scripts that call Vigil tools programmatically — results stay out of context.",
     "delegate_task spawns up to 3 concurrent sub-agents by default (delegation.max_concurrent_children) with isolated contexts for parallel work.",
     "web_extract works on PDF URLs — pass any PDF link and it converts to markdown.",
     "search_files is ripgrep-backed and faster than grep — use it instead of terminal grep.",
@@ -158,7 +158,7 @@ TIPS = [
     # --- Sessions ---
     "Sessions auto-generate descriptive titles after the first exchange — no manual naming needed.",
     "Session titles support lineage: \"my project\" → \"my project #2\" → \"my project #3\".",
-    "When exiting, Hermes prints a resume command with session ID and stats.",
+    "When exiting, Vigil prints a resume command with session ID and stats.",
     "vigil sessions export backup.jsonl exports all sessions for backup or analysis.",
     "vigil -r SESSION_ID resumes any specific past session by its ID.",
 
@@ -175,7 +175,7 @@ TIPS = [
     "Skills can restrict to specific OS platforms — some only load on macOS or Linux.",
     "skills.external_dirs in config.yaml lets you load skills from custom directories.",
     "The agent can create its own skills as procedural memory using skill_manage.",
-    "The plan skill saves markdown plans under .hermes/plans/ in the active workspace.",
+    "The plan skill saves markdown plans under the active workspace plans directory.",
 
     # --- Cron & Scheduling ---
     "Cron jobs can attach skills: vigil cron add --skill blogwatcher \"Check for new posts\".",
@@ -192,10 +192,10 @@ TIPS = [
     "Voice messages on Telegram, Discord, WhatsApp, and Slack are auto-transcribed.",
 
     # --- Gateway & Messaging ---
-    "Hermes runs on 21 messaging platforms: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, IRC, Microsoft Teams, email, and more.",
+    "Vigil runs on 21 messaging platforms: Telegram, Discord, Slack, WhatsApp, Signal, Matrix, IRC, Microsoft Teams, email, and more.",
     "vigil gateway install sets it up as a system service that starts on boot.",
     "DingTalk uses Stream Mode — no webhooks or public URL needed.",
-    "BlueBubbles brings iMessage to Hermes via a local macOS server.",
+    "BlueBubbles brings iMessage to Vigil via a local macOS server.",
     "Webhook routes support HMAC validation, rate limiting, and event filtering.",
     "The API server exposes an OpenAI-compatible endpoint compatible with Open WebUI and LibreChat.",
     "Discord voice channel mode: the bot joins VC, transcribes speech, and talks back.",
@@ -209,14 +209,14 @@ TIPS = [
     "SSRF protection blocks private networks, loopback, link-local, and cloud metadata addresses.",
     "Tirith pre-exec scanning detects homograph URL spoofing and pipe-to-interpreter patterns.",
     "MCP subprocesses receive a filtered environment — only safe system vars pass through.",
-    "Context files (.hermes.md, AGENTS.md) are security-scanned for prompt injection before loading.",
+    "Project context files (AGENTS.md, CLAUDE.md) are security-scanned for prompt injection before loading.",
     "command_allowlist in config.yaml permanently approves specific shell command patterns.",
 
     # --- Context & Compression ---
     "Context auto-compresses when it reaches the threshold — memories are flushed and history summarized.",
     "The status bar turns yellow, then orange, then red as context fills up.",
     "SOUL.md is the agent's primary identity file — customize it to shape behavior.",
-    "Hermes loads project context from .hermes.md, AGENTS.md, CLAUDE.md, or .cursorrules (first match).",
+    "Vigil loads project context from AGENTS.md, CLAUDE.md, or .cursorrules (first match).",
     "Subdirectory AGENTS.md files are discovered progressively as the agent navigates into folders.",
     "Context files are capped at 20,000 characters with smart head/tail truncation.",
 
@@ -239,7 +239,7 @@ TIPS = [
     "Checkpoints have zero overhead when no files are modified — enabled by default.",
     "A pre-rollback snapshot is saved automatically so you can undo the undo.",
     "/rollback also undoes the conversation turn, so the agent doesn't remember rolled-back changes.",
-    "Checkpoints use shadow repos in ~/.hermes/checkpoints/ — your project's .git is never touched.",
+    "Checkpoints use shadow repos in ~/.vigil/checkpoints/ — your project's .git is never touched.",
 
     # --- Batch & Data ---
     "batch_runner.py processes hundreds of prompts in parallel for training data generation.",
@@ -259,9 +259,9 @@ TIPS = [
     "Slash commands support prefix matching: /h resolves to /help, /mod to /model.",
     "Dragging a file path into the terminal auto-attaches images or sends as context.",
     ".worktreeinclude in your repo root lists gitignored files to copy into worktrees.",
-    "vigil acp runs Hermes as an ACP server for VS Code, Zed, and JetBrains integration.",
+    "vigil acp runs Vigil as an ACP server for VS Code, Zed, and JetBrains integration.",
     "Custom providers: save named endpoints in config.yaml under custom_providers.",
-    "HERMES_EPHEMERAL_SYSTEM_PROMPT injects a system prompt that's never persisted to history.",
+    "VIGIL_EPHEMERAL_SYSTEM_PROMPT injects a system prompt that's never persisted to history.",
     "credential_pool_strategies supports fill_first, round_robin, least_used, and random rotation.",
     "vigil auth add nous or vigil auth add openai-codex sets up OAuth-based providers.",
     "The API server supports both Chat Completions and Responses API with server-side state.",
@@ -270,13 +270,13 @@ TIPS = [
 
     # --- Hidden Gems & Power-User Tricks ---
     "Cron jobs can attach a Python script (--script) whose stdout is injected into the prompt as context.",
-    "Cron scripts live in ~/.hermes/scripts/ and run before the agent — perfect for data collection pipelines.",
+    "Cron scripts live in ~/.vigil/scripts/ and run before the agent — perfect for data collection pipelines.",
     "prefill_messages_file in config.yaml injects few-shot examples into every API call, never saved to history.",
-    "SOUL.md completely replaces the agent's default identity — rewrite it to make Hermes your own.",
+    "SOUL.md completely replaces the agent's default identity — rewrite it to make Vigil your own.",
     "SOUL.md is auto-seeded with a default personality on first run. Edit it to customize.",
     "/compress <focus topic> allocates 60-70% of the summary budget to your topic and aggressively trims the rest.",
     "On second+ compression, the compressor updates the previous summary instead of starting from scratch.",
-    "Before a gateway session reset, Hermes auto-flushes important facts to memory in the background.",
+    "Before a gateway session reset, Vigil auto-flushes important facts to memory in the background.",
     "network.force_ipv4: true in config.yaml fixes hangs on servers with broken IPv6 — monkey-patches socket.",
     "The terminal tool annotates common exit codes: grep returning 1 = 'No matches found (not an error)'.",
     "Failed foreground terminal commands auto-retry up to 3 times with exponential backoff (2s, 4s, 8s).",
@@ -296,13 +296,13 @@ TIPS = [
     "agent.api_max_retries (default 3) controls how many times the agent retries a failed API call before surfacing the error — lower it for fast fallback.",
     "The gateway caches AIAgent instances per session — destroying this cache breaks Anthropic prompt caching.",
     "Any website can expose skills via /.well-known/skills/index.json — the skills hub discovers them automatically.",
-    "The skills audit log at ~/.hermes/skills/.hub/audit.log tracks every install and removal operation.",
+    "The skills audit log at ~/.vigil/skills/.hub/audit.log tracks every install and removal operation.",
     "Stale git worktrees are auto-cleaned on startup: clean, fully-merged trees get pruned; dirty or unpushed work is always preserved.",
-    "Profiles scope Hermes state via HERMES_HOME; host tool subprocesses keep your real HOME unless terminal.home_mode is profile.",
-    "HERMES_HOME_MODE env var (octal, e.g. 0701) sets custom directory permissions for web server traversal.",
-    "Container mode: place .container-mode in HERMES_HOME and the host CLI auto-execs into the container.",
+    "Profiles scope Vigil state via VIGIL_HOME; host tool subprocesses keep your real HOME unless terminal.home_mode is profile.",
+    "VIGIL_HOME_MODE env var (octal, e.g. 0701) sets custom directory permissions for web server traversal.",
+    "Container mode: place .container-mode in VIGIL_HOME and the host CLI auto-execs into the container.",
     "Ctrl+C has 5 priority tiers: cancel recording → cancel prompts → cancel picker → interrupt agent → exit.",
-    "Every interrupt during an agent run is logged to ~/.hermes/interrupt_debug.log with timestamps.",
+    "Every interrupt during an agent run is logged to ~/.vigil/interrupt_debug.log with timestamps.",
     "BROWSER_CDP_URL connects browser tools to any running Chromium-family browser — accepts WebSocket, HTTP, or host:port.",
     "BROWSERBASE_ADVANCED_STEALTH=true enables advanced anti-detection with custom Chromium (Scale Plan).",
     "The CLI auto-switches to compact mode in terminals narrower than 80 columns.",
@@ -332,36 +332,36 @@ TIPS = [
     "File paths pasted with quotes or escaped spaces are handled automatically — no manual cleanup needed.",
     "Slash commands never trigger the large-paste collapse — /command with big arguments works correctly.",
     "In interrupt mode, slash commands typed during agent execution bypass interrupt logic and run immediately.",
-    "HERMES_DEV=1 bypasses container mode detection for local development.",
+    "VIGIL_DEV=1 bypasses container mode detection for local development.",
     "Each MCP server gets its own toolset (mcp-servername) that can be toggled independently via vigil tools.",
-    "MCP ${ENV_VAR} placeholders in config are resolved at server spawn — including vars from ~/.hermes/.env.",
+    "MCP ${ENV_VAR} placeholders in config are resolved at server spawn — including vars from ~/.vigil/.env.",
     "Skills from trusted repos (NousResearch) get a 'trusted' security level; community skills get extra scanning.",
-    "The skills quarantine at ~/.hermes/skills/.hub/quarantine/ holds skills pending security review.",
+    "The skills quarantine at ~/.vigil/skills/.hub/quarantine/ holds skills pending security review.",
 
     # --- Advanced Slash Commands ---
     '/steer <prompt> injects a note after the next tool call — nudge direction mid-task without interrupting.',
-    '/goal <text> sets a standing Ralph-loop objective — Hermes auto-continues turn after turn until a judge says done.',
-    '/snapshot create [label] saves a full state snapshot of Hermes config; /snapshot restore <id> reverts later.',
+    '/goal <text> sets a standing Ralph-loop objective — Vigil auto-continues turn after turn until a judge says done.',
+    '/snapshot create [label] saves a full state snapshot of Vigil config; /snapshot restore <id> reverts later.',
     '/copy [N] copies the last assistant response to your clipboard, or the Nth-from-last with a number.',
     '/redraw forces a full UI repaint, fixing terminal drift after tmux resize or mouse selection artifacts.',
     '/agents (alias /tasks) shows active agents and running background tasks across the current session.',
     '/footer toggles the gateway footer on final replies showing model, context %, and cwd.',
-    '/busy queue|steer|interrupt controls what pressing Enter does while Hermes is working.',
+    '/busy queue|steer|interrupt controls what pressing Enter does while Vigil is working.',
     '/topic in Telegram DMs enables user-managed multi-session topic mode — /topic <id> restores past sessions inline.',
     '/approve session|always runs a pending dangerous command with your chosen trust scope; /deny rejects it.',
     '/restart gracefully restarts the gateway after draining active runs, then pings the requester when back up.',
     '/kanban boards switch <slug> changes the active multi-project Kanban board from inside chat.',
-    '/reload reloads ~/.hermes/.env into the running session — pick up new API keys without restarting.',
+    '/reload reloads ~/.vigil/.env into the running session — pick up new API keys without restarting.',
 
     # --- Cron (no-agent & scripts) ---
     'cronjob with no_agent=True runs a script on schedule and sends its stdout directly — zero tokens, zero LLM.',
     'An empty cron script stdout means silent tick — nothing is delivered, perfect for threshold watchdogs.',
-    "HERMES_CRON_MAX_PARALLEL (default 4) caps how many cron jobs run per tick so bursts don't saturate your keys.",
+    "VIGIL_CRON_MAX_PARALLEL (default 4) caps how many cron jobs run per tick so bursts don't saturate your keys.",
 
     # --- Gateway Hooks ---
-    'Gateway hooks live under ~/.hermes/hooks/<name>/ with HOOK.yaml + handler.py — handler must be named `handle`.',
+    'Gateway hooks live under ~/.vigil/hooks/<name>/ with HOOK.yaml + handler.py — handler must be named `handle`.',
     'Hook events include gateway:startup, session:start, agent:step, and command:* wildcard subscriptions.',
-    'Drop a ~/.hermes/BOOT.md checklist and a gateway:startup hook runs it as a one-shot agent every boot.',
+    'Drop a ~/.vigil/BOOT.md checklist and a gateway:startup hook runs it as a one-shot agent every boot.',
 
     # --- Curator ---
     'vigil curator run --dry-run previews what the curator would archive or consolidate without mutating anything.',
@@ -376,27 +376,27 @@ TIPS = [
     'provider_routing.require_parameters: true only routes to providers that support every param in your request.',
 
     # --- TUI & Dashboard ---
-    'HERMES_TUI_RESUME=1 auto-re-attaches to the most recent TUI session on launch — handy after SSH drops.',
-    "HERMES_TUI_THEME=light|dark|<hex> forces the TUI theme on terminals that don't set COLORFGBG.",
+    'VIGIL_TUI_RESUME=1 auto-re-attaches to the most recent TUI session on launch — handy after SSH drops.',
+    "VIGIL_TUI_THEME=light|dark|<hex> forces the TUI theme on terminals that don't set COLORFGBG.",
     'Ctrl+G or Ctrl+X Ctrl+E in the TUI opens the input buffer in $EDITOR for long multi-line prompts.',
     'The TUI renders LaTeX inline — $E=mc^2$ becomes Unicode math instead of raw TeX.',
     'vigil dashboard launches a local web UI at 127.0.0.1:9119 — zero data leaves localhost.',
-    'vigil dashboard embeds the full Hermes TUI in your browser via xterm.js and a WebSocket PTY.',
-    'Drop a YAML in ~/.hermes/dashboard-themes/ with two palette colors to reskin the entire dashboard.',
-    'Dashboard plugins are drop-in: manifest.json + JS bundle in ~/.hermes/dashboard-plugins/ — no npm build required.',
+    'vigil dashboard embeds the full Vigil TUI in your browser via xterm.js and a WebSocket PTY.',
+    'Drop a YAML in ~/.vigil/dashboard-themes/ with two palette colors to reskin the entire dashboard.',
+    'Dashboard plugins are drop-in: manifest.json + JS bundle in ~/.vigil/dashboard-plugins/ — no npm build required.',
     'layoutVariant: cockpit in a dashboard theme adds a 260px left rail that plugins can populate via the sidebar slot.',
 
     # --- Env Vars & Config Gates ---
     "display.tool_progress_command: true exposes /verbose on messaging platforms; it's CLI-only by default.",
-    'HERMES_BACKGROUND_NOTIFICATIONS=result only pings when background tasks finish (vs all/error/off).',
-    'HERMES_WRITE_SAFE_ROOT restricts write_file/patch to directory prefixes; multiple paths via os.pathsep (: or ;).',
-    'HERMES_IGNORE_RULES skips auto-injection of AGENTS.md, SOUL.md, .cursorrules, memory, and preloaded skills.',
-    'HERMES_ACCEPT_HOOKS auto-approves unseen shell hooks declared in config.yaml without a TTY prompt.',
+    'VIGIL_BACKGROUND_NOTIFICATIONS=result only pings when background tasks finish (vs all/error/off).',
+    'VIGIL_WRITE_SAFE_ROOT restricts write_file/patch to directory prefixes; multiple paths via os.pathsep (: or ;).',
+    'VIGIL_IGNORE_RULES skips auto-injection of AGENTS.md, SOUL.md, .cursorrules, memory, and preloaded skills.',
+    'VIGIL_ACCEPT_HOOKS auto-approves unseen shell hooks declared in config.yaml without a TTY prompt.',
     'auxiliary.goal_judge.model routes the /goal judge to a cheap fast model to keep loop cost near zero.',
     'Checkpoints skip directories with more than 50,000 files to avoid slow git operations on massive monorepos.',
 
     # --- TTS ---
-    'tts.provider: piper runs 44-language local TTS on CPU — voices auto-download to ~/.hermes/cache/piper-voices/.',
+    'tts.provider: piper runs 44-language local TTS on CPU — voices auto-download to ~/.vigil/cache/piper-voices/.',
     'tts.providers.<name>.type: command wires any CLI TTS engine with {input_path} and {output_path} placeholders.',
 
     # --- API Server & Proxy ---
@@ -421,7 +421,7 @@ TIPS = [
     '/commands paginates the full slash-command + installed-skill list — useful on platforms without tab completion.',
     '/toolsets lists every available toolset so you know what -t/--toolsets accepts.',
     '/voice tts toggles TTS-only mode — agent replies out loud but you still type your prompts.',
-    '/reload-skills re-scans ~/.hermes/skills/ so drop-in skills appear without restarting the session.',
+    '/reload-skills re-scans ~/.vigil/skills/ so drop-in skills appear without restarting the session.',
     '/indicator kaomoji|emoji|unicode|ascii picks the TUI busy-indicator style shown during agent runs.',
     '/debug uploads a support bundle (system info + logs) and returns shareable links — works in chat too.',
 
@@ -433,28 +433,28 @@ TIPS = [
     "vigil chat --source tool tags programmatic chats so they don't clutter vigil sessions list.",
     'vigil dump --show-keys includes redacted API key fingerprints for deeper support debugging.',
     'vigil sessions rename <ID> "new title" renames any past session; vigil sessions delete <ID> removes one.',
-    'vigil import restores a full Hermes backup zip; session JSON/JSONL exports import from the dashboard Sessions page.',
+    'vigil import restores a full Vigil backup zip; session JSON/JSONL exports import from the dashboard Sessions page.',
     'vigil fallback manages the fallback_model chain interactively — no hand-editing config.yaml.',
     'vigil pairing rotates the DM pairing token — the first messager after rotation claims access to the bot.',
     'vigil setup walks first-time users through provider, keys, and platform wiring in one interactive flow.',
     'vigil status --deep runs the full health sweep across every component; plain vigil status is the quick view.',
 
     # --- Agent Behavior Env Vars ---
-    'HERMES_AGENT_TIMEOUT=0 disables the gateway inactivity kill for a running agent — use for long research runs.',
-    'HERMES_ENABLE_PROJECT_PLUGINS=1 auto-loads repo-local plugins from ./.hermes/plugins/ — trust-gated by design.',
-    "HERMES_DISABLE_FILE_STATE_GUARD=1 turns off the 'file changed since you read it' guard on patch and write_file.",
-    'HERMES_ALLOW_PRIVATE_URLS=true lets web tools hit localhost and private networks — off by default in gateway mode.',
-    'HERMES_OPTIONAL_SKILLS=name1,name2 auto-installs extra optional-catalog skills on first run per profile.',
-    'HERMES_BUNDLED_SKILLS points at a custom bundled-skill tree — used by Homebrew and Nix packaging.',
-    'HERMES_DUMP_REQUEST_STDOUT=1 dumps every API request payload to stdout instead of log files.',
-    'HERMES_OAUTH_TRACE=1 logs redacted OAuth token exchange and refresh attempts for debugging provider auth.',
-    'HERMES_STREAM_RETRIES (default 3) controls mid-stream reconnect attempts on transient network errors.',
+    'VIGIL_AGENT_TIMEOUT=0 disables the gateway inactivity kill for a running agent — use for long research runs.',
+    'VIGIL_ENABLE_PROJECT_PLUGINS=1 auto-loads repo-local plugins from the project plugin directory — trust-gated by design.',
+    "VIGIL_DISABLE_FILE_STATE_GUARD=1 turns off the 'file changed since you read it' guard on patch and write_file.",
+    'VIGIL_ALLOW_PRIVATE_URLS=true lets web tools hit localhost and private networks — off by default in gateway mode.',
+    'VIGIL_OPTIONAL_SKILLS=name1,name2 auto-installs extra optional-catalog skills on first run per profile.',
+    'VIGIL_BUNDLED_SKILLS points at a custom bundled-skill tree — used by Homebrew and Nix packaging.',
+    'VIGIL_DUMP_REQUEST_STDOUT=1 dumps every API request payload to stdout instead of log files.',
+    'VIGIL_OAUTH_TRACE=1 logs redacted OAuth token exchange and refresh attempts for debugging provider auth.',
+    'VIGIL_STREAM_RETRIES (default 3) controls mid-stream reconnect attempts on transient network errors.',
 
     # --- Gateway Behavior Env Vars ---
-    'HERMES_GATEWAY_BUSY_ACK_ENABLED=false silences the ⚡/⏳/⏩ ack messages when a user messages a busy agent.',
-    'HERMES_AGENT_NOTIFY_INTERVAL (default 180s) sets how often the gateway pings with progress on long turns.',
-    'HERMES_RESTART_DRAIN_TIMEOUT (default 900s) caps how long /restart waits for in-flight runs before forcing.',
-    'HERMES_CHECKPOINT_TIMEOUT (default 30s) caps filesystem checkpoint creation — raise it on huge monorepos.',
+    'VIGIL_GATEWAY_BUSY_ACK_ENABLED=false silences the ⚡/⏳/⏩ ack messages when a user messages a busy agent.',
+    'VIGIL_AGENT_NOTIFY_INTERVAL (default 180s) sets how often the gateway pings with progress on long turns.',
+    'VIGIL_RESTART_DRAIN_TIMEOUT (default 900s) caps how long /restart waits for in-flight runs before forcing.',
+    'VIGIL_CHECKPOINT_TIMEOUT (default 30s) caps filesystem checkpoint creation — raise it on huge monorepos.',
 
     # --- Auxiliary Tasks & Image Generation ---
     'image_gen.model in config.yaml picks the FAL model: flux-2/klein, gpt-image-2, nano-banana-pro, and more.',
@@ -462,7 +462,7 @@ TIPS = [
     'AUXILIARY_VISION_BASE_URL + AUXILIARY_VISION_API_KEY point vision analysis at any OpenAI-compatible endpoint.',
 
     # --- Security ---
-    'security.tirith_fail_open: false makes Hermes block commands when the tirith scanner itself errors out.',
+    'security.tirith_fail_open: false makes Vigil block commands when the tirith scanner itself errors out.',
     'TIRITH_FAIL_OPEN env var overrides the tirith_fail_open config — a quick toggle without editing config.yaml.',
 
     # --- Sessions & Source Tags ---
@@ -471,7 +471,7 @@ TIPS = [
 
     # --- Misc ---
     'API_SERVER_MODEL_NAME customizes the model name on /v1/models — essential for multi-profile Open WebUI setups.',
-    'Dashboard plugins are served from /dashboard-plugins/<name>/ — drop files into ~/.hermes/dashboard-plugins/.',
+    'Dashboard plugins are served from /dashboard-plugins/<name>/ — drop files into ~/.vigil/dashboard-plugins/.',
 ]
 
 

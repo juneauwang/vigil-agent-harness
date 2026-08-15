@@ -115,28 +115,28 @@ describe('buildToolView browser_navigate title', () => {
     const view = buildToolView(
       part({
         toolName: 'browser_navigate',
-        args: { url: 'https://hermes-agent.nousresearch.com/docs' },
+        args: { url: 'https://github.com/juneauwang/vigil-agent-harness' },
         result: { success: false, error: 'Command timed out after 60 seconds' }
       }),
       ''
     )
 
     expect(view.status).toBe('error')
-    expect(view.title).toBe('Failed to open hermes-agent.nousresearch.com/docs')
+    expect(view.title).toBe('Failed to open github.com/juneauwang/vigil-agent-harness/docs')
   })
 
   it('shows opened title on success', () => {
     const view = buildToolView(
       part({
         toolName: 'browser_navigate',
-        args: { url: 'https://hermes-agent.nousresearch.com/docs' },
-        result: { success: true, url: 'https://hermes-agent.nousresearch.com/docs', title: 'Docs' }
+        args: { url: 'https://github.com/juneauwang/vigil-agent-harness' },
+        result: { success: true, url: 'https://github.com/juneauwang/vigil-agent-harness', title: 'Docs' }
       }),
       ''
     )
 
     expect(view.status).toBe('success')
-    expect(view.title).toBe('Opened hermes-agent.nousresearch.com/docs')
+    expect(view.title).toBe('Opened github.com/juneauwang/vigil-agent-harness/docs')
   })
 })
 

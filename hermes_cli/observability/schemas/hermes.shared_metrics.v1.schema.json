@@ -22,7 +22,7 @@
       "$ref": "#/$defs/uuid"
     },
     "install_id": {
-      "description": "Random persistent identifier scoped to one HERMES_HOME; local-only in schema v1.",
+      "description": "Random persistent identifier scoped to one VIGIL_HOME; local-only in schema v1.",
       "$ref": "#/$defs/uuid"
     },
     "period_start": {

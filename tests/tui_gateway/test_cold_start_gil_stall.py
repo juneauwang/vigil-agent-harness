@@ -2,7 +2,7 @@
 
 The Desktop/TUI cold start could stall the event loop for ~14s because
 synchronous CPU-bound work ran on the loop thread during the window
-between ``HERMES_BACKEND_READY`` and the first prompt. Three fixes:
+between ``VIGIL_BACKEND_READY`` and the first prompt. Three fixes:
 
 1. ``copilot_auth.resolve_copilot_token`` skips the ``gh auth token``
    subprocess when a Copilot env var is explicitly set (even if invalid).

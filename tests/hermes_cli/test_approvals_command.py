@@ -40,8 +40,8 @@ def test_approvals_registry_drives_help_menu_and_autocomplete():
 
 
 def _isolate_config(monkeypatch, home):
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(home / "missing-managed"))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.setenv("VIGIL_MANAGED_DIR", str(home / "missing-managed"))
     from hermes_cli import managed_scope
     from hermes_cli.config import _LOAD_CONFIG_CACHE, _RAW_CONFIG_CACHE
 
@@ -62,8 +62,8 @@ def test_shared_command_refuses_managed_mode_override(tmp_path, monkeypatch):
     managed = tmp_path / "managed"
     home.mkdir()
     managed.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
-    monkeypatch.setenv("HERMES_MANAGED_DIR", str(managed))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    monkeypatch.setenv("VIGIL_MANAGED_DIR", str(managed))
     (managed / "config.yaml").write_text("approvals:\n  mode: manual\n", encoding="utf-8")
     managed_scope.invalidate_managed_cache()
 

@@ -14,14 +14,14 @@ npm install -g byterover-cli
 ## Setup
 
 ```bash
-hermes memory setup    # select "byterover"
+vigil memory setup    # select "byterover"
 ```
 
 Or manually:
 ```bash
-hermes config set memory.provider byterover
+vigil config set memory.provider byterover
 # Optional cloud sync:
-echo "BRV_API_KEY=your-key" >> ~/.hermes/.env
+echo "BRV_API_KEY=your-key" >> ~/.vigil/.env
 ```
 
 ## Config
@@ -30,7 +30,7 @@ echo "BRV_API_KEY=your-key" >> ~/.hermes/.env
 |---------|----------|-------------|
 | `BRV_API_KEY` | No | Cloud sync key (optional, local-first by default) |
 
-Working directory: `$HERMES_HOME/byterover/` (profile-scoped).
+Working directory: `$VIGIL_HOME/byterover/` (profile-scoped).
 
 ## Tools
 

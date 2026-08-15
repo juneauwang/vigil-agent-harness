@@ -363,7 +363,7 @@ def _responses_tools(tools: Optional[List[Dict[str, Any]]] = None) -> Optional[L
 # Responses ``tools`` array.  These are declared by ``type`` alone (no
 # client-side name/parameters schema) and run server-side — the provider
 # owns the implementation and reports progress via the matching ``*_call``
-# output items.  Hermes injects xAI's native ``web_search`` for the xAI
+# output items.  Vigil injects xAI's native ``web_search`` for the xAI
 # transport (see agent/transports/codex.py); the rest are listed so the
 # preflight validator passes them through rather than rejecting them as
 # "unsupported type".  Mirrors the ``*_call`` item-type set used in
@@ -422,7 +422,7 @@ def _chat_messages_to_responses_input(
     May 2026) we believed xAI's OAuth/SuperGrok ``/v1/responses`` surface
     rejected replayed ``encrypted_content`` reasoning items minted by
     prior turns, and we stripped them.  That decision was wrong — xAI
-    explicitly relies on Hermes threading encrypted reasoning back across
+    explicitly relies on Vigil threading encrypted reasoning back across
     turns for cross-turn coherence (the whole point of their partnership
     integration).  We now replay encrypted reasoning on every Responses
     transport (xAI, native Codex, custom relays) and let xAI tell us
@@ -1576,7 +1576,7 @@ def _normalize_codex_response(
         # are queued/in_progress/incomplete, reasoning alone is a valid final
         # state — forcing "incomplete" causes multi-minute stalls as the
         # continuation path re-issues calls (3 retries × up to 240s each).
-        # See https://github.com/NousResearch/hermes-agent/issues/64434
+        # See https://github.com/juneauwang/vigil-agent-harness
         if response_status == "completed" and issuer_kind not in (
             "codex_backend",
             "xai_responses",

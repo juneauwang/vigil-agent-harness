@@ -1,4 +1,4 @@
-"""Tests for the Command Installation check in hermes doctor."""
+"""Tests for the Command Installation check in vigil doctor."""
 
 import sys
 import types
@@ -11,8 +11,8 @@ import hermes_cli.doctor as doctor_mod
 
 
 def _setup_doctor_env(monkeypatch, tmp_path, venv_name="venv"):
-    """Create a minimal HERMES_HOME + PROJECT_ROOT for doctor tests."""
-    home = tmp_path / ".hermes"
+    """Create a minimal VIGIL_HOME + PROJECT_ROOT for doctor tests."""
+    home = tmp_path / ".vigil"
     home.mkdir(parents=True, exist_ok=True)
     (home / "config.yaml").write_text("memory: {}\n", encoding="utf-8")
 
@@ -26,7 +26,7 @@ def _setup_doctor_env(monkeypatch, tmp_path, venv_name="venv"):
     hermes_bin.write_text("#!/usr/bin/env python\n# entry point\n")
     hermes_bin.chmod(0o755)
 
-    monkeypatch.setattr(doctor_mod, "HERMES_HOME", home)
+    monkeypatch.setattr(doctor_mod, "VIGIL_HOME", home)
     monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)
     monkeypatch.setattr(doctor_mod, "_DHH", str(home))
 
@@ -96,7 +96,7 @@ class TestDoctorCommandInstallation:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="Symlink check is Unix-only")
     def test_missing_venv_entry_point_shows_warn(self, monkeypatch, tmp_path):
-        home = tmp_path / ".hermes"
+        home = tmp_path / ".vigil"
         home.mkdir(parents=True, exist_ok=True)
         (home / "config.yaml").write_text("memory: {}\n", encoding="utf-8")
 
@@ -104,7 +104,7 @@ class TestDoctorCommandInstallation:
         project.mkdir(exist_ok=True)
         # Do NOT create any venv entry point
 
-        monkeypatch.setattr(doctor_mod, "HERMES_HOME", home)
+        monkeypatch.setattr(doctor_mod, "VIGIL_HOME", home)
         monkeypatch.setattr(doctor_mod, "PROJECT_ROOT", project)
         monkeypatch.setattr(doctor_mod, "_DHH", str(home))
         monkeypatch.setattr(Path, "home", lambda: tmp_path)

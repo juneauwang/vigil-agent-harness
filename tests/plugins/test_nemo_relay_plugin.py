@@ -260,7 +260,7 @@ mode = "test"
 """,
         encoding="utf-8",
     )
-    monkeypatch.setenv("HERMES_NEMO_RELAY_PLUGINS_TOML", str(plugins_toml))
+    monkeypatch.setenv("VIGIL_NEMO_RELAY_PLUGINS_TOML", str(plugins_toml))
     return plugins_toml
 
 
@@ -282,7 +282,7 @@ def test_manifest_fields():
 
 
 def test_nemo_relay_plugin_is_discoverable_as_bundled_plugin(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes_test"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "hermes_test"))
 
     manager = PluginManager()
     manager.discover_and_load()
@@ -301,10 +301,10 @@ def test_shared_metrics_and_rich_plugin_share_one_core_session(
 
     fake = _FakeNemoRelay()
     hermes_home = tmp_path / "hermes-home"
-    monkeypatch.setenv("HERMES_HOME", str(hermes_home))
-    monkeypatch.setenv("HERMES_NEMO_RELAY_ATIF_ENABLED", "1")
+    monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
+    monkeypatch.setenv("VIGIL_NEMO_RELAY_ATIF_ENABLED", "1")
     monkeypatch.setenv(
-        "HERMES_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY", str(tmp_path / "atif")
+        "VIGIL_NEMO_RELAY_ATIF_OUTPUT_DIRECTORY", str(tmp_path / "atif")
     )
     monkeypatch.setattr(
         "hermes_cli.config.read_raw_config_readonly",

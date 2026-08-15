@@ -23,9 +23,9 @@ from hermes_cli import kanban_db as kb
 def fresh_home(tmp_path, monkeypatch):
     home = tmp_path / "hermes_home"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    for var in ("HERMES_KANBAN_DB", "HERMES_KANBAN_WORKSPACES_ROOT", "HERMES_KANBAN_HOME", "HERMES_KANBAN_BOARD"):
+    for var in ("VIGIL_KANBAN_DB", "VIGIL_KANBAN_WORKSPACES_ROOT", "VIGIL_KANBAN_HOME", "VIGIL_KANBAN_BOARD"):
         monkeypatch.delenv(var, raising=False)
     try:
         import hermes_constants

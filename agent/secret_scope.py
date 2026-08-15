@@ -10,7 +10,7 @@ This module provides a fail-closed, context-local secret scope:
 
 - ``set_secret_scope(mapping)`` installs the active profile's secrets for the
   current task (a contextvar, so it propagates into the agent's worker thread
-  via ``copy_context()`` exactly like the HERMES_HOME override).
+  via ``copy_context()`` exactly like the VIGIL_HOME override).
 - ``get_secret(name)`` reads from that scope. When multiplexing is **active**
   and no scope is set, it RAISES rather than silently falling back to
   ``os.environ`` — an un-migrated or newly-added call site fails loud at that
@@ -96,16 +96,16 @@ def current_secret_scope() -> Optional[Mapping[str, str]]:
 # Membership test is by exact name OR prefix (see _is_global_env). Keep this
 # list tight: when in doubt a value is a profile secret, not a global.
 _GLOBAL_ENV_EXACT = frozenset({
-    # Hermes runtime / deployment
-    "HERMES_HOME", "HERMES_PROFILE", "HERMES_GATEWAY_LOCK_DIR",
-    "HERMES_MAX_ITERATIONS", "HERMES_MAX_TOKENS", "HERMES_API_TIMEOUT",
-    "HERMES_REDACT_SECRETS", "HERMES_NOUS_TIMEOUT_SECONDS",
-    "_HERMES_GATEWAY",
+    # Vigil runtime / deployment
+    "VIGIL_HOME", "VIGIL_PROFILE", "VIGIL_GATEWAY_LOCK_DIR",
+    "VIGIL_MAX_ITERATIONS", "VIGIL_MAX_TOKENS", "VIGIL_API_TIMEOUT",
+    "VIGIL_REDACT_SECRETS", "VIGIL_NOUS_TIMEOUT_SECONDS",
+    "_VIGIL_GATEWAY",
     # OS / interpreter
     "PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "PWD", "SHELL", "TMPDIR",
     "VIRTUAL_ENV", "PYTHONPATH", "SSL_CERT_FILE",
     # Kanban paths (per-board, not per-profile-secret)
-    "HERMES_KANBAN_DB", "HERMES_KANBAN_WORKSPACES_ROOT", "HERMES_KANBAN_BOARD",
+    "VIGIL_KANBAN_DB", "VIGIL_KANBAN_WORKSPACES_ROOT", "VIGIL_KANBAN_BOARD",
     # API-server LISTENER settings — deployment config (Docker compose
     # ``environment:`` block, systemd ``Environment=``), not profile secrets.
     # The scoped runner reload (#64674) must keep seeing them or container
@@ -116,8 +116,8 @@ _GLOBAL_ENV_EXACT = frozenset({
     "API_SERVER_CORS_ORIGINS",
 })
 _GLOBAL_ENV_PREFIXES = (
-    "HERMES_KANBAN_",
-    "HERMES_TELEGRAM_",   # tuning knobs (batch delays, fallback toggles) — NOT the token
+    "VIGIL_KANBAN_",
+    "VIGIL_TELEGRAM_",   # tuning knobs (batch delays, fallback toggles) — NOT the token
     "TERMINAL_",          # terminal/sandbox backend settings
 )
 
@@ -227,7 +227,7 @@ def load_env_file(env_path: Path) -> Dict[str, str]:
     """Parse a ``.env`` file into a plain dict WITHOUT touching ``os.environ``.
 
     Used to load a profile's secrets into an isolated mapping for
-    ``set_secret_scope``. Parses the small KEY=VALUE subset Hermes writes
+    ``set_secret_scope``. Parses the small KEY=VALUE subset Vigil writes
     itself (``export`` prefix, ``#`` comments — full-line and
     dotenv-compatible inline, matching quotes with the
     writer's ``\\"``/``\\\\`` escapes reversed — the same semantics as
@@ -244,7 +244,7 @@ def load_env_file(env_path: Path) -> Dict[str, str]:
     except (FileNotFoundError, OSError, UnicodeDecodeError):
         return secrets
 
-    # Parse values with the canonical Hermes parser: save_env_value
+    # Parse values with the canonical Vigil parser: save_env_value
     # escapes " and \ inside double quotes, and every other reader
     # (load_env, python-dotenv) reverses those escapes. Stripping only
     # the outer quotes here would corrupt credentials containing "

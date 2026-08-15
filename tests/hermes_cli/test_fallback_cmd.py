@@ -1,4 +1,4 @@
-"""Tests for `hermes fallback` — chain reading, add/remove/clear, legacy migration."""
+"""Tests for `vigil fallback` — chain reading, add/remove/clear, legacy migration."""
 from __future__ import annotations
 
 import types
@@ -10,25 +10,25 @@ import yaml
 
 
 # ---------------------------------------------------------------------------
-# Shared fixture — isolate HERMES_HOME so save_config writes to tmp_path
+# Shared fixture — isolate VIGIL_HOME so save_config writes to tmp_path
 # ---------------------------------------------------------------------------
 
 @pytest.fixture()
 def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir(exist_ok=True)
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     return tmp_path
 
 
 def _write_config(home: Path, data: dict) -> None:
-    config_path = home / ".hermes" / "config.yaml"
+    config_path = home / ".vigil" / "config.yaml"
     config_path.write_text(yaml.safe_dump(data), encoding="utf-8")
 
 
 def _read_config(home: Path) -> dict:
-    config_path = home / ".hermes" / "config.yaml"
+    config_path = home / ".vigil" / "config.yaml"
     return yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
 
 
@@ -289,7 +289,7 @@ class TestDispatcher:
 # ---------------------------------------------------------------------------
 
 class TestArgparseWiring:
-    """Verify `hermes fallback` is wired into main.py's argparse tree.
+    """Verify `vigil fallback` is wired into main.py's argparse tree.
 
     main() builds the parser inline, so we invoke main([...]) via subprocess
     with --help to introspect registered subcommands without side effects.

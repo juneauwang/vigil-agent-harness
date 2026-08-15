@@ -92,7 +92,7 @@ export function useHermesConfig({ activeSessionIdRef }: HermesConfigOptions) {
         // Publish the profile default regardless of whether the composer is
         // reseeded below: picker rows and preset application resolve "the
         // default" from here, so a manual model pick must not leave them
-        // rendering/applying Hermes' built-in medium over the user's config.
+        // rendering/applying Vigil' built-in medium over the user's config.
         setDefaultReasoningEffort(reasoning)
 
         const shouldSeedComposer =

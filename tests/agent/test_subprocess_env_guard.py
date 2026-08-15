@@ -5,7 +5,7 @@ Every child-process env in the codebase must be built through
 ``hermes_subprocess_env`` / ``_sanitize_subprocess_env``, which the factory
 wraps) so profile-home propagation and secret-scrubbing have a single owner.
 History: ~11 commits over 6 months each fixed one more spawn site that missed
-``HERMES_HOME`` or secret-scrub propagation.
+``VIGIL_HOME`` or secret-scrub propagation.
 
 This test greps the source tree for ``os.environ.copy()`` appearing within
 ``PROXIMITY_LINES`` lines of a spawn call (``Popen`` / ``subprocess.run`` /

@@ -1,6 +1,6 @@
 """Single owner for backend identity and failure-scoped skip decisions.
 
-Every fallback / dedup / skip / quarantine decision in Hermes ultimately asks
+Every fallback / dedup / skip / quarantine decision in Vigil ultimately asks
 one question: **"is this candidate the same backend as the one that failed,
 along the axis that failure invalidated?"**  Before this module, that
 question was re-implemented inline at six call sites across four subsystems,

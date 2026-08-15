@@ -122,7 +122,7 @@ def build_agent_card(
         "url": url,  # convenience for pre-1.0 clients; canonical is supportedInterfaces
         "version": "1.0.0",
         "provider": {
-            "organization": os.getenv("A2A_PROVIDER_ORG", "Hermes Agent"),
+            "organization": os.getenv("A2A_PROVIDER_ORG", "Vigil Agent"),
             "url": os.getenv("A2A_PROVIDER_URL", "") or url,
         },
         "supportedInterfaces": [iface],
@@ -158,7 +158,7 @@ def skills_from_toolsets(toolsets: "list[str] | dict[str, list[str]] | None") ->
             skills.append({
                 "id": f"toolset.{ts_name}",
                 "name": ts_name,
-                "description": f"Hermes '{ts_name}' capabilities",
+                "description": f"Vigil '{ts_name}' capabilities",
                 "tags": [ts_name] + tool_names[:10],
             })
     else:
@@ -166,7 +166,7 @@ def skills_from_toolsets(toolsets: "list[str] | dict[str, list[str]] | None") ->
             skills.append({
                 "id": f"toolset.{ts}",
                 "name": ts,
-                "description": f"Hermes '{ts}' capabilities",
+                "description": f"Vigil '{ts}' capabilities",
                 "tags": [ts],
             })
     if not skills:
@@ -793,7 +793,7 @@ def _conv_dir() -> Path:
         from hermes_constants import get_hermes_home
         base = Path(get_hermes_home())
     except Exception:
-        base = Path(os.path.expanduser("~/.hermes"))
+        base = Path(os.path.expanduser("~/.vigil"))
     return base / "a2a_conversations"
 
 

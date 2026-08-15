@@ -14,7 +14,7 @@ def clean_env(monkeypatch):
         "GEMINI_API_KEY",
         "GOOGLE_API_KEY",
         "GEMINI_BASE_URL",
-        "HERMES_SESSION_PLATFORM",
+        "VIGIL_SESSION_PLATFORM",
     ):
         monkeypatch.delenv(key, raising=False)
 
@@ -116,7 +116,7 @@ class TestGenerateGeminiTts:
         assert data[44:] == fake_pcm_bytes
 
     def test_x_goog_api_client_header_is_set(self, tmp_path, monkeypatch, mock_gemini_response):
-        """Gemini TTS requests should include Hermes client context."""
+        """Gemini TTS requests should include Vigil client context."""
         from hermes_cli import __version__
         from tools.tts_tool import _generate_gemini_tts
 

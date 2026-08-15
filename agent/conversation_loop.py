@@ -138,7 +138,7 @@ def _apply_active_turn_redirect(agent: Any, messages: List[Dict[str, Any]], text
     "Provider returned an empty response" storms that no retry, nudge, or
     empty-recovery branch can escape (July 2026: four sessions bricked this
     way; every reasoning-free checkpoint that week was untouched — same
-    mechanism as the ~/.hermes/prefill.json incident, 20/20 blocked with
+    mechanism as the ~/.vigil/prefill.json incident, 20/20 blocked with
     assistant-exposed CoT vs 0/20 without). The interrupted reasoning was
     incomplete by definition; the model regenerates it on the retried turn.
     If a future path needs to preserve interrupted thinking, carry it in a
@@ -294,7 +294,7 @@ def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str
     tool_count = len(getattr(agent, "tools", None) or [])
 
     logger.warning(
-        "Ollama runtime context too small for Hermes tool use: "
+        "Ollama runtime context too small for Vigil tool use: "
         "model=%s provider=%s base_url=%s runtime_context=%d "
         "minimum_context=%d estimated_request_tokens=%d tool_count=%d "
         "session=%s",
@@ -310,11 +310,11 @@ def _ollama_context_limit_error(agent: Any, request_tokens: int) -> Optional[str
 
     return (
         f"Ollama loaded `{model}` with only {runtime_ctx:,} tokens of runtime "
-        f"context, but Hermes needs at least {MINIMUM_CONTEXT_LENGTH:,} tokens "
+        f"context, but Vigil needs at least {MINIMUM_CONTEXT_LENGTH:,} tokens "
         "for reliable tool use.\n\n"
         "Increase the Ollama context for this model and restart/reload the "
         "model before trying again. A known-good starting point is 65,536 "
-        "tokens. In Hermes config, set `model.ollama_num_ctx: 65536` "
+        "tokens. In Vigil config, set `model.ollama_num_ctx: 65536` "
         "(and `model.context_length: 65536` if you also override the displayed "
         "model context). If you manage the model through an Ollama Modelfile, "
         "set `PARAMETER num_ctx 65536` there instead."
@@ -643,7 +643,7 @@ def _stored_prompt_matches_runtime(agent, prompt: str) -> bool:
 
         Anchor on the ``User home directory:`` line that immediately precedes
         the working-directory line in that block, and take the FIRST such
-        occurrence, so only Hermes' own emitted block can satisfy the read.
+        occurrence, so only Vigil' own emitted block can satisfy the read.
         """
         prefix = f"{label}:"
         lines = prompt.splitlines()
@@ -1291,7 +1291,7 @@ def run_conversation(
     agent._last_compression_attempt_recorded = False
     agent._last_compression_attempt_in_place = None
 
-    # Adopt any ~/.hermes/.env credential/base-url edits made since the last
+    # Adopt any ~/.vigil/.env credential/base-url edits made since the last
     # turn — a Settings save updates .env but not this worker's client, which
     # was built at agent init (#67821). No-op when .env is unchanged.
     try:
@@ -1400,7 +1400,7 @@ def run_conversation(
 
     # Optional opt-in runtime: if api_mode == codex_app_server, hand the
     # turn to the codex app-server subprocess (terminal/file ops/patching
-    # all run inside Codex). Default Hermes path is bypassed entirely.
+    # all run inside Codex). Default Vigil path is bypassed entirely.
     # See agent/transports/codex_app_server_session.py for the adapter
     # and references/codex-app-server-runtime.md for the rationale.
     if agent.api_mode == "codex_app_server":
@@ -1699,9 +1699,9 @@ def run_conversation(
         # NOTE: Plugin context from pre_llm_call hooks is injected into the
         # user message (see injection block above), NOT the system prompt.
         # This is intentional — system prompt modifications break the prompt
-        # cache prefix.  The system prompt is reserved for Hermes internals.
+        # cache prefix.  The system prompt is reserved for Vigil internals.
         #
-        # Hermes invariant: the system prompt is built ONCE per session
+        # Vigil invariant: the system prompt is built ONCE per session
         # (cached on ``_cached_system_prompt``) and replayed verbatim on
         # every turn. ``apply_anthropic_cache_control`` may split its stable
         # prefix into content blocks on the wire, but the stored string and
@@ -1911,7 +1911,7 @@ def run_conversation(
             failed = True
             _turn_exit_reason = "ollama_runtime_context_too_small"
             messages.append({"role": "assistant", "content": final_response})
-            agent._emit_status("❌ Ollama runtime context is too small for Hermes tool use")
+            agent._emit_status("❌ Ollama runtime context is too small for Vigil tool use")
             api_call_count -= 1
             agent._api_call_count = api_call_count
             try:
@@ -2317,7 +2317,7 @@ def run_conversation(
                 except Exception:
                     pass
 
-                if env_var_enabled("HERMES_DUMP_REQUESTS"):
+                if env_var_enabled("VIGIL_DUMP_REQUESTS"):
                     agent._dump_api_request_debug(api_kwargs, reason="preflight")
 
                 # This object is private to the in-process MoA facade.  Add it
@@ -4534,7 +4534,7 @@ def run_conversation(
                 # this on the next pass and try fallback or bail.
                 #
                 # IMPORTANT: Nous Portal multiplexes multiple upstream
-                # providers (DeepSeek, Kimi, MiMo, Hermes).  A 429 can
+                # providers (DeepSeek, Kimi, MiMo, Vigil).  A 429 can
                 # also mean an UPSTREAM provider is out of capacity
                 # for one specific model -- transient, clears in
                 # seconds, nothing to do with the caller's quota.
@@ -4598,7 +4598,7 @@ def run_conversation(
 
                 # Actionable hint for GitHub Models (Azure) 413 errors.
                 # The free tier enforces a hard 8K token cap per request,
-                # which Hermes' system prompt + tool schemas alone exceed.
+                # which Vigil' system prompt + tool schemas alone exceed.
                 # Compression can't help — the floor is the system prompt
                 # itself, not the conversation — so surface a clear "not
                 # compatible" message instead of looping into three futile
@@ -4613,7 +4613,7 @@ def run_conversation(
                         force=True,
                     )
                     agent._vprint(
-                        f"{agent.log_prefix}      request at ~8K tokens. Hermes' system prompt + tool schemas baseline",
+                        f"{agent.log_prefix}      request at ~8K tokens. Vigil' system prompt + tool schemas baseline",
                         force=True,
                     )
                     agent._vprint(
@@ -4621,7 +4621,7 @@ def run_conversation(
                         force=True,
                     )
                     agent._vprint(
-                        f"{agent.log_prefix}      Use the `copilot` provider with a Copilot subscription token (`hermes",
+                        f"{agent.log_prefix}      Use the `copilot` provider with a Copilot subscription token (`vigil",
                         force=True,
                     )
                     agent._vprint(
@@ -4751,7 +4751,7 @@ def run_conversation(
                         # cap for the failed request, so keep it as an upper
                         # bound.  Also estimate the current API request shape
                         # (system prompt, injected context, tool schemas) because
-                        # Hermes may add API-only content not present in persisted
+                        # Vigil may add API-only content not present in persisted
                         # messages.  Use the smaller budget and apply a small
                         # safety margin.  Do not alter context_length.
                         request_input_estimate = estimate_request_tokens_rough(
@@ -5449,8 +5449,8 @@ def run_conversation(
                         agent._vprint(
                             f"{agent.log_prefix}      1. Set "
                             f"`providers.{_provider}.models.{_model}.stale_timeout_seconds: 900` "
-                            f"in `~/.hermes/config.yaml` to extend the per-call "
-                            f"timeout. (Hermes's built-in floor is 600s for "
+                            f"in `~/.vigil/config.yaml` to extend the per-call "
+                            f"timeout. (Vigil's built-in floor is 600s for "
                             f"known reasoning models — if you still see this "
                             f"after raising, the upstream cap is even shorter.)",
                             force=True,
@@ -6320,7 +6320,7 @@ def run_conversation(
                 try:
                     # Persist the assistant tool-call turn before any tool
                     # side effects run. If a destructive tool restarts or
-                    # terminates Hermes mid-turn, resume logic still sees the
+                    # terminates Vigil mid-turn, resume logic still sees the
                     # exact tool-call block that already executed.
                     _tool_turn_persisted = agent._flush_messages_to_session_db(
                         messages, conversation_history
@@ -6562,7 +6562,7 @@ def run_conversation(
                 # takes ~0s to process) followed by slow post-tool
                 # processing (compression, persist) and a slow
                 # follow-up API call can exceed the gateway inactivity
-                # timeout (HERMES_AGENT_TIMEOUT, default 1800s) and the
+                # timeout (VIGIL_AGENT_TIMEOUT, default 1800s) and the
                 # gateway kills the session before the next activity
                 # touch fires (#69559, #69131).
                 agent._touch_activity(f"tool results posted, continuing iteration #{api_call_count}")
@@ -7188,7 +7188,7 @@ def run_conversation(
                     logger.info(
                         "kanban stop-loop nudge issued (attempt %d) task=%s",
                         agent._kanban_stop_nudges,
-                        os.environ.get("HERMES_KANBAN_TASK", ""),
+                        os.environ.get("VIGIL_KANBAN_TASK", ""),
                     )
                     agent._emit_status(
                         "⚠️ Kanban worker tried to exit without "

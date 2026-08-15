@@ -24,7 +24,7 @@ def sample_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init")
-    _git(repo, "config", "user.name", "Hermes Tests")
+    _git(repo, "config", "user.name", "Vigil Tests")
     _git(repo, "config", "user.email", "tests@example.com")
 
     (repo / "src").mkdir()
@@ -142,16 +142,16 @@ async def test_blocks_canonical_read_denylist_credential_stores(tmp_path: Path, 
     The narrow in-module list historically missed the real credential stores
     (provider keys, OAuth tokens, MCP tokens, project-local .env). Because the
     gateway routes untrusted remote message text through reference expansion,
-    a chat peer could otherwise attach `@file:~/.hermes/auth.json` and read the
+    a chat peer could otherwise attach `@file:~/.vigil/auth.json` and read the
     operator's keys into context. These must all be refused, with their secret
     bodies kept out of the expanded message.
     """
     from agent.context_references import preprocess_context_references_async
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     (hermes_home).mkdir(parents=True)
 
     auth_json = hermes_home / "auth.json"
@@ -201,9 +201,9 @@ async def test_canonical_guard_fails_closed_when_lookup_raises(tmp_path: Path, m
     from agent.context_references import preprocess_context_references_async
 
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
 
-    hermes_home = tmp_path / ".hermes"
+    hermes_home = tmp_path / ".vigil"
     hermes_home.mkdir(parents=True)
     auth_json = hermes_home / "auth.json"
     auth_json.write_text('{"openai": "sk-AUTHJSON-SECRET"}\n', encoding="utf-8")

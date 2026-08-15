@@ -1,6 +1,6 @@
 """Audit log for dashboard-auth events.
 
-Profile-aware location: ``$HERMES_HOME/logs/dashboard-auth.log``.
+Profile-aware location: ``$VIGIL_HOME/logs/dashboard-auth.log``.
 Format: one JSON object per line. Token-like kwargs are dropped before
 serialisation so we never leak refresh tokens or JWTs to disk.
 """
@@ -14,10 +14,10 @@ from hermes_cli.dashboard_auth.audit import audit_log, AuditEvent
 
 @pytest.fixture
 def profile_home(tmp_path, monkeypatch):
-    """Redirect $HERMES_HOME and ~ to a tmp dir for the duration of the test."""
-    home = tmp_path / ".hermes"
+    """Redirect $VIGIL_HOME and ~ to a tmp dir for the duration of the test."""
+    home = tmp_path / ".vigil"
     home.mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     # Some code paths fall back to Path.home() — patch that too.
     monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
     return home

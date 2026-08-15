@@ -27,11 +27,11 @@ import pytest
 
 @pytest.fixture
 def tmp_skills(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """Isolated skills dir + HERMES_HOME so the real user config is untouched."""
-    home = tmp_path / ".hermes"
+    """Isolated skills dir + VIGIL_HOME so the real user config is untouched."""
+    home = tmp_path / ".vigil"
     home.mkdir()
     (home / "skills").mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     return home / "skills"
 
@@ -61,7 +61,7 @@ def test_frontmatter_slug_matched_even_when_dir_name_differs(
 
     _write_skill(tmp_skills, "mlops/stable-diffusion", "Stable Diffusion Image Generation")
 
-    # Config disables by declared name (matches what `hermes skills config` writes).
+    # Config disables by declared name (matches what `vigil skills config` writes).
     monkeypatch.setattr(
         "gateway.run._get_disabled_skill_names",
         lambda: {"Stable Diffusion Image Generation"},

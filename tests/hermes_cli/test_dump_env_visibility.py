@@ -1,8 +1,8 @@
-"""`hermes debug` must not report a shell-only API key as plainly "set".
+"""`vigil debug` must not report a shell-only API key as plainly "set".
 
 The dump reads ``os.getenv`` — the invoking terminal's environment — but the
 managed backends (launchd / systemd / the desktop-spawned ``serve`` process)
-load credentials from ``~/.hermes/.env``, not the login shell. A key exported
+load credentials from ``~/.vigil/.env``, not the login shell. A key exported
 in the shell but absent from ``.env`` is invisible to the backend, yet the dump
 used to print a bare "set", sending support down a phantom "the key is
 configured" path (the real cause behind gated tools like ``web_search`` going

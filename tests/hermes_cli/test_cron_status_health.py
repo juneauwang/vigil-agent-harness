@@ -2,8 +2,8 @@
 
 覆盖：
   - 心跳新鲜 → "✓ ticker 活跃，调度正常"；心跳缺失/过期 → 明确告警；
-  - upstream Hermes 的 gateway PID 存在但非 Vigil 归属 → 不误报 running；
-  - ``_pid_belongs_to_home`` 按 HERMES_HOME env / 命令行归属判定；
+  - upstream Vigil 的 gateway PID 存在但非 Vigil 归属 → 不误报 running；
+  - ``_pid_belongs_to_home`` 按 VIGIL_HOME env / 命令行归属判定；
   - vigil-watch 采集服务在跑 → 显示常驻接管提示。
 """
 
@@ -102,7 +102,7 @@ class TestPidBelongsToHome:
         home = tmp_path / "vigil"
         monkeypatch.setattr(
             cron_cli, "_read_process_environ",
-            lambda pid: f"HERMES_HOME={home}\x00OTHER=1",
+            lambda pid: f"VIGIL_HOME={home}\x00OTHER=1",
         )
         assert _pid_belongs_to_home(12345, home) is True
 
@@ -110,7 +110,7 @@ class TestPidBelongsToHome:
         home = tmp_path / "vigil"
         monkeypatch.setattr(
             cron_cli, "_read_process_environ",
-            lambda pid: "HERMES_HOME=/root/.hermes\x00OTHER=1",
+            lambda pid: "VIGIL_HOME=/root/.hermes\x00OTHER=1",
         )
         assert _pid_belongs_to_home(12345, home) is False
 

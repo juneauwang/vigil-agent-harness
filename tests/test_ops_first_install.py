@@ -32,11 +32,11 @@ from hermes_cli.tools_config import _get_platform_tools
 @pytest.fixture(autouse=True)
 def _clear_caches():
     hc._LOAD_CONFIG_CACHE.clear()
-    hc._HERMES_HOME_ENSURED.clear()
+    hc._VIGIL_HOME_ENSURED.clear()
     banner._banner_state_cache = None
     yield
     hc._LOAD_CONFIG_CACHE.clear()
-    hc._HERMES_HOME_ENSURED.clear()
+    hc._VIGIL_HOME_ENSURED.clear()
     banner._banner_state_cache = None
 
 
@@ -110,7 +110,7 @@ class TestFirstRunSeeding:
         topo = home / "topology.yaml"
         before = topo.read_bytes()
         mtime = topo.stat().st_mtime_ns
-        hc._HERMES_HOME_ENSURED.clear()
+        hc._VIGIL_HOME_ENSURED.clear()
         hc.ensure_hermes_home()
         assert topo.read_bytes() == before
         assert topo.stat().st_mtime_ns == mtime

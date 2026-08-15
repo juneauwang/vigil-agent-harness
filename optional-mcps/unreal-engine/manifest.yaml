@@ -8,8 +8,8 @@ source: https://dev.epicgames.com/documentation/unreal-engine/unreal-mcp-in-unre
 
 # Epic's official "Unreal MCP" plugin (internal id ModelContextProtocol)
 # embeds an MCP server inside the running Unreal Editor process and serves it
-# over local HTTP. There is nothing to install on the Hermes side — the user
-# enables the plugin in-editor and the server binds to 127.0.0.1. Hermes's
+# over local HTTP. There is nothing to install on the Vigil side — the user
+# enables the plugin in-editor and the server binds to 127.0.0.1. Vigil's
 # MCP client just connects to the URL.
 #
 # Default bind is http://127.0.0.1:8000/mcp (port + path are configurable in

@@ -43,7 +43,7 @@ class TestUserConfigMerge:
         import yaml
 
         # Simulate a legacy user config without the new key.
-        home = tmp_path / ".hermes"
+        home = tmp_path / ".vigil"
         home.mkdir()
         cfg_path = home / "config.yaml"
         legacy = {
@@ -51,8 +51,8 @@ class TestUserConfigMerge:
         }
         cfg_path.write_text(yaml.safe_dump(legacy))
 
-        monkeypatch.setenv("HERMES_HOME", str(home))
-        # Force a fresh reimport of config.py so the HERMES_HOME is honored.
+        monkeypatch.setenv("VIGIL_HOME", str(home))
+        # Force a fresh reimport of config.py so the VIGIL_HOME is honored.
         import importlib
         import hermes_cli.config as cfg_mod
         importlib.reload(cfg_mod)

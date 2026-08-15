@@ -1,7 +1,7 @@
 """Tests for the TUI-side kanban notification poller (issue #59890).
 
 ``kanban_create`` auto-subscribes TUI/desktop sessions with
-``platform="tui"`` / ``chat_id=HERMES_SESSION_KEY``, but no component ever
+``platform="tui"`` / ``chat_id=VIGIL_SESSION_KEY``, but no component ever
 read those rows back: the gateway notifier skips them (no "tui" messaging
 adapter) and the TUI notification poller only watched process completions.
 ``last_event_id`` stayed 0 forever and no notification was ever delivered.

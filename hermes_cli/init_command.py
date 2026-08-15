@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """``/init`` — build the prompt that generates or updates a project AGENTS.md.
 
-Port of Codex ``/init`` (Claude Code has the same for CLAUDE.md). Hermes
+Port of Codex ``/init`` (Claude Code has the same for CLAUDE.md). Vigil
 already *loads* AGENTS.md / CLAUDE.md / .cursorrules as project context, but
 had no command to bootstrap one. ``/init`` hands the live agent ONE
 guidance-laden prompt instructing it to:
@@ -79,7 +79,7 @@ def build_init_prompt(
             else "generate an AGENTS.md project-instructions file"
         )
         + f" for the project at: {cwd}\n",
-        "AGENTS.md is the instruction file coding agents (Hermes included) "
+        "AGENTS.md is the instruction file coding agents (Vigil included) "
         "load as project context every session. It should teach an agent how "
         "to work in THIS repo: what the project is, how to set up, the exact "
         "build/test/lint commands, the conventions the code actually follows, "

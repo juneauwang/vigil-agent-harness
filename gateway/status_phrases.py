@@ -1,21 +1,21 @@
 """Human-friendly generic gateway status phrases.
 
 These helpers deliberately avoid relaying raw model scratch text.  They turn
-Hermes' long-running gateway status surface into short status lines suitable
+Vigil' long-running gateway status surface into short status lines suitable
 for chat surfaces.
 
 Built-in defaults live in ``gateway/assets/status_phrases.yaml``. Users can add
-portable, profile-relative phrase catalogs under ``HERMES_HOME`` either by using
+portable, profile-relative phrase catalogs under ``VIGIL_HOME`` either by using
 conventional paths::
 
-    ~/.hermes/status_phrases.yaml
-    ~/.hermes/status_phrases/*.yaml
+    ~/.vigil/status_phrases.yaml
+    ~/.vigil/status_phrases/*.yaml
 
 or by pointing config at a relative file/directory::
 
     display:
       status_phrases:
-        path: status_phrases/whatsapp.yaml  # relative to HERMES_HOME
+        path: status_phrases/whatsapp.yaml  # relative to VIGIL_HOME
         mode: append                        # append (default) or replace
 
 Absolute paths and ``..`` escapes are ignored on purpose so config stays
@@ -36,7 +36,7 @@ import yaml
 
 from hermes_constants import get_hermes_home
 
-# These are Hermes UI surfaces, not app/vendor/domain buckets.  Keep this
+# These are Vigil UI surfaces, not app/vendor/domain buckets.  Keep this
 # long-running-only: regular tool/thinking/interim chatter is intentionally not
 # rewritten into generic placeholders because that gets noisy fast in chat.
 _STATUS_SURFACES = ("status", "generic")
@@ -189,7 +189,7 @@ def classify_status_context(
     preview: str | None = None,
     args: Any = None,
 ) -> str:
-    """Classify an internal gateway event into a Hermes UI-surface bucket."""
+    """Classify an internal gateway event into a Vigil UI-surface bucket."""
     normalized = str(kind or "").strip().lower()
     if normalized in {"heartbeat", "waiting", "long_running", "status"}:
         return "status"

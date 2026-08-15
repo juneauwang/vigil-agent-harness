@@ -1,7 +1,7 @@
 """OPS-DELTA #3 — setup 引导品牌化 + 工具推荐裁剪（批次六）。
 
 1. 向导欢迎框是 Vigil 运维定位（Welcome to Vigil + topology/runbooks/gates），
-   不再是无定位的 Hermes 通用安装文案；
+   不再是无定位的 Vigil 通用安装文案；
 2. 默认预选只含运维/基础工具集，浏览器/图像/桌面自动化等非运维工具默认关闭
    （用户仍可在 `vigil tools` 手动启用——显式配置路径不受影响）。
 """
@@ -26,8 +26,8 @@ class TestWizardWelcomeBox:
 
     def test_no_hermes_command_residue(self):
         box = "\n".join(_wizard_welcome_box_lines())
+        assert "hermes" not in box.lower()
         assert "hermes setup" not in box.lower()
-        assert "hermes " not in box.lower()
 
 
 _OPS_CORE_TOOLSETS = {

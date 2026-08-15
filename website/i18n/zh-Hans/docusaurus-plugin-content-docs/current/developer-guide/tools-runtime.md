@@ -6,7 +6,7 @@ description: "工具注册表、toolset、调度及终端环境的运行时行�
 
 # 工具运行时
 
-Hermes 工具是自注册函数，按 toolset（工具集）分组，并通过中央注册表/调度系统执行。
+Vigil 工具是自注册函数，按 toolset（工具集）分组，并通过中央注册表/调度系统执行。
 
 主要文件：
 
@@ -94,7 +94,7 @@ if entry.check_fn:
 
 ## Toolset 解析
 
-Toolset 是工具的命名集合。Hermes 通过以下方式解析它们：
+Toolset 是工具的命名集合。Vigil 通过以下方式解析它们：
 
 - 显式启用/禁用的 toolset 列表
 - 平台预设（`hermes-cli`、`hermes-telegram` 等）

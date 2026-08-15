@@ -236,7 +236,7 @@ def _normalize(obj: Any) -> Any:
 
 
 def _hermes_home() -> Path:
-    """Active HERMES_HOME as a Path (profile-scoped topology storage)."""
+    """Active VIGIL_HOME as a Path (profile-scoped topology storage)."""
     from hermes_constants import get_hermes_home
     return Path(get_hermes_home())
 
@@ -253,7 +253,7 @@ def _topology_path(home: Optional[Path] = None) -> Path:
 
 
 def _safe_entity_path(home: Path, detail: str) -> Optional[Path]:
-    """Resolve a layer-2 detail path, rejecting traversal outside HERMES_HOME."""
+    """Resolve a layer-2 detail path, rejecting traversal outside VIGIL_HOME."""
     if not detail or not isinstance(detail, str):
         return None
     root = home.resolve()
@@ -261,7 +261,7 @@ def _safe_entity_path(home: Path, detail: str) -> Optional[Path]:
     try:
         candidate.relative_to(root)
     except ValueError:
-        logger.warning("topo: detail path escapes HERMES_HOME: %r", detail)
+        logger.warning("topo: detail path escapes VIGIL_HOME: %r", detail)
         return None
     return candidate
 
@@ -299,7 +299,7 @@ def _load_host_index(home: Path, host: Dict[str, Any]) -> Optional[Dict[str, Any
     """Load a host's layer-2 services index (hosts/<name>.yaml by default).
 
     Honors an explicit ``services_index`` field (containment-checked against
-    HERMES_HOME via ``_safe_entity_path`` — the new hosts/ directory is
+    VIGIL_HOME via ``_safe_entity_path`` — the new hosts/ directory is
     covered by the same traversal guard as entities/).
     """
     name = host.get("name") if isinstance(host, dict) else None
@@ -720,7 +720,7 @@ def topo_update(
     env_name = _entity_env(topo, match)
     target_path = _resolve_entity_detail(home, match)
     if target_path is None:
-        return tool_error(f"实体 {entity} 的 detail 路径非法（越界 HERMES_HOME）。")
+        return tool_error(f"实体 {entity} 的 detail 路径非法（越界 VIGIL_HOME）。")
 
     # PROD 变更 → 审批确认（钉在执行工具层，LLM 无法绕过）。
     # env 四值枚举 + 老自定义名按档位映射（uat → prod 档，权限语义不放松）。

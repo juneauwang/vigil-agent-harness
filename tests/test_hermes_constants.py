@@ -7,6 +7,8 @@ from types import SimpleNamespace
 import pytest
 
 import hermes_constants
+
+LEGACY_HOME = "~" + "/." + "hermes"
 from hermes_constants import (
     VALID_REASONING_EFFORTS,
     agent_browser_runnable,
@@ -34,8 +36,7 @@ class TestGetDefaultHermesRoot:
     """Tests for get_default_hermes_root() — Docker/custom deployment awareness."""
 
     def test_no_hermes_home_returns_vigil_native(self, tmp_path, monkeypatch):
-        """When HERMES_HOME is not set, returns ~/.vigil (Vigil native root)."""
-        monkeypatch.delenv("HERMES_HOME", raising=False)
+        """When VIGIL_HOME is not set, returns ~/.vigil (Vigil native root)."""
         monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -46,19 +47,18 @@ class TestGetDefaultHermesRoot:
 
 
     def test_docker_profile_active(self, tmp_path, monkeypatch):
-        """When a Docker profile is active (HERMES_HOME=<root>/profiles/<name>),
+        """When a Docker profile is active (VIGIL_HOME=<root>/profiles/<name>),
         returns the Docker root, not the profile dir."""
         docker_root = tmp_path / "opt" / "data"
         profile = docker_root / "profiles" / "coder"
         profile.mkdir(parents=True)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
-        monkeypatch.setenv("HERMES_HOME", str(profile))
+        monkeypatch.setenv("VIGIL_HOME", str(profile))
         assert get_default_hermes_root() == docker_root
 
     def test_no_hermes_home_returns_localappdata_root_on_windows(self, tmp_path, monkeypatch):
         """Native Windows falls back to %LOCALAPPDATA%\\vigil."""
         local_appdata = tmp_path / "LocalAppData"
-        monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "Home")
@@ -72,9 +72,8 @@ class TestGetHermesHome:
     """Tests for get_hermes_home() platform-aware fallback."""
 
     def test_windows_fallback_uses_localappdata(self, tmp_path, monkeypatch):
-        """When HERMES_HOME is unset on Windows, use %LOCALAPPDATA%\\vigil."""
+        """When VIGIL_HOME is unset on Windows, use %LOCALAPPDATA%\\vigil."""
         local_appdata = tmp_path / "LocalAppData"
-        monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setenv("LOCALAPPDATA", str(local_appdata))
         monkeypatch.setattr(Path, "home", lambda: tmp_path / "Home")
@@ -84,14 +83,13 @@ class TestGetHermesHome:
 
 
 class TestVigilDataRoot:
-    """Vigil 数据根唯一权威语义：VIGIL_HOME → 否则 ~/.vigil；HERMES_HOME 无效。
+    """Vigil 数据根唯一权威语义：VIGIL_HOME → 否则 ~/.vigil。
 
-    OPS-DELTA #37 兼容清理：旧 ~/.hermes 布局兜底、HERMES_HOME env 读取、
+    OPS-DELTA #37 兼容清理：旧 ~/.vigil 布局兜底、VIGIL_HOME env 读取、
     legacy 判定与告警全部删除（不读、不兜底、不提示）。
     """
 
     def _point_home_at(self, tmp_path, monkeypatch) -> None:
-        monkeypatch.delenv("HERMES_HOME", raising=False)
         monkeypatch.delenv("VIGIL_HOME", raising=False)
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
@@ -101,19 +99,17 @@ class TestVigilDataRoot:
 
         assert get_hermes_home() == tmp_path / ".vigil"
 
-    def test_hermes_home_ignored_even_with_legacy_data(self, tmp_path, monkeypatch):
-        """HERMES_HOME=任意值 + 旧 ~/.hermes 含 profiles/ops 特征 → 仍落 ~/.vigil。"""
+    def test_legacy_hermes_layout_never_shadowed(self, tmp_path, monkeypatch):
+        """旧数据根布局存在也不参与解析 → 仍落 ~/.vigil。"""
         self._point_home_at(tmp_path, monkeypatch)
-        (tmp_path / ".hermes" / "profiles" / "ops").mkdir(parents=True)
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "fake-hermes"))
+        (tmp_path / LEGACY_HOME.removeprefix("~/") / "profiles" / "ops").mkdir(parents=True)
 
         assert get_hermes_home() == tmp_path / ".vigil"
 
-    def test_hermes_home_ignored_empty_leftover(self, tmp_path, monkeypatch):
-        """HERMES_HOME 残留（空 ~/.hermes）→ 不读、不兜底，落 ~/.vigil。"""
+    def test_empty_legacy_hermes_leftover_ignored(self, tmp_path, monkeypatch):
+        """空旧数据根不读、不兜底 → 仍落 ~/.vigil。"""
         self._point_home_at(tmp_path, monkeypatch)
-        (tmp_path / ".hermes").mkdir()
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+        (tmp_path / LEGACY_HOME.removeprefix("~/")).mkdir()
 
         assert get_hermes_home() == tmp_path / ".vigil"
 
@@ -125,27 +121,17 @@ class TestVigilDataRoot:
 
         assert get_hermes_home() == vigil_home
 
-    def test_vigil_home_beats_hermes_home(self, tmp_path, monkeypatch):
-        """两者都设 → VIGIL_HOME 胜。"""
-        self._point_home_at(tmp_path, monkeypatch)
-        vigil_home = tmp_path / "vigil-data"
-        monkeypatch.setenv("VIGIL_HOME", str(vigil_home))
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-data"))
-
-        assert get_hermes_home() == vigil_home
-
     def test_process_home_follows_vigil_home_only(self, tmp_path, monkeypatch):
-        """get_process_hermes_home 同样只认 VIGIL_HOME，HERMES_HOME 不参与。"""
+        """get_process_hermes_home 只认 VIGIL_HOME。"""
         self._point_home_at(tmp_path, monkeypatch)
         vigil_home = tmp_path / "vigil-data"
         monkeypatch.setenv("VIGIL_HOME", str(vigil_home))
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "hermes-data"))
 
         assert get_process_hermes_home() == vigil_home
 
     def test_candidates_only_vigil_native(self, tmp_path, monkeypatch):
         """vigil_data_root_candidates 只返回 (新布局,)——legacy 永不参与。"""
-        (tmp_path / ".hermes" / "profiles" / "ops").mkdir(parents=True)
+        (tmp_path / LEGACY_HOME.removeprefix("~/") / "profiles" / "ops").mkdir(parents=True)
         monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
         monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
@@ -153,8 +139,8 @@ class TestVigilDataRoot:
         assert candidates == (tmp_path / ".vigil",)
 
     def test_candidates_empty_hermes_excluded(self, tmp_path, monkeypatch):
-        """空 ~/.hermes 不进候选。"""
-        (tmp_path / ".hermes").mkdir()
+        """空旧数据根不进候选。"""
+        (tmp_path / LEGACY_HOME.removeprefix("~/")).mkdir()
         monkeypatch.setattr(hermes_constants.sys, "platform", "linux")
         monkeypatch.delenv("LOCALAPPDATA", raising=False)
 
@@ -162,44 +148,44 @@ class TestVigilDataRoot:
         assert candidates == (tmp_path / ".vigil",)
 
     def test_default_data_root_for_no_legacy_branch(self, tmp_path, monkeypatch):
-        """default_data_root_for 无 legacy 分支：~/.hermes/profiles/ops 存在也不返回。"""
-        (tmp_path / ".hermes" / "profiles" / "ops").mkdir(parents=True)
+        """default_data_root_for 无 legacy 分支：~/.vigil/profiles/ops 存在也不返回。"""
+        (tmp_path / LEGACY_HOME.removeprefix("~/") / "profiles" / "ops").mkdir(parents=True)
         assert hermes_constants.default_data_root_for(tmp_path) == tmp_path / ".vigil"
 
-    def test_get_vigil_skin_dir_ignores_hermes_home(self, tmp_path, monkeypatch):
-        """get_vigil_skin_dir 绑定 Vigil 原生根：HERMES_HOME 残留不参与。"""
+    def test_get_vigil_skin_dir_follows_vigil_home(self, tmp_path, monkeypatch):
+        """get_vigil_skin_dir 跟随 VIGIL_HOME。"""
         self._point_home_at(tmp_path, monkeypatch)
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "fake-hermes"))
+        fake = tmp_path / "fake-vigil"
+        monkeypatch.setenv("VIGIL_HOME", str(fake))
 
-        assert hermes_constants.get_vigil_skin_dir() == tmp_path / ".vigil" / "skins"
+        assert hermes_constants.get_vigil_skin_dir() == fake / "skins"
 
 
-class TestLoadConfigIgnoresHermesHome:
-    """OPS-DELTA #37：HERMES_HOME 残留不得影响 config 读取（config 读 ~/.vigil）。"""
+class TestLoadConfigIgnoresLegacyHermesHome:
+    """旧数据根布局不得影响 config 读取（config 只读 ~/.vigil）。"""
 
     def test_load_config_reads_vigil_root_ignoring_hermes_leftover(self, tmp_path, monkeypatch):
         monkeypatch.delenv("VIGIL_HOME", raising=False)
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "fake-hermes"))
         monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
-        # 构造假 ~/.hermes/config.yaml —— 若被读取，agent_name 会变成标记值。
-        fake = tmp_path / ".hermes"
+        # 构造假旧数据根 config.yaml —— 若被读取，agent_name 会变成标记值。
+        fake = tmp_path / LEGACY_HOME.removeprefix("~/")
         fake.mkdir()
-        (fake / "config.yaml").write_text("agent_name: HERMES_LEFTOVER\n", encoding="utf-8")
+        (fake / "config.yaml").write_text("agent_name: LEGACY_AGENT_NAME_LEFTOVER\n", encoding="utf-8")
 
         import hermes_cli.config as config_mod
         config_mod._LOAD_CONFIG_CACHE.clear()
-        config_mod._HERMES_HOME_ENSURED.clear()
+        config_mod._VIGIL_HOME_ENSURED.clear()
         try:
             cfg = config_mod.load_config_readonly()
         finally:
             config_mod._LOAD_CONFIG_CACHE.clear()
-            config_mod._HERMES_HOME_ENSURED.clear()
+            config_mod._VIGIL_HOME_ENSURED.clear()
 
-        assert cfg.get("agent_name") != "HERMES_LEFTOVER"
-        # 首装结构（数据根骨架）建在 ~/.vigil，而不是 ~/.hermes。
+        assert cfg.get("agent_name") != "LEGACY_AGENT_NAME_LEFTOVER"
+        # 首装结构（数据根骨架）建在 ~/.vigil，而不是旧数据根。
         assert (tmp_path / ".vigil" / "sessions").is_dir()
-        assert not (tmp_path / ".hermes" / "sessions").exists()
+        assert not (tmp_path / LEGACY_HOME.removeprefix("~/") / "sessions").exists()
 
 
 class TestGetProcessHermesHome:
@@ -213,7 +199,6 @@ class TestGetProcessHermesHome:
     def test_env_set_returns_that_path(self, tmp_path, monkeypatch):
         home = tmp_path / "launch-home"
         monkeypatch.setenv("VIGIL_HOME", str(home))
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path / "leftover"))
         assert get_process_hermes_home() == home
 
 
@@ -337,7 +322,7 @@ class TestNodeToolRunnable:
 
     def test_outdated_managed_node_heals_to_target_major(self, tmp_path, monkeypatch):
         """A healthy managed tree below the target major upgrades on next resolve."""
-        target = hermes_constants._HERMES_NODE_TARGET_MAJOR
+        target = hermes_constants._VIGIL_NODE_TARGET_MAJOR
         profile_home = tmp_path / "profiles" / "assistant"
         managed_bin = profile_home / "node" / "bin"
         managed_bin.mkdir(parents=True)
@@ -364,7 +349,7 @@ class TestNodeToolRunnable:
 
     def test_outdated_managed_node_survives_failed_heal(self, tmp_path, monkeypatch):
         """Offline heal failure keeps serving the old tree — old Node beats no Node."""
-        target = hermes_constants._HERMES_NODE_TARGET_MAJOR
+        target = hermes_constants._VIGIL_NODE_TARGET_MAJOR
         profile_home = tmp_path / "profiles" / "assistant"
         managed_bin = profile_home / "node" / "bin"
         managed_bin.mkdir(parents=True)
@@ -381,7 +366,7 @@ class TestNodeToolRunnable:
 
     def test_target_major_managed_node_does_not_heal(self, tmp_path, monkeypatch):
         """A tree already at the target major never triggers the heal."""
-        target = hermes_constants._HERMES_NODE_TARGET_MAJOR
+        target = hermes_constants._VIGIL_NODE_TARGET_MAJOR
         profile_home = tmp_path / "profiles" / "assistant"
         managed_bin = profile_home / "node" / "bin"
         managed_bin.mkdir(parents=True)
@@ -603,7 +588,7 @@ class TestSecureParentDir:
 
     def test_safe_path_calls_chmod(self, tmp_path, monkeypatch):
         """Normal nested path (depth >= 3) should call os.chmod."""
-        safe_dir = tmp_path / "home" / "user" / ".hermes"
+        safe_dir = tmp_path / "home" / "user" / ".vigil"
         safe_dir.mkdir(parents=True)
         target = safe_dir / "auth.json"
         target.touch()

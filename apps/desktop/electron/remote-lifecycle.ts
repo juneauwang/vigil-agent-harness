@@ -1,24 +1,24 @@
 /**
  * remote-lifecycle.ts
  *
- * Pure, electron-free remote Hermes dashboard lifecycle over SSH for Desktop
+ * Pure, electron-free remote Vigil dashboard lifecycle over SSH for Desktop
  * SSH remote mode. Composes an SshConnection (injected) with HTTP probes
  * through the established tunnel (injected fetch) and the served-token adoption
  * step (injected). Knows how to:
  *
- *   - locate the Hermes install on the remote (login-shell probe),
+ *   - locate the Vigil install on the remote (login-shell probe),
  *   - gate the remote platform to Linux/macOS via `uname`,
  *   - reuse an existing desktop-dedicated dashboard via a lockfile + an
  *     AUTHENTICATED /api/status probe (pid liveness alone is insufficient),
  *   - spawn a fresh detached `--isolated --port 0` dashboard and scrape its
- *     `HERMES_DASHBOARD_READY port=<n>` readiness line,
+ *     `VIGIL_DASHBOARD_READY port=<n>` readiness line,
  *   - adopt the token the dashboard actually serves (served-token adoption),
  *   - clean up a stale dashboard only when it is provably ours.
  *
  * No `import 'electron'` so it's unit-testable with `node --test`. main.ts wires
  * the real SshConnection, fetch, adoptServedDashboardToken, and waitForHermes in.
  *
- * The minted HERMES_DASHBOARD_SESSION_TOKEN is the SPAWN credential. After
+ * The minted VIGIL_DASHBOARD_SESSION_TOKEN is the SPAWN credential. After
  * readiness the caller runs served-token adoption against the tunneled baseUrl
  * and the SERVED token's fingerprint is what lands in the lockfile — so the
  * reuse probe checks the credential that actually authenticates /api/ws, not
@@ -32,8 +32,8 @@ const LOCKFILE_SCHEMA_VERSION = 2
 // an old running dashboard unsafe to reattach to (token handling, readiness/spawn
 // args, served-token reconciliation). A mismatch forces a clean respawn.
 const PROTOCOL_VERSION = 1
-const READY_RE = /^HERMES_(?:BACKEND|DASHBOARD)_READY port=(\d+)/m
-const REMOTE_LOCK_DIR = '~/.hermes/desktop-ssh'
+const READY_RE = /^VIGIL_(?:BACKEND|DASHBOARD)_READY port=(\d+)/m
+const REMOTE_LOCK_DIR = '~/.vigil/desktop-ssh'
 const SUPPORTED_REMOTE_OS = new Set(['Linux', 'Darwin'])
 const DEFAULT_READY_TIMEOUT_MS = 45_000
 const READY_POLL_INTERVAL_MS = 750
@@ -122,7 +122,7 @@ function expandRemotePath(p) {
   return shq(p)
 }
 
-// Resolve the remote hermes executable. An EXPLICIT path is honored strictly
+// Resolve the remote vigil executable. An EXPLICIT path is honored strictly
 // (throws a path-naming error if not executable — never silently falls back to a
 // different install). A BLANK path auto-detects: login-shell `command -v` (a
 // non-login `ssh host cmd` PATH misses user installs), then known install paths.
@@ -190,7 +190,7 @@ async function locateHermes(ssh, remoteHermesPath) {
   // command locations (scripts/install.sh) — per-user, root/FHS, legacy venv.
   candidates.push('~/.local/bin/hermes')
   candidates.push('/usr/local/bin/hermes')
-  candidates.push('~/.hermes/hermes-agent/venv/bin/hermes')
+  candidates.push('~/.vigil/hermes-agent/venv/bin/hermes')
 
   for (const candidate of candidates) {
     if (!candidate) {
@@ -204,7 +204,7 @@ async function locateHermes(ssh, remoteHermesPath) {
 
   const err: any = new Error(
     'Hermes is not installed on the remote host (could not find a `hermes` executable). ' +
-      'Install it on the remote with:  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | sh  ' +
+      'Install it on the remote with:  curl -fsSL https://github.com/juneauwang/vigil-agent-harness | sh  ' +
       '— or set the Hermes path explicitly in the SSH connection settings.'
   )
 
@@ -212,8 +212,8 @@ async function locateHermes(ssh, remoteHermesPath) {
   throw err
 }
 
-// Probe the resolved binary's version string (first line of `<hermes> --version`,
-// e.g. "Hermes Agent v0.18.2 ..."), or '' on failure. Surfaces WHICH hermes a
+// Probe the resolved binary's version string (first line of `<vigil> --version`,
+// e.g. "Vigil Agent v0.18.2 ..."), or '' on failure. Surfaces WHICH vigil a
 // connection uses, so a stale/unexpected install is visible.
 async function probeHermesVersion(ssh, hermesPath) {
   try {
@@ -242,14 +242,14 @@ async function probeRemotePlatform(ssh) {
   return { os: osName, arch }
 }
 
-// The HERMES_HOME the remote dashboard will use (explicit env wins, else
-// ~/.hermes). Recorded in the lockfile so a future reuse can tell it's the same
+// The VIGIL_HOME the remote dashboard will use (explicit env wins, else
+// ~/.vigil). Recorded in the lockfile so a future reuse can tell it's the same
 // state store; best-effort.
 async function probeRemoteHermesHome(ssh) {
   try {
-    const out = (await ssh.exec('echo "${HERMES_HOME:-$HOME/.hermes}"')).trim().split('\n').pop()
+    const out = (await ssh.exec('echo "${VIGIL_HOME:-$HOME/.vigil}"')).trim().split('\n').pop()
 
-    return out || '~/.hermes'
+    return out || '~/.vigil'
   } catch (cause) {
     const error: any = new Error('Could not resolve the remote Hermes home.')
     error.kind = 'transient-transport-error'
@@ -451,7 +451,7 @@ function buildSpawnCommand(hermesPath, profile, opts: any = {}) {
   const tokenArg = tokenFilePath ? ` --ssh-session-token-file ${expandRemotePath(tokenFilePath)}` : ''
   const ownerArg = opts.spawnNonce ? ` --ssh-owner-nonce ${validateSpawnNonce(opts.spawnNonce)}` : ''
   const subCmd = `serve --isolated --host 127.0.0.1 --port 0${tokenArg}${ownerArg}`
-  const dashCmd = `env HERMES_DESKTOP=1 ${hermes} ${profileArgs}${subCmd}`
+  const dashCmd = `env VIGIL_DESKTOP=1 ${hermes} ${profileArgs}${subCmd}`
 
   return (
     `mkdir -p "$(dirname ${logPath})" && ` +

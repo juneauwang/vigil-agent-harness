@@ -1,7 +1,7 @@
 """
-Status command for hermes CLI.
+Status command for vigil CLI.
 
-Shows the status of all Hermes Agent components.
+Shows the status of all Vigil Agent components.
 """
 
 import os
@@ -36,7 +36,7 @@ def redact_key(key: str) -> str:
     """Redact an API key for display.
 
     Thin wrapper over :func:`agent.redact.mask_secret`. Preserves the
-    "(not set)" placeholder in dim color to match ``hermes config``'s
+    "(not set)" placeholder in dim color to match ``vigil config``'s
     output (previously this variant was missing the DIM color —
     consolidated via PR that also introduced ``mask_secret``).
     """
@@ -113,12 +113,12 @@ from hermes_constants import is_termux as _is_termux
 
 
 def show_status(args):
-    """Show status of all Hermes Agent components."""
+    """Show status of all Vigil Agent components."""
     deep = getattr(args, 'deep', False)
 
     print()
     print(color("┌─────────────────────────────────────────────────────────┐", Colors.CYAN))
-    print(color("│                 ⚕ Hermes Agent Status                  │", Colors.CYAN))
+    print(color("│                 ⚕ Vigil Agent Status                  │", Colors.CYAN))
     print(color("└─────────────────────────────────────────────────────────┘", Colors.CYAN))
 
     # =========================================================================
@@ -209,7 +209,7 @@ def show_status(args):
             get_qwen_auth_status,
             get_minimax_oauth_auth_status,
         )
-        # Read-only display: use the refresh-free snapshot so `hermes status`
+        # Read-only display: use the refresh-free snapshot so `vigil status`
         # never performs an OAuth refresh or burns a single-use refresh token.
         nous_status = get_nous_auth_status_local()
         codex_status = get_codex_auth_status()

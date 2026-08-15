@@ -189,7 +189,7 @@ async def run_smoke(socket_path: str) -> dict[str, dict[str, Any]]:
                                 "stage": "editor_discovery",
                             }
                         else:
-                            marker = "hermes foreground smoke"
+                            marker = "vigil foreground smoke"
                             type_args = {
                                 "pid": launched_pid,
                                 "window_id": window_id,

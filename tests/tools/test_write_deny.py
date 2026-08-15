@@ -28,7 +28,7 @@ class TestWriteDenyExactPaths:
 
         Before the fix, ``build_write_denied_paths`` only added
         ``<active_profile>/.env`` to the deny list, so the global
-        ``~/.hermes/.env`` (whose credentials are inherited by every profile)
+        ``~/.vigil/.env`` (whose credentials are inherited by every profile)
         could be silently overwritten by ``write_file`` while a profile was
         active.
         """
@@ -38,9 +38,9 @@ class TestWriteDenyExactPaths:
         global_env = root / ".env"
         global_env.write_text("OPENAI_API_KEY=sk-real\n")
 
-        monkeypatch.setenv("HERMES_HOME", str(profile_home))
+        monkeypatch.setenv("VIGIL_HOME", str(profile_home))
 
-        # Sanity check: HERMES_HOME does point to the profile dir, not the root.
+        # Sanity check: VIGIL_HOME does point to the profile dir, not the root.
         from hermes_constants import get_hermes_home, get_default_hermes_root
         assert get_hermes_home() == profile_home
         assert get_default_hermes_root() == root

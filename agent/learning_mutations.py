@@ -9,9 +9,9 @@ The journey graph (``agent.learning_graph``) gives every node a stable id:
   ``USER.md``).
 
 This module maps a node id back to its on-disk home and performs the mutation,
-shared by the CLI (``hermes journey delete|edit``), the TUI ``/journey`` overlay
+shared by the CLI (``vigil journey delete|edit``), the TUI ``/journey`` overlay
 (gateway RPCs), and the desktop GUI (REST). Deleting a skill *archives* it
-(recoverable via ``hermes curator restore``); deleting a memory rewrites its
+(recoverable via ``vigil curator restore``); deleting a memory rewrites its
 file. Pure stdlib + existing skill/memory helpers.
 """
 

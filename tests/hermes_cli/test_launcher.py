@@ -1,4 +1,4 @@
-"""Tests for the top-level `./hermes` launcher script."""
+"""Tests for the top-level `./vigil` launcher script."""
 
 import runpy
 import sys
@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 def test_launcher_delegates_to_argparse_entrypoint(monkeypatch):
-    """`./hermes` should use `hermes_cli.main`, not the legacy Fire wrapper."""
+    """`./vigil` should use `hermes_cli.main`, not the legacy Fire wrapper."""
     launcher_path = Path(__file__).resolve().parents[2] / "hermes"
     called = []
 

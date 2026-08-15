@@ -1,4 +1,4 @@
-"""CLI for the Hermes Kanban board — ``hermes kanban …`` subcommand.
+"""CLI for the Vigil Kanban board — ``vigil kanban …`` subcommand.
 
 Exposes the full Kanban command surface documented in the design spec
 (``docs/hermes-kanban-v1-spec.pdf``).  All DB work is delegated to
@@ -138,14 +138,14 @@ def _check_dispatcher_presence(
 ) -> tuple[bool, str]:
     """Return ``(running, message)``.
 
-    - ``running=True``: a gateway is alive for this HERMES_HOME and its
+    - ``running=True``: a gateway is alive for this VIGIL_HOME and its
       config has ``kanban.dispatch_in_gateway`` on (default). Message
       is a short status line.
     - ``running=False``: either no gateway is running, or the gateway
       is running but the config flag is off. Message is human guidance
       explaining the next step.
 
-    Used by ``hermes kanban create`` (and callers) to warn when a task
+    Used by ``vigil kanban create`` (and callers) to warn when a task
     will sit in ``ready`` because nothing is there to pick it up.
     Defensive against import failures and config-read errors — if the
     probe itself errors, we return ``(True, "")`` so we don't spam
@@ -153,7 +153,7 @@ def _check_dispatcher_presence(
 
     ``hermes_home`` scopes the probe to a named profile's directory. The
     dashboard plugin API passes it because the dashboard backend process can
-    be running under a different HERMES_HOME than the profile the request
+    be running under a different VIGIL_HOME than the profile the request
     targets, which otherwise produced a "no gateway is running" warning
     against a perfectly healthy profile gateway (#71211). CLI callers leave
     it ``None`` and keep the existing process-level behavior.
@@ -222,17 +222,17 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "kanban",
         help="Multi-profile collaboration board (tasks, links, comments)",
         description=(
-            "Durable SQLite-backed task board shared across Hermes profiles. "
+            "Durable SQLite-backed task board shared across Vigil profiles. "
             "Tasks are claimed atomically, can depend on other tasks, and "
             "are executed by a named profile in an isolated workspace. "
-            "See https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban "
+            "See https://github.com/juneauwang/vigil-agent-harness "
             "or docs/hermes-kanban-v1-spec.pdf for the full design."
         ),
     )
     # --- global --board flag ---
     # Applies to every subcommand below. When set, scopes all reads and
     # writes to that board's DB. When omitted, resolves via the
-    # HERMES_KANBAN_BOARD env var, then the persisted current-board
+    # VIGIL_KANBAN_BOARD env var, then the persisted current-board
     # file, then "default". See kanban_db.get_current_board().
     kanban_parser.add_argument(
         "--board",
@@ -241,7 +241,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         help=(
             "Board slug to operate on. Defaults to the current board "
             "(set via `vigil kanban boards switch <slug>` or the "
-            "HERMES_KANBAN_BOARD env var). Use `vigil kanban boards list` "
+            "VIGIL_KANBAN_BOARD env var). Use `vigil kanban boards list` "
             "to see all boards."
         ),
     )
@@ -425,7 +425,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     # --- list ---
     p_list = sub.add_parser("list", aliases=["ls"], help="List tasks")
     p_list.add_argument("--mine", action="store_true",
-                        help="Filter by $HERMES_PROFILE as assignee")
+                        help="Filter by $VIGIL_PROFILE as assignee")
     p_list.add_argument("--assignee", default=None)
     p_list.add_argument("--status", default=None,
                         choices=sorted(kb.VALID_STATUSES))
@@ -568,7 +568,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     p_comment.add_argument("task_id")
     p_comment.add_argument("text", nargs="+", help="Comment body")
     p_comment.add_argument("--author", default=None,
-                           help="Author name (default: $HERMES_PROFILE or 'user')")
+                           help="Author name (default: $VIGIL_PROFILE or 'user')")
     p_comment.add_argument("--max-len", type=int, default=None,
                            help="Trim the stored comment body to this many characters")
 
@@ -581,7 +581,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     p_attach.add_argument("--name", default=None,
                           help="Stored filename (default: the source file's basename)")
     p_attach.add_argument("--author", default=None,
-                          help="uploaded_by label (default: $HERMES_PROFILE or 'user')")
+                          help="uploaded_by label (default: $VIGIL_PROFILE or 'user')")
 
     p_attachments = sub.add_parser("attachments", help="List a task's attachments")
     p_attachments.add_argument("task_id")
@@ -837,7 +837,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
     p_asg = sub.add_parser(
         "assignees",
         help="List known profiles + per-profile task counts "
-             "(union of ~/.hermes/profiles/ and current assignees on the board)",
+             "(union of ~/.vigil/profiles/ and current assignees on the board)",
     )
     p_asg.add_argument("--json", action="store_true")
 
@@ -877,7 +877,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "--author",
         default=None,
         help="Author name recorded on the audit comment "
-             "(default: $HERMES_PROFILE or 'specifier')",
+             "(default: $VIGIL_PROFILE or 'specifier')",
     )
     p_specify.add_argument(
         "--json",
@@ -914,7 +914,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
         "--author",
         default=None,
         help="Author name recorded on the audit comment "
-             "(default: $HERMES_PROFILE or 'decomposer')",
+             "(default: $VIGIL_PROFILE or 'decomposer')",
     )
     p_decompose.add_argument(
         "--json",
@@ -959,7 +959,7 @@ def build_parser(parent_subparsers: argparse._SubParsersAction) -> argparse.Argu
 # ---------------------------------------------------------------------------
 
 def kanban_command(args: argparse.Namespace) -> int:
-    """Entry point from ``hermes kanban …`` argparse dispatch.
+    """Entry point from ``vigil kanban …`` argparse dispatch.
 
     Returns a shell-style exit code (0 on success, non-zero on error).
     """
@@ -995,7 +995,7 @@ def kanban_command(args: argparse.Namespace) -> int:
         return _dispatch_boards(args)
 
     # `--board <slug>` applies to every subcommand below by way of an
-    # env-var pin for the duration of this call. Using HERMES_KANBAN_BOARD
+    # env-var pin for the duration of this call. Using VIGIL_KANBAN_BOARD
     # (rather than threading `board=` through 50+ kb.connect() sites)
     # keeps the patch small and inherits the exact same resolution the
     # dispatcher uses for workers — consistency is a feature here.
@@ -1025,13 +1025,13 @@ def kanban_command(args: argparse.Namespace) -> int:
     # is idempotent, so running it every invocation is cheap (one
     # SELECT against sqlite_master when tables already exist) and
     # prevents "no such table: tasks" on first use from a fresh
-    # HERMES_HOME. Previously only `init` and `daemon` triggered
+    # VIGIL_HOME. Previously only `init` and `daemon` triggered
     # schema creation; `create` / `list` / every other command would
     # error out on a fresh install.
     with board_scope:
         # `repair` must dispatch BEFORE the auto-init below: on a corrupt DB
         # init_db() itself raises KanbanDbCorruptError, which would turn
-        # every `hermes kanban repair` into "could not initialize database"
+        # every `vigil kanban repair` into "could not initialize database"
         # without ever reaching the repair path.
         if action == "repair":
             return _cmd_repair(args)
@@ -1102,7 +1102,7 @@ def kanban_command(args: argparse.Namespace) -> int:
 
 def _profile_author() -> str:
     """Best-effort author name for an interactive CLI call."""
-    for env in ("HERMES_PROFILE_NAME", "HERMES_PROFILE"):
+    for env in ("VIGIL_PROFILE_NAME", "VIGIL_PROFILE"):
         v = os.environ.get(env)
         if v:
             return v
@@ -1170,20 +1170,20 @@ def _is_delegated_child_cli_mutation(args: argparse.Namespace) -> bool:
 
         return is_delegated_child_process_context()
     except Exception:
-        return bool(os.environ.get("HERMES_DELEGATED_CHILD_CONTEXT"))
+        return bool(os.environ.get("VIGIL_DELEGATED_CHILD_CONTEXT"))
 
 
 # ---------------------------------------------------------------------------
-# Boards management (hermes kanban boards …)
+# Boards management (vigil kanban boards …)
 # ---------------------------------------------------------------------------
 
 def _dispatch_boards(args: argparse.Namespace) -> int:
-    """Handle ``hermes kanban boards <action>``.
+    """Handle ``vigil kanban boards <action>``.
 
     Boards management is deliberately separate from the task-level
     commands: it operates on the filesystem (board directories,
     ``current`` pointer, ``board.json``), not on the per-board SQLite
-    DB, so a fresh HERMES_HOME that has never called ``kanban init``
+    DB, so a fresh VIGIL_HOME that has never called ``kanban init``
     can still run ``boards create`` / ``boards list``.
     """
     sub = getattr(args, "boards_action", None) or "list"
@@ -1286,7 +1286,7 @@ def _cmd_boards_create(args: argparse.Namespace) -> int:
 
 
 def _cmd_boards_rm(args: argparse.Namespace) -> int:
-    # When the user runs `hermes kanban boards delete <slug>` (alias), the
+    # When the user runs `vigil kanban boards delete <slug>` (alias), the
     # boards_action is 'delete' but args.delete is never set to True because
     # the --delete flag belongs to the 'rm' subparser only.  Detect the alias
     # and treat it identically to `boards rm --delete` (fixes #23139).
@@ -1413,7 +1413,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
     # already addressable. Multica does this auto-detection on its
     # daemon start; we do it here at init time instead because our
     # dispatcher doesn't need to enumerate — we just pass the name
-    # through to `hermes -p <name>`.
+    # through to `vigil -p <name>`.
     try:
         profiles = kb.list_profiles_on_disk()
     except Exception:
@@ -1424,7 +1424,7 @@ def _cmd_init(args: argparse.Namespace) -> int:
         for name in profiles:
             print(f"  {name}")
     else:
-        print("No profiles found under ~/.hermes/profiles/.")
+        print("No profiles found under ~/.vigil/profiles/.")
         print("Create one with `vigil -p <name> setup` before assigning tasks.")
     print()
     print("Next step: start the gateway so ready tasks actually get picked up.")
@@ -1753,7 +1753,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
         print(task.result)
     elif latest_summary:
         # Worker handoff lives on the latest run, not on tasks.result.
-        # Surface it at top-level so a glance at ``hermes kanban show <id>``
+        # Surface it at top-level so a glance at ``vigil kanban show <id>``
         # tells you what the worker did even if tasks.result is empty.
         print()
         print("Latest summary:")
@@ -2127,9 +2127,9 @@ def _cmd_attach_rm(args: argparse.Namespace) -> int:
 
 
 def _worker_run_id_for(task_id: str) -> Optional[int]:
-    if os.environ.get("HERMES_KANBAN_TASK") != task_id:
+    if os.environ.get("VIGIL_KANBAN_TASK") != task_id:
         return None
-    raw = os.environ.get("HERMES_KANBAN_RUN_ID")
+    raw = os.environ.get("VIGIL_KANBAN_RUN_ID")
     if not raw:
         return None
     try:
@@ -2172,7 +2172,7 @@ def _cmd_complete(args: argparse.Namespace) -> int:
             # Goal-mode pre-completion judge gate (mirrors the gate in
             # tools/kanban_tools.py:_handle_complete — Issue #38367).
             # Without this, a goal_mode worker can call
-            # `hermes kanban complete <id>` from the terminal tool and
+            # `vigil kanban complete <id>` from the terminal tool and
             # bypass the auxiliary judge that the tool-call path enforces.
             task = kb.get_task(conn, tid)
             if task and task.goal_mode:
@@ -2650,7 +2650,7 @@ def _cmd_daemon(args: argparse.Namespace) -> int:
 
     def _ready_queue_nonempty() -> bool:
         """Cheap probe — is there at least one ready+assigned+unclaimed
-        task whose assignee maps to a real Hermes profile (i.e. one the
+        task whose assignee maps to a real Vigil profile (i.e. one the
         dispatcher would actually try to spawn for)?
 
         Filters out tasks assigned to control-plane lanes

@@ -157,7 +157,7 @@ export const coreCommands: SlashCommand[] = [
       }
 
       ctx.transcript.sys('exiting TUI to run update...')
-      // Exit code 42 signals the Python wrapper to exec `hermes update`.
+      // Exit code 42 signals the Python wrapper to exec `vigil update`.
       // Use dieWithCode for proper cleanup (gateway kill + Ink unmount).
       setTimeout(() => ctx.session.dieWithCode(42), 100)
     }
@@ -392,7 +392,7 @@ export const coreCommands: SlashCommand[] = [
         if (text) {
           return sys(`copied ${text.length} characters`)
         } else {
-          return sys('clipboard copy failed — try HERMES_TUI_FORCE_OSC52=1 to force the escape sequence')
+          return sys('clipboard copy failed — try VIGIL_TUI_FORCE_OSC52=1 to force the escape sequence')
         }
       }
 

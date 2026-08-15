@@ -396,7 +396,7 @@ class TestVisionSafetyGuards:
 
 class TestVisionRequirements:
     def test_check_requirements_accepts_codex_auth(self, monkeypatch, tmp_path):
-        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         (tmp_path / "auth.json").write_text(
             '{"active_provider":"openai-codex","providers":{"openai-codex":{"tokens":{"access_token":"codex-access-token","refresh_token":"codex-refresh-token"}}}}'
         )
@@ -772,9 +772,9 @@ class TestVisionCpuBurstCap:
                 patch("hermes_cli.config.load_config", side_effect=Exception),
             ):
                 if env_value is None:
-                    os.environ.pop("HERMES_VISION_MAX_CONCURRENCY", None)
+                    os.environ.pop("VIGIL_VISION_MAX_CONCURRENCY", None)
                 else:
-                    os.environ["HERMES_VISION_MAX_CONCURRENCY"] = env_value
+                    os.environ["VIGIL_VISION_MAX_CONCURRENCY"] = env_value
                 return vt._resolve_vision_cpu_workers()
 
         # No fixed ceiling: a 64-core host gets 64 encode workers. The cap

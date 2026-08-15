@@ -33,7 +33,7 @@ def _python_project(root: Path) -> None:
 
 
 def test_lint_and_typecheck_are_not_reported_as_full_tests(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     _node_project(tmp_path)
 
     lint = classify_verification_command(
@@ -60,7 +60,7 @@ def test_lint_and_typecheck_are_not_reported_as_full_tests(tmp_path, monkeypatch
 
 
 def test_shell_wrappers_match_but_echo_does_not(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     _node_project(tmp_path)
 
     wrapped = classify_verification_command(
@@ -85,7 +85,7 @@ def test_shell_wrappers_match_but_echo_does_not(tmp_path, monkeypatch):
 
 
 def test_temp_script_records_ad_hoc_evidence_without_canonical_suite(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
     script = Path(tempfile.gettempdir()) / f"hermes-ad-hoc-{tmp_path.name}.py"
     script.write_text("print('ok')\n", encoding="utf-8")
@@ -118,7 +118,7 @@ def test_temp_script_records_ad_hoc_evidence_without_canonical_suite(tmp_path, m
 
 
 def test_file_tool_stales_evidence_by_session_id_for_absolute_edit(tmp_path, monkeypatch):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     _node_project(tmp_path)
     target = tmp_path / "src" / "app.ts"
     target.parent.mkdir()
@@ -152,8 +152,8 @@ def test_file_tool_stales_evidence_by_session_id_for_absolute_edit(tmp_path, mon
 
 
 def test_recording_expires_old_edit_only_state(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    home = tmp_path / ".vigil"
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     _node_project(tmp_path)
 
     mark_workspace_edited(
@@ -191,7 +191,7 @@ def test_windows_backslash_ad_hoc_script_path_is_matched(tmp_path, monkeypatch):
     """
     from agent.verification_evidence import _find_ad_hoc_match
 
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     (tmp_path / "package.json").write_text("{}", encoding="utf-8")
 
     # On Windows, shlex.split(posix=True) eats backslashes as escape chars;

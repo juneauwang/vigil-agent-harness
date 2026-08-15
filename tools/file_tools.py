@@ -88,7 +88,7 @@ def _truncate_to_char_budget(content: str, max_chars: int) -> tuple[str, int, bo
     """Trim line-numbered ``read_file`` content to fit a char budget.
 
     Ported in spirit from nearai/ironclaw#5029 (dual line/byte cap on
-    ``read_file``). Where hermes previously hard-rejected an oversized read
+    ``read_file``). Where vigil previously hard-rejected an oversized read
     (forcing the model to guess a smaller ``limit`` and burn a round-trip
     returning nothing), this trims the content to the last *complete line*
     that fits within ``max_chars`` and reports how many lines were kept so
@@ -440,7 +440,7 @@ def _path_resolution_warning(filepath: str, resolved: Path, task_id: str = "defa
 
 
 def _file_ops_uses_host_paths(file_ops) -> bool:
-    """Return True when *file_ops* targets the same host filesystem as Hermes.
+    """Return True when *file_ops* targets the same host filesystem as Vigil.
 
     Only then may we rewrite V4A header paths to resolved host-absolute
     paths: a container/remote backend has its own filesystem namespace where
@@ -659,7 +659,7 @@ _install_code_roots_loaded = False
 
 
 def _get_hermes_config_resolved() -> str | None:
-    """Return the resolved absolute path of the Hermes config file (cached)."""
+    """Return the resolved absolute path of the Vigil config file (cached)."""
     global _hermes_config_resolved, _hermes_config_resolved_loaded
     if _hermes_config_resolved_loaded:
         return _hermes_config_resolved
@@ -669,7 +669,7 @@ def _get_hermes_config_resolved() -> str | None:
         _hermes_config_resolved = str(get_config_path().resolve())
     except Exception:
         try:
-            _hermes_config_resolved = str(Path(_expand_tilde("~/.hermes/config.yaml")).resolve())
+            _hermes_config_resolved = str(Path(_expand_tilde("~/.vigil/config.yaml")).resolve())
         except Exception:
             _hermes_config_resolved = None
     return _hermes_config_resolved
@@ -758,22 +758,22 @@ def _check_sensitive_path(filepath: str, task_id: str = "default") -> str | None
                     "in an explicit development profile to allow install-code "
                     "writes."
                 )
-    # Prevent agents from modifying the Hermes config file directly.
+    # Prevent agents from modifying the Vigil config file directly.
     # approvals.mode and other security settings live here; a malicious or
     # prompt-injected agent could silently disable exec approval by writing to
     # this file.
     hermes_config = _get_hermes_config_resolved()
     if hermes_config and (resolved == hermes_config or normalized == hermes_config):
         return (
-            f"Refusing to write to Hermes config file: {filepath}\n"
+            f"Refusing to write to Vigil config file: {filepath}\n"
             "Agent cannot modify security-sensitive configuration. "
-            "Edit ~/.hermes/config.yaml directly or use 'vigil config' instead."
+            "Edit ~/.vigil/config.yaml directly or use 'vigil config' instead."
         )
     return None
 
 
 def _get_container_mirror_prefix_for_task(task_id: str = "default") -> str | None:
-    """Return the container-side Hermes mirror prefix for Docker file tools."""
+    """Return the container-side Vigil mirror prefix for Docker file tools."""
     try:
         from tools.terminal_tool import (
             _active_environments,
@@ -794,7 +794,7 @@ def _get_container_mirror_prefix_for_task(task_id: str = "default") -> str | Non
             if env.__class__.__name__ == "DockerEnvironment" and bool(
                 getattr(env, "_persistent", False)
             ):
-                return "/root/.hermes"
+                return "/root/.vigil"
             return None
 
         config = _get_env_config()
@@ -802,29 +802,29 @@ def _get_container_mirror_prefix_for_task(task_id: str = "default") -> str | Non
         return None
 
     if config.get("env_type") == "docker" and config.get("container_persistent", True):
-        return "/root/.hermes"
+        return "/root/.vigil"
     return None
 
 
 def _check_cross_profile_path(filepath: str, task_id: str = "default") -> str | None:
-    """Return a soft-guard warning when ``filepath`` lands in another Hermes
+    """Return a soft-guard warning when ``filepath`` lands in another Vigil
     profile's scoped area, a host-side sandbox-mirror of authoritative profile
-    state, or the Docker container's sandbox mirror of Hermes state.
+    state, or the Docker container's sandbox mirror of Vigil state.
 
     Three detectors run in order:
 
     * cross-profile — writes that hit another profile's
       ``skills/plugins/cron/memories`` directory.
     * sandbox-mirror (#32049) — writes that hit the
-      ``…/sandboxes/<backend>/<task>/home/.hermes/…`` mirror created by a
+      ``…/sandboxes/<backend>/<task>/home/.vigil/…`` mirror created by a
       non-local terminal backend (Docker, Daytona, etc.), where the host
-      Hermes process never reads the mirror and the authoritative file is
+      Vigil process never reads the mirror and the authoritative file is
       left untouched.
     * container-mirror (#32049 follow-up) — writes from inside a Docker
       container whose bind-mounted home strips the ``sandboxes/`` prefix, so
-      the agent sees a plain ``/root/.hermes/…`` path.
+      the agent sees a plain ``/root/.vigil/…`` path.
 
-    Returns ``None`` when the write is in-scope or outside Hermes scope.
+    Returns ``None`` when the write is in-scope or outside Vigil scope.
     All detectors are soft guards — the agent can override any by
     passing ``cross_profile=True`` to its write tool after explicit user
     direction. Defense-in-depth, NOT a security boundary — the terminal
@@ -845,7 +845,7 @@ def _check_cross_profile_path(filepath: str, task_id: str = "default") -> str | 
         return None
 
     # Resolve via the task's cwd so a relative ``skills/foo/SKILL.md``
-    # in a session that cd'd into ``~/.hermes/profiles/other/`` is
+    # in a session that cd'd into ``~/.vigil/profiles/other/`` is
     # classified against the right base.
     try:
         resolved = str(_resolve_path_for_task(filepath, task_id))
@@ -1416,11 +1416,11 @@ def read_file_tool(path: str, offset: int = 1, limit: int = 2000, task_id: str =
                 "Use vision_analyze for images, or terminal to inspect binary files."
             )
 
-        # ── Hermes internal path guard ────────────────────────────────
+        # ── Vigil internal path guard ────────────────────────────────
         # Prevent prompt injection via catalog or hub metadata files,
-        # and block credential stores under HERMES_HOME.  Pass the
+        # and block credential stores under VIGIL_HOME.  Pass the
         # already-resolved path so a relative-path read against
-        # TERMINAL_CWD == HERMES_HOME (e.g. "auth.json") still hits the
+        # TERMINAL_CWD == VIGIL_HOME (e.g. "auth.json") still hits the
         # denylist — get_read_block_error's own resolve() runs against
         # the Python process cwd, which can differ.
         block_error = get_read_block_error(str(_resolved))
@@ -2281,7 +2281,7 @@ WRITE_FILE_SCHEMA = {
             "content": {"type": "string", "description": "Complete content to write to the file"},
             "cross_profile": {
                 "type": "boolean",
-                "description": "Opt out of the cross-profile soft guard. Defaults to false. Set true ONLY after explicit user direction to edit another Hermes profile's skills/plugins/cron/memories — by default these writes are blocked with a warning because they affect a different profile than the one this session is running under.",
+                "description": "Opt out of the cross-profile soft guard. Defaults to false. Set true ONLY after explicit user direction to edit another Vigil profile's skills/plugins/cron/memories — by default these writes are blocked with a warning because they affect a different profile than the one this session is running under.",
                 "default": False,
             },
         },
@@ -2332,7 +2332,7 @@ PATCH_SCHEMA = {
             },
             "cross_profile": {
                 "type": "boolean",
-                "description": "Opt out of the cross-profile soft guard. Defaults to false. Set true ONLY after explicit user direction to edit another Hermes profile's skills/plugins/cron/memories.",
+                "description": "Opt out of the cross-profile soft guard. Defaults to false. Set true ONLY after explicit user direction to edit another Vigil profile's skills/plugins/cron/memories.",
                 "default": False,
             },
         },

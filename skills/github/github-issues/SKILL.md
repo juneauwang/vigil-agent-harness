@@ -2,11 +2,11 @@
 name: github-issues
 description: "Create, triage, label, assign GitHub issues via gh or REST."
 version: 1.1.0
-author: Hermes Agent
+author: Vigil
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
-  hermes:
+  vigil:
     tags: [GitHub, Issues, Project-Management, Bug-Tracking, Triage]
     related_skills: [github-auth, github-pr-workflow]
 ---
@@ -28,10 +28,10 @@ if command -v gh &>/dev/null && gh auth status &>/dev/null; then
 else
   AUTH="git"
   if [ -z "$GITHUB_TOKEN" ]; then
-    if _hermes_env="${HERMES_HOME:-$HOME/.hermes}/.env"; [ -f "$_hermes_env" ] && grep -q "^GITHUB_TOKEN=" "$_hermes_env"; then
+    if _hermes_env="${VIGIL_HOME:-$HOME/.vigil}/.env"; [ -f "$_hermes_env" ] && grep -q "^GITHUB_TOKEN=" "$_hermes_env"; then
       GITHUB_TOKEN=$(grep "^GITHUB_TOKEN=" "$_hermes_env" | head -1 | cut -d= -f2 | tr -d '\n\r')
     elif grep -q "github.com" ~/.git-credentials 2>/dev/null; then
-      GITHUB_TOKEN=$(uv run python3 "${HERMES_HOME:-$HOME/.hermes}/skills/github/github-auth/scripts/git-credential-token.py")
+      GITHUB_TOKEN=$(uv run python3 "${VIGIL_HOME:-$HOME/.vigil}/skills/github/github-auth/scripts/git-credential-token.py")
     fi
   fi
 fi

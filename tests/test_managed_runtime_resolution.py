@@ -1,13 +1,13 @@
 """Guard: Hermes-owned subprocesses must not resolve managed runtimes by bare PATH.
 
-Hermes installs runtimes for itself — ``uv`` at ``$HERMES_HOME/bin/uv``, Node at
-``$HERMES_HOME/node``. Neither directory is on the ambient PATH of an arbitrary
-process, so ``shutil.which("uv")`` / ``shutil.which("node")`` in Hermes's own
+Vigil installs runtimes for itself — ``uv`` at ``$VIGIL_HOME/bin/uv``, Node at
+``$VIGIL_HOME/node``. Neither directory is on the ambient PATH of an arbitrary
+process, so ``shutil.which("uv")`` / ``shutil.which("node")`` in Vigil's own
 code has two failure modes:
 
 * the managed runtime is invisible, so the caller reports "not installed" or
   degrades to a slower tier on a machine that has exactly what it needed; and
-* when a system copy also exists, the one Hermes does not own wins — which is
+* when a system copy also exists, the one Vigil does not own wins — which is
   how a generated systemd unit or launchd plist can bake a system Node in and
   keep resolving it across reboots.
 
@@ -32,7 +32,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-# Runtimes Hermes provisions into HERMES_HOME and must therefore resolve
+# Runtimes Vigil provisions into VIGIL_HOME and must therefore resolve
 # through a managed-aware helper rather than PATH.
 _MANAGED_COMMANDS = frozenset({"uv", "node", "npm", "npx"})
 
@@ -155,7 +155,7 @@ def test_no_unreviewed_bare_managed_runtime_lookups():
     assert not unexpected, (
         "Bare PATH lookup for a Hermes-managed runtime.\n\n"
         + "\n".join(f"  {rel}:{lineno}  which({cmd!r})" for rel, cmd, lineno in unexpected)
-        + "\n\n$HERMES_HOME/bin (uv) and $HERMES_HOME/node are not on an "
+        + "\n\n$VIGIL_HOME/bin (uv) and $VIGIL_HOME/node are not on an "
         "arbitrary process's PATH, so this resolves a system copy — or nothing "
         "— on an install that has a managed one.\n"
         "Use instead:\n"

@@ -1,11 +1,11 @@
-"""SimpleX Chat platform adapter (Hermes plugin).
+"""SimpleX Chat platform adapter (Vigil plugin).
 
 Connects to a simplex-chat daemon running in WebSocket mode.
 Inbound messages arrive via a persistent WebSocket connection.
 Outbound messages use the same WebSocket with JSON commands.
 
-This adapter ships as a Hermes platform plugin under
-``plugins/platforms/simplex/``. The Hermes plugin loader scans the
+This adapter ships as a Vigil platform plugin under
+``plugins/platforms/simplex/``. The Vigil plugin loader scans the
 directory at startup, calls ``register(ctx)``, and the platform
 becomes available to ``gateway/run.py`` and ``tools/send_message_tool``
 through the registry — no edits to core files are required.
@@ -32,14 +32,14 @@ Optional environment variables:
                                for any group. Omit to disable groups entirely.
     SIMPLEX_HOME_CHANNEL       Default contact/group ID for cron delivery
     SIMPLEX_HOME_CHANNEL_NAME  Human label for the home channel
-    HERMES_SIMPLEX_TEXT_BATCH_DELAY
+    VIGIL_SIMPLEX_TEXT_BATCH_DELAY
                                Quiet-period seconds (default: 0.8) used to
                                concatenate rapid-fire inbound text messages
                                into a single MessageEvent — same pattern as
                                Telegram's text batching.
 
 The ``websockets`` Python package is imported lazily — the plugin is
-discoverable and ``hermes setup`` can describe it even when websockets is
+discoverable and ``vigil setup`` can describe it even when websockets is
 not installed. ``check_requirements()`` returns False until the package
 is present, so the gateway will not attempt to instantiate the adapter.
 """
@@ -57,7 +57,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 # Lazy import: BasePlatformAdapter and friends live in the main repo.
-# Imported at module top because they're stdlib-only inside Hermes — no
+# Imported at module top because they're stdlib-only inside Vigil — no
 # external dependency that would block the plugin from loading.
 from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
@@ -192,7 +192,7 @@ class SimplexAdapter(BasePlatformAdapter):
         # Text message batching — concatenate rapid-fire messages into one
         # event before dispatching, mirroring Telegram's batching.
         self._text_batch_delay = float(
-            os.getenv("HERMES_SIMPLEX_TEXT_BATCH_DELAY", "0.8")
+            os.getenv("VIGIL_SIMPLEX_TEXT_BATCH_DELAY", "0.8")
         )
         self._pending_text_batches: Dict[str, MessageEvent] = {}
         self._pending_text_batch_tasks: Dict[str, asyncio.Task] = {}
@@ -1237,8 +1237,8 @@ async def _standalone_send(
     """Open an ephemeral WebSocket to the daemon, send, and close.
 
     Used by ``tools/send_message_tool._send_via_adapter`` when the gateway
-    runner is not in this process (e.g. ``hermes cron`` running as a
-    separate process from ``hermes gateway``). Without this hook,
+    runner is not in this process (e.g. ``vigil cron`` running as a
+    separate process from ``vigil gateway``). Without this hook,
     ``deliver=simplex`` cron jobs fail with "No live adapter for platform".
 
     ``thread_id`` and ``force_document`` are accepted for signature parity
@@ -1288,10 +1288,10 @@ async def _standalone_send(
 
 
 def interactive_setup() -> None:
-    """Minimal stdin wizard for ``hermes setup gateway`` → SimpleX.
+    """Minimal stdin wizard for ``vigil setup gateway`` → SimpleX.
 
     Prompts for the WebSocket URL and the optional allowlist / groups /
-    auto-accept / home channel. Writes to ``~/.hermes/.env`` via
+    auto-accept / home channel. Writes to ``~/.vigil/.env`` via
     ``hermes_cli.config``.
     """
     print()
@@ -1307,7 +1307,7 @@ def interactive_setup() -> None:
     except ImportError:
         print(
             "hermes_cli.config not available; set SIMPLEX_* vars manually in "
-            "~/.hermes/.env"
+            "~/.vigil/.env"
         )
         return
 
@@ -1344,7 +1344,7 @@ def interactive_setup() -> None:
 
 
 def register(ctx) -> None:
-    """Plugin entry point — called by the Hermes plugin system at startup."""
+    """Plugin entry point — called by the Vigil plugin system at startup."""
     ctx.register_platform(
         name="simplex",
         label="SimpleX Chat",

@@ -22,11 +22,11 @@ import pytest
 
 @pytest.fixture
 def curator_env(tmp_path, monkeypatch):
-    home = tmp_path / ".hermes"
+    home = tmp_path / ".vigil"
     home.mkdir()
     (home / "skills").mkdir()
     (home / "logs").mkdir()
-    monkeypatch.setenv("HERMES_HOME", str(home))
+    monkeypatch.setenv("VIGIL_HOME", str(home))
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     import importlib
@@ -406,7 +406,7 @@ def test_reconcile_mixed_declarations_and_legacy_calls(curator_env):
 # ---------------------------------------------------------------------------
 # _build_rename_summary — surfaces the "where did my skills go?" map to the
 # user-visible curator summary (gateway 💾 line, CLI Rich panel,
-# `hermes curator status`). The full data has always been in REPORT.md on
+# `vigil curator status`). The full data has always been in REPORT.md on
 # disk; this helper makes it visible without digging.
 # ---------------------------------------------------------------------------
 
@@ -509,7 +509,7 @@ def test_rename_summary_mixed_consolidation_and_pruning(curator_env):
 
 
 # ---------------------------------------------------------------------------
-# Pin hint — surfaces `hermes curator pin <umbrella>` in the rename block so
+# Pin hint — surfaces `vigil curator pin <umbrella>` in the rename block so
 # users learn the command exists at the moment they care (a consolidation
 # just landed against their library). The hint is gated on having at least
 # one umbrella destination — pruned-only runs skip it.

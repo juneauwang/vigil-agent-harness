@@ -1,4 +1,4 @@
-/** 轻量 className 合并（替代 Hermes 的 @/lib/utils cn）。 */
+/** 轻量 className 合并（不依赖上游 @/lib/utils cn）。 */
 export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
 }

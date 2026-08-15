@@ -235,7 +235,7 @@ class TestMigrate:
 
     def test_preserves_user_mcp_server_outside_managed_block(self, tmp_path):
         """Quirk #6: when a user adds their own MCP server entry directly
-        to ~/.codex/config.toml outside Hermes' managed block, re-running
+        to ~/.codex/config.toml outside Vigil' managed block, re-running
         migration must preserve it. Tested both above and below the
         managed block."""
         target = tmp_path / "config.toml"
@@ -286,7 +286,7 @@ class TestStripUnmanagedPluginTables:
 
     When codex itself writes ``[plugins."<name>@<marketplace>"]`` tables
     (via the user running ``codex plugins enable`` directly), re-running
-    ``hermes codex-runtime migrate`` would re-emit them inside the managed
+    ``vigil codex-runtime migrate`` would re-emit them inside the managed
     block and the resulting duplicate-table-header would crash codex.
     """
 
@@ -380,13 +380,13 @@ class TestStripUnmanagedPluginTables:
         tomllib.loads(new_text)
 
 
-# ---- Bug C: HERMES_HOME tempdir leak into ~/.codex/config.toml ----
+# ---- Bug C: VIGIL_HOME tempdir leak into ~/.codex/config.toml ----
 
 
 class TestHermesHomeLeakGuard:
     """Regression tests for issue #26250 Bug C.
 
-    Previously ``_build_hermes_tools_mcp_entry()`` read ``HERMES_HOME``
+    Previously ``_build_hermes_tools_mcp_entry()`` read ``VIGIL_HOME``
     directly from ``os.environ``, so a pytest ``monkeypatch.setenv`` would
     leak a transient tempdir path into the user's real ``~/.codex/config.toml``
     once codex spawned the hermes-tools MCP subprocess.
@@ -396,28 +396,28 @@ class TestHermesHomeLeakGuard:
 
 
     def test_real_hermes_home_propagates(self, monkeypatch, tmp_path):
-        """A legitimate HERMES_HOME (not a tempdir path) DOES propagate so the
+        """A legitimate VIGIL_HOME (not a tempdir path) DOES propagate so the
         MCP subprocess sees the same config as the parent CLI."""
         # Use a path that looks real — under /Users or /home, not /var/folders.
         # We can't easily create one in the test, so just use a stable path
         # outside any tempdir-detector needle. The detector checks for tempdir
         # markers, not for path existence.
-        real_path = "/Users/alice/.hermes"
-        monkeypatch.setenv("HERMES_HOME", real_path)
+        real_path = "/Users/alice/.vigil"
+        monkeypatch.setenv("VIGIL_HOME", real_path)
         entry = _build_hermes_tools_mcp_entry()
         env = entry.get("env", {})
-        assert env.get("HERMES_HOME") == real_path
+        assert env.get("VIGIL_HOME") == real_path
 
     def test_unset_hermes_home_omits_env_key(self, monkeypatch):
-        """When HERMES_HOME is unset in the environment, the MCP entry MUST
+        """When VIGIL_HOME is unset in the environment, the MCP entry MUST
         NOT bake in a resolved-default path. The codex subprocess should
-        inherit whatever HERMES_HOME its launcher (systemd, gateway, shell)
+        inherit whatever VIGIL_HOME its launcher (systemd, gateway, shell)
         sets at runtime, rather than being pinned to migrate-time defaults.
         Regression guard for issue #26250 follow-up review."""
-        monkeypatch.delenv("HERMES_HOME", raising=False)
+        monkeypatch.delenv("VIGIL_HOME", raising=False)
         entry = _build_hermes_tools_mcp_entry()
         env = entry.get("env", {})
-        assert "HERMES_HOME" not in env, (
-            f"HERMES_HOME should not be set when env var is unset, got: "
-            f"{env.get('HERMES_HOME')!r}"
+        assert "VIGIL_HOME" not in env, (
+            f"VIGIL_HOME should not be set when env var is unset, got: "
+            f"{env.get('VIGIL_HOME')!r}"
         )

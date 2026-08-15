@@ -1,22 +1,22 @@
-"""``hermes logs`` — view and filter Hermes log files.
+"""``vigil logs`` — view and filter Vigil log files.
 
 Supports tailing, following, session filtering, level filtering,
 component filtering, and relative time ranges.  All log files live
-under ``~/.hermes/logs/``.
+under ``~/.vigil/logs/``.
 
 Usage examples::
 
-    hermes logs                    # last 50 lines of agent.log
-    hermes logs -f                 # follow agent.log in real time
-    hermes logs errors             # last 50 lines of errors.log
-    hermes logs gateway -n 100    # last 100 lines of gateway.log
-    hermes logs gui -f            # follow gui.log (dashboard/pty/ws)
-    hermes logs desktop -f        # follow desktop.log (Electron app boot/backend)
-    hermes logs --level WARNING    # only WARNING+ lines
-    hermes logs --session abc123   # filter by session ID substring
-    hermes logs --component tools  # only tool-related lines
-    hermes logs --since 1h         # lines from the last hour
-    hermes logs --since 30m -f     # follow, starting 30 min ago
+    vigil logs                    # last 50 lines of agent.log
+    vigil logs -f                 # follow agent.log in real time
+    vigil logs errors             # last 50 lines of errors.log
+    vigil logs gateway -n 100    # last 100 lines of gateway.log
+    vigil logs gui -f            # follow gui.log (dashboard/pty/ws)
+    vigil logs desktop -f        # follow desktop.log (Electron app boot/backend)
+    vigil logs --level WARNING    # only WARNING+ lines
+    vigil logs --session abc123   # filter by session ID substring
+    vigil logs --component tools  # only tool-related lines
+    vigil logs --since 1h         # lines from the last hour
+    vigil logs --since 30m -f     # follow, starting 30 min ago
 """
 
 import re
@@ -179,7 +179,7 @@ def tail_log(
     log_path = get_hermes_home() / "logs" / filename
     if not log_path.exists():
         print(f"Log file not found: {log_path}")
-        print("(Logs are created when Hermes runs — try 'vigil chat' first)")
+        print("(Logs are created when Vigil runs — try 'vigil chat' first)")
         sys.exit(1)
 
     # Parse --since into a datetime cutoff

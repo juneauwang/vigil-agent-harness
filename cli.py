@@ -2,7 +2,7 @@
 """
 Vigil CLI - Interactive Terminal Interface
 
-A beautiful command-line interface for Vigil (ops agent harness, fork of Vigil),
+A beautiful command-line interface for Vigil (ops agent harness, fork of an MIT-licensed upstream agent harness),
 inspired by Claude Code. Features a clean startup banner, interactive REPL,
 toolset selection, and rich formatting.
 
@@ -19,7 +19,7 @@ try:
     import hermes_bootstrap  # noqa: F401
 except ModuleNotFoundError:
     # Graceful fallback when hermes_bootstrap isn't registered in the venv
-    # yet — happens during partial ``hermes update`` where git-reset landed
+    # yet — happens during partial ``vigil update`` where git-reset landed
     # new code but ``uv pip install -e .`` didn't finish.  Missing bootstrap
     # means UTF-8 stdio setup is skipped on Windows; POSIX is unaffected.
     pass
@@ -49,7 +49,7 @@ from typing import List, Dict, Any, Optional
 logger = logging.getLogger(__name__)
 
 # Suppress startup messages for clean CLI experience
-os.environ["HERMES_QUIET"] = "1"  # Our own modules
+os.environ["VIGIL_QUIET"] = "1"  # Our own modules
 
 from hermes_cli.fallback_config import get_fallback_chain
 from hermes_cli.cli_agent_setup_mixin import CLIAgentSetupMixin
@@ -133,7 +133,7 @@ def _reverse_alias_for_display(model_name: str) -> str:
     """Return the shortest configured alias for ``model_name``, or ``model_name``.
 
     Looks up both ``model_aliases:`` (dict-based, full DirectAlias entries)
-    and ``model.aliases:`` (string-based, set via ``hermes config set``)
+    and ``model.aliases:`` (string-based, set via ``vigil config set``)
     from config.yaml. Multiple aliases pointing at the same model — the
     shortest wins, so ``opus47`` beats ``palantir-claude47``.
     """
@@ -216,7 +216,7 @@ from hermes_cli.banner import _format_context_length, format_banner_version_labe
 _COMMAND_SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏")
 
 
-# Load .env from ~/.hermes/.env first, then project root as dev fallback.
+# Load .env from ~/.vigil/.env first, then project root as dev fallback.
 # User-managed env files should override stale shell exports on restart.
 from hermes_constants import get_hermes_home, display_hermes_home
 from hermes_cli.browser_connect import (
@@ -343,7 +343,7 @@ def _load_prefill_messages(file_path: str) -> List[Dict[str, Any]]:
     The file should contain a JSON array of {role, content} dicts, e.g.:
         [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": "Hello!"}]
     
-    Relative paths are resolved from ~/.hermes/.
+    Relative paths are resolved from ~/.vigil/.
     Returns an empty list if the path is empty or the file doesn't exist.
     """
     if not file_path:
@@ -373,7 +373,7 @@ def _resolve_prefill_messages_file(config: Dict[str, Any]) -> str:
     ``agent.prefill_messages_file`` remains a legacy fallback for older CLI and
     godmode-generated configs.
     """
-    env_path = os.getenv("HERMES_PREFILL_MESSAGES_FILE", "").strip()
+    env_path = os.getenv("VIGIL_PREFILL_MESSAGES_FILE", "").strip()
     if env_path:
         return env_path
     top_level = str(config.get("prefill_messages_file", "") or "").strip()
@@ -413,25 +413,25 @@ def load_cli_config() -> Dict[str, Any]:
     Load CLI configuration from config files.
     
     Config lookup order:
-    1. ~/.hermes/config.yaml (user config - preferred)
+    1. ~/.vigil/config.yaml (user config - preferred)
     2. ./cli-config.yaml (project config - fallback)
     
     Environment variables take precedence over config file values.
     Returns default values if no config file exists.
 
-    If HERMES_IGNORE_USER_CONFIG=1 is set (via ``hermes chat --ignore-user-config``),
-    the user config at ``~/.hermes/config.yaml`` is skipped entirely and only the
+    If VIGIL_IGNORE_USER_CONFIG=1 is set (via ``vigil chat --ignore-user-config``),
+    the user config at ``~/.vigil/config.yaml`` is skipped entirely and only the
     built-in defaults plus the project-level ``cli-config.yaml`` (if any) are used.
     Credentials in ``.env`` are still loaded — this flag only suppresses
     behavioral/config settings.
     """
-    # Check user config first ({HERMES_HOME}/config.yaml)
+    # Check user config first ({VIGIL_HOME}/config.yaml)
     user_config_path = _hermes_home / 'config.yaml'
     project_config_path = Path(__file__).parent / 'cli-config.yaml'
 
     # --ignore-user-config: force-skip the user config.yaml (still honor project
     # config as a fallback so defaults stay sensible).
-    ignore_user_config = os.environ.get("HERMES_IGNORE_USER_CONFIG") == "1"
+    ignore_user_config = os.environ.get("VIGIL_IGNORE_USER_CONFIG") == "1"
 
     # Use user config if it exists, otherwise project config
     if user_config_path.exists() and not ignore_user_config:
@@ -628,7 +628,7 @@ def load_cli_config() -> Dict[str, Any]:
     # hermes_cli.config._load_config_impl (which has its own managed merge), so
     # without this the entire interactive CLI/TUI surface — skin, display prefs,
     # etc. read from CLI_CONFIG — would silently ignore managed scope while
-    # `hermes config`/`doctor`/guards (which use load_config) honor it. The
+    # `vigil config`/`doctor`/guards (which use load_config) honor it. The
     # shared helper mirrors _load_config_impl (env-only expansion, root-model
     # normalization, leaf-merge) and is fail-open.
     from hermes_cli import managed_scope
@@ -646,7 +646,7 @@ def load_cli_config() -> Dict[str, Any]:
     
     # CWD resolution for CLI/TUI. The gateway has its own config bridge in
     # gateway/run.py but may lazily import cli.py (triggering this code).
-    # Local backend: always os.getcwd(). Use `cd /dir && hermes` to control it.
+    # Local backend: always os.getcwd(). Use `cd /dir && vigil` to control it.
     # Non-local with placeholder: pop so terminal_tool uses its per-backend default.
     # Non-local with explicit path: keep as-is.
     _CWD_PLACEHOLDERS = (".", "auto", "cwd")
@@ -697,9 +697,9 @@ def load_cli_config() -> Dict[str, Any]:
     }
     
     # Bridge config → env vars for terminal_tool. TERMINAL_CWD is force-exported
-    # UNLESS we're inside a gateway process (detected by _HERMES_GATEWAY marker)
+    # UNLESS we're inside a gateway process (detected by _VIGIL_GATEWAY marker)
     # where it was already set correctly by gateway/run.py's config bridge.
-    _is_gateway = os.environ.get("_HERMES_GATEWAY") == "1"
+    _is_gateway = os.environ.get("_VIGIL_GATEWAY") == "1"
     for config_key, env_var in env_mappings.items():
         if config_key in terminal_config:
             if env_var == "TERMINAL_CWD":
@@ -776,15 +776,15 @@ def load_cli_config() -> Dict[str, Any]:
     if isinstance(security_config, dict):
         redact = security_config.get("redact_secrets")
         if redact is not None:
-            os.environ["HERMES_REDACT_SECRETS"] = str(redact).lower()
+            os.environ["VIGIL_REDACT_SECRETS"] = str(redact).lower()
 
     # Session-search index knobs (hermes_state reads the env carriers).
     sessions_config = defaults.get("sessions", {})
     if isinstance(sessions_config, dict):
         if "cjk_fts" in sessions_config:
-            os.environ["HERMES_CJK_FTS"] = str(sessions_config["cjk_fts"])
+            os.environ["VIGIL_CJK_FTS"] = str(sessions_config["cjk_fts"])
         if "search_slow_ms" in sessions_config:
-            os.environ["HERMES_SEARCH_SLOW_MS"] = str(
+            os.environ["VIGIL_SEARCH_SLOW_MS"] = str(
                 sessions_config["search_slow_ms"]
             )
 
@@ -794,7 +794,7 @@ def load_cli_config() -> Dict[str, Any]:
 CLI_CONFIG = load_cli_config()
 
 
-# Initialize centralized logging early — agent.log + errors.log in ~/.hermes/logs/.
+# Initialize centralized logging early — agent.log + errors.log in ~/.vigil/logs/.
 # This ensures CLI sessions produce a log trail even before AIAgent is instantiated.
 try:
     from hermes_logging import setup_logging
@@ -854,7 +854,7 @@ try:
         """Defer ``AsyncHttpxClientWrapper.__del__`` neutering until import.
 
         Saves ~166ms on cold CLI start where openai is never used (e.g.
-        ``hermes --help`` paths inside the chat command flow).  See
+        ``vigil --help`` paths inside the chat command flow).  See
         ``agent.auxiliary_client.neuter_async_httpx_del`` for full rationale
         on why ``__del__`` must be a no-op.
         """
@@ -1015,10 +1015,10 @@ def _prepare_deferred_agent_startup() -> None:
     global _deferred_agent_startup_done
     if _deferred_agent_startup_done:
         return
-    if os.environ.get("HERMES_DEFER_AGENT_STARTUP") != "1":
+    if os.environ.get("VIGIL_DEFER_AGENT_STARTUP") != "1":
         return
     _deferred_agent_startup_done = True
-    _accept_hooks = os.environ.get("HERMES_ACCEPT_HOOKS", "").lower() in {
+    _accept_hooks = os.environ.get("VIGIL_ACCEPT_HOOKS", "").lower() in {
         "1",
         "true",
         "yes",
@@ -1083,11 +1083,11 @@ def _arm_exit_watchdog(timeout_s: float | None = None) -> None:
     Daemon threads keep running through ``Py_FinalizeEx``'s thread joins,
     so the timer fires even when the main thread is stuck in teardown.
 
-    Tune with ``HERMES_EXIT_WATCHDOG_S`` (seconds); ``0`` disables.
+    Tune with ``VIGIL_EXIT_WATCHDOG_S`` (seconds); ``0`` disables.
     """
     if timeout_s is None:
         try:
-            timeout_s = float(os.getenv("HERMES_EXIT_WATCHDOG_S", "30"))
+            timeout_s = float(os.getenv("VIGIL_EXIT_WATCHDOG_S", "30"))
         except (TypeError, ValueError):
             timeout_s = 30.0
     if timeout_s <= 0:
@@ -1141,7 +1141,7 @@ def _arm_exit_watchdog_on_shutdown_signal() -> None:
     parked in a syscall that never observes the unwind, a prompt_toolkit
     teardown that never returns, or an agent worker blocking the ``finally``.
     When that happens the process has NO backstop and a "dead" CLI lingers
-    (observed: ``hermes --tui`` alive ~47 min at 4% CPU after terminal close —
+    (observed: ``vigil --tui`` alive ~47 min at 4% CPU after terminal close —
     the #65998 class).
 
     Arming at signal time closes that window. The leash is 2× the normal
@@ -1161,7 +1161,7 @@ def _arm_exit_watchdog_on_shutdown_signal() -> None:
         return
     _signal_watchdog_armed = True
     try:
-        base = float(os.getenv("HERMES_EXIT_WATCHDOG_S", "30"))
+        base = float(os.getenv("VIGIL_EXIT_WATCHDOG_S", "30"))
     except (TypeError, ValueError):
         base = 30.0
     if base <= 0:
@@ -1476,7 +1476,7 @@ def _resolve_worktree_base(
     """Resolve the freshest base ref to branch a new worktree from.
 
     The standalone clone's ``HEAD`` can lag the remote by hundreds of commits
-    (the ``~/.hermes/hermes-agent`` clone is updated only by ``hermes update``,
+    (the ``~/.vigil/hermes-agent`` clone is updated only by ``vigil update``,
     not on every session). Branching a worktree from that stale ``HEAD`` roots
     every new branch on an old base — so the PR diff GitHub computes against
     current ``main`` balloons with unrelated changes, and the agent has to
@@ -1493,7 +1493,7 @@ def _resolve_worktree_base(
          old behavior, never worse than before.
 
     "Refresh" is deliberately cheap on the startup path (the fetch here used
-    to stall ``hermes -w`` launches for 30-60s on flaky smart-HTTP
+    to stall ``vigil -w`` launches for 30-60s on flaky smart-HTTP
     connections):
 
     - The fetch is SKIPPED entirely when the repo's ``FETCH_HEAD`` is younger
@@ -1627,8 +1627,8 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True) -> Optional[D
         return None
 
     short_id = uuid.uuid4().hex[:8]
-    wt_name = f"hermes-{short_id}"
-    branch_name = f"hermes/{wt_name}"
+    wt_name = f"vigil-{short_id}"
+    branch_name = f"vigil/{wt_name}"
 
     worktrees_dir = Path(repo_root) / ".worktrees"
     worktrees_dir.mkdir(parents=True, exist_ok=True)
@@ -1769,7 +1769,7 @@ def _setup_worktree(repo_root: str = None, sync_base: bool = True) -> Optional[D
     # it is actively in use.  Fail-soft: a lock failure never blocks the session.
     try:
         subprocess.run(
-            ["git", "worktree", "lock", "--reason", f"hermes pid={os.getpid()}", str(wt_path)],
+            ["git", "worktree", "lock", "--reason", f"vigil pid={os.getpid()}", str(wt_path)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10, cwd=repo_root,
         )
         logger.debug("Worktree locked: %s (pid=%s)", wt_path, os.getpid())
@@ -1995,8 +1995,8 @@ def _worktree_commits_all_merged_upstream(
 def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10):
     """Classify a worktree's git lock as live, dead, or absent.
 
-    ``hermes -w`` locks each worktree with reason ``hermes pid=<pid>`` so a
-    concurrent hermes process' startup prune leaves an in-use worktree alone.
+    ``vigil -w`` locks each worktree with reason ``vigil pid=<pid>`` so a
+    concurrent vigil process' startup prune leaves an in-use worktree alone.
     But a *crashed* session leaves the lock behind forever, and
     ``git worktree remove --force`` (single ``-f``) refuses to remove a locked
     worktree — so dead-locked worktrees accumulate indefinitely. This lets the
@@ -2004,7 +2004,7 @@ def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10
 
     - ``"live"``  — locked and the owning pid is still running (skip it).
     - ``"dead"``  — locked but the owning pid is gone, or the reason isn't a
-                    parseable hermes lock (safe to unlock + reap).
+                    parseable vigil lock (safe to unlock + reap).
     - ``None``    — not locked at all.
 
     Fails SAFE toward ``"live"``: if git can't be queried at all we cannot
@@ -2035,11 +2035,11 @@ def _worktree_lock_is_live(repo_root: str, worktree_path: str, timeout: int = 10
             if current != target:
                 continue
             reason = line[len("locked"):].strip()
-            m = re.search(r"hermes pid=(\d+)", reason)
+            m = re.search(r"vigil pid=(\d+)", reason)
             if not m:
-                # Locked by something we don't recognize as a hermes session
+                # Locked by something we don't recognize as a vigil session
                 # (or lock reason unavailable). Treat as dead — a foreign lock
-                # on a hermes -w worktree is almost certainly a leftover, and
+                # on a vigil -w worktree is almost certainly a leftover, and
                 # the age/dirty/unpushed gates already ran before we got here.
                 return "dead"
             pid = int(m.group(1))
@@ -2201,7 +2201,7 @@ def _run_checkpoint_auto_maintenance() -> None:
         # workdir at startup is ambiguous (deleted project vs. an unmounted
         # external volume / network share / VPN not yet up) and this sweep
         # runs unattended. Orphan cleanup is only ever done via the explicit
-        # `hermes checkpoints prune` command, which the user has to invoke.
+        # `vigil checkpoints prune` command, which the user has to invoke.
         maybe_auto_prune_checkpoints(
             retention_days=int(cfg.get("retention_days", 7)),
             min_interval_hours=int(cfg.get("min_interval_hours", 24)),
@@ -2217,10 +2217,10 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
 
     Covers EVERY directory under ``.worktrees/`` except kanban task trees
     (``t_<hex>`` — owned by the kanban dispatcher's own gc). Scratch trees
-    created by ``hermes -w`` (``hermes-*``) age out fast; named trees created
+    created by ``vigil -w`` (``vigil-*``) age out fast; named trees created
     manually for salvage/review lanes age out on a slower schedule:
 
-    - ``hermes-*``: skip under 24h; reap 24h+ when clean and merged/pushed;
+    - ``vigil-*``: skip under 24h; reap 24h+ when clean and merged/pushed;
       72h+ is the aggressive tier (still never deletes real work).
     - named trees: same logic at 3x the timeline (72h soft / 9d hard).
 
@@ -2231,8 +2231,8 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
       squash-merged-PR case, which is the dominant ``.worktrees/`` leak since
       those commits stay unreachable from ``refs/remotes/*`` forever.
 
-    Lock handling (orthogonal to age): ``hermes -w`` locks each worktree with
-    reason ``hermes pid=<pid>`` so a concurrent hermes process leaves an in-use
+    Lock handling (orthogonal to age): ``vigil -w`` locks each worktree with
+    reason ``vigil pid=<pid>`` so a concurrent vigil process leaves an in-use
     worktree alone. A *live*-locked worktree is skipped at any age; a
     *dead*-locked one (owning pid gone — a crashed session) is unlocked first
     so ``git worktree remove --force`` can actually reap it, otherwise those
@@ -2246,10 +2246,10 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
     are older than 7 days are listed in a single WARNING so real in-flight
     work can't rot silently.
 
-    Also prunes orphaned ``hermes/*`` and ``pr-*`` local branches that
+    Also prunes orphaned ``vigil/*`` and ``pr-*`` local branches that
     have no corresponding worktree.
 
-    Performance: this runs on the startup path of every ``hermes -w`` session,
+    Performance: this runs on the startup path of every ``vigil -w`` session,
     and each candidate tree costs several git subprocesses (the ``git cherry``
     patch-equivalence probe dominates at ~0.2-1.0s on a large repo). With
     dozens of accumulated worktrees the serial version added ~11-18s of latency
@@ -2277,7 +2277,7 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
     stale_work_cutoff = now - (7 * 24 * 3600)
     preserved_stale: list = []
     # Kanban task worktrees (<repo>/.worktrees/t_<hex>) have their own
-    # dispatcher-driven lifecycle (hermes kanban gc) — never touch them here.
+    # dispatcher-driven lifecycle (vigil kanban gc) — never touch them here.
     kanban_re = re.compile(r"^t_[0-9a-f]+$")
 
     # ── Phase 1: age filter (no subprocesses) ───────────────────────────────
@@ -2288,9 +2288,9 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
         if not entry.is_dir() or kanban_re.match(entry.name):
             continue
 
-        # Scratch trees (hermes-*) age out on the default schedule; named
+        # Scratch trees (vigil-*) age out on the default schedule; named
         # trees (salvage/review lanes someone created deliberately) get 3x.
-        scratch = entry.name.startswith("hermes-")
+        scratch = entry.name.startswith("vigil-")
         tier_hours = max_age_hours if scratch else max_age_hours * 3
         soft_cutoff = now - (tier_hours * 3600)
         hard_cutoff = now - (tier_hours * 3 * 3600)
@@ -2340,7 +2340,7 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
                 return (entry, mtime, force, "unpushed", None)
 
         # Respect git-native session locks. A lock owned by a still-running
-        # hermes process means the worktree is actively in use — never touch
+        # vigil process means the worktree is actively in use — never touch
         # it. A lock whose owning pid is gone is a crashed session's leftover:
         # unlock it so `git worktree remove --force` (single -f) can reap it,
         # otherwise dead-locked worktrees pile up indefinitely.
@@ -2355,7 +2355,7 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
     try:
         if workers > 1:
             with concurrent.futures.ThreadPoolExecutor(
-                max_workers=workers, thread_name_prefix="hermes-wt-prune"
+                max_workers=workers, thread_name_prefix="vigil-wt-prune"
             ) as pool:
                 verdicts = list(pool.map(_classify, candidates))
         else:
@@ -2431,9 +2431,9 @@ def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
 
 
 def _prune_orphaned_branches(repo_root: str) -> None:
-    """Delete local ``hermes/hermes-*`` and ``pr-*`` branches with no worktree.
+    """Delete local ``vigil/vigil-*`` and ``pr-*`` branches with no worktree.
 
-    These are auto-generated by ``hermes -w`` sessions and PR review
+    These are auto-generated by ``vigil -w`` sessions and PR review
     workflows respectively.  Once their worktree is gone they serve no
     purpose and just accumulate.
     """
@@ -2479,7 +2479,7 @@ def _prune_orphaned_branches(repo_root: str) -> None:
     orphaned = [
         b for b in all_branches
         if b not in active_branches
-        and (b.startswith("hermes/hermes-") or b.startswith("pr-"))
+        and (b.startswith("vigil/vigil-") or b.startswith("pr-"))
     ]
 
     if not orphaned:
@@ -2547,12 +2547,12 @@ def _hex_to_ansi(hex_color: str, *, bold: bool = False) -> str:
 # Terminal.app / iTerm2 background.
 #
 # Detection priority:
-#   1. HERMES_LIGHT / HERMES_TUI_LIGHT env (true/false) — explicit override
-#   2. HERMES_TUI_THEME=light|dark — explicit theme
-#   3. HERMES_TUI_BACKGROUND=#RRGGBB — explicit bg hint
+#   1. VIGIL_LIGHT / VIGIL_TUI_LIGHT env (true/false) — explicit override
+#   2. VIGIL_TUI_THEME=light|dark — explicit theme
+#   3. VIGIL_TUI_BACKGROUND=#RRGGBB — explicit bg hint
 #   4. COLORFGBG env (set by xterm/Konsole/urxvt) — bg slot 7/15 = light
 #   5. OSC 11 query (\x1b]11;?\x1b\\) — ask the terminal directly
-#   6. Default: assume dark (matches the legacy Vigil assumption)
+#   6. Default: assume dark (matches the legacy upstream assumption)
 #
 # Cached after first call so we don't query the terminal repeatedly.
 _LIGHT_MODE_CACHE: bool | None = None
@@ -2655,7 +2655,7 @@ def _detect_light_mode() -> bool:
     result = False
     try:
         # 1. Explicit env override
-        for var in ("HERMES_LIGHT", "HERMES_TUI_LIGHT"):
+        for var in ("VIGIL_LIGHT", "VIGIL_TUI_LIGHT"):
             v = (os.environ.get(var) or "").strip().lower()
             if _TRUE_RE.match(v):
                 result = True
@@ -2665,7 +2665,7 @@ def _detect_light_mode() -> bool:
                 _LIGHT_MODE_CACHE = result
                 return result
         # 2. Theme hint
-        theme = (os.environ.get("HERMES_TUI_THEME") or "").strip().lower()
+        theme = (os.environ.get("VIGIL_TUI_THEME") or "").strip().lower()
         if theme == "light":
             result = True
             _LIGHT_MODE_CACHE = result
@@ -2674,7 +2674,7 @@ def _detect_light_mode() -> bool:
             _LIGHT_MODE_CACHE = result
             return result
         # 3. Explicit bg hex
-        bg_hint = os.environ.get("HERMES_TUI_BACKGROUND") or ""
+        bg_hint = os.environ.get("VIGIL_TUI_BACKGROUND") or ""
         bg_lum = _luminance_from_hex(bg_hint)
         if bg_lum is not None:
             result = bg_lum >= 0.5
@@ -3928,7 +3928,7 @@ VIGIL_HERO = """[bold #FFD700]◉[/]
 
 
 # ASCII Art - Vigil Caduceus (compact, fits in left panel)
-HERMES_CADUCEUS = """[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
+VIGIL_CADUCEUS = """[#CD7F32]⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣀⡀⠀⣀⣀⠀⢀⣀⡀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀[/]
 [#CD7F32]⠀⠀⠀⠀⠀⠀⢀⣠⣴⣾⣿⣿⣇⠸⣿⣿⠇⣸⣿⣿⣷⣦⣄⡀⠀⠀⠀⠀⠀⠀[/]
 [#FFBF00]⠀⢀⣠⣴⣶⠿⠋⣩⡿⣿⡿⠻⣿⡇⢠⡄⢸⣿⠟⢿⣿⢿⣍⠙⠿⣶⣦⣄⡀⠀[/]
 [#FFBF00]⠀⠀⠉⠉⠁⠶⠟⠋⠀⠉⠀⢀⣈⣁⡈⢁⣈⣁⡀⠀⠉⠀⠙⠻⠶⠈⠉⠉⠀⠀[/]
@@ -3967,7 +3967,7 @@ def _build_compact_banner() -> str:
         line1 = f"{agent_name} - 运维 Agent Harness"
         tiny_line = agent_name
 
-    if os.environ.get("HERMES_FAST_STARTUP_BANNER") == "1":
+    if os.environ.get("VIGIL_FAST_STARTUP_BANNER") == "1":
         from hermes_cli import __release_date__ as _release_date
         from hermes_cli import __version__ as _version
 
@@ -4139,7 +4139,7 @@ def save_config_value(key_path: str, value: any) -> bool:
     Save a value to the active config file at the specified key path.
     
     Respects the same lookup order as load_cli_config():
-    1. ~/.hermes/config.yaml (user config - preferred, used if it exists)
+    1. ~/.vigil/config.yaml (user config - preferred, used if it exists)
     2. ./cli-config.yaml (project config - fallback)
     
     Args:
@@ -4149,8 +4149,8 @@ def save_config_value(key_path: str, value: any) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    # Runtime persistence ALWAYS targets the user's HERMES_HOME config.yaml,
-    # creating it if needed. Resolve HERMES_HOME live (not the import-time
+    # Runtime persistence ALWAYS targets the user's VIGIL_HOME config.yaml,
+    # creating it if needed. Resolve VIGIL_HOME live (not the import-time
     # _hermes_home constant) so profile switches and test isolation land right.
     #
     # We deliberately do NOT fall back to the repo's project cli-config.yaml:
@@ -4159,13 +4159,13 @@ def save_config_value(key_path: str, value: any) -> bool:
     # load_wake_word_config) never read it. Writing a user setting there means
     # the reader never sees it. This was the "wake-word ear reverts to disabled
     # after restart" bug — the toggle's persist wrote to cli-config.yaml (which
-    # exists in the checkout) while startup read HERMES_HOME/config.yaml, so the
+    # exists in the checkout) while startup read VIGIL_HOME/config.yaml, so the
     # setting silently vanished every restart on any install whose
-    # HERMES_HOME/config.yaml didn't exist yet.
+    # VIGIL_HOME/config.yaml didn't exist yet.
     config_path = get_hermes_home() / 'config.yaml'
     
     try:
-        # Ensure parent directory exists (for ~/.hermes/config.yaml on first use)
+        # Ensure parent directory exists (for ~/.vigil/config.yaml on first use)
         config_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Save back atomically while preserving comments, ordering, quotes, and
@@ -4180,7 +4180,7 @@ def save_config_value(key_path: str, value: any) -> bool:
             pass
 
         # Model/provider changes made through /model and the TUI use this
-        # persistence path rather than ``hermes config set``. Surface the same
+        # persistence path rather than ``vigil config set``. Surface the same
         # fail-closed cron drift warning for every operator-facing model switch.
         from hermes_cli.config import (
             warn_unpinned_cron_jobs_after_model_config_change,
@@ -4206,7 +4206,7 @@ def _normalize_moa_model(model: Optional[str]) -> tuple[Optional[str], Optional[
 
     Returns ``("moa", "<preset>")`` when *model* selects the MoA virtual
     provider, otherwise ``(None, model)`` unchanged. This gives non-interactive
-    ``hermes chat -Q -m moa:<preset>`` the same routing the interactive
+    ``vigil chat -Q -m moa:<preset>`` the same routing the interactive
     ``/moa`` command and the model picker already use: ``resolve_runtime_provider``
     handles ``requested_provider == "moa"`` and ``agent_init`` builds the
     MoAClient off ``provider == "moa"``. Without this the raw ``moa:<preset>``
@@ -4412,8 +4412,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # through MoA instead of hitting the real provider with an unknown
         # model (#56828). A ``moa:`` prefix wins over an explicit ``--provider``.
         _moa_provider_override, self.model = _normalize_moa_model(self.model)
-        # Read max_tokens from config (env var override: HERMES_MAX_TOKENS)
-        _env_mt = os.environ.get("HERMES_MAX_TOKENS")
+        # Read max_tokens from config (env var override: VIGIL_MAX_TOKENS)
+        _env_mt = os.environ.get("VIGIL_MAX_TOKENS")
         if _env_mt:
             try:
                 self.max_tokens = int(_env_mt)
@@ -4450,7 +4450,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             _moa_provider_override
             or provider
             or CLI_CONFIG["model"].get("provider")
-            or os.getenv("HERMES_INFERENCE_PROVIDER")
+            or os.getenv("VIGIL_INFERENCE_PROVIDER")
             or "auto"
         )
         self._provider_source: Optional[str] = None
@@ -4483,9 +4483,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # other paths may bypass it. This fallback is therefore the only
             # safety net for configs that still carry the root key.
             self.max_turns = CLI_CONFIG["max_turns"]
-        elif os.getenv("HERMES_MAX_ITERATIONS"):
+        elif os.getenv("VIGIL_MAX_ITERATIONS"):
             try:
-                self.max_turns = int(os.getenv("HERMES_MAX_ITERATIONS", ""))
+                self.max_turns = int(os.getenv("VIGIL_MAX_ITERATIONS", ""))
             except (TypeError, ValueError):
                 self.max_turns = 500
         else:
@@ -4514,14 +4514,14 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self.checkpoint_max_file_size_mb = cp_cfg.get("max_file_size_mb", 10)
         self.pass_session_id = pass_session_id
         # --ignore-rules: honor either the constructor flag or the env var set
-        # by `hermes chat --ignore-rules` in hermes_cli/main.py. When true we
+        # by `vigil chat --ignore-rules` in hermes_cli/main.py. When true we
         # pass skip_context_files=True and skip_memory=True to AIAgent so
         # AGENTS.md/SOUL.md/.cursorrules and persistent memory are not loaded.
-        self.ignore_rules = ignore_rules or os.environ.get("HERMES_IGNORE_RULES") == "1"
+        self.ignore_rules = ignore_rules or os.environ.get("VIGIL_IGNORE_RULES") == "1"
         
         # Ephemeral system prompt: env var takes precedence, then config
         self.system_prompt = (
-            os.getenv("HERMES_EPHEMERAL_SYSTEM_PROMPT", "")
+            os.getenv("VIGIL_EPHEMERAL_SYSTEM_PROMPT", "")
             or CLI_CONFIG["agent"].get("system_prompt", "")
         )
         self.personalities = CLI_CONFIG["agent"].get("personalities", {})
@@ -4637,12 +4637,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # Opportunistic state.db maintenance — runs at most once per
         # min_interval_hours, tracked via state_meta in state.db itself so
-        # it's shared across all Vigil processes for this HERMES_HOME.
+        # it's shared across all Vigil processes for this VIGIL_HOME.
         # Never blocks startup on failure.
         _run_state_db_auto_maintenance(self._session_db)
 
         # Opportunistic shadow-repo cleanup — deletes orphan/stale
-        # checkpoint repos under ~/.hermes/checkpoints/.  Opt-in via
+        # checkpoint repos under ~/.vigil/checkpoints/.  Opt-in via
         # checkpoints.auto_prune, idempotent via .last_prune marker.
         _run_checkpoint_auto_maintenance()
 
@@ -5984,7 +5984,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     def _pet_resolve_config(self) -> None:
         """(Re)resolve the active pet from config — picks up live enable/disable/
 
-        switch made via ``/pet`` or ``hermes pets`` without a restart, mirroring
+        switch made via ``/pet`` or ``vigil pets`` without a restart, mirroring
         the TUI's steady poll. Cheap and fail-open: any problem disables the pet.
         """
         try:
@@ -7546,9 +7546,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """Show a startup banner if any unacked security advisories match.
 
         Renders a single bold-red box on stderr (so piped stdout remains
-        clean) listing the worst hit and pointing at ``hermes doctor``.
+        clean) listing the worst hit and pointing at ``vigil doctor``.
         Banner-cache rate-limits this to once per 24h per advisory; full
-        remediation lives behind ``hermes doctor`` so the banner stays
+        remediation lives behind ``vigil doctor`` so the banner stays
         small.
         """
         try:
@@ -7603,7 +7603,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         
         # Tool discovery is intentionally deferred on the Termux bare prompt
         # path; availability warnings are shown once tools are initialized.
-        if os.environ.get("HERMES_DEFER_AGENT_STARTUP") != "1":
+        if os.environ.get("VIGIL_DEFER_AGENT_STARTUP") != "1":
             self._show_tool_availability_warnings()
 
         # Warn about low context lengths (common with local servers). Keep
@@ -7765,7 +7765,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     def _try_attach_clipboard_image(self) -> bool:
         """Check clipboard for an image and attach it if found.
 
-        Saves the image to ~/.hermes/images/ and appends the path to
+        Saves the image to ~/.vigil/images/ and appends the path to
         ``_attached_images``.  Returns True if an image was attached.
         """
         from hermes_cli.clipboard import save_clipboard_image
@@ -7950,7 +7950,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     def _show_status(self):
         """Show compact startup status line."""
         # Avoid pulling the full tool registry into the bare Termux prompt path.
-        if os.environ.get("HERMES_DEFER_AGENT_STARTUP") == "1":
+        if os.environ.get("VIGIL_DEFER_AGENT_STARTUP") == "1":
             tool_status = "tools deferred"
         else:
             tools = get_tool_definitions(enabled_toolsets=self.enabled_toolsets, quiet_mode=True)
@@ -8091,7 +8091,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         skill_commands = _ensure_skill_commands()
         if skill_commands:
-            # 批次二十六：折叠为一行（运维用户用不到 hermes 继承的消费级
+            # 批次二十六：折叠为一行（运维用户用不到 vigil 继承的消费级
             # skill）；skill 命令注册/执行机制完全不动，/skills 或 --help-all
             # 仍可查看全部。
             _cprint(
@@ -8426,7 +8426,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         Starting the CLI and immediately quitting (or rotating with /new,
         /clear) used to leave an empty untitled row behind that clutters
-        ``/resume`` and ``hermes sessions list``. Delegates the
+        ``/resume`` and ``vigil sessions list``. Delegates the
         check-and-delete to ``SessionDB.delete_session_if_empty``, which
         only removes rows with no messages, no title, and no child
         sessions. Ported from google-gemini/gemini-cli#27770.
@@ -8532,7 +8532,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             except Exception:
                 pass
             # Don't let immediately-rotated empty sessions pile up in
-            # /resume and `hermes sessions list` (gemini-cli#27770 port).
+            # /resume and `vigil sessions list` (gemini-cli#27770 port).
             self._discard_session_if_empty(old_session_id)
 
         self.session_start = datetime.now()
@@ -8630,7 +8630,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     self.agent._session_db_created = False
                     self._session_db.create_session(
                         session_id=self.session_id,
-                        source=os.environ.get("HERMES_SESSION_SOURCE", "cli"),
+                        source=os.environ.get("VIGIL_SESSION_SOURCE", "cli"),
                         model=self.model,
                         model_config={
                             "max_iterations": self.max_turns,
@@ -8741,11 +8741,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
 
     def save_conversation(self):
-        """Save the current conversation to a JSON snapshot under ~/.hermes/sessions/saved/.
+        """Save the current conversation to a JSON snapshot under ~/.vigil/sessions/saved/.
 
         The snapshot is a convenience export for sharing or off-line inspection;
         every message is already persisted incrementally to the SQLite session
-        DB, so the live session remains resumable via ``hermes --resume <id>``
+        DB, so the live session remains resumable via ``vigil --resume <id>``
         regardless of whether the user ever runs ``/save``.
         """
         if not self.conversation_history:
@@ -8759,7 +8759,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         except Exception as e:
             print(f"(x_x) Failed to create save directory {saved_dir}: {e}")
             return
-        path = saved_dir / f"hermes_conversation_{timestamp}.json"
+        path = saved_dir / f"vigil_conversation_{timestamp}.json"
 
         try:
             with open(path, "w", encoding="utf-8") as f:
@@ -9625,7 +9625,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 return
             provider_data = providers[selected]
             # Use the curated model list from list_authenticated_providers()
-            # (same lists as `hermes model` and gateway pickers).
+            # (same lists as `vigil model` and gateway pickers).
             # Only fall back to the live provider catalog when the curated
             # list is empty (e.g. user-defined endpoints with no curated list).
             model_list = provider_data.get("models", [])
@@ -10558,7 +10558,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             self._handle_browser_command(cmd_original)
         elif canonical == "plugins":
             try:
-                # Discover from disk (bundled + user), matching `hermes plugins
+                # Discover from disk (bundled + user), matching `vigil plugins
                 # list` — so installed-but-not-enabled plugins are visible here
                 # too. The plugin manager only knows about *loaded* plugins, so
                 # using it alone made freshly-installed, not-yet-enabled plugins
@@ -10577,7 +10577,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 # `/plugins` is a quick glance — default to user-installed
                 # plugins (what the user actually added). Bundled provider/
                 # platform plugins are summarized on one line; the full
-                # catalog lives behind `hermes plugins list`.
+                # catalog lives behind `vigil plugins list`.
                 user_entries = [e for e in entries if e[3] != "bundled"]
                 bundled_count = len(entries) - len(user_entries)
 
@@ -11272,7 +11272,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             enable_session_yolo(new_session_id)
             disable_session_yolo(old_session_id)
             # Carry the persisted flag onto the continuation row so a later
-            # `hermes --resume <new_id>` restores the bypass too. getattr
+            # `vigil --resume <new_id>` restores the bypass too. getattr
             # guard: tests call this unbound against a minimal stand-in.
             _persist = getattr(self, "_persist_session_yolo", None)
             if _persist:
@@ -11285,7 +11285,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         ``enable_session_yolo`` / ``disable_session_yolo`` write to) so the
         status bar reflects the actual bypass state instead of a stale env
         var. Also honors the process-start ``--yolo`` flag, which freezes
-        ``HERMES_YOLO_MODE`` into ``_YOLO_MODE_FROZEN`` before tool imports
+        ``VIGIL_YOLO_MODE`` into ``_YOLO_MODE_FROZEN`` before tool imports
         happen.
         """
         try:
@@ -11310,7 +11310,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         Per-session toggle that mirrors the gateway and TUI ``/yolo`` handlers
         (see ``gateway/run.py:_handle_yolo_command`` and
         ``tui_gateway/server.py`` key=="yolo"). We deliberately do NOT mutate
-        ``HERMES_YOLO_MODE`` here — that env var is read once at module import
+        ``VIGIL_YOLO_MODE`` here — that env var is read once at module import
         time into ``tools.approval._YOLO_MODE_FROZEN`` to keep prompt-injected
         skills from flipping the bypass mid-session, so setting it after CLI
         startup is a silent no-op. Routing through ``enable_session_yolo`` /
@@ -11353,7 +11353,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """Persist the YOLO flag to the session row so --resume restores it.
 
         Best-effort: the in-memory toggle is authoritative for this process;
-        persistence only affects a future ``hermes --resume``. Skipped when the
+        persistence only affects a future ``vigil --resume``. Skipped when the
         session store is unavailable or the row doesn't exist yet (the row is
         created lazily on the first turn — ``_toggle_yolo`` before any chat
         writes nothing, and the launch-time ``--yolo`` flag is carried into the
@@ -12252,7 +12252,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             print(f"  ❌ MCP reload failed: {e}")
 
     def _reload_skills(self) -> None:
-        """Reload skills: rescan ~/.hermes/skills/ and queue a note for the
+        """Reload skills: rescan ~/.vigil/skills/ and queue a note for the
         next user turn.
 
         Skills don't need to live in the system prompt for the model to use
@@ -12903,9 +12903,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
             # Use MP3 output for CLI playback (afplay doesn't handle OGG well).
             # The TTS tool may auto-convert MP3->OGG, but the original MP3 remains.
-            os.makedirs(os.path.join(tempfile.gettempdir(), "hermes_voice"), exist_ok=True)
+            os.makedirs(os.path.join(tempfile.gettempdir(), "vigil_voice"), exist_ok=True)
             mp3_path = os.path.join(
-                tempfile.gettempdir(), "hermes_voice",
+                tempfile.gettempdir(), "vigil_voice",
                 f"tts_{time.strftime('%Y%m%d_%H%M%S')}.mp3",
             )
 
@@ -15116,7 +15116,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # include `-p <profile>` for non-default profiles. Without this,
             # copying the hint from a non-default profile fails to find the
             # session on the next invocation. The "default" and "custom"
-            # profile names use the standard HERMES_HOME, so no -p needed.
+            # profile names use the standard VIGIL_HOME, so no -p needed.
             try:
                 from hermes_cli.profiles import get_active_profile_name
                 _active_profile = get_active_profile_name()
@@ -15420,7 +15420,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         # First-run: a completely unconfigured install must route into
         # provider onboarding, not a chat that cannot work. Previously a
-        # keyless `hermes` accepted a message, spun for ~30s, then failed
+        # keyless `vigil` accepted a message, spun for ~30s, then failed
         # with a provider-specific error the user never chose. Only fires
         # on a real TTY; quiet/single-query paths keep their own handling.
         try:
@@ -15464,7 +15464,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # main thread simply blocks on the remaining import work instead of
         # redoing it. Skipped when agent startup is explicitly deferred
         # (Termux) — that path defers heavy work on purpose.
-        if os.environ.get("HERMES_DEFER_AGENT_STARTUP") != "1":
+        if os.environ.get("VIGIL_DEFER_AGENT_STARTUP") != "1":
             def _prewarm_agent_runtime() -> None:
                 try:
                     import run_agent  # noqa: F401  (imports model_tools + tool registry)
@@ -15483,11 +15483,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # won't affect the running process — we just want the operator to
         # see that they're running without the safety net.
         try:
-            _redact_raw = os.getenv("HERMES_REDACT_SECRETS", "true")
+            _redact_raw = os.getenv("VIGIL_REDACT_SECRETS", "true")
             if _redact_raw.lower() not in {"1", "true", "yes", "on"}:
                 self._console_print(
                     "[bold red]⚠  Secret redaction is DISABLED[/] "
-                    f"(HERMES_REDACT_SECRETS={_redact_raw}). "
+                    f"(VIGIL_REDACT_SECRETS={_redact_raw}). "
                     "API keys and tokens may appear verbatim in chat output, "
                     "session JSONs, and logs. Set "
                     "[cyan]security.redact_secrets: true[/] in config.yaml "
@@ -15644,10 +15644,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._voice_tts_stop = None  # active streaming pipeline's stop event
         self._voice_barge_capture = threading.Event()  # barge monitor is capturing the interruption
 
-        if os.environ.get("HERMES_DEFER_AGENT_STARTUP") != "1":
+        if os.environ.get("VIGIL_DEFER_AGENT_STARTUP") != "1":
             self._install_tool_callbacks()
 
-        if os.environ.get("HERMES_DEFER_AGENT_STARTUP") != "1":
+        if os.environ.get("VIGIL_DEFER_AGENT_STARTUP") != "1":
             self._ensure_tirith_security()
         
         # Key bindings for the input area
@@ -18032,7 +18032,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             spawned with ``os.setsid`` and therefore survives as an orphan
             with PPID=1.
 
-            Grace window (``HERMES_SIGTERM_GRACE``, default 1.5 s) gives
+            Grace window (``VIGIL_SIGTERM_GRACE``, default 1.5 s) gives
             the daemon time to: detect the interrupt (next 200 ms poll) →
             call _kill_process (SIGTERM + 1 s wait + SIGKILL if needed) →
             return from _wait_for_process.  ``time.sleep`` releases the
@@ -18067,7 +18067,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         _signal_agent, f"received signal {signum}"
                     )
                     try:
-                        _grace = float(os.getenv("HERMES_SIGTERM_GRACE", "1.5"))
+                        _grace = float(os.getenv("VIGIL_SIGTERM_GRACE", "1.5"))
                     except (TypeError, ValueError):
                         _grace = 1.5
                     if _grace > 0:
@@ -18109,7 +18109,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             # Windows: install a SIGINT handler that absorbs the signal
             # instead of letting Python's default handler raise
             # KeyboardInterrupt in MainThread. Windows Terminal / Win32
-            # delivers spurious CTRL_C_EVENT to the hermes process when
+            # delivers spurious CTRL_C_EVENT to the vigil process when
             # child processes are spawned from background threads (agent
             # subprocess Popen path). The default Python SIGINT handler
             # would then unwind prompt_toolkit's app.run(), trigger
@@ -18289,7 +18289,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 except (Exception, KeyboardInterrupt) as e:
                     logger.debug("Could not close session in DB: %s", e)
                 # Started-and-immediately-quit sessions never gained content;
-                # drop the empty row so /resume and `hermes sessions list`
+                # drop the empty row so /resume and `vigil sessions list`
                 # stay clean (gemini-cli#27770 port). No-op for resumed or
                 # titled sessions and anything with messages or children.
                 if not getattr(self, '_delete_session_on_exit', False):
@@ -18350,7 +18350,7 @@ def _run_kanban_goal_loop_q(cli: "HermesCLI", first_response: str) -> None:
     """Drive a kanban goal_mode worker through the Ralph-style goal loop.
 
     Called from the quiet single-query path AFTER the worker's first turn,
-    only when ``HERMES_KANBAN_GOAL_MODE`` is set (dispatcher-spawned
+    only when ``VIGIL_KANBAN_GOAL_MODE`` is set (dispatcher-spawned
     goal_mode card). Wires the worker's ``run_conversation`` and the kanban
     DB into ``goals.run_kanban_goal_loop``. All errors are swallowed by the
     caller — a broken goal loop must never wedge a worker, the dispatcher's
@@ -18358,7 +18358,7 @@ def _run_kanban_goal_loop_q(cli: "HermesCLI", first_response: str) -> None:
     """
     import os as _os
 
-    task_id = (_os.environ.get("HERMES_KANBAN_TASK") or "").strip()
+    task_id = (_os.environ.get("VIGIL_KANBAN_TASK") or "").strip()
     if not task_id:
         return
 
@@ -18463,7 +18463,7 @@ def main(
     ignore_rules: bool = False,
 ):
     """
-    Vigil CLI - Interactive AI Assistant (ops agent harness, fork of Vigil)
+    Vigil CLI - Interactive AI Assistant (ops agent harness, fork of an MIT-licensed upstream agent harness)
     
     Args:
         query: Single query to execute (then exit). Alias: -q
@@ -18509,7 +18509,7 @@ def main(
 
     # Signal to terminal_tool that we're in interactive mode
     # This enables interactive sudo password prompts with timeout
-    os.environ["HERMES_INTERACTIVE"] = "1"
+    os.environ["VIGIL_INTERACTIVE"] = "1"
     
     # Handle gateway mode (messaging + cron)
     if gateway:
@@ -18666,7 +18666,7 @@ def main(
     # per-thread interrupt flag the worker's poll loop checks every 200 ms.
     # Give the worker a grace window to call _kill_process (SIGTERM to the
     # process group, then SIGKILL after 1 s), then raise KeyboardInterrupt
-    # so main unwinds normally.  HERMES_SIGTERM_GRACE overrides the 1.5 s
+    # so main unwinds normally.  VIGIL_SIGTERM_GRACE overrides the 1.5 s
     # default for debugging.
     def _signal_handler_q(signum, frame):
         logger.debug("Received signal %s in single-query mode", signum)
@@ -18679,7 +18679,7 @@ def main(
             if _agent is not None:
                 request_hard_interrupt(_agent, f"received signal {signum}")
                 try:
-                    _grace = float(os.getenv("HERMES_SIGTERM_GRACE", "1.5"))
+                    _grace = float(os.getenv("VIGIL_SIGTERM_GRACE", "1.5"))
                 except (TypeError, ValueError):
                     _grace = 1.5
                 if _grace > 0:
@@ -18698,7 +18698,7 @@ def main(
         # first so the final debug trace isn't lost; SIGALRM deadman guards
         # the flush against any rare blocking-I/O case (the reporter measured
         # flush in <1ms; the alarm is a failsafe, not the common path).
-        if os.environ.get("HERMES_KANBAN_TASK"):
+        if os.environ.get("VIGIL_KANBAN_TASK"):
             try:
                 import signal as _sig_mod
                 if hasattr(_sig_mod, "SIGALRM"):
@@ -18739,7 +18739,7 @@ def main(
             sys.exit(1)
         try:
             query, single_query_images = _collect_query_images(query, image)
-            # Kanban workers spawn with ``hermes chat -q "work kanban task <id>"``;
+            # Kanban workers spawn with ``vigil chat -q "work kanban task <id>"``;
             # the actual task description lives in the task body. Mirror the
             # gateway/CLI behaviour for inbound images by scanning the body for
             # local image paths and http(s) image URLs and attaching them to the
@@ -18747,7 +18747,7 @@ def main(
             # path or URL into a kanban task body never get it routed to the
             # model's vision input.
             single_query_image_urls: list[str] = []
-            _kanban_task_id = os.environ.get("HERMES_KANBAN_TASK", "").strip()
+            _kanban_task_id = os.environ.get("VIGIL_KANBAN_TASK", "").strip()
             if _kanban_task_id:
                 try:
                     from hermes_cli import kanban_db as _kb
@@ -18894,7 +18894,7 @@ def main(
                         # out (→ sticky block). Gated on the env vars the
                         # dispatcher sets in `_default_spawn`; a no-op for every
                         # normal worker and every non-kanban `-q` run.
-                        if os.environ.get("HERMES_KANBAN_GOAL_MODE") == "1":
+                        if os.environ.get("VIGIL_KANBAN_GOAL_MODE") == "1":
                             try:
                                 _run_kanban_goal_loop_q(cli, response)
                             except Exception as _goal_exc:
@@ -18918,7 +18918,7 @@ def main(
                         _exit_code = 0
                         if isinstance(result, dict) and result.get("failed"):
                             _exit_code = 1
-                            if os.environ.get("HERMES_KANBAN_TASK") and result.get(
+                            if os.environ.get("VIGIL_KANBAN_TASK") and result.get(
                                 "failure_reason"
                             ) in ("rate_limit", "billing"):
                                 try:
@@ -18933,7 +18933,7 @@ def main(
                 # Exit with error code if credentials or agent init fails
                 sys.exit(1)
             else:
-                # Single-query mode (`hermes chat -q "…"`): skip the welcome
+                # Single-query mode (`vigil chat -q "…"`): skip the welcome
                 # banner. Building the banner takes ~420 ms on cold start —
                 # ~200 ms of that is the version-update check, the rest is
                 # toolset / skill enumeration and Rich panel rendering. None

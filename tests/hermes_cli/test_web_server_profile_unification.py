@@ -2,9 +2,9 @@
 
 The dashboard is ONE machine-level management surface: config, env, MCP,
 model, and chat-PTY endpoints accept an optional ``profile`` so the global
-profile switcher can target any profile's HERMES_HOME. These tests pin:
+profile switcher can target any profile's VIGIL_HOME. These tests pin:
 reads/writes land in the REQUESTED profile, the dashboard's own profile
-stays untouched, and the chat PTY env is scoped via HERMES_HOME.
+stays untouched, and the chat PTY env is scoped via VIGIL_HOME.
 """
 import pytest
 import yaml
@@ -196,7 +196,7 @@ class TestProfileScopedPostSetup:
         self, client, isolated_profiles, monkeypatch
     ):
         """Post-setup runs in a -p scoped subprocess so hooks that read
-        config / write per-profile state see the same HERMES_HOME the rest
+        config / write per-profile state see the same VIGIL_HOME the rest
         of the drawer's writes targeted."""
         import hermes_cli.web_server as web_server
 
@@ -403,9 +403,9 @@ class TestProfileScopedChatPty:
         )
         argv, cwd, env = web_server._resolve_chat_argv(profile="worker_beta")
         assert env is not None
-        assert env["HERMES_HOME"] == str(isolated_profiles["worker_beta"])
+        assert env["VIGIL_HOME"] == str(isolated_profiles["worker_beta"])
         # Scoped chat must NOT attach to the dashboard's in-memory gateway.
-        assert "HERMES_TUI_GATEWAY_URL" not in env
+        assert "VIGIL_TUI_GATEWAY_URL" not in env
 
 
 class TestProfileScopedAudio:

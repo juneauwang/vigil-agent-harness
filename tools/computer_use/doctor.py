@@ -1,10 +1,10 @@
 """
-`hermes computer-use doctor` — thin client for cua-driver's `health_report` MCP tool.
+`vigil computer-use doctor` — thin client for cua-driver's `health_report` MCP tool.
 
 cua-driver owns the health model (#1908 / be761fac on `main`). This module
 just drives the stdio JSON-RPC handshake, calls `health_report`, and
 renders the structured response. When the driver gets new checks, they
-flow through here without code changes on the Hermes side — the only
+flow through here without code changes on the Vigil side — the only
 contract is the stable `schema_version="1"` payload shape.
 
 cua-driver 0.10.x marks `health_report` with risk.class='unclassified', so
@@ -55,7 +55,7 @@ class HealthReportUnavailable(RuntimeError):
 
 
 def _cua_child_env() -> Dict[str, str]:
-    """cua-driver child env with the Hermes telemetry policy applied.
+    """cua-driver child env with the Vigil telemetry policy applied.
 
     Delegates to ``cua_backend.cua_driver_child_env`` (telemetry disabled by
     default unless the user opts in). Falls back to the current environment
@@ -70,7 +70,7 @@ def _cua_child_env() -> Dict[str, str]:
 
 
 def _sanitized_cua_env() -> Dict[str, str]:
-    """Telemetry-policy env with Hermes provider secrets stripped.
+    """Telemetry-policy env with Vigil provider secrets stripped.
 
     cua-driver is a third-party binary — it must never inherit provider
     API keys (#53503/#55709/#58889 lineage). Falls back to the unsanitized
@@ -804,7 +804,7 @@ def run_doctor(
 ) -> int:
     """Resolve the cua-driver binary, call `health_report`, render the result.
 
-    Honors `HERMES_CUA_DRIVER_CMD` via the shared runtime resolver, so the
+    Honors `VIGIL_CUA_DRIVER_CMD` via the shared runtime resolver, so the
     doctor diagnoses what your `computer_use` toolset will actually invoke.
 
     On cua-driver 0.10.x, ``health_report`` may be risk-unclassified and
@@ -844,7 +844,7 @@ def run_doctor(
 
     if json_output:
         # Additive envelope: preserve the upstream health_report keys and
-        # attach Hermes identity under hermes_identity so existing parsers
+        # attach Vigil identity under hermes_identity so existing parsers
         # that only read overall/checks keep working.
         payload = dict(report)
         payload["hermes_identity"] = identity

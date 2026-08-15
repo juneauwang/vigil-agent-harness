@@ -97,7 +97,7 @@ class TestTelegramAllowedChats:
         """slack-style config.yaml → env var bridge works."""
         from gateway.config import load_gateway_config
 
-        hermes_home = tmp_path / ".hermes"
+        hermes_home = tmp_path / ".vigil"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text(
             "telegram:\n"
@@ -106,7 +106,7 @@ class TestTelegramAllowedChats:
             "    - -200\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         monkeypatch.setenv("TELEGRAM_ALLOWED_CHATS", "__sentinel__")
         monkeypatch.delenv("TELEGRAM_ALLOWED_CHATS")
 
@@ -181,7 +181,7 @@ class TestMattermostAllowedChannels:
     def test_config_bridge(self, monkeypatch, tmp_path):
         from gateway.config import load_gateway_config
 
-        hermes_home = tmp_path / ".hermes"
+        hermes_home = tmp_path / ".vigil"
         hermes_home.mkdir()
         (hermes_home / "config.yaml").write_text(
             "mattermost:\n"
@@ -190,7 +190,7 @@ class TestMattermostAllowedChannels:
             "    - chanDEF\n",
             encoding="utf-8",
         )
-        monkeypatch.setenv("HERMES_HOME", str(hermes_home))
+        monkeypatch.setenv("VIGIL_HOME", str(hermes_home))
         # Pre-register the key with monkeypatch so teardown cleans it up
         # even though load_gateway_config mutates os.environ directly
         # (monkeypatch only restores keys it's touched via setenv/delenv;

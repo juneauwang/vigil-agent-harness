@@ -1,23 +1,23 @@
-# RCA: SSL CA cert bundle corruption after `hermes update`
+# RCA: SSL CA cert bundle corruption after `vigil update`
 
 **Status:** resolved by `fix(ssl): surface broken CA bundles before provider calls`
 **Severity:** P2 — degrades the agent into opaque provider/client failures until the user repairs deps or CA configuration.
 
 ## Summary
 
-A partial `hermes update`, interrupted venv repair, or stale CA-bundle environment variable can leave Python TLS configuration pointing at a missing, empty, or unloadable CA bundle. The first outbound HTTPS client creation or request can then fail with a raw `FileNotFoundError: [Errno 2] No such file or directory` or a low-level SSL error that does not name the broken CA path.
+A partial `vigil update`, interrupted venv repair, or stale CA-bundle environment variable can leave Python TLS configuration pointing at a missing, empty, or unloadable CA bundle. The first outbound HTTPS client creation or request can then fail with a raw `FileNotFoundError: [Errno 2] No such file or directory` or a low-level SSL error that does not name the broken CA path.
 
 ## Root cause
 
-Hermes uses OpenAI/httpx and requests-based clients for provider calls, model metadata, gateway delivery, and web tools. Those clients inherit CA bundle settings from:
+Vigil uses OpenAI/httpx and requests-based clients for provider calls, model metadata, gateway delivery, and web tools. Those clients inherit CA bundle settings from:
 
-- `HERMES_CA_BUNDLE`
+- `VIGIL_CA_BUNDLE`
 - `SSL_CERT_FILE`
 - `REQUESTS_CA_BUNDLE`
 - `CURL_CA_BUNDLE`
 - the bundled `certifi` package's `cacert.pem`
 
-When the venv is partially refreshed, or when one of those env vars points at a file that no longer exists, provider client construction can fail before Hermes has enough context to produce a useful message.
+When the venv is partially refreshed, or when one of those env vars points at a file that no longer exists, provider client construction can fail before Vigil has enough context to produce a useful message.
 
 ## Fix
 
@@ -41,14 +41,14 @@ Repair: python -m pip install --force-reinstall certifi openai httpx
 If you configured a custom corporate CA bundle, fix or unset the broken CA bundle environment variable.
 ```
 
-For a normal corrupted Hermes venv, reinstall the affected client dependencies:
+For a normal corrupted Vigil venv, reinstall the affected client dependencies:
 
 ```bash
 python -m pip install --force-reinstall certifi openai httpx
 ```
 
-For a custom/corporate CA setup, fix the env var so it points at a real PEM bundle, or unset it if Hermes should use the bundled `certifi` store.
+For a custom/corporate CA setup, fix the env var so it points at a real PEM bundle, or unset it if Vigil should use the bundled `certifi` store.
 
 ## Environment escape hatch
 
-Set `HERMES_SKIP_SSL_GUARD=1` to bypass the preflight check. This is intended only for sandboxed or managed-trust environments where the Python CA path looks unusual but downstream clients are known to work.
+Set `VIGIL_SKIP_SSL_GUARD=1` to bypass the preflight check. This is intended only for sandboxed or managed-trust environments where the Python CA path looks unusual but downstream clients are known to work.
