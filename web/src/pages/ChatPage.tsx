@@ -22,6 +22,7 @@ import {
   createChatState,
   markApprovalResolved,
   pushUserMessage,
+  stateFromHistory,
   toggleToolExpanded,
   type ChatApprovalCard,
   type ChatMessage,
@@ -200,12 +201,18 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval }: {
 export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [state, setState] = useState<ChatTurnState>(() => createChatState());
+  // 批三十三：会话状态分槽——每个会话独立消息列表 + busy/SSE 状态（按
+  // sessionId 存 map）。切页/切回不再丢消息；A 忙时可切到 B 发消息；切回
+  // A 由历史端点 + 轮询恢复现场。
+  const [states, setStates] = useState<Record<string, ChatTurnState>>({});
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
+  const abortRefs = useRef<Record<string, AbortController>>({});
+  const loadedRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
+
+  const activeState = (activeId && states[activeId]) || createChatState();
 
   const refreshSessions = useCallback(async () => {
     try {
@@ -218,13 +225,32 @@ export default function ChatPage() {
     }
   }, []);
 
+  const loadSessionHistory = useCallback(async (id: string) => {
+    if (loadedRef.current.has(id)) return;
+    loadedRef.current.add(id);
+    try {
+      const resp = await api.getChatHistory(id);
+      setStates((prev) => {
+        // 槽位已有消息（如拉取期间用户已发消息/流式渲染中）→ 不覆盖现场。
+        const existing = prev[id];
+        if (existing && existing.messages.length > 0) return prev;
+        return { ...prev, [id]: stateFromHistory(resp.messages ?? [], Boolean(resp.busy)) };
+      });
+    } catch {
+      // 拉取失败：允许重试（下次切回再试），空状态也能发消息。
+      loadedRef.current.delete(id);
+    }
+  }, []);
+
   const createSession = useCallback(async () => {
     setError(null);
     setBusyAction(true);
     try {
       const resp = await api.createChatSession();
-      setActiveId(resp.chat_session_id);
-      setState(createChatState());
+      const sid = resp.chat_session_id;
+      setActiveId(sid);
+      loadedRef.current.add(sid); // 新会话无历史，跳过 GET
+      setStates((prev) => ({ ...prev, [sid]: createChatState() }));
       await refreshSessions();
     } catch (e) {
       setError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e));
@@ -260,68 +286,123 @@ export default function ChatPage() {
       });
     return () => {
       alive = false;
-      abortRef.current?.abort();
+      for (const c of Object.values(abortRefs.current)) c?.abort();
     };
   }, []);
+
+  // 切到无缓存的会话 → 拉历史恢复现场（1a：切页/切回消息完整）。
+  useEffect(() => {
+    if (!activeId) return;
+    void loadSessionHistory(activeId);
+  }, [activeId, loadSessionHistory]);
+
+  // 后台 turn 收尾轮询：当前会话 busy（切走被 abort 的流）时轮询注册表，
+  // busy 翻转 → 重拉历史拿最终内容（1b 验收③：在跑的显示"处理中"，跑完恢复）。
+  useEffect(() => {
+    if (!activeId || !activeState.busy) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const resp = await api.listChatSessions();
+        const s = (resp.sessions ?? []).find((x) => x.id === activeId);
+        if (s && !s.busy) {
+          const h = await api.getChatHistory(activeId);
+          setStates((prev) => ({ ...prev, [activeId]: stateFromHistory(h.messages ?? [], false) }));
+        }
+      } catch {
+        // transient network hiccup — next tick retries
+      }
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [activeId, activeState.busy]);
 
   // 新内容自动滚底。
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
-  }, [state.messages]);
+  }, [activeState.messages]);
 
   const send = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
       const text = draft.trim();
-      if (!text || !activeId || chatInputDisabled(state)) return;
+      const sid = activeId;
+      const st = (sid && states[sid]) || createChatState();
+      if (!text || !sid || chatInputDisabled(st)) return;
       setDraft("");
       setError(null);
-      setState((prev) => pushUserMessage(prev, text));
+      setStates((prev) => ({ ...prev, [sid]: pushUserMessage(prev[sid] ?? createChatState(), text) }));
       const ctrl = new AbortController();
-      abortRef.current = ctrl;
+      abortRefs.current[sid] = ctrl;
       try {
-        await api.chatStream(activeId, text, (ev) => {
-          setState((prev) => applyChatEvent(prev, { type: ev.type, data: (ev.data ?? {}) as Record<string, unknown> }));
+        await api.chatStream(sid, text, (ev) => {
+          setStates((prev) => ({
+            ...prev,
+            [sid]: applyChatEvent(prev[sid] ?? createChatState(), {
+              type: ev.type,
+              data: (ev.data ?? {}) as Record<string, unknown>,
+            }),
+          }));
         }, ctrl.signal);
         void refreshSessions();
       } catch (err) {
         if (err instanceof Error && err.name === "AbortError") return;
         const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
-        setState((prev) => applyChatEvent(prev, { type: "chat:error", data: { message: msg } }));
+        setStates((prev) => ({
+          ...prev,
+          [sid]: applyChatEvent(prev[sid] ?? createChatState(), { type: "chat:error", data: { message: msg } }),
+        }));
       } finally {
-        abortRef.current = null;
+        if (abortRefs.current[sid] === ctrl) delete abortRefs.current[sid];
       }
     },
-    [activeId, draft, refreshSessions, state],
+    [activeId, draft, refreshSessions, states],
   );
 
   const resolveApproval = useCallback(
     async (card: ChatApprovalCard, status: "approved" | "denied") => {
-      setState((prev) => markApprovalResolved(prev, card.approvalId, status === "approved" ? "approved" : "denied"));
+      const sid = activeId;
+      if (!sid) return;
+      setStates((prev) => ({
+        ...prev,
+        [sid]: markApprovalResolved(prev[sid] ?? createChatState(), card.approvalId, status === "approved" ? "approved" : "denied"),
+      }));
       try {
         if (status === "approved") await api.approveApproval(card.approvalId, "once");
         else await api.denyApproval(card.approvalId);
       } catch (err) {
         const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
         setError(msg);
-        setState((prev) => markApprovalResolved(prev, card.approvalId, "error"));
+        setStates((prev) => ({
+          ...prev,
+          [sid]: markApprovalResolved(prev[sid] ?? createChatState(), card.approvalId, "error"),
+        }));
       }
     },
-    [],
+    [activeId],
   );
 
   const switchSession = useCallback(
     (id: string) => {
       if (id === activeId) return;
-      abortRef.current?.abort();
+      // 切走：abort 旧会话 SSE（后台 turn 继续跑，切回由轮询恢复现场）。
+      if (activeId) abortRefs.current[activeId]?.abort();
       setActiveId(id);
-      setState(createChatState());
       setError(null);
     },
     [activeId],
   );
 
-  const disabled = chatInputDisabled(state) || !activeId || busyAction;
+  const toggleTool = useCallback(
+    (toolId: number) => {
+      if (!activeId) return;
+      setStates((prev) => ({
+        ...prev,
+        [activeId]: toggleToolExpanded(prev[activeId] ?? createChatState(), toolId),
+      }));
+    },
+    [activeId],
+  );
+
+  const disabled = chatInputDisabled(activeState) || !activeId || busyAction;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -338,7 +419,6 @@ export default function ChatPage() {
             value={activeId ?? ""}
             onChange={(e) => switchSession(e.target.value)}
             title="活会话切换"
-            disabled={chatInputDisabled(state)}
             className="h-8 max-w-[220px] rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 font-mono text-xs text-[var(--vigil-text)] outline-none"
           >
             {sessions.length === 0 && <option value="">（无会话）</option>}
@@ -371,17 +451,17 @@ export default function ChatPage() {
 
       {/* 消息列表 */}
       <div className="scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] p-3">
-        {state.messages.length === 0 && (
+        {activeState.messages.length === 0 && (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-sm text-[var(--vigil-muted)]">
             <Bot className="size-8 opacity-60" />
             {activeId ? "发一条消息开始对话" : "创建会话后开始对话"}
           </div>
         )}
-        {state.messages.map((m) => (
+        {activeState.messages.map((m) => (
           <MessageBubble
             key={m.id}
             msg={m}
-            onToggleTool={(toolId) => setState((prev) => toggleToolExpanded(prev, toolId))}
+            onToggleTool={toggleTool}
             onResolveApproval={resolveApproval}
           />
         ))}
@@ -399,7 +479,7 @@ export default function ChatPage() {
             spellCheck={false}
             className="h-9 min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
           />
-          {chatInputDisabled(state) && (
+          {chatInputDisabled(activeState) && (
             <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[var(--vigil-muted)] sm:inline-flex">
               <Loader2 className="size-3.5 animate-spin" /> agent 思考中…
             </span>
@@ -417,3 +497,4 @@ export default function ChatPage() {
     </div>
   );
 }
+

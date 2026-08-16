@@ -111,6 +111,7 @@ export interface TopologyCluster {
   env?: string;
   description?: string;
   owner?: string;
+  status?: string;
 }
 
 export interface TopologyView {
@@ -257,6 +258,28 @@ export interface ChatSessionsResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+/** 历史消息（对齐前端 ChatMessage 的字段；tools 折叠进 assistant 气泡）。 */
+export interface ChatHistoryMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  tools: {
+    name: string;
+    input_summary: string;
+    output_summary?: string | null;
+    ok?: boolean | null;
+  }[];
+  timestamp?: number | null;
+}
+
+export interface ChatHistoryResponse {
+  chat_session_id?: string;
+  messages?: ChatHistoryMessage[];
+  total?: number;
+  busy?: boolean;
+  error?: { code?: string; message?: string; details?: Record<string, unknown> };
+}
+
 // ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -319,6 +342,9 @@ export const api = {
       body: "{}",
     }),
   listChatSessions: () => fetchJSON<ChatSessionsResponse>("/api/chat/sessions"),
+  /** 拉取会话历史消息（批三十三：切页/切回恢复现场）。 */
+  getChatHistory: (sessionId: string) =>
+    fetchJSON<ChatHistoryResponse>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`),
   /** 发消息：POST 后消费 SSE 流（与批二十八 exec SSE 同款解析）。 */
   chatStream: (
     sessionId: string,

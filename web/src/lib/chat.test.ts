@@ -6,6 +6,7 @@ import {
   createChatState,
   markApprovalResolved,
   pushUserMessage,
+  stateFromHistory,
   toggleToolExpanded,
 } from "./chat";
 
@@ -91,5 +92,61 @@ describe("chat 流式渲染状态机（批三十一）", () => {
     s = applyChatEvent(s, ev("chat:delta", { text: "answer" }));
     expect(s.messages).toHaveLength(2);
     expect(s.messages[1].content).toBe("answer");
+  });
+});
+
+import type { ChatHistoryMessage } from "./api";
+
+describe("批三十三 历史恢复（stateFromHistory）", () => {
+  it("历史消息转会话状态：role/content/tools/稳定 key", () => {
+    const history: ChatHistoryMessage[] = [
+      { id: 101, role: "user", content: "看下拓扑", tools: [], timestamp: 100 },
+      {
+        id: 102,
+        role: "assistant",
+        content: "",
+        tools: [
+          { name: "terminal", input_summary: "kubectl get nodes", output_summary: "node1 Ready", ok: true },
+        ],
+        timestamp: 101,
+      },
+      { id: 103, role: "assistant", content: "共 2 台主机。", tools: [], timestamp: 102 },
+    ];
+    const s = stateFromHistory(history, false);
+    expect(s.messages).toHaveLength(3);
+    expect(s.messages[0].role).toBe("user");
+    expect(s.messages[0].content).toBe("看下拓扑");
+    expect(s.messages[1].tools).toHaveLength(1);
+    expect(s.messages[1].tools[0].name).toBe("terminal");
+    expect(s.messages[1].tools[0].inputSummary).toBe("kubectl get nodes");
+    expect(s.messages[1].tools[0].outputSummary).toBe("node1 Ready");
+    expect(s.messages[1].tools[0].expanded).toBe(false);
+    expect(s.messages[2].content).toBe("共 2 台主机。");
+    expect(s.busy).toBe(false);
+    // 本地 id 不与服务器行 id 冲突（重编号自 1）
+    expect(s.messages[0].id).toBe(1);
+    expect(s.messages[1].tools[0].id).toBe(3);
+    expect(chatInputDisabled(s)).toBe(false);
+  });
+
+  it("busy 历史状态 → 输入禁用（在跑的显示处理中）", () => {
+    const history: ChatHistoryMessage[] = [{ id: 1, role: "user", content: "hi", tools: [], timestamp: 1 }];
+    const s = stateFromHistory(history, true);
+    expect(s.busy).toBe(true);
+    expect(chatInputDisabled(s)).toBe(true);
+  });
+
+  it("空历史 → 空会话状态", () => {
+    const s = stateFromHistory([], false);
+    expect(s.messages).toHaveLength(0);
+    expect(s.nextId).toBe(1);
+  });
+
+  it("无 output_summary 的工具行 → outputSummary undefined 不渲染空输出", () => {
+    const history: ChatHistoryMessage[] = [
+      { id: 1, role: "assistant", content: "", tools: [{ name: "read_file", input_summary: "/etc/hosts", output_summary: null, ok: null }] },
+    ];
+    const s = stateFromHistory(history, false);
+    expect(s.messages[0].tools[0].outputSummary).toBeUndefined();
   });
 });

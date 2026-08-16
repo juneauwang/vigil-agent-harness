@@ -1557,11 +1557,13 @@ def _format_session_token_line(total_tokens: int, input_tokens: int, output_toke
                                cache_read_tokens: int, reasoning_tokens: int,
                                *, model: Optional[str] = None,
                                cost: Optional[float] = None) -> str:
-    """Token 行显示（E4）：``cache read A/B``（A=命中缓存数，B=总输入即命中率）+ 可选价格。"""
+    """Token 行显示（E4）：``cache read A/B (P%)``（A=命中缓存数，B=总输入，
+    P=命中率百分比，B=0 时省略）+ 可选价格。"""
     total_input = input_tokens + cache_read_tokens
+    rate = f" ({cache_read_tokens / total_input * 100:.0f}%)" if total_input > 0 else ""
     line = (
         f"Tokens:         {total_tokens} (in {input_tokens}, out {output_tokens}, "
-        f"cache read {cache_read_tokens}/{total_input}, reasoning {reasoning_tokens})"
+        f"cache read {cache_read_tokens}/{total_input}{rate}, reasoning {reasoning_tokens})"
     )
     if cost is None:
         cost = _estimate_session_cost_usd(model, input_tokens, output_tokens, cache_read_tokens)

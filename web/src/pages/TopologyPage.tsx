@@ -357,6 +357,7 @@ export default function TopologyPage() {
                     <div className="flex items-center gap-2 px-2 py-1 text-xs font-semibold">
                       <Database className="size-3.5 text-[var(--vigil-muted)]" />
                       集群 {group.name}
+                      <StatusPill status={group.meta?.status} />
                       <span className="font-normal text-[var(--vigil-muted)]">
                         （{visibleHosts.length} 台主机）
                       </span>
@@ -402,6 +403,7 @@ export default function TopologyPage() {
                   <h2 className="mb-2.5 flex flex-wrap items-baseline gap-2 text-sm font-semibold">
                     <Database className="size-4 text-[var(--vigil-muted)]" />
                     集群 {group.name}
+                    <StatusPill status={group.meta?.status} />
                     {group.meta?.description && (
                       <span className="text-xs font-normal text-[var(--vigil-muted)]">
                         — {group.meta.description}

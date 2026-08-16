@@ -6,8 +6,11 @@
  *     增量归并到消息列表
  *   - chatInputDisabled()：agent 忙时禁用输入（busy 语义照后端 409）
  *   - markApprovalResolved()：审批卡本地状态（批准/拒绝后回填）
+ *   - stateFromHistory()：批三十三历史端点 → 会话状态（切回恢复现场）
  * 凭据红线：工具 input/output 摘要只显示服务端 redact 后的内容，前端不再加工。
  */
+
+import type { ChatHistoryMessage } from "./api";
 
 export interface ChatToolEvent {
   id: number;
@@ -239,4 +242,36 @@ export function toggleToolExpanded(state: ChatTurnState, toolId: number): ChatTu
       tools: m.tools.map((t) => (t.id === toolId ? { ...t, expanded: !t.expanded } : t)),
     })),
   };
+}
+
+/** 历史消息 → 会话状态（切回/切页恢复现场；批三十三）。
+ *
+ * 服务器消息带稳定行 id，这里重编号为本地自增（避免与流式渲染的 nextId
+ * 冲突）；tools 已由服务端折叠进 assistant 气泡。busy 来自注册表（在跑的
+ * 会话显示"处理中"，输入禁用直到后台 turn 完成）。
+ */
+export function stateFromHistory(
+  history: ChatHistoryMessage[],
+  busy: boolean,
+): ChatTurnState {
+  let nextId = 1;
+  const messages: ChatMessage[] = (history ?? []).map((m) => {
+    const id = nextId++;
+    return {
+      id,
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.content ?? "",
+      streaming: false,
+      tools: (m.tools ?? []).map((t) => ({
+        id: nextId++,
+        name: t.name,
+        inputSummary: t.input_summary ?? "",
+        outputSummary: t.output_summary ?? undefined,
+        ok: t.ok ?? undefined,
+        expanded: false,
+      })),
+      approvals: [],
+    };
+  });
+  return { messages, busy: Boolean(busy), nextId, activeMessageId: null };
 }

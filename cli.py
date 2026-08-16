@@ -107,6 +107,69 @@ def estimate_usage_cost(*args, **kwargs):
     return _estimate_usage_cost(*args, **kwargs)
 
 
+def _estimate_exit_cost_label(
+    agent,
+    *,
+    inp: int,
+    out: int,
+    cache_read: int,
+    cache_write: int,
+    reasoning: int,
+    api_calls: int,
+    fallback_model: str = "",
+) -> str:
+    """退出汇总成本标签（批三十三 E4 补漏）。
+
+    优先 agent 会话内累计成本（conversation_loop 每调用估算累加，含 MoA /
+    codex 特殊路径——最准确）；缺失时用 usage_pricing 现估。deepseek 等路由
+    的官方快照缺 cache-write 单价（estimate 返回 unknown），此时降级为忽略
+    cache-write 的近似估算（与 E4 硬编码价格表口径一致），保证真实会话也能
+    看到价格。返回空串 = 不显示成本行。
+    """
+    try:
+        accum = getattr(agent, "session_estimated_cost_usd", 0.0) or 0.0
+        accum = float(accum)
+        if accum and accum > 0:
+            status = str(getattr(agent, "session_cost_status", "") or "")
+            if status == "included":
+                return " · 成本已含（订阅）"
+            return f" · 估算成本 ≈${accum:.2f}"
+    except Exception:
+        pass
+    try:
+        from agent.usage_pricing import CanonicalUsage as _CU
+
+        model = str(getattr(agent, "model", "") or fallback_model or "")
+        provider = getattr(agent, "provider", None) or None
+        base_url = getattr(agent, "base_url", None)
+
+        def _try(cw: int):
+            return estimate_usage_cost(
+                model,
+                _CU(
+                    input_tokens=inp,
+                    output_tokens=out,
+                    cache_read_tokens=cache_read,
+                    cache_write_tokens=cw,
+                    reasoning_tokens=reasoning,
+                    request_count=api_calls,
+                ),
+                provider=provider,
+                base_url=base_url,
+            )
+
+        _cost = _try(cache_write)
+        if _cost is None or _cost.amount_usd is None:
+            _cost = _try(0)
+        if _cost is not None and _cost.amount_usd is not None:
+            if str(getattr(_cost, "status", "")) == "included":
+                return " · 成本已含（订阅）"
+            return f" · 估算成本 {_cost.label}"
+    except Exception:
+        pass
+    return ""
+
+
 def format_duration_compact(*args, **kwargs):
     seconds = float(args[0] if args else kwargs.get("seconds", 0.0))
     if seconds < 60:
@@ -4698,6 +4761,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         self._approval_lock = threading.Lock()
         self._slash_confirm_state = None
         self._slash_confirm_deadline = 0
+        self._text_input_state = None
+        self._text_input_deadline = 0
         self._model_picker_state = None
         # Armed when a bare `/resume` prints the recent-sessions list so the
         # very next bare numeric input (e.g. `3`) resolves to that session.
@@ -5334,7 +5399,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     self._console_print(f"  ✗ 未知参数 --{name}")
                     return
             else:
-                hosts.append(tok)
+                # 批三十三 2b：host 参数支持逗号分隔（用户习惯 ip1,ip2,ip3），
+                # 逗号被当 hostname 会报 "hostname contains invalid characters"。
+                for part in tok.split(","):
+                    part = part.strip()
+                    if part:
+                        hosts.append(part)
             i += 1
 
         interactive_mode = not hosts
@@ -5345,11 +5415,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         dry_run = "dry-run" in opts
 
         if interactive_mode:
+            # 批三十三 2c：无参/交互模式先打印用法，用户一敲就知道格式。
+            self._console_print(
+                "  用法: /topo <host...> [--env E] [--user U] [--key K] "
+                "[--cluster C] [--force] [--yes]"
+            )
             host = self._prompt_text_input("  目标 host/IP（回车取消）: ")
             if not host:
                 self._console_print("  已取消。")
                 return
-            hosts = [host]
+            hosts = [part.strip() for part in host.split(",") if part.strip()] or [host]
             if not env:
                 env = self._prompt_text_input(
                     "  环境（test/dev/prod；回车默认 dev）: "
@@ -6087,6 +6162,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             or self._sudo_state
             or self._secret_state
             or getattr(self, "_slash_confirm_state", None)
+            or getattr(self, "_text_input_state", None)
         )
 
         return derive_pet_state(
@@ -7372,7 +7448,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         if self._command_running:
             _cprint(f"{_DIM}Wait for the current command to finish before opening the editor.{_RST}")
             return False
-        if self._sudo_state or self._secret_state or self._approval_state or getattr(self, "_slash_confirm_state", None) or self._clarify_state:
+        if self._sudo_state or self._secret_state or self._approval_state or getattr(self, "_slash_confirm_state", None) or self._clarify_state or getattr(self, "_text_input_state", None):
             _cprint(f"{_DIM}Finish the active prompt before opening the editor.{_RST}")
             return False
         target_buffer = buffer or getattr(app, "current_buffer", None)
@@ -8996,7 +9072,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
         return result[0]
 
-    def _prompt_text_input(self, prompt_text: str) -> str | None:
+    def _prompt_text_input(self, prompt_text: str, *, timeout: float = 120) -> str | None:
         """Prompt for free-text input safely inside or outside prompt_toolkit.
 
         Mirrors the thread-aware guard in ``_run_curses_picker``: ``run_in_terminal``
@@ -9006,30 +9082,47 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         ``run_in_terminal`` from there orphans the coroutine — ``_ask`` never runs,
         and user keystrokes leak into the composer instead.  Fall back to a direct
         ``input()`` when we're off the main thread.
+
+        TUI path（批三十三 2a）：旧 slash-worker 守卫在 prompt_toolkit app 运行且
+        非主线程（process_loop / slash-worker 守护线程）时直接 return None ——
+        TUI 会话里每个交互式 slash 命令（/topo 等）都变"已取消"。现在照
+        ``_prompt_text_input_modal`` 的机制走通用线程安全路径：``call_soon_
+        threadsafe`` 把 ``_text_input_state`` modal 调度到 app loop（提示面板
+        显示在 composer 上方），用户在正常输入区输入、Enter 提交（或 ESC /
+        Ctrl+C 取消），worker 线程轮询队列拿结果。超时（默认 120s）取消。
         """
         import threading
-        result = [None]
+        import time as _time
 
-        def _ask():
-            try:
-                result[0] = input(prompt_text).strip() or None
-            except (KeyboardInterrupt, EOFError):
-                pass
+        if not getattr(self, "_app", None):
+            result = [None]
+
+            def _ask():
+                try:
+                    result[0] = input(prompt_text).strip() or None
+                except (KeyboardInterrupt, EOFError):
+                    pass
+
+            _ask()
+            return result[0]
+
+        try:
+            app_loop = self._app.loop
+        except Exception:
+            app_loop = None
 
         in_main_thread = threading.current_thread() is threading.main_thread()
 
-        # Slash-worker guard (#23185 / billing auto-reload hang): when a
-        # prompt_toolkit app is running but we're on a non-main thread (the
-        # process_loop / TUI slash-worker daemon thread), stdin is owned by the
-        # event loop / JSON-RPC pipe.  A bare input() there blocks forever until
-        # the worker's 45s timeout fires.  We cannot safely prompt off the main
-        # thread, so cancel cleanly (None) instead of hanging — mirrors the
-        # _stdin_fallback discipline in _prompt_text_input_modal.
-        if self._app and not in_main_thread:
-            self._invalidate()
-            return None
+        if in_main_thread:
+            # 主线程 + app 运行：保持原 run_in_terminal 直接 input 路径。
+            result = [None]
 
-        if self._app and in_main_thread:
+            def _ask():
+                try:
+                    result[0] = input(prompt_text).strip() or None
+                except (KeyboardInterrupt, EOFError):
+                    pass
+
             from prompt_toolkit.application import run_in_terminal
             was_visible = self._status_bar_visible
             self._status_bar_visible = False
@@ -9037,9 +9130,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             try:
                 run_in_terminal(_ask)
             except Exception:
-                # WSL / Warp / certain terminal emulators silently drop the
-                # scheduled coroutine.  Fall back to a direct input() so the
-                # user's keystrokes don't leak into the agent buffer.
+                # WSL / Warp / 部分终端静默丢弃被调度的协程——兜底直接 input()。
                 try:
                     _ask()
                 except Exception:
@@ -9047,9 +9138,63 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             finally:
                 self._status_bar_visible = was_visible
                 self._app.invalidate()
-        else:
-            _ask()
-        return result[0]
+            return result[0]
+
+        # 非主线程（slash-worker / process_loop 守护线程）：
+        if app_loop is None:
+            # 无可调度的 app loop → 无法安全 off-main prompt，干净取消（与
+            # _prompt_text_input_modal 的 _stdin_fallback 纪律一致）。
+            self._invalidate()
+            return None
+
+        response_queue = queue.Queue()
+
+        def _setup_modal() -> None:
+            self._text_input_state = {
+                "prompt": prompt_text,
+                "response_queue": response_queue,
+            }
+            self._text_input_deadline = _time.monotonic() + timeout
+            self._invalidate()
+
+        def _teardown_modal() -> None:
+            self._text_input_state = None
+            self._text_input_deadline = 0
+            self._invalidate()
+
+        def _run_on_app_loop(fn) -> bool:
+            ready = threading.Event()
+
+            def _wrapped() -> None:
+                try:
+                    fn()
+                finally:
+                    ready.set()
+
+            try:
+                app_loop.call_soon_threadsafe(_wrapped)
+            except Exception:
+                return False
+            return ready.wait(timeout=5)
+
+        if not _run_on_app_loop(_setup_modal):
+            self._invalidate()
+            return None
+
+        try:
+            while True:
+                try:
+                    result = response_queue.get(timeout=1)
+                    _run_on_app_loop(_teardown_modal)
+                    return result
+                except queue.Empty:
+                    remaining = self._text_input_deadline - _time.monotonic()
+                    if remaining <= 0:
+                        break
+        finally:
+            if self._text_input_state is not None:
+                _run_on_app_loop(_teardown_modal)
+        return None
 
     def _prompt_text_input_modal(
         self,
@@ -15146,15 +15291,36 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             agent = getattr(self, "agent", None)
             api_calls = getattr(agent, "session_api_calls", 0) or 0
             if agent is not None and api_calls > 0:
-                inp = getattr(agent, "session_input_tokens", 0) or 0
-                out = getattr(agent, "session_output_tokens", 0) or 0
-                total = getattr(agent, "session_total_tokens", 0) or 0
-                cache_read = getattr(agent, "session_cache_read_tokens", 0) or 0
-                reasoning = getattr(agent, "session_reasoning_tokens", 0) or 0
+                inp = int(getattr(agent, "session_input_tokens", 0) or 0)
+                out = int(getattr(agent, "session_output_tokens", 0) or 0)
+                total = int(getattr(agent, "session_total_tokens", 0) or 0)
+                cache_read = int(getattr(agent, "session_cache_read_tokens", 0) or 0)
+                reasoning = int(getattr(agent, "session_reasoning_tokens", 0) or 0)
                 # 口径与状态栏 token 行（E4）一致：in/out 为净值（扣除缓存），
                 # 缓存命中单独列出（毛值 total 含缓存，直接相加会误导）。
+                # 批三十三：补 E4 承诺的缓存命中率 + 估算成本（usage_pricing，
+                # 未知模型/未知单价省略成本行）。
+                try:
+                    total_input = int(cache_read) + int(inp)
+                except Exception:
+                    total_input = 0
+                rate_label = ""
+                if total_input > 0:
+                    rate_label = f" · 缓存命中率 {int(cache_read) / total_input * 100:.1f}%"
+                cache_write = getattr(agent, "session_cache_write_tokens", 0) or 0
+                cost_label = _estimate_exit_cost_label(
+                    agent,
+                    inp=int(inp),
+                    out=int(out),
+                    cache_read=int(cache_read),
+                    cache_write=int(cache_write),
+                    reasoning=int(reasoning),
+                    api_calls=int(api_calls),
+                    fallback_model=str(getattr(self, "model", "") or ""),
+                )
                 print(f"Tokens:         📊 本次会话: 输入 {inp:,} · 输出 {out:,} · "
-                      f"缓存 {cache_read:,} · reasoning {reasoning:,} · 总计 {total:,} tokens")
+                      f"缓存 {cache_read:,} · reasoning {reasoning:,} · 总计 {total:,} tokens"
+                      f"{rate_label}{cost_label}")
         else:
             try:
                 from hermes_cli.skin_engine import get_active_goodbye
@@ -15243,6 +15409,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             return _state_fragment("class:prompt-working", "⚠")
         if getattr(self, "_slash_confirm_state", None):
             return _state_fragment("class:prompt-working", "⚠")
+        if getattr(self, "_text_input_state", None):
+            return _state_fragment("class:prompt-working", "⌨")
         if self._clarify_freetext:
             return _state_fragment("class:clarify-selected", "✎")
         if self._clarify_state:
@@ -15353,6 +15521,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         secret_widget,
         approval_widget,
         slash_confirm_widget=None,
+        text_input_widget=None,
         clarify_widget,
         model_picker_widget=None,
         spinner_widget=None,
@@ -15378,6 +15547,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 secret_widget,
                 approval_widget,
                 slash_confirm_widget,
+                text_input_widget,
                 clarify_widget,
                 model_picker_widget,
                 spinner_widget,
@@ -15721,6 +15891,16 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 event.app.invalidate()
                 return
 
+            # --- Slash free-text input: submit typed text (empty → None) ---
+            if self._text_input_state:
+                text = event.app.current_buffer.text.strip() or None
+                self._text_input_state["response_queue"].put(text)
+                self._text_input_state = None
+                self._text_input_deadline = 0
+                event.app.current_buffer.reset()
+                event.app.invalidate()
+                return
+
             # --- /model picker modal ---
             if self._model_picker_state:
                 try:
@@ -15987,7 +16167,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         # in those IDEs and arrives here as ('escape', 'g') — register it as
         # a fallback so the editor handoff works inside Cursor/VSCode too.
         _editor_filter = Condition(
-            lambda: not self._clarify_state and not self._approval_state and not self._sudo_state and not self._secret_state
+            lambda: not self._clarify_state and not self._approval_state and not self._sudo_state and not self._secret_state and not getattr(self, "_text_input_state", None)
         )
 
         @kb.add('c-g', filter=_editor_filter)
@@ -16006,6 +16186,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             and not cli_ref._sudo_state
             and not cli_ref._secret_state
             and not cli_ref._slash_confirm_state
+            and not cli_ref._text_input_state
             and not cli_ref._model_picker_state
         )
         _stash_panel_filter = Condition(
@@ -16369,6 +16550,15 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 event.app.invalidate()
                 return
 
+            # Cancel slash free-text prompt (same foreground-UI discipline).
+            if self._text_input_state:
+                self._text_input_state["response_queue"].put(None)
+                self._text_input_state = None
+                self._text_input_deadline = 0
+                event.app.current_buffer.reset()
+                event.app.invalidate()
+                return
+
             # Cancel /model picker (foreground UI — cancel and stop here).
             if self._model_picker_state:
                 self._close_model_picker()
@@ -16513,7 +16703,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 event.app.exit()
 
         _modal_prompt_active = Condition(
-            lambda: bool(self._secret_state or self._sudo_state or self._slash_confirm_state)
+            lambda: bool(
+                self._secret_state
+                or self._sudo_state
+                or self._slash_confirm_state
+                or self._text_input_state
+            )
         )
 
         @kb.add('escape', filter=_modal_prompt_active, eager=True)
@@ -16531,6 +16726,13 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 return
             if self._slash_confirm_state:
                 self._submit_slash_confirm_response("cancel")
+                event.app.current_buffer.reset()
+                event.app.invalidate()
+                return
+            if self._text_input_state:
+                self._text_input_state["response_queue"].put(None)
+                self._text_input_state = None
+                self._text_input_deadline = 0
                 event.app.current_buffer.reset()
                 event.app.invalidate()
                 return
@@ -17412,6 +17614,36 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             filter=Condition(lambda: cli_ref._slash_confirm_state is not None),
         )
 
+        # --- Slash free-text input: display widget (批三十三 2a) ---
+
+        def _get_text_input_display():
+            state = cli_ref._text_input_state
+            if not state:
+                return []
+            title = '⌨ 输入'
+            prompt = str(state.get("prompt") or "")
+            body = '在上方输入区输入后回车提交（回车空输入=取消；ESC/Ctrl+C 取消）'
+            box_width = _panel_box_width(title, [prompt, body])
+            lines = []
+            lines.append(('class:sudo-border', '╭─ '))
+            lines.append(('class:sudo-title', title))
+            lines.append(('class:sudo-border', ' ' + ('─' * max(0, box_width - len(title) - 3)) + '╮\n'))
+            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
+            _append_panel_line(lines, 'class:sudo-border', 'class:sudo-text', prompt, box_width)
+            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
+            _append_panel_line(lines, 'class:sudo-border', 'class:sudo-text', body, box_width)
+            _append_blank_panel_line(lines, 'class:sudo-border', box_width)
+            lines.append(('class:sudo-border', '╰' + ('─' * box_width) + '╯\n'))
+            return lines
+
+        text_input_widget = ConditionalContainer(
+            Window(
+                FormattedTextControl(_get_text_input_display),
+                wrap_lines=True,
+            ),
+            filter=Condition(lambda: cli_ref._text_input_state is not None),
+        )
+
         # --- /model picker: display widget ---
         def _get_model_picker_display():
             state = cli_ref._model_picker_state
@@ -17585,6 +17817,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     secret_widget=secret_widget,
                     approval_widget=approval_widget,
                     slash_confirm_widget=slash_confirm_widget,
+                    text_input_widget=text_input_widget,
                     clarify_widget=clarify_widget,
                     model_picker_widget=model_picker_widget,
                     spinner_widget=spinner_widget,
