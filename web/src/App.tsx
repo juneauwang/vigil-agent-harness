@@ -16,8 +16,10 @@ import {
   Sun,
   TriangleAlert,
 } from "lucide-react";
-import { api, type ApprovalItem, type HealthResponse, type TopologyResponse } from "@/lib/api";
+import { api, type HealthResponse, type TopologyResponse } from "@/lib/api";
 import { cn, formatUptime } from "@/lib/ops";
+import ApprovalModal from "@/components/ApprovalModal";
+import { useApprovalPolling, useApprovalSnapshot } from "@/lib/approvalPoller";
 
 const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
 const TopologyPage = lazy(() => import("@/pages/TopologyPage"));
@@ -95,20 +97,8 @@ export default function App() {
     };
   }, []);
 
-  // 待审批数量（顶部徽标 + 铃铛角标）
-  const [pendingCount, setPendingCount] = useState(0);
-  useEffect(() => {
-    let alive = true;
-    api
-      .getApprovals({ status: "pending", limit: 1 })
-      .then((resp) => {
-        if (alive) setPendingCount(resp.total ?? 0);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // 待审批数量（顶部徽标 + 铃铛角标，批三十四：接全局轮询实时化）
+  const approvalPoll = useApprovalPolling();
 
   // 侧边栏：默认 60px 纯图标，可展开 200px
   const [collapsed, setCollapsed] = useState(() => {
@@ -184,7 +174,7 @@ export default function App() {
             title="待审批（点击进入审批中心）"
             className="vigil-badge hidden lg:inline-flex hover:bg-[var(--vigil-muted-bg)]"
           >
-            Approvals {pendingCount}
+            Approvals {approvalPoll.total}
           </button>
 
           {/* 运行时长 */}
@@ -282,6 +272,9 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {/* 审批全局弹窗（批三十四）：任何路由可见；决策独立于对话页审批卡 */}
+      <ApprovalModal />
     </div>
   );
 }
@@ -290,25 +283,12 @@ export default function App() {
 /** 待审批通知：铃铛 + 数量角标；点开下拉列出待审批项，可跳审批中心。 */
 function ApprovalBell() {
   const [open, setOpen] = useState(false);
-  const [items, setItems] = useState<ApprovalItem[]>([]);
-  const [count, setCount] = useState(0);
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-
-  useEffect(() => {
-    let alive = true;
-    api
-      .getApprovals({ status: "pending", limit: 5 })
-      .then((resp) => {
-        if (!alive) return;
-        setItems(resp.approvals ?? []);
-        setCount(resp.total ?? 0);
-      })
-      .catch(() => {});
-    return () => {
-      alive = false;
-    };
-  }, []);
+  // 批三十四：铃铛角标/下拉接全局轮询快照，实时反映 pending 审批。
+  const poll = useApprovalSnapshot();
+  const count = poll.total;
+  const items = poll.approvals.slice(0, 5);
 
   useEffect(() => {
     if (!open) return;
