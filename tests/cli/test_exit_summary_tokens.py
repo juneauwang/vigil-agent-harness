@@ -28,6 +28,11 @@ def _agent_with_tokens(input_tokens=1234, output_tokens=567, total=1801, calls=3
     agent.session_input_tokens = input_tokens
     agent.session_output_tokens = output_tokens
     agent.session_total_tokens = total
+    agent.session_cache_read_tokens = 0
+    agent.session_cache_write_tokens = 0
+    agent.session_reasoning_tokens = 0
+    agent.session_estimated_cost_usd = 0.0
+    agent.session_cost_status = "unknown"
     return agent
 
 
@@ -38,7 +43,7 @@ class TestExitSummaryTokens:
         with patch("hermes_cli.profiles.get_active_profile_name", return_value="default"):
             cli_obj._print_exit_summary(clear_screen=False)
         out = capsys.readouterr().out
-        assert "📊 本次会话: 输入 1,234 · 输出 567 · 总计 1,801 tokens" in out
+        assert "📊 本次会话: 输入 1,234 · 输出 567 · 缓存 0 · reasoning 0 · 总计 1,801 tokens" in out
         # 现有退出摘要不受影响。
         assert "Messages:       1 (1 user, 0 tool calls)" in out
 
@@ -66,7 +71,7 @@ class TestExitSummaryTokens:
         with patch("hermes_cli.profiles.get_active_profile_name", return_value="default"):
             cli_obj._print_exit_summary(clear_screen=False)
         out = capsys.readouterr().out
-        assert "📊 本次会话: 输入 1,234 · 输出 567 · 总计 1,801 tokens" in out
+        assert "📊 本次会话: 输入 1,234 · 输出 567 · 缓存 0 · reasoning 0 · 总计 1,801 tokens" in out
 
     def test_token_line_skipped_when_agent_attrs_missing(self, capsys):
         """agent 无 token 属性（旧对象/损坏状态）→ 跳过而非崩溃。"""

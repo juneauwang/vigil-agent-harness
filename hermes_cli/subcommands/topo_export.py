@@ -141,6 +141,21 @@ def _card_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _derive_status(statuses: List[Any]) -> str:
+    """从子级状态推导聚合状态（批三十三 4）：
+
+    全 running/健康 → ``running``；任一非健康（stopped/exited/degraded/…）→
+    ``degraded``；全部空 → 空串（不显示 pill，避免误显示）。
+    """
+    non_empty = [str(s).strip().lower() for s in statuses if str(s or "").strip()]
+    if not non_empty:
+        return ""
+    healthy = {"running", "up", "healthy", "ok", "active", "online"}
+    if all(s in healthy for s in non_empty):
+        return "running"
+    return "degraded"
+
+
 def _load_detail(home: Path, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """第三层档案（可选）：_load_entity_file 失败/缺失 → None；成功 → sanitize。"""
     try:
@@ -255,18 +270,41 @@ def build_view(home: Path) -> Optional[Dict[str, Any]]:
                 continue
             s_card["on_key_path"] = s_card["name"] in kp_names
             s_card["kind"] = "service"
+            detail = _load_detail(home, svc)
+            # 批三十三 4：服务状态在第三层 entities/*.yaml（status 字段），
+            # 从 detail merge（detail 已 sanitize；无 status/load 失败保持空）。
+            detail_status = str((detail or {}).get("status") or "").strip()
+            if detail_status:
+                s_card["status"] = detail_status
             services.append({
                 "card": s_card,
-                "detail": _load_detail(home, svc),
+                "detail": detail,
             })
         if services:
             services_missing = False
+        # 批三十三 4：主机卡状态由服务推导（全健康 → running；任一
+        # stopped/exited/degraded → degraded；全部空 → 空不显示）。
+        if not str(card.get("status") or "").strip():
+            derived = _derive_status([s["card"].get("status") for s in services])
+            if derived:
+                card["status"] = derived
         view["hosts"].append({
             "card": card,
             "services": services,
             "services_missing": services_missing,
             "detail": _load_detail(home, row),
         })
+
+    # 批三十三 4：集群卡状态由主机推导（同规则）。
+    for cluster in view["clusters"]:
+        host_statuses = [
+            h["card"].get("status")
+            for h in view["hosts"]
+            if str(h["card"].get("cluster") or "default") == str(cluster.get("name") or "default")
+        ]
+        derived = _derive_status(host_statuses)
+        if derived:
+            cluster["status"] = derived
 
     for row in first.get("cross_host") or []:
         if not isinstance(row, dict):
@@ -583,13 +621,14 @@ def _cluster_sections_html(view: Dict[str, Any]) -> str:
             continue
         desc = meta.get("description") or ""
         desc_html = f'<span class="cluster-desc">— {_esc(desc)}</span>' if desc else ""
+        cluster_status = _status_pill(meta.get("status"))
         cards = "\n".join(_host_card_html(h) for h in hosts)
         sections.append(
             '<section class="cluster-section" data-cluster="%s">'
-            '<h2 class="cluster-header">🖥️ 集群 %s%s'
+            '<h2 class="cluster-header">🖥️ 集群 %s%s%s'
             '<span class="cluster-desc muted">（%d 台主机）</span></h2>'
             '<div class="hosts-grid">%s</div></section>' % (
-                _esc(name), _esc(name), desc_html, len(hosts), cards,
+                _esc(name), _esc(name), desc_html, cluster_status, len(hosts), cards,
             )
         )
     return "\n".join(sections)

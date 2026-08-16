@@ -186,18 +186,99 @@ def secrets_hex() -> str:
     return secrets.token_hex(4)
 
 
-def _load_conversation_history(session: "ChatSession") -> list:
-    """跨 turn 上下文：从 SessionDB 重放已持久化消息（gateway 同款）。"""
+def _load_conversation_history(
+    session: "ChatSession",
+    *,
+    repair_alternation: bool = True,
+    include_row_ids: bool = False,
+) -> list:
+    """跨 turn 上下文：从 SessionDB 重放已持久化消息（gateway 同款）。
+
+    历史展示端点传 ``repair_alternation=False``（verbatim 转录，不合并/丢弃
+    消息）+ ``include_row_ids=True``（稳定 id 作前端 React key）。
+    """
     if session.session_db is None:
         return []
     try:
         history = session.session_db.get_messages_as_conversation(
-            session.chat_session_id, repair_alternation=True
+            session.chat_session_id,
+            repair_alternation=repair_alternation,
+            include_row_ids=include_row_ids,
         )
         return [m for m in history if m.get("role") != "session_meta"]
     except Exception:
         _log.debug("chat history reload failed", exc_info=True)
         return []
+
+
+def _history_to_view_messages(history: list) -> list:
+    """把 SessionDB 的 OpenAI 消息 dict 结构化为前端 ChatMessage 字段。
+
+    返回消息列表（role/content/tools/timestamp，id 用行 id 保证稳定），内容
+    全部过 redact（_redact_text 值级 + _preview 单行截断的展示预览）。tool
+    调用（assistant.tool_calls）与紧随的 tool 结果行折叠进同一条 assistant
+    气泡的 ``tools`` 数组（对齐 SSE 流式渲染的 ChatToolEvent）。
+    """
+    view: List[Dict[str, Any]] = []
+    pending_tools: List[Dict[str, Any]] = []
+    for msg in history:
+        role = msg.get("role")
+        msg_id = msg.get("_row_id")
+        if role == "user":
+            view.append({
+                "id": msg_id if msg_id is not None else len(view) + 1,
+                "role": "user",
+                "content": _redact_text(msg.get("content") or ""),
+                "tools": [],
+                "timestamp": msg.get("timestamp"),
+            })
+        elif role == "assistant":
+            tools: List[Dict[str, Any]] = []
+            for tc in msg.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                tools.append({
+                    "name": str(fn.get("name") or ""),
+                    "input_summary": _preview(fn.get("arguments") or ""),
+                    "output_summary": None,
+                    "ok": None,
+                })
+            view.append({
+                "id": msg_id if msg_id is not None else len(view) + 1,
+                "role": "assistant",
+                "content": _redact_text(msg.get("content") or ""),
+                "tools": tools,
+                "timestamp": msg.get("timestamp"),
+            })
+            pending_tools = tools
+        elif role == "tool":
+            content = _preview(msg.get("content") or "")
+            name = str(msg.get("tool_name") or "")
+            matched = False
+            for t in reversed(pending_tools):
+                if t.get("output_summary") is None and (not name or t.get("name") == name):
+                    t["output_summary"] = content
+                    t["ok"] = True
+                    matched = True
+                    break
+            if not matched and name:
+                view.append({
+                    "id": msg_id if msg_id is not None else len(view) + 1,
+                    "role": "assistant",
+                    "content": "",
+                    "tools": [{
+                        "name": name,
+                        "input_summary": "",
+                        "output_summary": content,
+                        "ok": True,
+                    }],
+                    "timestamp": msg.get("timestamp"),
+                })
+                pending_tools = []
+        # session_meta 已在上游过滤，这里兜底跳过。
+    for t in pending_tools:
+        if t.get("output_summary") is None:
+            t["output_summary"] = ""
+    return view
 
 
 def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
@@ -404,6 +485,33 @@ async def list_chat_sessions():
             _CHAT_SESSIONS.values(), key=lambda s: s.last_activity_at, reverse=True
         )]
     return {"sessions": sessions, "total": len(sessions)}
+
+
+@router.get("/api/chat/sessions/{chat_session_id}/messages")
+async def chat_session_messages(chat_session_id: str):
+    """拉取会话历史消息（结构化，供前端切回/切页恢复现场）。
+
+    复用 ``_load_conversation_history``（SessionDB 持久化消息，verbatim 转录
+    + 稳定行 id），返回对齐前端 ChatMessage 的字段
+    （role/content/tools/timestamp，内容过 redact）；会话不在注册表 → 404。
+    ``busy`` 随注册表状态返回（前端据此显示"处理中"）。
+    """
+    with _CHAT_LOCK:
+        session = _CHAT_SESSIONS.get(chat_session_id)
+        busy = bool(session.busy) if session is not None else False
+    if session is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "not_found", "message": f"会话不存在: {chat_session_id}"}},
+        )
+    history = _load_conversation_history(session, repair_alternation=False, include_row_ids=True)
+    messages = _history_to_view_messages(history)
+    return {
+        "chat_session_id": chat_session_id,
+        "messages": messages,
+        "total": len(messages),
+        "busy": busy,
+    }
 
 
 @router.post("/api/chat/sessions/{chat_session_id}/messages")
