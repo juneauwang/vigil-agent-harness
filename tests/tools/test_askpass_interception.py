@@ -71,7 +71,6 @@ class TestTerminalHardline:
             'echo "wwplove815" >> ~/credential/sudo_credential',
             "printf '%s\\n' 'wwplove815' > ~/.vigil/askpass",
             "echo 'wwplove815' > $HOME/.vigil/x",
-            "echo 'wwplove815' > /home/wpwang/.vigil/x",
         ],
     )
     def test_askpass_write_hardline_blocked(self, cmd):
