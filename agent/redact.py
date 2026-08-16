@@ -7,13 +7,158 @@ Short tokens (< 18 chars) are fully masked. Longer tokens preserve
 the first 6 and last 4 characters for debuggability.
 """
 
+import json
 import logging
 import os
 import re
 import shlex
+import threading
+from pathlib import Path
 from urllib.parse import unquote_plus
 
 logger = logging.getLogger(__name__)
+
+
+# =========================================================================
+# 已知凭据值登记表（OPS-DELTA 批次三十二，行为层安全）
+#
+# 覆盖 redact 两套既有检测（键名命中 + 高熵值兜底）都漏的盲区：低熵裸密码
+# （``echo 'wwplove815'``，无键名形态、长度不足 16 不挂高熵门）。登记来源：
+#   ① credential_vault.store() 写入的凭据值；
+#   ② clarify 交互中问题含敏感关键词（密码/password/密钥/secret/凭据…）时
+#     的答复值。
+# 登记后，任何输出通道（终端 / review diff / SSE / trajectory / state.db /
+# JSON 会话快照）经 ``redact_sensitive_text`` 时对登记值做精确匹配打码——
+# 不依赖熵检测，值即凭据本身。
+#
+# 持久化：<VIGIL_HOME>/credential_values.json（600 权限），redact 时惰性加载
+# 并合并进进程内集合。登记表文件自身受同一打码路径保护——read_file 读它时
+# 值被精确匹配打码，读不出明文。
+# =========================================================================
+_CREDENTIAL_VALUES: set = set()
+_CREDENTIAL_VALUES_SNAPSHOT: tuple = ()
+_CREDENTIAL_VALUES_LOADED = False
+_CREDENTIAL_VALUES_LOCK = threading.Lock()
+_REGISTERED_VALUE_MIN_LEN = 6
+_REGISTERED_VALUE_MASK = "«redacted-value»"
+
+
+def _credential_values_file() -> Path | None:
+    """登记表持久化路径（<VIGIL_HOME>/credential_values.json，profile-aware）。"""
+    try:
+        from hermes_constants import get_hermes_home
+        return Path(get_hermes_home()) / "credential_values.json"
+    except Exception:
+        return None
+
+
+def _eligible_credential_value(value: str) -> bool:
+    """登记资格：长度 ≥ 6 且非纯数字（端口/计数/年份等公共形态不全局打码）。"""
+    if len(value) < _REGISTERED_VALUE_MIN_LEN:
+        return False
+    if value.isdigit():
+        return False
+    if len(set(value)) == 1:
+        return False  # 单字符重复（aaaaaa）——公共形态，非凭据
+    return True
+
+
+def _refresh_registered_snapshot_locked() -> None:
+    global _CREDENTIAL_VALUES_SNAPSHOT
+    _CREDENTIAL_VALUES_SNAPSHOT = tuple(sorted(_CREDENTIAL_VALUES))
+
+
+def _ensure_registry_loaded_locked() -> None:
+    """惰性加载持久化登记表（进程内一次；失败静默降级为空集合）。"""
+    global _CREDENTIAL_VALUES_LOADED
+    if _CREDENTIAL_VALUES_LOADED:
+        return
+    _CREDENTIAL_VALUES_LOADED = True
+    path = _credential_values_file()
+    if path is None or not path.is_file():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for value in data.get("values") or []:
+            if isinstance(value, str) and _eligible_credential_value(value.strip()):
+                _CREDENTIAL_VALUES.add(value.strip())
+    except Exception:
+        logger.debug("credential value registry load failed", exc_info=True)
+    _refresh_registered_snapshot_locked()
+
+
+def _persist_registered_credential_values() -> None:
+    """原子写登记表（600 权限）。失败仅记日志——登记表是打码增强，不阻断主流程。"""
+    path = _credential_values_file()
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump({"values": sorted(_CREDENTIAL_VALUES)}, fh,
+                      ensure_ascii=False, indent=2)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+        os.chmod(path, 0o600)
+    except Exception:
+        logger.debug("credential value registry persist failed", exc_info=True)
+
+
+def register_credential_value(value) -> bool:
+    """登记一个已知凭据值 → 全局 redact 精确打码 + 持久化。
+
+    返回是否实际进入登记表。非字符串/过短/纯数字等公共形态自动跳过
+    （防把常见词全局打码）。值本身绝不写日志（只记长度）。
+    """
+    if value is None:
+        return False
+    if not isinstance(value, str):
+        value = str(value)
+    value = value.strip()
+    if not _eligible_credential_value(value):
+        return False
+    with _CREDENTIAL_VALUES_LOCK:
+        _ensure_registry_loaded_locked()
+        if value in _CREDENTIAL_VALUES:
+            return True
+        _CREDENTIAL_VALUES.add(value)
+        _refresh_registered_snapshot_locked()
+    _persist_registered_credential_values()
+    logger.info("credential value registered for global redaction (len=%d)", len(value))
+    return True
+
+
+def registered_credential_values() -> tuple:
+    """已登记凭据值集合的快照（审计/清理命令用；不含打码来源信息）。"""
+    with _CREDENTIAL_VALUES_LOCK:
+        _ensure_registry_loaded_locked()
+        return tuple(_CREDENTIAL_VALUES_SNAPSHOT)
+
+
+def _mask_registered_values(text: str, file_read: bool) -> str:
+    """把登记表值在文本中的精确出现打码（词边界保护，防腐蚀更长 token）。"""
+    values = _CREDENTIAL_VALUES_SNAPSHOT
+    if not values:
+        return text
+    mask = "«redacted-secret»" if file_read else _REGISTERED_VALUE_MASK
+    for value in values:
+        if value not in text:
+            continue
+        pattern = re.compile(
+            r"(?<![A-Za-z0-9_])" + re.escape(value) + r"(?![A-Za-z0-9_])"
+        )
+        text = pattern.sub(mask, text)
+    return text
+
+
+def _reset_registered_credential_values_for_tests() -> None:
+    """测试隔离用：清空进程内登记表并标记未加载（下次访问重新读盘）。"""
+    global _CREDENTIAL_VALUES_LOADED
+    with _CREDENTIAL_VALUES_LOCK:
+        _CREDENTIAL_VALUES.clear()
+        _refresh_registered_snapshot_locked()
+        _CREDENTIAL_VALUES_LOADED = False
 
 # Sensitive query-string parameter names (case-insensitive exact match).
 # Ported from nearai/ironclaw#2529 — catches tokens whose values don't match
@@ -1244,6 +1389,17 @@ def redact_sensitive_text(
 
     # Command-text inline credentials (#21): agent 内插进命令串的凭据明文。
     text = _redact_command_inline_credentials(text)
+
+    # OPS-DELTA 批次三十二：已知凭据值登记表（精确值打码，不依赖熵检测）。
+    # 覆盖键名命中 + 高熵值兜底都漏的低熵裸密码形态（``echo 'wwplove815'``）。
+    # 任何输出通道统一生效；值登记后即全局打码。
+    if not _CREDENTIAL_VALUES_LOADED:
+        with _CREDENTIAL_VALUES_LOCK:
+            _ensure_registry_loaded_locked()
+    if _CREDENTIAL_VALUES_SNAPSHOT and any(
+        v in text for v in _CREDENTIAL_VALUES_SNAPSHOT
+    ):
+        text = _mask_registered_values(text, file_read)
 
     return text
 

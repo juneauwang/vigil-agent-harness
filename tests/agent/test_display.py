@@ -189,6 +189,48 @@ class TestEditDiffPreview:
 
 
 
+    def test_diff_redacted_against_registered_credential_values(self, tmp_path, monkeypatch):
+        """OPS-DELTA 批次三十二：review diff 展示层兜底——登记值精确打码。"""
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        import hermes_cli.config as hc
+        hc._LOAD_CONFIG_CACHE.clear()
+        from agent import redact
+        redact._reset_registered_credential_values_for_tests()
+        try:
+            redact.register_credential_value("wwplove815")
+            target = tmp_path / "note.txt"
+            target.write_text("old\n", encoding="utf-8")
+            snapshot = capture_local_edit_snapshot("write_file", {"path": str(target)})
+            target.write_text("old\necho 'wwplove815' > /tmp/x\n", encoding="utf-8")
+            diff = extract_edit_diff(
+                "write_file",
+                '{"bytes_written": 30}',
+                function_args={"path": str(target)},
+                snapshot=snapshot,
+            )
+            assert diff is not None
+            assert "wwplove815" not in diff
+            assert "«redacted-value»" in diff
+        finally:
+            redact._reset_registered_credential_values_for_tests()
+
+    def test_emit_inline_diff_double_insurance(self, tmp_path, monkeypatch):
+        """_emit_inline_diff 输出前再过一次 redact（防登记表外新形态兜底）。"""
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        import hermes_cli.config as hc
+        hc._LOAD_CONFIG_CACHE.clear()
+        from agent import redact
+        redact._reset_registered_credential_values_for_tests()
+        try:
+            redact.register_credential_value("wwplove815")
+            from agent.display import _emit_inline_diff
+            lines = []
+            assert _emit_inline_diff("+wwplove815", lines.append) is True
+            assert "wwplove815" not in lines[1]
+            assert "«redacted-value»" in lines[1]
+        finally:
+            redact._reset_registered_credential_values_for_tests()
+
     def test_extract_edit_diff_uses_local_snapshot_for_write_file(self, tmp_path):
         target = tmp_path / "note.txt"
         target.write_text("old\n", encoding="utf-8")

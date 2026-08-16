@@ -59,4 +59,33 @@ def build_security_parser(subparsers, *, cmd_security: Callable) -> None:
         help="Skip scanning pinned MCP servers in config.yaml",
     )
     audit_parser.set_defaults(func=cmd_security)
+
+    scrub_parser = security_subparsers.add_parser(
+        "scrub",
+        help="Scrub persisted credential plaintext from state.db",
+        description=(
+            "Mask known credential values (registered via credential_vault / "
+            "sensitive clarify answers) that are already persisted as plaintext "
+            "in state.db messages (e.g. pre-batch-32 clarify answers), then "
+            "rebuild the FTS index. Values come from the global credential-value "
+            "registry (credential_values.json) plus any --values you pass."
+        ),
+    )
+    scrub_parser.add_argument(
+        "--values",
+        action="append",
+        default=[],
+        help="Extra plaintext value to scrub (repeatable), in addition to the registry",
+    )
+    scrub_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report matches without modifying the database",
+    )
+    scrub_parser.add_argument(
+        "--session",
+        default=None,
+        help="Only scrub messages of this session id",
+    )
+    scrub_parser.set_defaults(func=cmd_security)
     security_parser.set_defaults(func=cmd_security)

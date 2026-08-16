@@ -2226,6 +2226,22 @@ class AIAgent:
                     ]
                 elif isinstance(msg.get("tool_calls"), list):
                     tool_calls_data = msg["tool_calls"]
+                # OPS-DELTA 批次三十二：clarify 敏感答复（问题含密码/密钥/凭据
+                # 关键词）在 tools/clarify_tool 已把答复值登记进全局凭据值登记表；
+                # 这里对落 state.db 的 clarify 工具结果副本再过一次 redact——登记值
+                # 精确打码，非敏感答复（redact 恒等）不受影响。live 内存消息保持
+                # 明文（agent 仍需该值去 credential_vault.store），只打码落库副本。
+                if (
+                    role == "tool"
+                    and isinstance(content, str)
+                    and '"user_response"' in content
+                    and '"question"' in content
+                ):
+                    try:
+                        from agent.redact import redact_sensitive_text as _rs
+                        content = _rs(content, force=True, credential_values=True)
+                    except Exception:
+                        pass
                 _batch_rows.append({
                     "role": role,
                     "content": content,

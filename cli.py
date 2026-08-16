@@ -7512,6 +7512,11 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         set_approval_callback(self._approval_callback)
         set_secret_capture_callback(self._secret_capture_callback)
         try:
+            from tools.sudo_tool import set_clarify_callback as _set_sudo_clarify_cb
+            _set_sudo_clarify_cb(self._clarify_callback)
+        except ImportError:
+            pass
+        try:
             from tools.computer_use_tool import set_approval_callback as _set_cu_cb
 
             _set_cu_cb(self._computer_use_approval_callback)

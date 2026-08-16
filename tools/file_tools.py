@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import posixpath
+import re
 import sys
 import threading
 from pathlib import Path, PurePosixPath
@@ -1839,6 +1840,52 @@ def _redact_write_content(content: str):
     return masked, True
 
 
+_ASKPASS_BARE_VALUE_RE = re.compile(
+    r"""(?is)\b(?:echo|printf)\b[^\n]*?(?:['"])([^'"]{8,32})(?:['"])"""
+)
+
+
+def _check_askpass_script_write(path: str, content: str, task_id: str = "default") -> str | None:
+    """裸 askpass 脚本写入拦截（OPS-DELTA 批次三十二）。
+
+    特征：内容含 ``echo '<8-32 字符>'``（裸密码 echo 形态）且目标路径在
+    ``~/.vigil`` 或 ``~/credential/`` 下——agent 手写 askpass 脚本绕过
+    credential_vault 受控通道的现场形态。命中 → 拦截并引导受控通道。
+    检测必须在 redact 之前（值登记后 redact 会把密码打码，形态即消失）。
+    """
+    if not content or not _ASKPASS_BARE_VALUE_RE.search(content):
+        return None
+    try:
+        resolved = str(_resolve_path_for_task(path, task_id))
+    except (OSError, ValueError):
+        try:
+            resolved = str(Path(_expand_tilde(path)).resolve())
+        except (OSError, ValueError):
+            return None
+    normalized = os.path.normpath(resolved)
+    # 前缀集合覆盖：VIGIL_HOME 覆盖值 + 默认 ~/.vigil + ~/credential
+    # （get_subprocess_home 反映进程真实 HOME，防 VIGIL_HOME 指向别处时漏掉
+    # 默认位置的手写 askpass）。
+    prefixes: set = set()
+    try:
+        from hermes_constants import get_hermes_home, get_subprocess_home
+        prefixes.add(str(get_hermes_home()))
+        sub_home = get_subprocess_home() or str(Path.home())
+    except Exception:
+        sub_home = str(Path.home())
+    prefixes.add(str(Path(sub_home) / ".vigil"))
+    prefixes.add(str(Path(sub_home) / "credential"))
+    for prefix in prefixes:
+        if normalized == prefix or normalized.startswith(prefix + os.sep):
+            return (
+                f"write_file 拒绝：疑似手写 askpass 脚本/裸凭据落盘（{path}）。\n"
+                "请使用受控通道：凭据经 credential_vault.store()（0600 保险箱）"
+                "存储并引用名字；提权走 sudo_exec / vssh（拓扑表 credential 引用，"
+                "ASKPASS 内部注入，命令串/argv 不出现密码）。"
+            )
+    return None
+
+
 def _lockdown_credential_file(path: str, result_dict: dict) -> None:
     """疑似凭据文件收紧为 0600 + 合并警告（§AE：644 报告文件泄露出口）。"""
     try:
@@ -1874,6 +1921,11 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             "Strip read_file line-number prefixes or reconstruct the intended "
             "file contents before writing."
         )
+    # OPS-DELTA 批次三十二：裸 askpass 脚本写入拦截（redact 之前检测——值登记
+    # 后 redact 会把密码打码，形态即消失）。命中 → 拦截并引导受控通道。
+    askpass_err = _check_askpass_script_write(path, content, task_id)
+    if askpass_err:
+        return tool_error(askpass_err)
     write_content, credential_sensitive = _redact_write_content(content)
     try:
         # Resolve once for the registry lock + stale check.  Failures here
