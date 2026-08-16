@@ -5,6 +5,7 @@ import {
   chatInputDisabled,
   createChatState,
   markApprovalResolved,
+  markTurnInterrupted,
   pushUserMessage,
   stateFromHistory,
   toggleToolExpanded,
@@ -148,5 +149,36 @@ describe("批三十三 历史恢复（stateFromHistory）", () => {
     ];
     const s = stateFromHistory(history, false);
     expect(s.messages[0].tools[0].outputSummary).toBeUndefined();
+  });
+});
+
+describe("停止（批三十六 markTurnInterrupted）", () => {
+  it("busy 中停止 → busy 解除 + 消息区出现已停止状态行，可继续发新消息", () => {
+    let s = createChatState();
+    s = pushUserMessage(s, "分析下拓扑");
+    s = applyChatEvent(s, ev("chat:delta", { text: "正在分析" }));
+    expect(chatInputDisabled(s)).toBe(true);
+    s = markTurnInterrupted(s);
+    expect(chatInputDisabled(s)).toBe(false);
+    const last = s.messages[s.messages.length - 1];
+    expect(last.interrupted).toBe(true);
+    expect(last.role).toBe("assistant");
+    expect(last.streaming).toBe(false);
+  });
+
+  it("停止后推入新消息：已停止行保留在上方，新用户气泡追加", () => {
+    let s = createChatState();
+    s = pushUserMessage(s, "任务 A");
+    s = markTurnInterrupted(s);
+    s = pushUserMessage(s, "任务 B");
+    expect(s.messages).toHaveLength(3);
+    expect(s.messages[1].interrupted).toBe(true);
+    expect(s.messages[2].role).toBe("user");
+    expect(s.messages[2].content).toBe("任务 B");
+  });
+
+  it("interrupted 行不进入历史恢复（本地瞬态标记）", () => {
+    const s = stateFromHistory([], false);
+    expect(s.messages.some((m) => m.interrupted)).toBe(false);
   });
 });

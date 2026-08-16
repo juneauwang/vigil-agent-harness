@@ -344,6 +344,22 @@ export const api = {
       body: "{}",
     }),
   listChatSessions: () => fetchJSON<ChatSessionsResponse>("/api/chat/sessions"),
+  /** 批三十六：中断当前 turn（对话页"停止"按钮）。会话不忙 → 409 not_busy。 */
+  interruptChatSession: (sessionId: string) => {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    const token = typeof window !== "undefined" ? window.__VIGIL_SESSION_TOKEN__ : undefined;
+    if (token) headers.set("X-Vigil-Session-Token", token);
+    return fetch(`${BASE}/api/chat/sessions/${encodeURIComponent(sessionId)}/interrupt`, {
+      method: "POST",
+      headers,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw parseErrorBody(text, res.status);
+      }
+      return res.json().catch(() => ({}));
+    });
+  },
   /** 拉取会话历史消息（批三十三：切页/切回恢复现场）。 */
   getChatHistory: (sessionId: string) =>
     fetchJSON<ChatHistoryResponse>(`/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`),

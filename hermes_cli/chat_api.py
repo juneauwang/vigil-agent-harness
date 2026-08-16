@@ -444,6 +444,34 @@ def _evict_if_needed() -> None:
         _CHAT_SESSIONS.pop(s.chat_session_id, None)
 
 
+def _cancel_pending_approvals_for_session(chat_session_id: str) -> int:
+    """批三十六：中断当前 turn 前，把本会话所有 pending web 审批标 denied。
+
+    只清理挂起的审批（不改审批核心逻辑）：``deny_web_approval`` 置状态 +
+    唤醒等待中的审批回调（``wait_web_approval`` 返回 "deny"）→ 工具按拒绝
+    收尾 → 审批中心/铃铛不再出现该 pending（不会僵尸挂起到超时）。
+    """
+    try:
+        from tools.approval import deny_web_approval, list_web_approvals
+    except Exception:
+        return 0
+    cancelled = 0
+    try:
+        views, _total = list_web_approvals(status="pending", limit=200)
+    except Exception:
+        _log.debug("chat interrupt approval scan failed", exc_info=True)
+        return 0
+    for v in views:
+        if str(v.get("session_key") or "") != chat_session_id:
+            continue
+        try:
+            deny_web_approval(str(v["id"]), reason="interrupted")
+            cancelled += 1
+        except Exception:
+            _log.debug("chat interrupt approval cancel failed", exc_info=True)
+    return cancelled
+
+
 router = APIRouter()
 
 
@@ -575,6 +603,52 @@ async def chat_message(chat_session_id: str, payload: Dict[str, Any] = Body(defa
         media_type="text/event-stream",
         headers=dict(_SSE_HEADERS),
     )
+
+
+@router.post("/api/chat/sessions/{chat_session_id}/interrupt")
+async def chat_interrupt(chat_session_id: str):
+    """中断当前 turn（对话页"停止"按钮；批三十六）。
+
+    复用 AIAgent.interrupt()（gateway /stop / CLI Ctrl+C 同套机制），
+    ``hard_cancel=True`` 表示显式停止（非 redirect/新消息打断）：
+      - 会话不存在 → 404；不 busy → 409（重复中断/空闲都是明确状态）。
+      - busy → 先取消本会话挂起审批（deny 唤醒等待中的工具），再 interrupt；
+        等 worker 收尾（``_turn_done``，上限 5s）后返回 200。
+    SSE 事件类型零新增：worker 侧 run_conversation 返回 interrupted → 现有
+    chat:done 带 ``interrupted: true`` 收尾（或 chat:error）。
+    """
+    with _CHAT_LOCK:
+        session = _CHAT_SESSIONS.get(chat_session_id)
+    if session is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "not_found", "message": f"会话不存在: {chat_session_id}"}},
+        )
+    if session.agent is None:
+        return JSONResponse(
+            status_code=409,
+            content={"error": {"code": "agent_not_ready", "message": "会话 agent 初始化未完成"}},
+        )
+    with _CHAT_LOCK:
+        if not session.busy:
+            return JSONResponse(
+                status_code=409,
+                content={"error": {"code": "not_busy", "message": "会话当前没有进行中的操作"}},
+            )
+    cancelled = _cancel_pending_approvals_for_session(chat_session_id)
+    try:
+        session.agent.interrupt(hard_cancel=True)
+    except Exception:
+        _log.debug("chat interrupt failed (session=%s)", chat_session_id, exc_info=True)
+    # 等 worker 收尾（busy 由 worker finally 复位，单一写入方不竞争）。
+    deadline = time.monotonic() + 5.0
+    while not session._turn_done.is_set() and time.monotonic() < deadline:
+        await asyncio.sleep(0.05)
+    return {
+        "status": "interrupted",
+        "chat_session_id": chat_session_id,
+        "approvals_cancelled": cancelled,
+    }
 
 
 def clear_chat_sessions() -> None:

@@ -8,6 +8,7 @@ import {
   MessageSquarePlus,
   Send,
   ShieldAlert,
+  Square,
   TerminalSquare,
   User,
   Wrench,
@@ -21,6 +22,7 @@ import {
   chatInputDisabled,
   createChatState,
   markApprovalResolved,
+  markTurnInterrupted,
   pushUserMessage,
   stateFromHistory,
   toggleToolExpanded,
@@ -29,6 +31,7 @@ import {
   type ChatTurnState,
 } from "@/lib/chat";
 import { Markdown } from "@/components/Markdown";
+import StopButton from "@/components/StopButton";
 import { cn } from "@/lib/ops";
 
 /**
@@ -172,6 +175,11 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval }: {
           <Bot className="size-3" /> Vigil
           {msg.streaming && <Loader2 className="size-3 animate-spin text-[var(--vigil-muted)]" />}
         </div>
+        {msg.interrupted && (
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+            <Square className="size-3.5 shrink-0" /> 已停止
+          </div>
+        )}
         {msg.error && (
           <div className="flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
             <XCircle className="size-4 shrink-0" />
@@ -208,6 +216,7 @@ export default function ChatPage() {
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
+  const [stopping, setStopping] = useState(false);
   const abortRefs = useRef<Record<string, AbortController>>({});
   const loadedRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -357,6 +366,30 @@ export default function ChatPage() {
     [activeId, draft, refreshSessions, states],
   );
 
+  const stopTurn = useCallback(async () => {
+    const sid = activeId;
+    const st = (sid && states[sid]) || createChatState();
+    if (!sid || !chatInputDisabled(st) || stopping) return;
+    setStopping(true);
+    setError(null);
+    try {
+      await api.interruptChatSession(sid);
+    } catch (err) {
+      // 中断请求失败（网络/409 等）提示但不卡死：仍 abort SSE + 本地标记停止，
+      // 后台 turn 由注册表轮询兜底复位。
+      const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
+      setError(`停止请求未送达（${msg}）；若 agent 仍在运行请稍后重试`);
+    } finally {
+      setStopping(false);
+    }
+    abortRefs.current[sid]?.abort();
+    setStates((prev) => ({
+      ...prev,
+      [sid]: markTurnInterrupted(prev[sid] ?? createChatState()),
+    }));
+    void refreshSessions();
+  }, [activeId, refreshSessions, states, stopping]);
+
   const resolveApproval = useCallback(
     async (card: ChatApprovalCard, status: "approved" | "denied") => {
       const sid = activeId;
@@ -483,6 +516,9 @@ export default function ChatPage() {
             <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[var(--vigil-muted)] sm:inline-flex">
               <Loader2 className="size-3.5 animate-spin" /> agent 思考中…
             </span>
+          )}
+          {chatInputDisabled(activeState) && !busyAction && (
+            <StopButton stopping={stopping} onStop={() => void stopTurn()} />
           )}
           <button
             type="submit"

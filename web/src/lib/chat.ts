@@ -41,6 +41,8 @@ export interface ChatMessage {
   tools: ChatToolEvent[];
   approvals: ChatApprovalCard[];
   error?: string;
+  /** 批三十六：用户点"停止"后的本地状态行（不持久化，切会话/重拉历史即消失）。 */
+  interrupted?: boolean;
 }
 
 export interface ChatTurnState {
@@ -218,6 +220,32 @@ export function pushUserMessage(state: ChatTurnState, text: string): ChatTurnSta
 
 export function chatInputDisabled(state: ChatTurnState): boolean {
   return state.busy;
+}
+
+/** 批三十六：用户点"停止"后的本地状态收口——busy 解除 + 消息区"已停止"状态行。
+
+ * 服务端 turn 由 /interrupt 真中断（后台仍在收尾，busy 由注册表轮询兜底复位）；
+ * 这里只做本地即时反馈：可立即发新消息（后端 409 会在极端竞态下兜底）。
+ */
+export function markTurnInterrupted(state: ChatTurnState): ChatTurnState {
+  return {
+    ...state,
+    busy: false,
+    activeMessageId: null,
+    nextId: state.nextId + 1,
+    messages: [
+      ...state.messages,
+      {
+        id: state.nextId,
+        role: "assistant",
+        content: "",
+        streaming: false,
+        tools: [],
+        approvals: [],
+        interrupted: true,
+      },
+    ],
+  };
 }
 
 export function markApprovalResolved(
