@@ -25,11 +25,12 @@ Design:
 
 import json
 import logging
+import re
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from hermes_constants import get_hermes_home
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 from utils import atomic_write_text
 
@@ -908,6 +909,113 @@ def load_on_disk_store() -> "MemoryStore":
     return store
 
 
+# ---------------------------------------------------------------------------
+# 拓扑事实拦截（OPS-DELTA 批次三十七 §Z）
+# ---------------------------------------------------------------------------
+# 用户/agent 把主机/服务/集群/endpoint/IP 等平台事实写进 memory 会污染每轮注入
+# 的记忆且不进权威拓扑表。工具层拦截 + prompt 层约束（OPS_TOPO_MEMORY_GUIDANCE）
+# 双管：命中拓扑特征 → 返回引导（写拓扑表），普通偏好放行。
+
+_TOPO_FACT_IP_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
+# endpoint 形态：IPv4:port / 含数字的 hostname:port（node1:22）/ 含点 hostname:port
+# （svc.internal:443）。纯时间（09:30）与纯词（timeout:30）不命中。
+_TOPO_FACT_ENDPOINT_RE = re.compile(
+    r"\b(?:"
+    r"(?:\d{1,3}\.){3}\d{1,3}"
+    r"|[a-zA-Z][\w.-]*\d[\w.-]*"
+    r"|[a-zA-Z][\w.-]*\.[a-zA-Z][\w.-]*"
+    r"):\d{2,5}\b"
+)
+
+
+def _topo_fact_names() -> Set[str]:
+    """Entity/host/cluster names from the live topology table (§Z 拦截用)。
+
+    Reads the same sources topo_query resolves: hosts + cross_host + layer-2
+    services + clusters. Empty set when no topology data or on any load
+    failure — interception then falls back to the shape-based signals (IP /
+    endpoint) only.
+    """
+    try:
+        from pathlib import Path
+
+        from tools.topo_tools import _all_core_entities, load_topology
+    except Exception:
+        return set()
+    try:
+        home = Path(get_hermes_home())
+        topo = load_topology(home)
+        if not topo:
+            return set()
+        names: Set[str] = set()
+        for entity in _all_core_entities(topo, home):
+            for key in ("name", "host", "_host"):
+                value = str(entity.get(key) or "").strip()
+                if value:
+                    names.add(value)
+        for cluster in topo.get("clusters") or []:
+            if isinstance(cluster, dict):
+                value = str(cluster.get("name") or "").strip()
+                if value:
+                    names.add(value)
+        return {name for name in names if len(name) >= 2}
+    except Exception:
+        return set()
+
+
+def _topo_fact_error(signal: str) -> str:
+    return tool_error(
+        f"检测到拓扑平台事实（{signal}）：主机/服务/集群/endpoint/IP 属于拓扑表"
+        "（topo_query / topo_update 管理），不要写进 memory——memory 注入每一轮"
+        "上下文，平台事实放这里会污染记忆且不进权威拓扑。若这确实是人的偏好"
+        "（如'用户偏好用某主机部署'），先拆分：平台部分用 topo_update 写入拓扑"
+        "表，偏好部分才存 memory。",
+        success=False,
+    )
+
+
+def _topo_fact_rejection(content: Optional[str]) -> Optional[str]:
+    """Reject a memory write that carries a topology-table fact.
+
+    Returns a JSON tool-error string when the content matches a platform-fact
+    signal — an entity/host/cluster name from the live topology table, an IP
+    literal, or an endpoint shape (host:port / ip:port) — and None otherwise.
+    Ordinary preferences ("用户偏好简洁回复") carry none of these signals and
+    pass through unchanged.
+    """
+    text = (content or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    for name in sorted(_topo_fact_names()):
+        lowered_name = name.lower()
+        if re.search(
+            rf"(?<![A-Za-z0-9_.-]){re.escape(lowered_name)}(?![A-Za-z0-9_.-])",
+            lowered,
+        ):
+            return _topo_fact_error(f"拓扑实体 {name}")
+    if _TOPO_FACT_IP_RE.search(text):
+        return _topo_fact_error("IP 地址")
+    if _TOPO_FACT_ENDPOINT_RE.search(text):
+        return _topo_fact_error("endpoint（host:port / ip:port）")
+    return None
+
+
+def _batch_topo_fact_rejection(operations: List[Dict[str, Any]]) -> Optional[str]:
+    """Reject a whole batch when ANY operation writes a topology-table fact.
+
+    Mirrors the batch write gate's all-or-nothing shape: one offending op
+    blocks the batch (atomicity, and the model gets one clear routing prompt).
+    """
+    for op in operations:
+        op = op or {}
+        if op.get("action") in {"add", "replace"}:
+            rejection = _topo_fact_rejection(str(op.get("content") or ""))
+            if rejection is not None:
+                return rejection
+    return None
+
+
 def _apply_write_gate(action: str, target: str, content: Optional[str],
                       old_text: Optional[str]) -> Optional[str]:
     """Evaluate the memory write gate. Returns a JSON tool-result string when
@@ -1078,6 +1186,9 @@ def memory_tool(
     if operations:
         if not isinstance(operations, list):
             return tool_error("operations must be a list of {action, content?, old_text?} objects.", success=False)
+        batch_rejection = _batch_topo_fact_rejection(operations)
+        if batch_rejection is not None:
+            return batch_rejection
         gate_result = _apply_batch_write_gate(target, operations)
         if gate_result is not None:
             return gate_result
@@ -1100,6 +1211,14 @@ def memory_tool(
         return tool_error(f"{missing} is required for 'replace' action.", success=False)
     if action == "remove" and not old_text:
         return _missing_old_text_error(store, target, "remove")
+
+    # Topology-fact interception (OPS-DELTA 批次三十七 §Z): platform facts
+    # belong in the topology table, not memory. Rejects before the approval
+    # gate so a topo fact is never even staged.
+    if action in {"add", "replace"}:
+        topo_rejection = _topo_fact_rejection(content)
+        if topo_rejection is not None:
+            return topo_rejection
 
     # Approval gate: when on, stages the write (background/gateway) or prompts
     # inline (interactive CLI); when off (default) passes straight through.

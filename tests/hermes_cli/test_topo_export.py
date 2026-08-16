@@ -412,3 +412,51 @@ def test_topo_help_shows_export():
     assert proc.returncode == 0, proc.stderr
     assert "export" in proc.stdout
     assert "topo export" in proc.stdout
+
+
+# =========================================================================
+# 批次三十七 §Y — 实体可选 ports 字段：build_view 带出到 card，老文件兼容
+# =========================================================================
+
+def test_build_view_ports_carried_to_cards_and_details(topo_home):
+    """实体文件/服务行带 ports → host/服务 card 与第三层详情都带出。"""
+    # 给 harbor 实体文件（第三层）与 gateway-svc 服务行（第二层）加 ports。
+    harbor_file = topo_home / "entities" / "k8s-prod__node1__harbor.yaml"
+    harbor_file.write_text(
+        harbor_file.read_text(encoding="utf-8") + "\nports: [80, 443]\n",
+        encoding="utf-8",
+    )
+    hosts_node1 = topo_home / "hosts" / "node1.yaml"
+    hosts_node1.write_text(
+        hosts_node1.read_text(encoding="utf-8").replace(
+            "  - {name: gateway-svc, type: service, env: prod, cluster: k8s-prod, endpoint: \"203.0.113.10:30080\", status: running}",
+            "  - {name: gateway-svc, type: service, env: prod, cluster: k8s-prod, endpoint: \"203.0.113.10:30080\", status: running, ports: [30080, 30081]}",
+        ),
+        encoding="utf-8",
+    )
+
+    view = build_view(topo_home)
+    assert view is not None
+    by_name = {h["card"]["name"]: h for h in view["hosts"]}
+    node1 = by_name["node1"]
+    # 服务行 card 带 ports。
+    gateway = next(s for s in node1["services"] if s["card"]["name"] == "gateway-svc")
+    assert gateway["card"]["ports"] == [30080, 30081]
+    # 实体文件 ports 进第三层详情（DetailDrawer 的 DetailTree 直接渲染列表）。
+    harbor = next(s for s in node1["services"] if s["card"]["name"] == "harbor")
+    assert harbor["detail"]["ports"] == [80, 443]
+    # 老文件无 ports 字段 → card 空列表、detail 无键，完全兼容。
+    order_db = next(s for s in node1["services"] if s["card"]["name"] == "order-db")
+    assert order_db["card"]["ports"] == []
+    # order-db 无第三层档案（detail None）；老文件无 ports 字段 → 不引入该键。
+    assert order_db["detail"] is None
+
+
+def test_card_fields_include_ports_whitelist(topo_home):
+    """_card_fields 白名单返回值含 ports（列表，缺省空）。"""
+    from hermes_cli.subcommands.topo_export import _card_fields
+
+    card = _card_fields({"name": "svc", "ports": [9090, 443], "credential": "should-not-leak"})
+    assert card["ports"] == [9090, 443]
+    assert "credential" not in card
+    assert _card_fields({"name": "svc"})["ports"] == []

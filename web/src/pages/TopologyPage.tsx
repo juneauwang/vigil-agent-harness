@@ -63,6 +63,9 @@ function Facts({ card }: { card: TopologyCard }) {
       facts.push([key, String(v)]);
     }
   }
+  if (card.ports && card.ports.length > 0) {
+    facts.push(["ports", card.ports.join(", ")]);
+  }
   if (facts.length === 0) return null;
   return (
     <div className="mb-3 flex flex-wrap gap-1.5">
@@ -110,6 +113,11 @@ function ServiceRow({
       {card.type && <span className="text-xs text-[var(--vigil-muted)]">{card.type}</span>}
       {card.endpoint && (
         <span className="font-mono text-[11px] text-[var(--vigil-muted)]">{card.endpoint}</span>
+      )}
+      {card.ports && card.ports.length > 0 && (
+        <span className="font-mono text-[11px] text-[var(--vigil-muted)]">
+          ports {card.ports.join(", ")}
+        </span>
       )}
       <StatusPill status={card.status} />
       <div className="ml-auto min-w-0">

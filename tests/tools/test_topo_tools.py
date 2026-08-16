@@ -529,3 +529,56 @@ def test_topo_discover_handler_returns_guide_with_next_steps(topo_home_v3, monke
     assert "topo_update" in _TOPO_DISCOVER_SCHEMA["description"]
     assert "needs_review=false" in _TOPO_DISCOVER_SCHEMA["description"]
     assert "未经确认不参与权限判定" in _TOPO_DISCOVER_SCHEMA["description"]
+
+
+# =========================================================================
+# 批次三十七 §Y — 实体可选 ports 字段（schema v0.3，load 校验）
+# =========================================================================
+
+class TestNormalizePorts:
+    def test_valid_list_normalized(self):
+        assert topo_tools._normalize_ports([9090, 443, "8080"]) == [9090, 443, 8080]
+
+    def test_missing_and_empty_are_none(self):
+        assert topo_tools._normalize_ports(None) is None
+        assert topo_tools._normalize_ports([]) is None
+        assert topo_tools._normalize_ports("") is None
+
+    def test_invalid_shapes_dropped_never_raise(self):
+        assert topo_tools._normalize_ports("9090") is None
+        assert topo_tools._normalize_ports({"ports": [1]}) is None
+        # 越界 / 非整数 / 布尔逐项丢弃，合法项保留。
+        assert topo_tools._normalize_ports([0, 9090, 70000, "x", True]) == [9090]
+
+    def test_float_ports_coerced_when_integral(self):
+        assert topo_tools._normalize_ports([9090.0]) == [9090]
+
+
+class TestPortsFieldPropagation:
+    """ports 从实体文件/服务行经 load 校验后进入查询与 build_view 数据。"""
+
+    def test_entity_detail_ports_carried_through_query(self, topo_home_v3, monkeypatch, tmp_path):
+        # 给 v3 的 postgres 实体文件补 ports → detail 查询带出校验后的列表。
+        from tools.topo_tools import _load_entity_file, topo_query
+        entity_file = topo_home_v3 / "entities" / "k3s-prod__node1__postgres.yaml"
+        entity_file.write_text(
+            entity_file.read_text(encoding="utf-8")
+            + "\nports: [5432, 15432]\n",
+            encoding="utf-8",
+        )
+        result = _load(topo_query(entity="postgres", detail=True))
+        assert result["detail"]["ports"] == [5432, 15432]
+
+    def test_invalid_ports_never_break_loading(self, topo_home_v3):
+        from tools.topo_tools import load_topology, _load_entity_file
+        entity_file = topo_home_v3 / "entities" / "k3s-prod__node1__postgres.yaml"
+        entity_file.write_text(
+            entity_file.read_text(encoding="utf-8")
+            + "\nports: [not-a-port, 5432]\n",
+            encoding="utf-8",
+        )
+        topo = load_topology(topo_home_v3)
+        row = {"name": "postgres", "cluster": "k3s-prod",
+               "detail": "entities/k3s-prod__node1__postgres.yaml"}
+        detail = _load_entity_file(topo_home_v3, row)
+        assert detail["ports"] == [5432]
