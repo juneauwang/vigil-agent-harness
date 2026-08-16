@@ -4,6 +4,7 @@ import {
   Bell,
   History,
   LayoutDashboard,
+  MessageSquare,
   Moon,
   Network,
   PanelLeftClose,
@@ -24,6 +25,7 @@ const RunbooksPage = lazy(() => import("@/pages/RunbooksPage"));
 const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
 const ApprovalsPage = lazy(() => import("@/pages/ApprovalsPage"));
 const AuditPage = lazy(() => import("@/pages/AuditPage"));
+const ChatPage = lazy(() => import("@/pages/ChatPage"));
 
 interface NavItem {
   path: string;
@@ -31,8 +33,9 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
-/** 豆包菜单 6 项：6 个路由页。 */
+/** 豆包菜单 7 项：7 个路由页。 */
 const NAV_ITEMS: NavItem[] = [
+  { path: "/chat", label: "Chat", icon: MessageSquare },
   { path: "/overview", label: "Overview", icon: LayoutDashboard },
   { path: "/topology", label: "Topology", icon: Network },
   { path: "/runbooks", label: "Runbooks", icon: ScrollText },
@@ -266,6 +269,7 @@ export default function App() {
             >
               <Routes>
                 <Route path="/" element={<Navigate to="/overview" replace />} />
+                <Route path="/chat" element={<ChatPage />} />
                 <Route path="/overview" element={<OverviewPage />} />
                 <Route path="/topology" element={<TopologyPage />} />
                 <Route path="/runbooks" element={<RunbooksPage />} />

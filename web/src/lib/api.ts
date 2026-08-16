@@ -241,6 +241,22 @@ export interface IncidentsResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+// ── 批三十一契约：对话 Session（/api/chat/*）─────────────────────────────
+
+export interface ChatSessionSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  busy: boolean;
+  last_message_preview?: string;
+}
+
+export interface ChatSessionsResponse {
+  sessions?: ChatSessionSummary[];
+  total?: number;
+  error?: { code?: string; message?: string; details?: Record<string, unknown> };
+}
+
 // ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -295,6 +311,63 @@ export const api = {
       `/api/incidents?${new URLSearchParams(cleanParams({ limit: params?.limit, offset: params?.offset }))}`,
     ),
 
+  // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
+  // approval_pending/done/error）
+  createChatSession: () =>
+    fetchJSON<{ chat_session_id: string; created_at?: string }>("/api/chat/sessions", {
+      method: "POST",
+      body: "{}",
+    }),
+  listChatSessions: () => fetchJSON<ChatSessionsResponse>("/api/chat/sessions"),
+  /** 发消息：POST 后消费 SSE 流（与批二十八 exec SSE 同款解析）。 */
+  chatStream: (
+    sessionId: string,
+    message: string,
+    onEvent: (event: { type: string; data: unknown }) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    const token = typeof window !== "undefined" ? window.__VIGIL_SESSION_TOKEN__ : undefined;
+    if (token) headers.set("X-Vigil-Session-Token", token);
+    return fetch(`${BASE}/api/chat/sessions/${encodeURIComponent(sessionId)}/messages`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ message }),
+      signal,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw parseErrorBody(text, res.status);
+      }
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          let eventType = "message";
+          let data = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event:")) eventType = line.slice(6).trim();
+            else if (line.startsWith("data:")) data += (data ? "\n" : "") + line.slice(5).trim();
+          }
+          if (data) {
+            try {
+              onEvent({ type: eventType, data: JSON.parse(data) });
+            } catch {
+              onEvent({ type: eventType, data });
+            }
+          }
+        }
+      }
+    });
+  },
 };
 
 function cleanParams(p: Record<string, string | number | undefined>): Record<string, string> {
