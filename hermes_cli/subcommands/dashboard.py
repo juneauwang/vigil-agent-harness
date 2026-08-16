@@ -85,7 +85,9 @@ def _add_server_runtime_args(parser) -> None:
 
 
 def build_dashboard_parser(
-    subparsers, *, cmd_dashboard: Callable, cmd_dashboard_register: Callable
+    subparsers, *, cmd_dashboard: Callable, cmd_dashboard_register: Callable,
+    cmd_dashboard_install: Callable = None, cmd_dashboard_uninstall: Callable = None,
+    cmd_dashboard_status: Callable = None,
 ) -> None:
     """Attach the ``dashboard`` and ``serve`` subcommands.
 
@@ -212,3 +214,45 @@ def build_dashboard_parser(
         ),
     )
     dashboard_register_parser.set_defaults(func=cmd_dashboard_register)
+
+    # -----------------------------------------------------------------
+    # `vigil dashboard install / uninstall / status` — systemd 常驻
+    # 产品化（批三十六）：自动创建/卸载/查看常驻 dashboard unit，中间
+    # 市场用户不再手写 unit。install 覆盖旧 unit 行为明确（先停再写）。
+    # -----------------------------------------------------------------
+    if cmd_dashboard_install is not None:
+        install_parser = dashboard_subparsers.add_parser(
+            "install",
+            help="Install the dashboard as a systemd user service (auto-start on login)",
+            description=(
+                "Create/overwrite the vigil-dashboard.service user unit (systemd "
+                "user session required), enable auto-start, and launch the "
+                "dashboard. Repeated installs overwrite the unit (old service is "
+                "stopped first); --port changes take effect immediately."
+            ),
+        )
+        install_parser.add_argument(
+            "--port", type=int, default=9119,
+            help="Port the unit should serve on (default 9119)",
+        )
+        install_parser.set_defaults(func=cmd_dashboard_install)
+    if cmd_dashboard_uninstall is not None:
+        uninstall_parser = dashboard_subparsers.add_parser(
+            "uninstall",
+            help="Remove the systemd dashboard service and stop it (idempotent)",
+            description=(
+                "Stop + disable + delete vigil-dashboard.service. Idempotent: "
+                "succeeds even when the unit does not exist."
+            ),
+        )
+        uninstall_parser.set_defaults(func=cmd_dashboard_uninstall)
+    if cmd_dashboard_status is not None:
+        status_parser = dashboard_subparsers.add_parser(
+            "status",
+            help="Show the systemd dashboard service status (active/exited + URL)",
+            description=(
+                "Summarize the vigil-dashboard.service state: active/exited, "
+                "auto-start enabled, and the access URL/port."
+            ),
+        )
+        status_parser.set_defaults(func=cmd_dashboard_status)

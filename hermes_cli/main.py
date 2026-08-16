@@ -10623,6 +10623,27 @@ def cmd_dashboard_register(args):
     _impl(args)
 
 
+def cmd_dashboard_install(args):
+    """Install the dashboard as a systemd user service (批三十六产品化)."""
+    from hermes_cli.dashboard_service import cmd_dashboard_install as _impl
+
+    raise SystemExit(_impl(args))
+
+
+def cmd_dashboard_uninstall(args):
+    """Uninstall the systemd dashboard service (idempotent)."""
+    from hermes_cli.dashboard_service import cmd_dashboard_uninstall as _impl
+
+    raise SystemExit(_impl(args))
+
+
+def cmd_dashboard_status(args):
+    """Show the systemd dashboard service status summary."""
+    from hermes_cli.dashboard_service import cmd_dashboard_status as _impl
+
+    raise SystemExit(_impl(args))
+
+
 def cmd_gateway_enroll(args):
     """Enroll a self-hosted gateway with a relay connector."""
     from hermes_cli.gateway_enroll import cmd_gateway_enroll as _impl
@@ -12567,6 +12588,9 @@ def main():
         subparsers,
         cmd_dashboard=cmd_dashboard,
         cmd_dashboard_register=cmd_dashboard_register,
+        cmd_dashboard_install=cmd_dashboard_install,
+        cmd_dashboard_uninstall=cmd_dashboard_uninstall,
+        cmd_dashboard_status=cmd_dashboard_status,
     )
 
 
