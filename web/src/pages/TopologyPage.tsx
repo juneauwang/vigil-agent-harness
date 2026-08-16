@@ -80,7 +80,7 @@ function ServiceRow({
         <span className="font-mono text-[11px] text-[var(--vigil-muted)]">{card.endpoint}</span>
       )}
       <StatusPill status={card.status} />
-      <div className="ml-auto">
+      <div className="ml-auto min-w-0">
         <DetailBox detail={svc.detail} />
       </div>
     </div>
@@ -118,7 +118,7 @@ function HostCard({
             <Link2 className="size-3" /> 关键链路
           </span>
         )}
-        <div className="ml-auto">
+        <div className="ml-auto min-w-0">
           <DetailBox detail={host.detail} />
         </div>
       </div>
@@ -164,7 +164,7 @@ function CrossCard({
         <EnvBadge env={card.env} />
         <StatusPill status={card.status} />
         {card.on_key_path && <Link2 className="size-3 text-amber-500" />}
-        <div className="ml-auto">
+        <div className="ml-auto min-w-0">
           <DetailBox detail={svc.detail} />
         </div>
       </div>

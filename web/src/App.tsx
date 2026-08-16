@@ -13,12 +13,10 @@ import {
   Settings,
   ShieldCheck,
   Sun,
-  Terminal,
   TriangleAlert,
 } from "lucide-react";
 import { api, type ApprovalItem, type HealthResponse, type TopologyResponse } from "@/lib/api";
 import { cn, formatUptime } from "@/lib/ops";
-import { TerminalPanel } from "@/components/TerminalPanel";
 
 const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
 const TopologyPage = lazy(() => import("@/pages/TopologyPage"));
@@ -26,7 +24,6 @@ const RunbooksPage = lazy(() => import("@/pages/RunbooksPage"));
 const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
 const ApprovalsPage = lazy(() => import("@/pages/ApprovalsPage"));
 const AuditPage = lazy(() => import("@/pages/AuditPage"));
-const TerminalPage = lazy(() => import("@/pages/TerminalPage"));
 
 interface NavItem {
   path: string;
@@ -34,7 +31,7 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
-/** 豆包菜单 7 项：6 个路由页 + Terminal（锚定底部终端面板）。 */
+/** 豆包菜单 6 项：6 个路由页。 */
 const NAV_ITEMS: NavItem[] = [
   { path: "/overview", label: "Overview", icon: LayoutDashboard },
   { path: "/topology", label: "Topology", icon: Network },
@@ -138,21 +135,6 @@ export default function App() {
     },
     [globalQuery, navigate],
   );
-
-  // 底部终端面板
-  const [terminalCollapsed, setTerminalCollapsed] = useState(false);
-  const toggleTerminal = useCallback(() => setTerminalCollapsed((v) => !v), []);
-  const terminalRef = useRef<HTMLDivElement>(null);
-  const focusTerminal = useCallback(() => {
-    setTerminalCollapsed(false);
-    // 等面板渲染后滚动到底部
-    setTimeout(() => {
-      terminalRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }, 60);
-  }, []);
-
-  const isTerminalRoute = pathname === "/terminal";
-  const showGlobalTerminal = !isTerminalRoute;
 
   return (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
@@ -258,19 +240,6 @@ export default function App() {
                 </NavLink>
               );
             })}
-            {/* Terminal 项：锚定底部终端面板 */}
-            <button
-              type="button"
-              onClick={focusTerminal}
-              title={collapsed ? "Terminal" : undefined}
-              className={cn(
-                "flex h-10 items-center rounded-md text-[var(--vigil-muted)] transition-colors hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]",
-                collapsed ? "w-10 justify-center" : "w-[176px] gap-2 px-2.5",
-              )}
-            >
-              <Terminal className="size-[18px] shrink-0" />
-              {!collapsed && <span className="truncate text-sm">Terminal</span>}
-            </button>
           </nav>
 
           <div className="flex justify-center pt-2">
@@ -287,7 +256,7 @@ export default function App() {
 
         {/* 主内容区 */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className={cn("min-h-0 flex-1 overflow-y-auto", showGlobalTerminal ? "p-4" : "")}>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <Suspense
               fallback={
                 <div className="flex min-h-[40vh] items-center justify-center text-sm text-[var(--vigil-muted)]">
@@ -303,18 +272,10 @@ export default function App() {
                 <Route path="/incidents" element={<IncidentsPage />} />
                 <Route path="/approvals" element={<ApprovalsPage />} />
                 <Route path="/audit" element={<AuditPage />} />
-                <Route path="/terminal" element={<TerminalPage />} />
                 <Route path="*" element={<Navigate to="/overview" replace />} />
               </Routes>
             </Suspense>
           </div>
-
-          {/* 主体下区：全宽深色 Agent Terminal（Terminal 页自带大视图，不重复） */}
-          {showGlobalTerminal && (
-            <div ref={terminalRef} className="shrink-0 px-4 pb-4">
-              <TerminalPanel collapsed={terminalCollapsed} onToggle={toggleTerminal} />
-            </div>
-          )}
         </main>
       </div>
     </div>
