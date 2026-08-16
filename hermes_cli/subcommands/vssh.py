@@ -147,6 +147,13 @@ def run(args) -> int:
         cred = _resolve_topology_credential(host)
     argv, env = _build_ssh_argv(host, user=user, port=port,
                                 key=getattr(args, "key", None), cred=cred)
+    # 批三十五：SSH 会话发起前打活性点（execvpe 成功即进程替换、不会返回；
+    # 到达此处 = 凭据解析 + argv 构造成功）。
+    try:
+        from hermes_cli.runtime_state import mark_host_activity
+        mark_host_activity(host)
+    except Exception:
+        pass
     os.execvpe("ssh", argv, env)
     print(f"✗ 无法执行 ssh：{argv[0]}", file=sys.stderr)
     return 127

@@ -175,3 +175,30 @@ export function formatUptime(seconds: number | undefined | null): string {
   const d = Math.floor(h / 24);
   return `${d}d ${h % 24}h`;
 }
+
+// ── 批三十五：host 活性（lazy last_seen） ────────────────────────────────
+
+/** 活性阈值：超过该分钟数无交互 → 视为"离线/无活动"（本批不做主动探测）。 */
+export const LAST_SEEN_ACTIVE_MINUTES = 10;
+
+export interface LastSeenInfo {
+  label: string;
+  tone: StatusTone;
+}
+
+/**
+ * host 活性展示：last_seen 为 epoch 秒。
+ * - 无记录 → "未探测"（offline）；
+ * - 距现在 ≤ 阈值 → "在线 · X 分钟前活跃"（ok；<1 分钟 → "刚刚活跃"）；
+ * - 超过阈值 → "离线 · 已 X 分钟无活动"（offline）。
+ */
+export function lastSeenInfo(lastSeen?: number, now: number = Date.now()): LastSeenInfo {
+  if (!lastSeen || lastSeen <= 0) return { label: "未探测", tone: "offline" };
+  const ageMin = Math.floor((now - lastSeen * 1000) / 60_000);
+  if (ageMin < 0) return { label: "在线 · 刚刚活跃", tone: "ok" };
+  if (ageMin === 0) return { label: "在线 · 刚刚活跃", tone: "ok" };
+  if (ageMin <= LAST_SEEN_ACTIVE_MINUTES) {
+    return { label: `在线 · ${ageMin} 分钟前活跃`, tone: "ok" };
+  }
+  return { label: `离线 · 已 ${ageMin} 分钟无活动`, tone: "offline" };
+}

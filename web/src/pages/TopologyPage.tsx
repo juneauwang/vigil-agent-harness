@@ -12,10 +12,11 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "@/lib/api";
-import { TopologyMiniGraph } from "@/components/TopologyMiniGraph";
-import { DetailBox } from "@/components/DetailTree";
+import TopologyGraph from "@/components/TopologyGraph";
+import DetailDrawer from "@/components/DetailDrawer";
 import { EnvBadge, StatusPill } from "@/components/StatusBits";
-import { cn, matchesSearch, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
+import { cn, lastSeenInfo, matchesSearch, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
+import type { GraphEntityRef } from "@/lib/topologyGraph";
 
 const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; label: string }> = [
   { id: "all", label: "全部" },
@@ -24,6 +25,35 @@ const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; label: string }> = [
   { id: "error", label: "故障" },
   { id: "offline", label: "离线" },
 ];
+
+function DetailButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="vigil-btn h-6 gap-1 px-2 text-xs"
+      aria-label="查看详情"
+    >
+      详情
+    </button>
+  );
+}
+
+/** 批三十五：host 活性行（lazy last_seen；"在线 · X 分钟前活跃" / "未探测"）。 */
+function ActivityLine({ lastSeen }: { lastSeen?: number }) {
+  const info = lastSeenInfo(lastSeen);
+  return (
+    <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-[var(--vigil-muted)]">
+      <span
+        className={cn(
+          "size-1.5 rounded-full",
+          info.tone === "ok" ? "bg-[var(--vigil-ok)]" : "bg-[var(--vigil-offline)]",
+        )}
+      />
+      <span>活性：{info.label}</span>
+    </div>
+  );
+}
 
 function Facts({ card }: { card: TopologyCard }) {
   const facts: Array<[string, string]> = [];
@@ -53,10 +83,12 @@ function ServiceRow({
   svc,
   q,
   filter,
+  onDetail,
 }: {
   svc: TopologyService;
   q: string;
   filter: StatusFilterId;
+  onDetail: (e: GraphEntityRef) => void;
 }) {
   const card = svc.card;
   if (!matchesSearch(card, q)) return null;
@@ -81,7 +113,7 @@ function ServiceRow({
       )}
       <StatusPill status={card.status} />
       <div className="ml-auto min-w-0">
-        <DetailBox detail={svc.detail} />
+        <DetailButton onClick={() => onDetail({ kind: "service", name: card.name, card, detail: svc.detail })} />
       </div>
     </div>
   );
@@ -91,10 +123,12 @@ function HostCard({
   host,
   q,
   filter,
+  onDetail,
 }: {
   host: TopologyHost;
   q: string;
   filter: StatusFilterId;
+  onDetail: (e: GraphEntityRef) => void;
 }) {
   const card = host.card;
   const anyServiceVisible = host.services.some(
@@ -119,10 +153,11 @@ function HostCard({
           </span>
         )}
         <div className="ml-auto min-w-0">
-          <DetailBox detail={host.detail} />
+          <DetailButton onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })} />
         </div>
       </div>
       <Facts card={card} />
+      <ActivityLine lastSeen={card.last_seen} />
       <div className="border-t border-dashed border-[var(--vigil-border)] pt-2">
         <div className="mb-1 text-[11px] text-[var(--vigil-muted)]">
           服务{visibleServices.length > 0 ? `（${visibleServices.length}）` : ""}
@@ -136,6 +171,7 @@ function HostCard({
               svc={svc}
               q={q}
               filter={filter}
+              onDetail={onDetail}
             />
           ))
         )}
@@ -148,10 +184,12 @@ function CrossCard({
   svc,
   q,
   filter,
+  onDetail,
 }: {
   svc: TopologyService;
   q: string;
   filter: StatusFilterId;
+  onDetail: (e: GraphEntityRef) => void;
 }) {
   const card = svc.card;
   if (!matchesSearch(card, q)) return null;
@@ -165,7 +203,7 @@ function CrossCard({
         <StatusPill status={card.status} />
         {card.on_key_path && <Link2 className="size-3 text-amber-500" />}
         <div className="ml-auto min-w-0">
-          <DetailBox detail={svc.detail} />
+          <DetailButton onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })} />
         </div>
       </div>
       <Facts card={card} />
@@ -188,9 +226,13 @@ function ListRow({ card, kind }: { card: TopologyCard; kind: string }) {
         <span />
       )}
       <EnvBadge env={card.env} />
-      <span className="truncate font-mono text-[11px] text-[var(--vigil-muted)]">
-        {card.endpoint ?? "-"}
-      </span>
+      {kind === "host" && card.last_seen ? (
+        <span className="text-[11px] text-[var(--vigil-muted)]">{lastSeenInfo(card.last_seen).label}</span>
+      ) : (
+        <span className="truncate font-mono text-[11px] text-[var(--vigil-muted)]">
+          {card.endpoint ?? "-"}
+        </span>
+      )}
       <StatusPill status={card.status} />
     </div>
   );
@@ -203,6 +245,7 @@ export default function TopologyPage() {
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
   const [filter, setFilter] = useState<StatusFilterId>("all");
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
+  const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -338,7 +381,7 @@ export default function TopologyPage() {
               <Database className="size-3.5" />
               拓扑总览（琥珀点 = 关键链路服务）
             </div>
-            <TopologyMiniGraph view={view} />
+            <TopologyGraph view={view} onSelect={setDrawer} />
           </div>
 
           {viewMode === "list" ? (
@@ -420,6 +463,7 @@ export default function TopologyPage() {
                         host={host}
                         q={q}
                         filter={filter}
+                        onDetail={setDrawer}
                       />
                     ))}
                   </div>
@@ -434,7 +478,7 @@ export default function TopologyPage() {
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                     {view.cross_host.map((svc) => (
-                      <CrossCard key={svc.card.name} svc={svc} q={q} filter={filter} />
+                      <CrossCard key={svc.card.name} svc={svc} q={q} filter={filter} onDetail={setDrawer} />
                     ))}
                   </div>
                 </section>
@@ -473,6 +517,8 @@ export default function TopologyPage() {
           )}
         </div>
       ) : null}
+
+      <DetailDrawer entity={drawer} onClose={() => setDrawer(null)} />
     </div>
   );
 }

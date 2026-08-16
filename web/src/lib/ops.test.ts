@@ -4,6 +4,7 @@ import {
   STATUS_FILTERS,
   aggregateTopologyStats,
   formatUptime,
+  lastSeenInfo,
   matchesSearch,
   statusMatchesFilter,
   statusTone,
@@ -110,5 +111,24 @@ describe("formatUptime", () => {
     expect(formatUptime(undefined)).toBe("-");
     expect(formatUptime(null)).toBe("-");
     expect(formatUptime(-1)).toBe("-");
+  });
+});
+
+describe("lastSeenInfo（批三十五活性）", () => {
+  const NOW = 1_800_000_000_000;
+  it("无记录 → 未探测", () => {
+    expect(lastSeenInfo(undefined, NOW).label).toBe("未探测");
+    expect(lastSeenInfo(0, NOW).label).toBe("未探测");
+    expect(lastSeenInfo(undefined, NOW).tone).toBe("offline");
+  });
+  it("≤ 阈值 → 在线 · X 分钟前活跃", () => {
+    expect(lastSeenInfo((NOW - 0.5 * 60_000) / 1000, NOW).label).toBe("在线 · 刚刚活跃");
+    expect(lastSeenInfo((NOW - 5 * 60_000) / 1000, NOW).label).toBe("在线 · 5 分钟前活跃");
+    expect(lastSeenInfo((NOW - 10 * 60_000) / 1000, NOW).label).toBe("在线 · 10 分钟前活跃");
+    expect(lastSeenInfo((NOW - 5 * 60_000) / 1000, NOW).tone).toBe("ok");
+  });
+  it("超过阈值 → 离线 · 已 X 分钟无活动", () => {
+    expect(lastSeenInfo((NOW - 11 * 60_000) / 1000, NOW).label).toBe("离线 · 已 11 分钟无活动");
+    expect(lastSeenInfo((NOW - 11 * 60_000) / 1000, NOW).tone).toBe("offline");
   });
 });

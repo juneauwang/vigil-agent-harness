@@ -124,6 +124,20 @@ def _esc(value: Any) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _topology_host_names(home: Optional[Path] = None) -> set:
+    """拓扑表 hosts 段全部主机名（批三十五：本地执行打点按名匹配用）。
+
+    读取失败/无 hosts → 空集。仅名字集合，不触敏感字段。
+    """
+    try:
+        from tools.topo_tools import load_topology
+        from hermes_constants import get_hermes_home
+        topo = load_topology(home or Path(get_hermes_home()))
+        return {str(r.get("name") or "").strip() for r in (topo or {}).get("hosts") or []}
+    except Exception:
+        return set()
+
+
 def _card_fields(row: Dict[str, Any]) -> Dict[str, Any]:
     """紧凑卡片显示字段（白名单；row 已 sanitize，凭据值不可能在此）。"""
     return {
@@ -195,6 +209,14 @@ def build_view(home: Path) -> Optional[Dict[str, Any]]:
 
     first = topo_first_layer(topo)
 
+    # 批三十五：host 活性（runtime_state，lazy last_seen）整表读一次，合并进
+    # host card；无记录 → 不返回该字段（前端显示"未探测"）。
+    try:
+        from hermes_cli.runtime_state import load_activity
+        activity = load_activity(home)
+    except Exception:
+        activity = {}
+
     chains: List[List[str]] = []
     for chain in topo.get("key_paths") or []:
         if isinstance(chain, list):
@@ -254,6 +276,9 @@ def build_view(home: Path) -> Optional[Dict[str, Any]]:
             continue
         card["on_key_path"] = card["name"] in kp_names
         card["kind"] = "host"
+        last_seen = activity.get(card["name"])
+        if last_seen:
+            card["last_seen"] = last_seen
         services: List[Dict[str, Any]] = []
         services_missing = True
         index: Dict[str, Any] = {}
