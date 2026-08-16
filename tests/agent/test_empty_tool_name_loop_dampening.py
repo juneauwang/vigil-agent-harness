@@ -119,8 +119,53 @@ def _text_resp(text: str) -> dict:
     }
 
 
+def _teardown_temp_dir_logging(temp_home: str) -> None:
+    """Stop/close async file logging that points into the throwaway VIGIL_HOME.
+
+    AIAgent construction calls ``setup_logging()`` (idempotent). When this
+    fixture's agent is the first thing in the process to initialize logging,
+    the file handlers land inside the fixture's temp ``VIGIL_HOME``; without
+    teardown the ``QueueListener`` thread keeps writing into the rmtree'd dir
+    (``FileNotFoundError`` noise) and the handlers leak into later tests.
+    When ``setup_logging()`` already ran (any earlier import), no handlers
+    point at the temp home and this is a no-op.
+    """
+    import logging
+
+    import hermes_logging as hl
+
+    home = str(temp_home)
+    with hl._queue_state_lock:
+        stale = [
+            h for h in hl._queued_file_handlers
+            if str(getattr(h, "baseFilename", "")).startswith(home)
+        ]
+        if not stale:
+            return
+        for h in stale:
+            try:
+                h.close()
+            except Exception:
+                pass
+        hl._queued_file_handlers[:] = [
+            h for h in hl._queued_file_handlers if h not in stale
+        ]
+        if hl._queued_file_handlers:
+            return
+        hl._stop_queue_listener_locked()
+        root = logging.getLogger()
+        for h in list(root.handlers):
+            if getattr(h, "_hermes_queue", False):
+                root.removeHandler(h)
+                try:
+                    h.close()
+                except Exception:
+                    pass
+        hl._log_queue = None
+
+
 @pytest.fixture()
-def agent_env():
+def agent_env(monkeypatch):
     """Spin up the mock provider + an isolated VIGIL_HOME, yield (agent, helpers)."""
     _MockHandler.captured_requests = []
     _MockHandler.response_queue = []
@@ -131,14 +176,16 @@ def agent_env():
 
     test_home = tempfile.mkdtemp(prefix="hermes_e2e_47967_")
     os.makedirs(os.path.join(test_home, ".vigil"))
-    prev_home = os.environ.get("VIGIL_HOME")
-    os.environ["VIGIL_HOME"] = os.path.join(test_home, ".vigil")
+    monkeypatch.setenv("VIGIL_HOME", os.path.join(test_home, ".vigil"))
 
-    # Import fresh so the patched conversation_loop is exercised even when the
-    # module was imported earlier in the same worker.
-    for mod in list(sys.modules):
-        if mod == "run_agent" or mod.startswith("agent.") or mod.startswith("tools.") or mod.startswith("hermes_"):
-            del sys.modules[mod]
+    # NOTE: no ``del sys.modules[...]`` reload here.  Purging the repo modules
+    # and re-importing them under the temp VIGIL_HOME splits module identity:
+    # test modules collected earlier in the same process keep references to
+    # the pre-reload objects, so their ``patch()`` targets (resolved by name
+    # against the post-reload ``sys.modules`` entries) silently stop applying
+    # and unrelated suites fail in the same process (batch-31 fix 1).  The
+    # code under test is current on disk; conftest sandboxes VIGIL_HOME and
+    # re-pins ``hermes_state.DEFAULT_DB_PATH`` per test already.
     from run_agent import AIAgent
 
     agent = AIAgent(
@@ -154,11 +201,8 @@ def agent_env():
         yield agent, _MockHandler
     finally:
         srv.shutdown()
+        _teardown_temp_dir_logging(test_home)
         shutil.rmtree(test_home, ignore_errors=True)
-        if prev_home is None:
-            os.environ.pop("VIGIL_HOME", None)
-        else:
-            os.environ["VIGIL_HOME"] = prev_home
 
 
 def _tool_results(handler) -> list[str]:
@@ -245,5 +289,4 @@ def test_invalid_tool_exhaustion_closes_tool_tail(agent_env):
     assert msgs, "expected persisted conversation messages"
     assert msgs[-1].get("role") == "assistant"
     assert "invalid tool call" in (msgs[-1].get("content") or "").lower()
-
 

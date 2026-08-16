@@ -324,6 +324,12 @@ from hermes_cli.memory_oauth import router as _memory_oauth_router  # noqa: E402
 
 app.include_router(_memory_oauth_router)
 
+# 对话 Session API（UI 壳核心价值页 /api/chat/*）——独立模块，不在 web_server
+# main 文件里继续堆端点。会话/agent 常驻进程内注册表，SSE 事件流见 chat_api.py。
+from hermes_cli.chat_api import router as _chat_router  # noqa: E402
+
+app.include_router(_chat_router)
+
 # ---------------------------------------------------------------------------
 # Session token for protecting sensitive endpoints (reveal).
 # The desktop shell mints the token and injects it via

@@ -94,6 +94,74 @@ from utils import base_url_host_matches, env_var_enabled
 
 logger = logging.getLogger(__name__)
 
+
+# ── tool_callback 摘要辅助（chat API 用；输入/输出必须过 redact，零凭据泄露）──
+_TOOL_EVENT_SUMMARY_MAX = 500
+
+
+def _redact_tool_event_text(value: Any) -> str:
+    """工具输入/输出摘要脱敏：与 web_server._redact_exec_text 同套双层组合
+    （redact_sensitive_text 值级 + topo_export._redact_value URL userinfo /
+    .pem / home 前缀），再截断到 500 字符。失败时原样截断返回（摘要层绝不
+    抛异常打断工具执行）。"""
+    try:
+        text = str(value)
+    except Exception:
+        text = ""
+    try:
+        from agent.redact import redact_sensitive_text
+        out = redact_sensitive_text(text, credential_values=True, force=True)
+        from hermes_cli.subcommands.topo_export import _redact_value
+        out = _redact_value(out)
+    except Exception:
+        out = text
+    if len(out) > _TOOL_EVENT_SUMMARY_MAX:
+        out = out[:_TOOL_EVENT_SUMMARY_MAX] + "…"
+    return out
+
+
+def _tool_result_content_for(messages: List[Dict[str, Any]], tool_call_id: str) -> str:
+    """从 messages 里取指定 tool_call_id 的最后一条 tool 结果（字符串化）。"""
+    for msg in reversed(messages):
+        if (
+            isinstance(msg, dict)
+            and msg.get("role") == "tool"
+            and msg.get("tool_call_id") == tool_call_id
+        ):
+            content = msg.get("content")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts = [
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                return "\n".join(parts)
+            return str(content) if content is not None else ""
+    return ""
+
+
+def _tool_result_ok(content: str) -> bool:
+    """结果 ok 启发式：JSON exit_code/ok/error 字段优先，否则按错误前缀。"""
+    if not content:
+        return True
+    s = content.strip()
+    lowered = s.lower()
+    if lowered.startswith("error") or lowered.startswith("failed"):
+        return False
+    try:
+        obj = json.loads(s)
+    except Exception:
+        return True
+    if isinstance(obj, dict):
+        if "exit_code" in obj:
+            return obj["exit_code"] in (0, None, "0", "None")
+        if "ok" in obj:
+            return bool(obj["ok"])
+        if obj.get("error"):
+            return False
+    return True
+
 # Stable prefix of the local interrupt status string emitted when a turn is
 # cancelled while waiting on the provider. Surfaces (ACP, TUI) match on this
 # to treat it as cancellation metadata rather than assistant prose.
@@ -1237,6 +1305,7 @@ def run_conversation(
     conversation_history: List[Dict[str, Any]] = None,
     task_id: str = None,
     stream_callback: Optional[callable] = None,
+    tool_callback: Optional[callable] = None,
     persist_user_message: Optional[Any] = None,
     persist_user_timestamp: Optional[float] = None,
     persist_user_display_kind: Optional[str] = None,
@@ -1254,6 +1323,12 @@ def run_conversation(
         stream_callback: Optional callback invoked with each text delta during streaming.
             Used by the TTS pipeline to start audio generation before the full response.
             When None (default), API calls use the standard non-streaming path.
+        tool_callback: Optional callback invoked around each tool execution with a
+            dict event: ``{"type": "tool_start", "name", "input_summary"}`` (pre-execute)
+            and ``{"type": "tool_end", "name", "output_summary", "ok"}`` (post-execute).
+            Summaries are redacted + truncated server-side; the callback must never
+            raise (exceptions are swallowed and logged). When None (default), the
+            tool loop behaves exactly as before.
         persist_user_message: Optional clean user message to store in
             transcripts/history when user_message contains API-only
             synthetic prefixes.
@@ -6362,7 +6437,46 @@ def run_conversation(
                     except Exception:
                         pass
 
+                # Optional per-tool event callback (chat API / UI 壳): fire
+                # pre-execute + post-execute events with redacted summaries.
+                # Default None keeps every existing caller byte-identical.
+                if tool_callback is not None:
+                    for _tc in assistant_message.tool_calls:
+                        try:
+                            tool_callback({
+                                "type": "tool_start",
+                                "name": _tc.function.name,
+                                "input_summary": _redact_tool_event_text(
+                                    _tc.function.arguments
+                                ),
+                            })
+                        except Exception:
+                            logger.debug(
+                                "tool_callback tool_start failed: %s",
+                                getattr(_tc, "id", ""),
+                                exc_info=True,
+                            )
+
                 agent._execute_tool_calls(assistant_message, messages, effective_task_id, api_call_count)
+
+                if tool_callback is not None:
+                    for _tc in assistant_message.tool_calls:
+                        try:
+                            _tool_content = _tool_result_content_for(
+                                messages, getattr(_tc, "id", "") or ""
+                            )
+                            tool_callback({
+                                "type": "tool_end",
+                                "name": _tc.function.name,
+                                "output_summary": _redact_tool_event_text(_tool_content),
+                                "ok": _tool_result_ok(_tool_content),
+                            })
+                        except Exception:
+                            logger.debug(
+                                "tool_callback tool_end failed: %s",
+                                getattr(_tc, "id", ""),
+                                exc_info=True,
+                            )
 
                 if getattr(agent, "_incremental_persistence_failed", False):
                     # A tool result could not be made canonical. Do not send
