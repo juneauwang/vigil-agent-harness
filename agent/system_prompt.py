@@ -38,7 +38,9 @@ from agent.prompt_builder import (
     MEMORY_GUIDANCE,
     OPS_CREDENTIAL_GUIDANCE,
     OPS_CREDENTIAL_SSH_GUIDANCE,
+    OPS_DIAGNOSTIC_COMMANDS_GUIDANCE,
     OPS_RUNBOOK_GUIDANCE,
+    OPS_TOPO_MEMORY_GUIDANCE,
     OPS_TOPOLOGY_SYNC_GUIDANCE,
     OPENAI_MODEL_EXECUTION_GUIDANCE,
     PARALLEL_TOOL_CALL_GUIDANCE,
@@ -280,12 +282,25 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         # OPS-DELTA 批次三十二：提权受控通道强制（vssh 同款）——与 SSH 纪律
         # 同门控、并列注入；静态文本，字节稳定（缓存前缀安全）。
         stable_parts.append(OPS_CREDENTIAL_GUIDANCE)
+        # OPS-DELTA 批次三十七 §X：主机资源排障预设只读命令集——优先用预设
+        # 命令，不现拼（审批等待 + 试错浪费）。与 SSH 纪律同门控（ops 工具在
+        # 场才有诊断场景）；静态文本，字节稳定（缓存前缀安全）。
+        stable_parts.append(OPS_DIAGNOSTIC_COMMANDS_GUIDANCE)
 
     # Topology status sync (OPS-DELTA 批次二十四，§R): after container/service
     # state changes, actively diff topology vs actual and ask before writing.
     # Static text, gated on topo tool presence → byte-stable prompt.
     if set(agent.valid_tool_names or []) & _TOPOLOGY_SYNC_TOOLS:
         stable_parts.append(OPS_TOPOLOGY_SYNC_GUIDANCE)
+
+    # Topology facts belong in the topology table, not memory (OPS-DELTA 批次
+    # 三十七 §Z)：拓扑工具与 memory 同时在场时才注入——没有拓扑工具就没有
+    # 权威事实层可路由，没有 memory 就无从污染。静态文本，字节稳定。
+    if (
+        set(agent.valid_tool_names or []) & _TOPOLOGY_SYNC_TOOLS
+        and "memory" in (agent.valid_tool_names or [])
+    ):
+        stable_parts.append(OPS_TOPO_MEMORY_GUIDANCE)
 
     # Runbook discipline (OPS-DELTA 批次二十五): runbook is a first-class
     # mechanism, and completed flows get a proactive "sink into a runbook?"

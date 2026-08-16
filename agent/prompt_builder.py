@@ -830,6 +830,46 @@ OPS_RUNBOOK_GUIDANCE = (
 )
 
 
+# Host resource diagnostics preset command set (OPS-DELTA 批次三十七，§X)。
+#
+# 静态常量文本——不读环境/会话，随 stable tier 进入缓存前缀，字节稳定。
+# NetBox 迁移实验教训（§X）：agent 排障时现拼诊断命令 → 审批等待 + 多版脚本
+# 试错（19.5 分钟里 12.9 分钟审批等待）。预设只读命令集：排障优先用预设命令，
+# 不现拼；命令集本身是 L1 只读查询（不应触发审批）。
+OPS_DIAGNOSTIC_COMMANDS_GUIDANCE = (
+    "# Host resource diagnostics use the preset read-only command set\n"
+    "- Diagnose host memory/swap/CPU/disk/load with the preset L1 read-only "
+    "commands below — do not hand-assemble ad-hoc variants (approval waits + "
+    "trial-and-error cost, §X lesson):\n"
+    "  * memory/swap: `free -h && swapon --show`\n"
+    "  * disk: `df -hT`\n"
+    "  * load: `uptime && cat /proc/loadavg`\n"
+    "  * cpu/processes: `top -bn1 | head -20`\n"
+    "- These are L1 read-only queries and must not trigger approval; run them "
+    "directly. Only extend beyond the presets (per-process / per-cgroup depth) "
+    "when their output is insufficient — never invent a whole new pipeline for "
+    "the same signal."
+)
+
+
+# Topology facts belong in the topology table, not memory (OPS-DELTA 批次
+# 三十七，§Z)。
+#
+# 静态常量文本——不读环境/会话，随 stable tier 进入缓存前缀，字节稳定。
+# 与 runbook 专有名词绑定同先例：prompt 层约束 + 工具层校验（memory_tool
+# 拓扑事实拦截）双管。拓扑数据写进 memory 会污染每轮注入的记忆，且不进权威
+# 拓扑表。
+OPS_TOPO_MEMORY_GUIDANCE = (
+    "# Platform facts belong in the topology table, not memory\n"
+    "- 主机/服务/集群/endpoint/IP/端口等平台事实属于拓扑表（topo_query / "
+    "topo_update 管理），不要写进 memory——memory 注入每一轮上下文，平台事实"
+    "放这里既污染记忆又不进权威拓扑。\n"
+    "- memory 只放人的偏好与稳定约定（如'用户偏好简洁回复'）。\n"
+    "- 用户要求'记住某主机/某服务/某 IP'时：先 topo_query 查是否已在表；不在"
+    "则用 topo_update 写入拓扑表（或让用户确认后写入），不要存 memory。"
+)
+
+
 # Model name substrings that should use the 'developer' role instead of
 # 'system' for the system prompt.  OpenAI's newer models (GPT-5, Codex)
 # give stronger instruction-following weight to the 'developer' role.

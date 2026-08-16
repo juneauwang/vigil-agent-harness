@@ -142,3 +142,58 @@ class TestForceFullRedraw:
         bare_cli._app = app
 
         bare_cli._force_full_redraw()  # must not raise
+
+
+class TestInterruptRecovery:
+    """批次三十七 §AB：interrupt/deny 恢复不触发整段重渲染。
+
+    中断是内部事件，终端内容未被外部清空——清屏 + 重放 _OUTPUT_HISTORY 会把
+    同一段历史再渲染一遍（历史段重复）。恢复只保留 stdin 排空 + 原地 repaint。
+    """
+
+    def test_recovery_flushes_stdin_and_invalidates_without_clear_or_replay(self, bare_cli, monkeypatch):
+        app = MagicMock()
+        bare_cli._app = app
+        events = []
+        monkeypatch.setattr(cli_mod, "_replay_output_history", lambda: events.append("replay"))
+        monkeypatch.setattr(
+            "hermes_cli.curses_ui.flush_stdin",
+            lambda: events.append("flush"),
+        )
+
+        bare_cli._recover_terminal_after_interrupt()
+
+        # #33271 的 stdin 侧修复保留。
+        assert "flush" in events
+        # 原地 repaint 活体 chrome。
+        app.invalidate.assert_called_once()
+        # §AB：不触发整段重渲染——既不清屏也不重放历史。
+        assert "replay" not in events
+        app.renderer.output.erase_screen.assert_not_called()
+
+    def test_recovery_safe_without_app(self, bare_cli, monkeypatch):
+        bare_cli._app = None
+        monkeypatch.setattr(
+            "hermes_cli.curses_ui.flush_stdin",
+            lambda: None,
+        )
+        bare_cli._recover_terminal_after_interrupt()  # must not raise
+
+    def test_recovery_swallows_flush_failure(self, bare_cli, monkeypatch):
+        def boom():
+            raise RuntimeError("no tty")
+        monkeypatch.setattr("hermes_cli.curses_ui.flush_stdin", boom)
+        app = MagicMock()
+        bare_cli._app = app
+        bare_cli._recover_terminal_after_interrupt()  # must not raise
+        app.invalidate.assert_called_once()
+
+    def test_recovery_swallows_invalidate_failure(self, bare_cli, monkeypatch):
+        app = MagicMock()
+        app.invalidate.side_effect = RuntimeError("boom")
+        bare_cli._app = app
+        monkeypatch.setattr(
+            "hermes_cli.curses_ui.flush_stdin",
+            lambda: None,
+        )
+        bare_cli._recover_terminal_after_interrupt()  # must not raise

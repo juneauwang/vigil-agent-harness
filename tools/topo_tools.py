@@ -235,6 +235,37 @@ def _normalize(obj: Any) -> Any:
     return obj
 
 
+def _normalize_ports(value: Any) -> Optional[List[int]]:
+    """Validate + normalize the optional entity ``ports`` field (schema v0.3).
+
+    Accepts a non-empty list of integers in 1..65535 (OPS-DELTA 批次三十七
+    §Y：实体记录监听端口，prometheus 9090 这类不再只能靠 docker exec 查)。
+    Missing/empty → None（老文件无 ports 字段，完全兼容）；非法形态（非列表/
+    非整数/越界）逐项丢弃并告警——坏 ports 字段绝不能打断拓扑加载。
+    """
+    if value is None:
+        return None
+    if not isinstance(value, list) or not value:
+        if value not in (None, [], ""):
+            logger.warning("topo: invalid ports field dropped: %r", value)
+        return None
+    normalized: List[int] = []
+    for item in value:
+        if isinstance(item, bool):
+            logger.warning("topo: invalid ports item dropped: %r", item)
+            continue
+        try:
+            port = int(item)
+        except (TypeError, ValueError):
+            logger.warning("topo: invalid ports item dropped: %r", item)
+            continue
+        if 1 <= port <= 65535:
+            normalized.append(port)
+        else:
+            logger.warning("topo: out-of-range ports item dropped: %r", item)
+    return normalized or None
+
+
 def _hermes_home() -> Path:
     """Active VIGIL_HOME as a Path (profile-scoped topology storage)."""
     from hermes_constants import get_hermes_home
@@ -278,7 +309,12 @@ def load_topology(home: Optional[Path] = None) -> Optional[Dict[str, Any]]:
         return None
     if not isinstance(data, dict):
         return None
-    return _normalize(data)
+    data = _normalize(data)
+    for section in ("hosts", "cross_host", "clusters"):
+        for row in data.get(section) or []:
+            if isinstance(row, dict):
+                row["ports"] = _normalize_ports(row.get("ports"))
+    return data
 
 
 def _is_v2_or_v3(topo: Dict[str, Any]) -> bool:
@@ -319,7 +355,11 @@ def _load_host_index(home: Path, host: Dict[str, Any]) -> Optional[Dict[str, Any
         return None
     if not isinstance(data, dict):
         return None
-    return _normalize(data)
+    data = _normalize(data)
+    for svc in data.get("services") or []:
+        if isinstance(svc, dict):
+            svc["ports"] = _normalize_ports(svc.get("ports"))
+    return data
 
 
 def _all_services(topo: Dict[str, Any], home: Optional[Path] = None) -> List[Dict[str, Any]]:
@@ -440,6 +480,7 @@ def _load_entity_file(home: Path, entity: Dict[str, Any]) -> Optional[Dict[str, 
         data.setdefault("cluster", str(entity.get("cluster") or "default"))
         data.setdefault("source", entity.get("source"))
         data.setdefault("last_verified", entity.get("last_verified"))
+        data["ports"] = _normalize_ports(data.get("ports"))
     return data
 
 

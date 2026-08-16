@@ -627,3 +627,104 @@ class TestLoadTimeSnapshotSanitization:
         # Block marker appears exactly once, not nested
         assert snapshot.count("[BLOCKED:") == 1
         assert "Clean fact" in snapshot
+
+
+# =========================================================================
+# OPS-DELTA 批次三十七 §Z — 拓扑平台事实拦截（写 memory 前路由到拓扑表）
+# =========================================================================
+
+class TestTopoFactInterception:
+    """平台事实（主机/服务/集群/endpoint/IP）被拦并引导写拓扑；普通偏好放行。"""
+
+    TOPO_YAML = """\
+version: 3
+environments:
+  - {name: prod, isolation: strict, role: prod}
+clusters:
+  - {name: k8s-prod, env: prod, description: 生产 k3s 集群}
+hosts:
+  - {name: node1, env: prod, cluster: k8s-prod, endpoint: "203.0.113.10"}
+  - {name: node2, env: prod, cluster: k8s-prod, endpoint: "203.0.113.11"}
+cross_host:
+  - {name: ingress, type: ingress, env: prod, cluster: k8s-prod}
+"""
+
+    @pytest.fixture
+    def topo_home(self, tmp_path, monkeypatch):
+        (tmp_path / "topology.yaml").write_text(self.TOPO_YAML, encoding="utf-8")
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        return tmp_path
+
+    def test_entity_name_blocked_and_routed(self, store, topo_home):
+        result = json.loads(memory_tool(
+            action="add", content="node1 是生产控制面主机", store=store))
+        assert result["success"] is False
+        assert "拓扑平台事实" in result["error"]
+        assert "拓扑实体 node1" in result["error"]
+        assert "topo_update" in result["error"]  # 引导写拓扑表而非记忆
+        assert "node1" not in store.memory_entries
+
+    def test_cluster_name_blocked(self, store, topo_home):
+        result = json.loads(memory_tool(
+            action="add", content="k8s-prod 集群有 3 个节点", store=store))
+        assert result["success"] is False
+        assert "拓扑实体 k8s-prod" in result["error"]
+
+    def test_ip_literal_blocked(self, store, topo_home):
+        result = json.loads(memory_tool(
+            action="add", content="主库 IP 是 203.0.113.10", store=store))
+        assert result["success"] is False
+        assert "IP 地址" in result["error"]
+
+    def test_endpoint_shape_blocked(self, store, topo_home):
+        result = json.loads(memory_tool(
+            action="add", content="prometheus 服务监听 monitor.internal:9090", store=store))
+        assert result["success"] is False
+        assert "endpoint" in result["error"]
+
+    def test_preference_passes(self, store, topo_home):
+        result = json.loads(memory_tool(
+            action="add", content="用户偏好简洁回复，先结论后细节", store=store))
+        assert result["success"] is True
+        assert "用户偏好简洁回复，先结论后细节" in store.memory_entries
+
+    def test_bare_port_preference_passes(self, store, topo_home):
+        # 纯端口号（无 host/IP/endpoint 形态）不是拓扑特征——偏好放行。
+        result = json.loads(memory_tool(
+            action="add", content="用户偏好用 9090 端口做本地开发", store=store))
+        assert result["success"] is True
+        assert any("9090" in e for e in store.memory_entries)
+
+    def test_time_like_text_not_blocked(self, store, topo_home):
+        # 09:30 这类时间不应被 endpoint 正则误伤。
+        result = json.loads(memory_tool(
+            action="add", content="用户习惯在 09:30 前开始工作", store=store))
+        assert result["success"] is True
+
+    def test_replace_blocked(self, store, topo_home):
+        store.add("memory", "旧条目")
+        result = json.loads(memory_tool(
+            action="replace", old_text="旧条目", content="node2 是 worker 节点", store=store))
+        assert result["success"] is False
+        assert "拓扑实体 node2" in result["error"]
+
+    def test_batch_rejected_whole(self, store, topo_home):
+        result = json.loads(memory_tool(
+            target="memory",
+            operations=[
+                {"action": "add", "content": "用户偏好英文回复"},
+                {"action": "add", "content": "node1 的 IP 是 203.0.113.10"},
+            ],
+            store=store,
+        ))
+        assert result["success"] is False
+        # 全批原子拒绝——连合法偏好也不落盘，模型拿到统一路由提示。
+        assert "用户偏好英文回复" not in store.memory_entries
+
+    def test_no_topology_still_blocks_ip_shape(self, store, tmp_path, monkeypatch):
+        # 无拓扑表时实体名信号为空，但 IP/endpoint 形态信号仍生效。
+        monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        result = json.loads(memory_tool(
+            action="add", content="数据库 IP 是 10.0.0.9", store=store))
+        assert result["success"] is False
+        assert "IP 地址" in result["error"]

@@ -152,6 +152,7 @@ def _card_fields(row: Dict[str, Any]) -> Dict[str, Any]:
         "owner": row.get("owner", ""),
         "description": row.get("description", ""),
         "port": row.get("port", ""),
+        "ports": row.get("ports") or [],
     }
 
 
@@ -543,6 +544,11 @@ def _facts_html(card: Dict[str, Any]) -> str:
         if str(value or "").strip():
             items.append(
                 f'<span class="fact"><span class="k">{_esc(key)}</span> {_esc(value)}</span>')
+    ports = card.get("ports") or []
+    if ports:
+        items.append(
+            f'<span class="fact"><span class="k">ports</span> '
+            f'{_esc(",".join(str(p) for p in ports))}</span>')
     return f'<div class="facts">{"".join(items)}</div>' if items else ""
 
 

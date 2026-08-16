@@ -90,6 +90,8 @@ export interface TopologyCard {
   owner?: string;
   description?: string;
   port?: string | number;
+  /** 批三十七 §Y：监听端口列表（实体 schema v0.3 可选字段，如 [9090, 443]）。 */
+  ports?: Array<number | string>;
   on_key_path?: boolean;
   kind?: string;
   /** 批三十五：host 活性（lazy last_seen，epoch 秒；无记录不返回该字段）。 */

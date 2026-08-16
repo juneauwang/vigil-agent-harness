@@ -402,3 +402,69 @@ class TestOpsRunbookGuidance:
         from agent.prompt_builder import OPS_RUNBOOK_GUIDANCE
 
         assert OPS_RUNBOOK_GUIDANCE not in _stable_prompt(agent)
+
+
+# ---------------------------------------------------------------------------
+# 批次三十七 §X — 主机资源排障预设只读命令集（swap/mem/cpu/磁盘/负载）
+# ---------------------------------------------------------------------------
+
+class TestOpsDiagnosticCommandsGuidance:
+    def test_constant_contains_preset_command_set(self):
+        """常量含 swap/mem/cpu/磁盘/负载三类预设命令 + 只读 L1 语义。"""
+        from agent.prompt_builder import OPS_DIAGNOSTIC_COMMANDS_GUIDANCE
+
+        assert "free -h && swapon --show" in OPS_DIAGNOSTIC_COMMANDS_GUIDANCE  # mem/swap
+        assert "df -hT" in OPS_DIAGNOSTIC_COMMANDS_GUIDANCE  # disk
+        assert "uptime && cat /proc/loadavg" in OPS_DIAGNOSTIC_COMMANDS_GUIDANCE  # load
+        assert "top -bn1 | head -20" in OPS_DIAGNOSTIC_COMMANDS_GUIDANCE  # cpu
+        # L1 只读查询：不触发审批，直接运行，不现拼。
+        assert "L1 read-only" in OPS_DIAGNOSTIC_COMMANDS_GUIDANCE
+        assert "must not trigger approval" in OPS_DIAGNOSTIC_COMMANDS_GUIDANCE
+
+    def test_guidance_lands_when_ops_tools_loaded(self):
+        """ops 工具（terminal/sudo_exec）加载时该块进 stable tier。"""
+        agent = _make_agent(valid_tool_names=["terminal", "sudo_exec"])
+        from agent.prompt_builder import OPS_DIAGNOSTIC_COMMANDS_GUIDANCE
+
+        assert OPS_DIAGNOSTIC_COMMANDS_GUIDANCE in _stable_prompt(agent)
+
+    def test_guidance_absent_without_ops_tools(self):
+        """无 ops 工具时不注入（没有终端就没有诊断场景）。"""
+        agent = _make_agent(valid_tool_names=["read_file"])
+        from agent.prompt_builder import OPS_DIAGNOSTIC_COMMANDS_GUIDANCE
+
+        assert OPS_DIAGNOSTIC_COMMANDS_GUIDANCE not in _stable_prompt(agent)
+
+
+# ---------------------------------------------------------------------------
+# 批次三十七 §Z — 拓扑平台事实不写 memory（prompt 层约束；工具层拦截在
+# tools/memory_tool.py，测试见 tests/tools/test_memory_tool.py）
+# ---------------------------------------------------------------------------
+
+class TestOpsTopoMemoryGuidance:
+    def test_constant_routes_platform_facts_to_topology(self):
+        """常量约束：平台事实走拓扑表，记忆只放人的偏好。"""
+        from agent.prompt_builder import OPS_TOPO_MEMORY_GUIDANCE
+
+        assert "topo_query" in OPS_TOPO_MEMORY_GUIDANCE
+        assert "topo_update" in OPS_TOPO_MEMORY_GUIDANCE
+        assert "不要写进 memory" in OPS_TOPO_MEMORY_GUIDANCE
+        assert "人的偏好" in OPS_TOPO_MEMORY_GUIDANCE
+
+    def test_guidance_lands_when_topo_and_memory_loaded(self):
+        """拓扑工具 + memory 同时在场时注入（没有拓扑表无从路由）。"""
+        agent = _make_agent(valid_tool_names=["topo_query", "memory"])
+        from agent.prompt_builder import OPS_TOPO_MEMORY_GUIDANCE
+
+        assert OPS_TOPO_MEMORY_GUIDANCE in _stable_prompt(agent)
+
+    def test_guidance_absent_without_both(self):
+        """只有拓扑工具（无 memory）或只有 memory（无拓扑）都不注入。"""
+        from agent.prompt_builder import OPS_TOPO_MEMORY_GUIDANCE
+
+        assert OPS_TOPO_MEMORY_GUIDANCE not in _stable_prompt(
+            _make_agent(valid_tool_names=["topo_query"])
+        )
+        assert OPS_TOPO_MEMORY_GUIDANCE not in _stable_prompt(
+            _make_agent(valid_tool_names=["memory"])
+        )

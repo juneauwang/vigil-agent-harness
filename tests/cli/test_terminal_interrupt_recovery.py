@@ -10,7 +10,11 @@ The recovery path lives in ``HermesCLI._recover_terminal_after_interrupt()``,
 which is invoked from ``process_loop``'s ``finally`` block only when
 ``self._last_turn_interrupted`` is set. It must:
   1. Drain stray escape bytes from the OS input buffer (``flush_stdin``).
-  2. Force a clean prompt_toolkit renderer redraw (``_force_full_redraw``).
+  2. Repaint the live chrome in place (``app.invalidate()``) — WITHOUT the
+     old full screen-clear + ``_replay_output_history`` route (批次三十七
+     §AB): an interrupt is an internal event, the terminal content was never
+     externally wiped, so clearing + replaying re-renders the same history
+     segments below the originals → duplicated transcript.
 
 These tests exercise the real method (not a re-implementation of its logic),
 and assert that the finally block actually wires it in behind the interrupt
@@ -36,42 +40,52 @@ def bare_cli():
 class TestRecoverTerminalAfterInterrupt:
     """Directly exercise HermesCLI._recover_terminal_after_interrupt()."""
 
-    def test_drains_stdin_then_redraws(self, bare_cli):
-        """Happy path: flush_stdin runs, then a full redraw is forced."""
-        bare_cli._force_full_redraw = MagicMock()
+    def test_drains_stdin_then_invalidates_in_place(self, bare_cli):
+        """Happy path: flush_stdin runs, then the live chrome repaints in place.
+
+        §AB: the old full redraw (clear + _replay_output_history) is what
+        re-rendered the history segments → visible duplication. Recovery now
+        only repaints in place and never triggers a history replay.
+        """
+        app = MagicMock()
+        bare_cli._app = app
         with patch("hermes_cli.curses_ui.flush_stdin") as mock_flush:
             bare_cli._recover_terminal_after_interrupt()
 
         mock_flush.assert_called_once()
-        bare_cli._force_full_redraw.assert_called_once()
+        app.invalidate.assert_called_once()
+        with patch("cli._replay_output_history") as mock_replay:
+            bare_cli._recover_terminal_after_interrupt()
+        mock_replay.assert_not_called()
 
-    def test_redraw_still_runs_when_flush_fails(self, bare_cli):
-        """A flush_stdin failure (no TTY, non-POSIX) must not skip the redraw.
+    def test_invalidate_still_runs_when_flush_fails(self, bare_cli):
+        """A flush_stdin failure (no TTY, non-POSIX) must not skip the repaint.
 
         The two recovery steps are independent — losing the stdin drain must
         never leave the renderer un-repainted.
         """
-        bare_cli._force_full_redraw = MagicMock()
+        app = MagicMock()
+        bare_cli._app = app
         with patch(
             "hermes_cli.curses_ui.flush_stdin", side_effect=OSError("no tty")
         ):
             bare_cli._recover_terminal_after_interrupt()  # must not raise
 
-        bare_cli._force_full_redraw.assert_called_once()
+        app.invalidate.assert_called_once()
 
-    def test_flush_runs_before_redraw(self, bare_cli):
-        """Order matters: drain stray bytes first so they don't arrive mid-redraw."""
+    def test_flush_runs_before_invalidate(self, bare_cli):
+        """Order matters: drain stray bytes first so they don't arrive mid-repaint."""
         events = []
-        bare_cli._force_full_redraw = MagicMock(
-            side_effect=lambda: events.append("redraw")
-        )
+        app = MagicMock()
+        app.invalidate.side_effect = lambda: events.append("invalidate")
+        bare_cli._app = app
         with patch(
             "hermes_cli.curses_ui.flush_stdin",
             side_effect=lambda: events.append("flush"),
         ):
             bare_cli._recover_terminal_after_interrupt()
 
-        assert events == ["flush", "redraw"]
+        assert events == ["flush", "invalidate"]
 
     def test_flush_stdin_is_tty_gated(self):
         """The real flush_stdin is a no-op on non-TTY stdin (piped/redirected).

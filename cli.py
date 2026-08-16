@@ -4970,21 +4970,31 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         (``^[[19;1R``) and the VT100 parser can stall in a partial-escape
         state, accepting no further keystrokes — the terminal appears frozen.
 
-        Two steps recover a sane state:
+        Recovery keeps two independent, self-guarding pieces:
           1. ``flush_stdin()`` drains stray escape bytes from the OS input
              buffer (``termios.tcflush(TCIFLUSH)``; no-op on non-TTY).
-          2. ``_force_full_redraw()`` drops prompt_toolkit's cached
-             screen/cursor state and forces a clean repaint.
+          2. An in-place repaint (``app.invalidate()``) so prompt_toolkit's
+             chrome (prompt/status bar) re-syncs with the live input state.
 
-        Both steps are independently safe and self-guard, so a failure of one
-        never prevents the other.
+        OPS-DELTA 批次三十七 §AB: this path deliberately does NOT clear the
+        screen + replay ``_OUTPUT_HISTORY`` (the old ``_force_full_redraw``
+        route). An interrupt is an INTERNAL event — the terminal content was
+        never externally wiped — so clearing and replaying re-renders the same
+        history segments below the still-visible originals, which reads as
+        duplicated transcript (the §AB report). Full redraw stays available
+        for genuine external wipes: Ctrl+L / ``/redraw`` / the resize path.
         """
         try:
             from hermes_cli.curses_ui import flush_stdin
             flush_stdin()
         except Exception:
             pass
-        self._force_full_redraw()
+        app = getattr(self, "_app", None)
+        if app is not None:
+            try:
+                app.invalidate()
+            except Exception:
+                pass
 
     def _clear_prompt_toolkit_screen(self, app, *, rebuild_scrollback: bool = False) -> None:
         """Clear the terminal and reset prompt_toolkit renderer state."""
