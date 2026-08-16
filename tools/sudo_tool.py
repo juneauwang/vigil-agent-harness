@@ -34,6 +34,7 @@ agent → credential resolver（§T 四档来源）→ injector adapter（sudo/s
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -43,7 +44,7 @@ import shlex
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from hermes_cli.subcommands.vssh import _build_ssh_argv, _resolve_topology_credential
 from tools.credential_vault import path_for
@@ -57,6 +58,27 @@ logger = logging.getLogger(__name__)
 _EXEC_TIMEOUT_S = 120
 _PROVISION_TIMEOUT_S = 60
 _LOCAL_HOST_ALIASES = ("localhost", "127.0.0.1", "::1", "")
+
+# sudo_tool 内置 clarify 通道回调（OPS-DELTA 批次三十二）：拓扑表无该 host
+# credential 且用户要 sudo 时，工具内部经 clarify 收密码 → vault store(0600) →
+# 执行，把正确路径做成工具内置流程（agent 无需自行设计裸 askpass/明文文件）。
+#
+# 用 ContextVar（而非 TLS）：CLI 主线程 set 后，经
+# ``tools.thread_context.propagate_context_to_thread`` 的 ``copy_context()``
+# 自动传播到工具 worker 线程，无需改传播层。gateway/web/oneshot 未注册时
+# 保持原 fail-closed 引导（无交互通道就不收密码）。
+_CLARIFY_CALLBACK: "contextvars.ContextVar[Optional[Callable]]" = contextvars.ContextVar(
+    "vigil_sudo_clarify_callback", default=None
+)
+
+
+def set_clarify_callback(cb) -> None:
+    """注册 sudo_tool 内置 clarify 回调（CLI ``_install_tool_callbacks`` 调用）。"""
+    _CLARIFY_CALLBACK.set(cb)
+
+
+def _get_clarify_callback():
+    return _CLARIFY_CALLBACK.get()
 
 # sudo 认证失败信号（本地/远端 sudo 密码错误）——fail-closed：返回问用户引导，
 # 不继续猜 vault 字段/换用户名重试（§Q/§AD 教训）。
@@ -100,6 +122,38 @@ def _validate_command(command: str) -> Optional[str]:
 def _sudo_askpass_for_vault(ref: str) -> Path:
     """vault 凭据 → 0700 askpass 脚本（只 cat 保险箱文件，不进 argv/env）。"""
     return _make_askpass_script(path_for(str(ref)))
+
+
+def _vault_name_for_host(host: str) -> str:
+    """无拓扑凭据时临时 vault 凭据名（``sudo-<host>``，符合 [A-Za-z0-9._-]+）。"""
+    base = str(host or "").strip().lower() or "local"
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-") or "local"
+    return f"sudo-{safe}"
+
+
+def _collect_sudo_password_via_clarify(host: str) -> Optional[str]:
+    """经 clarify 收 sudo 密码（CLI 交互通道）。返回明文；无通道/用户跳过 → None。"""
+    cb = _get_clarify_callback()
+    if cb is None:
+        return None
+    try:
+        from tools.clarify_tool import clarify_tool as _clarify_tool
+        raw = _clarify_tool(
+            question=(
+                f"sudo_exec 需要 {host or '本机'} 的 sudo 密码：请输入"
+                "（将安全存入凭据保险箱 0600，仅引用名字，不落会话明文）"
+            ),
+            callback=cb,
+        )
+        data = json.loads(raw)
+        if isinstance(data, dict) and data.get("error"):
+            return None
+        answer = str(data.get("user_response") or "").strip()
+        if not answer or answer.startswith("[") or "no user available" in answer:
+            return None
+        return answer
+    except Exception:
+        return None
 
 
 def _write_askpass_cat(vault_path: str) -> Path:
@@ -301,13 +355,28 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     # 凭据解析：拓扑表 host 行 credential 引用（ssh_key/vault/askpass 三通道）。
     cred = _resolve_topology_credential(host, allow_fallback=False)
     if not cred:
-        return tool_error(
-            f"sudo_exec 缺少 sudo 凭据：拓扑表中 host {host or '(未指定)'} 无 credential 引用。"
-            "请停止自动重试：1) 手动执行该命令 2) 或在拓扑表补充 credential 声明"
-            "（vault 类型，见 vssh / topo credential）3) 或询问用户提供正确凭据；"
-            "禁止翻 ~/.ssh/ 试密钥/猜 vault 字段/换用户名试登录（§Q/§AD 教训，"
-            "会触发限流）"
-        )
+        # OPS-DELTA 批次三十二：把"收密码 → vault store(0600) → 执行"做成工具
+        # 内置流程，agent 无需自行设计裸 askpass/明文文件。无交互通道
+        # （gateway/web/oneshot）时保持原 fail-closed 引导。
+        collected = _collect_sudo_password_via_clarify(host)
+        if collected is None:
+            return tool_error(
+                f"sudo_exec 缺少 sudo 凭据：拓扑表中 host {host or '(未指定)'} 无 credential 引用。"
+                "请停止自动重试：1) 手动执行该命令 2) 或在拓扑表补充 credential 声明"
+                "（vault 类型，见 vssh / topo credential）3) 或询问用户提供正确凭据；"
+                "禁止翻 ~/.ssh/ 试密钥/猜 vault 字段/换用户名试登录（§Q/§AD 教训，"
+                "会触发限流）"
+            )
+        vault_name = _vault_name_for_host(host)
+        try:
+            from tools.credential_vault import store as _vault_store
+            _vault_store(vault_name, collected, source="user")
+        except Exception as exc:
+            return tool_error(f"sudo_exec 无法把凭据存入保险箱：{exc}")
+        cred = {"type": "vault", "ref": vault_name, "user": "root", "port": 22}
+        credential_collected = True
+    else:
+        credential_collected = False
     user = str(cred.get("user") or "root")
     port = int(cred.get("port") or 22)
 
@@ -327,20 +396,32 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     if result.returncode != 0:
         stderr = (result.stderr or "").lower()
         if any(hint in stderr for hint in _SUDO_AUTH_FAILURE_HINTS):
+            collected_note = (
+                f"（已把用户提供的密码存入保险箱 {vault_name}，如密码有误可让用户"
+                "更新该凭据或执行 credential_vault expire）"
+                if credential_collected else ""
+            )
             return tool_error(
-                "sudo 认证失败（凭据错误或未生效）——停止自动重试：1) 手动执行该命令 "
+                f"sudo 认证失败（凭据错误或未生效）——停止自动重试：1) 手动执行该命令 "
                 "2) 修正/补充拓扑表 credential 声明 3) 或询问用户提供正确密码；"
                 "禁止连续猜 vault 字段/换用户名试登录（§Q/§AD 教训，会触发限流）"
+                + collected_note
             )
 
-    return json.dumps({
+    result_payload = {
         "status": "ok",
         "host": host or "local",
         "command": f"sudo -A {command}",
         "stdout": (result.stdout or ""),
         "stderr": (result.stderr or ""),
         "exit_code": result.returncode,
-    }, ensure_ascii=False)
+    }
+    if credential_collected:
+        result_payload["_warning"] = (
+            f"已用保险箱凭据 {vault_name} 执行；建议在拓扑表 {host or 'local'} 行补充 "
+            f"credential 声明（type: vault, ref: {vault_name}）以便后续自动解析"
+        )
+    return json.dumps(result_payload, ensure_ascii=False)
 
 
 _SUDO_EXEC_SCHEMA = {
@@ -351,8 +432,9 @@ _SUDO_EXEC_SCHEMA = {
         "`SUDO_PASS=$(curl vault | jq)`、`echo 密码 | sudo -S` 等管道形态：密码由本工具"
         "从凭据来源内部注入（ASKPASS），命令串/argv/展示层永不出现密码。"
         "凭据从拓扑表 host 行的 credential 引用自动读取（ssh_key/vault/askpass 三通道）。"
-        "凭据缺失或认证失败时**停下来问用户**（提供凭据或手动执行），禁止翻 ~/.ssh/ 试密钥、"
-        "禁止猜 vault 字段、禁止换用户名试登录。"
+        "凭据缺失时本工具会内置 clarify 询问用户密码 → 自动存入凭据保险箱（0600）→"
+        "执行，并提示在拓扑表补充 credential 声明；无交互通道或认证失败时**停下来问用户**"
+        "（提供凭据或手动执行），禁止翻 ~/.ssh/ 试密钥、禁止猜 vault 字段、禁止换用户名试登录。"
         "安全边界：只接受单条只读命令——拒绝 bash -c 嵌套 shell、重定向到文件（> / >>）、"
         "后台（&）、多命令分隔（;）、命令替换（$()/反引号）、内嵌 sudo。"
         "prod 环境变更类命令（重启/重建/配置下发）需人工确认；只读诊断（ps/ss/vmstat/cat）"

@@ -2399,3 +2399,77 @@
 - **核销方式**：测试常驻——批次 29 套件全绿；季度体检检查：清单两段式是否被改回
   单层混排、web 默认是否被改回订阅项、`_DEFAULT_OFF_TOOLSETS` 是否又漏掉消费级
   工具、首次安装是否重新出现 cua-driver 下载。
+
+### 49. 批次三十二 行为层安全——凭据值全局登记打码 + 提权受控通道强制（Codex 产出，2026-08-16）
+
+- **背景（dogfood 实测，用户跑"停 GitLab"任务）**：①agent 引导用户把 sudo 密码
+  写裸明文文件（`~/credential/sudo_credential`）、手写 echo 密码 askpass 脚本
+  （`~/.vigil/tmp-askpass-sudo`，绕过 credential_vault 受控通道），且 review diff
+  展示明文；②clarify 密码输入明文落 state.db（role=tool 消息，如 id 503）。低熵
+  裸密码（`wwplove815`：无键名形态、不足 16 字符不挂高熵门）漏过 redact 两套既有
+  检测。本批治本：**凭据值全局登记打码（不依赖熵检测）+ 提权受控通道绑死**。
+- **任务 1（凭据值全局登记打码）**：
+  1. **登记表（agent/redact.py）**：`register_credential_value()` 进程内 set +
+     持久化 `<VIGIL_HOME>/credential_values.json`（600 权限，原子写）；redact 时
+     惰性加载合并。`redact_sensitive_text` 尾部新增"值精确匹配登记表 → 打码"
+     路径（词边界保护，防腐蚀更长 token）——任何输出通道统一生效（终端/review
+     diff/SSE/trajectory/state.db 落库副本/JSON 会话快照）。登记资格过滤：长度
+     ≥6、非纯数字、非单字符重复（防把常见词全局打码）；值本身不打日志（只记长度）。
+  2. **登记来源 ①**：`credential_vault.store()` 写入的值自动登记。
+  3. **登记来源 ②**：clarify 问题文本含敏感关键词（密码/password/密钥/secret/
+     凭据/sudo…）时答复值登记（≥8 字符且含数字/符号/大写，防 "bearer"/"yes"
+     等常见答复词误登记）；返回给 agent 的 JSON 保持明文（agent 仍需该值去
+     store vault），脱敏发生在落库层。
+  4. **落库脱敏**：`run_agent._flush_messages_to_session_db` 对 clarify 工具结果
+     内容（含 question+user_response JSON 形态）写 SQLite 前过 redact（force）——
+     登记值精确打码；live 内存消息保持明文；非敏感答复（redact 恒等）不受影响。
+     JSON 会话快照路径（_save_session_log）本就过 redact，登记后自动打码。
+  5. **review diff 展示层兜底（agent/display.py）**：`extract_edit_diff` 返回 +
+     `_emit_inline_diff` 输出前再过一次 redact（双保险，防登记表外的新形态）。
+  6. **已落库明文清理命令**：`vigil security scrub`（新子命令，hermes_cli/
+     scrub_secrets.py）——扫描 state.db messages 各文本列（content/api_content/
+     reasoning/reasoning_content/tool_calls/reasoning_details/codex_*）打码登记值，
+     重建 FTS；支持 `--dry-run`、`--values <值>`（追加）、`--session <id>`（过滤）。
+  7. **登记表文件自护**：`credential_values.json` 自身内容过 file_read redact 时
+     值被精确打码（read_file 读不出明文）。
+- **任务 2（提权受控通道强制，vssh 同款，零新机制）**：
+  1. **prompt 层**：新常量 `OPS_CREDENTIAL_GUIDANCE`（agent/prompt_builder.py，
+     与 OPS_CREDENTIAL_SSH_GUIDANCE 并列）——提权/sudo 走 sudo_exec/vssh（拓扑表
+     credential 引用 + vault，ASKPASS 内部注入）；禁引导用户写裸密码文件、禁手写
+     echo 密码 askpass、禁让用户把密码贴普通对话（要收密码走 clarify，答复自动
+     登记+打码+落库脱敏）。`agent/system_prompt.py` 在 `_OPS_SECURITY_TOOLS` 同门控
+     下并列注入（静态文本，字节稳定，缓存前缀安全）。
+  2. **工具层校验**：
+     - write_file（tools/file_tools.py）：内容含 `echo '<8-32 字符>'`（或
+       printf 形态）且目标路径在 `~/.vigil` 或 `~/credential/` 下 → 拦截并引导
+       "用 credential_vault / sudo_exec 受控通道"（redact 之前检测原始内容）。
+     - terminal（tools/approval.py HARDLINE_PATTERNS，批十九 sudoers.d 同款
+       硬拒风格）：`echo/printf '<8-32 值>' (>|>>) ~/.vigil 或 ~/credential/`
+       → hardline 硬拒（yolo 也绕不过）；`$HOME`/绝对路径形态同覆盖。
+     - sudo_exec（tools/sudo_tool.py）：拓扑表无该 host credential 且用户要
+       sudo 时，工具内部走 clarify 收密码 → `credential_vault.store()`（0600，
+       name=`sudo-<host>`）→ 执行 → 返回拓扑登记提示（credential 声明
+       type: vault, ref）。回调经 ContextVar 注册（CLI `_install_tool_callbacks`
+       一行），`propagate_context_to_thread` 的 `copy_context` 自动传播到工具
+       worker 线程；gateway/web/oneshot 无交互通道时保持原 fail-closed 引导。
+       认证失败时提示已存凭据名（可更新或 expire）。
+- **测试**：tests/agent/test_redact_registry.py（13：登记资格/全形态打码/file_read
+  sentinel/持久化 600+重载/边界保护/登记表自护）+ test_display.py 补 2 +
+  test_system_prompt.py 补 3；tests/tools/test_askpass_interception.py（17：write_file
+  4 形态拦截 + terminal hardline 5 形态 + 良性 5）；test_sudo_clarify_flow.py（4：
+  clarify→store→执行/认证失败提示/fail-closed/名清洗）；test_clarify_registration.py
+  （7：敏感登记/多选/非敏感不误伤）；test_credential_vault.py 补 1；tests/run_agent/
+  test_flush_clarify_redaction.py（3：落库脱敏/非敏感不受影响/非 clarify 不动）；
+  tests/hermes_cli/test_scrub_secrets.py（6：dry-run/清理/非敏感保留/--values/
+  --session/空表）。回归：tests/agent/test_redact*.py、tests/tools/test_sudo_exec.py、
+  tests/tools/test_hardline_blocklist.py、tests/agent/test_turn_context.py、
+  tests/hermes_cli/test_batch31_chat_api.py、tests/hermes_cli/test_batch28_exec_api.py
+  全绿。
+- **边界**：登记表持久化在 `<VIGIL_HOME>/credential_values.json`（profile-aware，
+  进程内热集合 + 磁盘持久化，重启不丢）；已落库明文清理 = `vigil security scrub`
+  （对历史 state.db 一次性清理，新写入自动脱敏）；gateway/web 对话页的 sudo_exec
+  无 clarify 交互通道（保持原引导文案），CLI 全量支持；terminal 管道形态
+  （`echo x | tee ~/.vigil/...`）不在本批硬拒范围（write_file 内容检测已覆盖同型）。
+- **核销方式**：测试常驻——批次 32 套件全绿；季度体检检查：登记表是否仍被
+  store/clarify 写入并持久化 600、askpass 硬拒是否被削弱、sudo_exec 无凭据引导
+  是否仍指向 vault 受控通道。

@@ -753,6 +753,37 @@ OPS_CREDENTIAL_SSH_GUIDANCE = (
     "variables."
 )
 
+# Privilege-escalation credential channel discipline (OPS-DELTA 批次三十二)。
+#
+# 静态常量文本——不读环境/会话，随 stable tier 进入缓存前缀，字节稳定。
+# 与 OPS_CREDENTIAL_SSH_GUIDANCE 同门控（_OPS_SECURITY_TOOLS）注入。约束
+# agent 行为：提权/sudo 必须走拓扑表 credential 引用 + credential_vault
+# 受控通道；禁止把正确通道的替代品（裸密码文件/手写 echo askpass/对话贴密码）
+# 做成"看起来可行"的路径。
+OPS_CREDENTIAL_GUIDANCE = (
+    "# Privilege escalation & credential channel\n"
+    "- For sudo / privilege escalation, use the `sudo_exec` tool (or `vssh`) "
+    "— it resolves the credential from the topology table's `credential` "
+    "reference (ssh_key / vault / askpass channels) and injects it internally "
+    "via ASKPASS. Never hand-roll `sudo -S <<< 'password'`, "
+    "`SUDO_PASS=$(...)`, or `echo password | sudo -S` pipelines.\n"
+    "- NEVER guide the user to write a password in plaintext to a file — not "
+    "`~/credential/...`, not `~/.vigil/...`, not any other location — and "
+    "NEVER hand-write an askpass script containing `echo '<password>'`. "
+    "Credential values belong in the credential vault (`credential_vault` "
+    "store: 0600 files, owner-checked); reference them by name only, and "
+    "declare the reference in the topology table's `credential` field so "
+    "`sudo_exec` / `vssh` can resolve them automatically.\n"
+    "- NEVER ask the user to paste a password into a normal chat message — "
+    "it would land in the transcript. When you must collect a password, use "
+    "the `clarify` tool; the answer is registered and redacted from every "
+    "output channel (logs, diffs, SSE, trajectory) and from persisted state. "
+    "Store it in the vault immediately, then reference it by name.\n"
+    "- If a credential is missing or undeclared, ask the user — do not "
+    "invent an ad-hoc plaintext file or echo-based askpass workaround; that "
+    "bypasses the controlled channel and leaks the value."
+)
+
 # Topology status sync discipline (OPS-DELTA 批次二十四，§R 行为层约束)。
 #
 # 静态常量文本——不读环境/会话，随 stable tier 进入缓存前缀，字节稳定。

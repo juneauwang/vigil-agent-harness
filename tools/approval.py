@@ -566,6 +566,14 @@ HARDLINE_PATTERNS = [
     #    (< file) after the path is still a write — allow it in the lookahead.
     (_CMDPOS + r'(?:tee|install|cp|mv)\b[^\n]*?\s+["\']?(?:/etc/|/private/etc/)sudoers(?:\.d)?(?:/["\']?[^\s;&|\n]*)?(?=\s*(?:<\s*\S+\s*)?(?:&&|;|\||\n|$))',
      "禁止通过修改 sudoers 实现免密/传密码——提权走 sudo_exec 工具（ASKPASS 注入）"),
+    # Hand-written askpass / bare-credential writes (OPS-DELTA 批次三十二):
+    # `echo '<8-32 char value>' > ~/.vigil/...` or `> ~/credential/...` is the
+    # agent hand-rolling an askpass script (or plaintext credential file) to
+    # bypass credential_vault. The bare-value echo + protected-dir write is
+    # exactly the observed shape; vault writes happen programmatically with
+    # 0600 + owner checks, never via terminal echo.
+    (_CMDPOS + r'(?:echo|printf)\b[^\n]*?["\']([^"\']{8,32})["\'][^\n]*?(?:>>|>)\s*["\']?(?:(?:~|\$HOME|/home/[A-Za-z0-9._-]+))/(?:\.vigil|credential)(?:/|["\']?(?:\s|$))',
+     "禁止手写 echo 密码 askpass 脚本/裸凭据落盘——凭据走 credential_vault / sudo_exec 受控通道（ASKPASS 注入）"),
 ]
 
 # Pre-compiled variant used by the hot-path matcher. Building these at module

@@ -305,6 +305,30 @@ class TestOpsCredentialFailClosedGuidance:
 
         assert OPS_CREDENTIAL_SSH_GUIDANCE in parts["stable"]
 
+    def test_privilege_channel_guidance_exists_with_keywords(self):
+        """OPS-DELTA 批次三十二：OPS_CREDENTIAL_GUIDANCE 常量含受控通道约束。"""
+        from agent.prompt_builder import OPS_CREDENTIAL_GUIDANCE
+
+        assert "sudo_exec" in OPS_CREDENTIAL_GUIDANCE
+        assert "credential_vault" in OPS_CREDENTIAL_GUIDANCE
+        assert "echo '<password>'" in OPS_CREDENTIAL_GUIDANCE  # 禁手写 askpass
+        assert "clarify" in OPS_CREDENTIAL_GUIDANCE  # 收密码走 clarify
+        assert "plaintext" in OPS_CREDENTIAL_GUIDANCE  # 禁裸明文文件
+
+    def test_privilege_channel_guidance_lands_with_ops_tools(self):
+        """与 SSH 纪律同门控：ops 工具加载时并列注入 stable tier。"""
+        agent = _make_agent(valid_tool_names=["sudo_exec"])
+        from agent.prompt_builder import OPS_CREDENTIAL_GUIDANCE
+
+        stable = _stable_prompt(agent)
+        assert OPS_CREDENTIAL_GUIDANCE in stable
+
+    def test_privilege_channel_guidance_absent_without_ops_tools(self):
+        agent = _make_agent(valid_tool_names=["read_file"])
+        from agent.prompt_builder import OPS_CREDENTIAL_GUIDANCE
+
+        assert OPS_CREDENTIAL_GUIDANCE not in _stable_prompt(agent)
+
 
 # ---------------------------------------------------------------------------
 # 批次二十四 — 拓扑状态自动同步（§R）：状态变更后主动 topo_status_sync 行为约束

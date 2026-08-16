@@ -15,12 +15,54 @@ a thin dispatcher that delegates to a platform-provided callback.
 """
 
 import json
+import re
 from typing import List, Optional, Callable
 
 
 # Maximum number of predefined choices the agent can offer.
 # A 5th "Other (type your answer)" option is always appended by the UI.
 MAX_CHOICES = 4
+
+# 敏感问题关键词（OPS-DELTA 批次三十二）：问题文本命中任一即视为在收集
+# 凭据（密码/密钥/凭据/口令/sudo…），答复值登记进全局 redact 登记表——
+# 任何输出通道（含 state.db 落库副本）精确匹配即打码。登记自带资格过滤
+# （见 agent.redact.register_credential_value），普通答复（"是"/"否"/
+# "bearer" 等短值）不受影响。
+_SENSITIVE_QUESTION_RE = re.compile(
+    r"(密码|密钥|凭据|凭证|口令|sudo|password|passwd|secret|credential|token)",
+    re.IGNORECASE,
+)
+
+
+def _collect_secret_answer_shape(value: str) -> bool:
+    """敏感答复登记的形状门槛：≥8 字符且含数字/符号/大写（防常见答复词误登记）。
+
+    ``wwplove815``（低熵密码现场形态）→ 含数字 → 登记；``bearer`` /
+    ``approved`` / ``yes`` 等答复词 → 不登记，不把常见词全局打码。
+    """
+    if len(value) < 8 or value.isdigit():
+        return False
+    if value.isalpha() and value.islower():
+        return False
+    return True
+
+
+def _register_sensitive_answers(question: str, user_response) -> None:
+    """问题含敏感关键词时，把答复值登记进全局凭据值登记表（best-effort）。"""
+    if not question or not _SENSITIVE_QUESTION_RE.search(question):
+        return
+    try:
+        from agent.redact import register_credential_value
+    except Exception:
+        return
+    values = user_response if isinstance(user_response, list) else [user_response]
+    for value in values:
+        text = str(value).strip() if value is not None else ""
+        if _collect_secret_answer_shape(text):
+            try:
+                register_credential_value(text)
+            except Exception:
+                pass
 
 
 def _flatten_choice(c) -> str:
@@ -168,6 +210,12 @@ def clarify_tool(
         user_response = _parse_multi_select_response(raw_response)
     else:
         user_response = str(raw_response).strip()
+
+    # OPS-DELTA 批次三十二：敏感问题（密码/密钥/凭据…）的答复值登记进全局
+    # 登记表 → 落库副本/SSE/review diff 等输出通道精确打码。返回给 agent 的
+    # JSON 保持明文（agent 仍需该值去 credential_vault.store），脱敏发生在
+    # 持久化层（run_agent._flush_messages_to_session_db）。
+    _register_sensitive_answers(question, user_response)
 
     return json.dumps({
         "question": question,

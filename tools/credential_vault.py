@@ -118,6 +118,14 @@ def store(name: str, value: str, source: str = "user") -> str:
         pass
     _check_owner(path)
     register_source(name, source)
+    # OPS-DELTA 批次三十二：写入的凭据值自动登记进全局 redact 登记表——
+    # 值一旦入 vault，任何输出通道（终端/review diff/SSE/trajectory/落库）
+    # 精确匹配即打码，不依赖熵检测。注册逻辑自带资格过滤（过短/纯数字跳过）。
+    try:
+        from agent.redact import register_credential_value
+        register_credential_value(value)
+    except Exception:
+        logger.debug("credential value registration failed", exc_info=True)
     logger.info("credential_vault: stored %r (source=%s)", name, source)
     return name
 

@@ -904,13 +904,29 @@ def extract_edit_diff(
         if isinstance(data, dict):
             diff = data.get("diff")
             if isinstance(diff, str) and diff.strip():
-                return diff
+                return _redact_diff_text(diff)
 
     if tool_name not in {"write_file", "patch", "skill_manage"}:
         return None
     if not _result_succeeded(result):
         return None
-    return _diff_from_snapshot(snapshot)
+    return _redact_diff_text(_diff_from_snapshot(snapshot))
+
+
+def _redact_diff_text(diff: str | None) -> str | None:
+    """review diff 展示层兜底（OPS-DELTA 批次三十二）：输出前再过一次 redact。
+
+    双保险——write_file 内容已打码落盘，但 diff 读的是磁盘实际内容；登记表外的
+    新凭据形态（值已登记则精确打码；键名形态由 redact 常规通道兜住）在此再挡
+    一层，防 diff 展示明文。
+    """
+    if not diff:
+        return diff
+    try:
+        from agent.redact import redact_sensitive_text
+        return redact_sensitive_text(diff, force=True, credential_values=True)
+    except Exception:
+        return diff
 
 
 def _emit_inline_diff(diff_text: str, print_fn) -> bool:
@@ -918,6 +934,7 @@ def _emit_inline_diff(diff_text: str, print_fn) -> bool:
     if print_fn is None or not diff_text:
         return False
     try:
+        diff_text = _redact_diff_text(diff_text) or ""
         print_fn("  ┊ review diff")
         for line in diff_text.rstrip("\n").splitlines():
             print_fn(line)

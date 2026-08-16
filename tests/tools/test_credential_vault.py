@@ -54,6 +54,21 @@ def test_store_registers_user_source(vault_home):
     assert cv.has_credential_source("vault") is False
 
 
+def test_store_registers_value_in_global_redaction_registry(vault_home):
+    """OPS-DELTA 批次三十二：store() 写入的值自动登记进全局打码登记表。"""
+    from agent import redact
+    redact._reset_registered_credential_values_for_tests()
+    try:
+        cv.store("srv_pass", "wwplove815")
+        assert "wwplove815" in redact.registered_credential_values()
+        # 登记后任意输出通道打码（低熵裸值形态）
+        out = redact.redact_sensitive_text("echo 'wwplove815'", force=True)
+        assert "wwplove815" not in out
+        # 值本身不打日志
+    finally:
+        redact._reset_registered_credential_values_for_tests()
+
+
 def test_expire_makes_retrieve_fail(vault_home):
     cv.store("tmp_secret", "TmpV@lue123456")
     assert cv.expire("tmp_secret") is True

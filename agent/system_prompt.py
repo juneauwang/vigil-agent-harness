@@ -36,6 +36,7 @@ from agent.prompt_builder import (
     VIGIL_AGENT_HELP_GUIDANCE,
     KANBAN_GUIDANCE,
     MEMORY_GUIDANCE,
+    OPS_CREDENTIAL_GUIDANCE,
     OPS_CREDENTIAL_SSH_GUIDANCE,
     OPS_RUNBOOK_GUIDANCE,
     OPS_TOPOLOGY_SYNC_GUIDANCE,
@@ -276,6 +277,9 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     # gated only on stable toolset membership → byte-stable prompt.
     if set(agent.valid_tool_names or []) & _OPS_SECURITY_TOOLS:
         stable_parts.append(OPS_CREDENTIAL_SSH_GUIDANCE)
+        # OPS-DELTA 批次三十二：提权受控通道强制（vssh 同款）——与 SSH 纪律
+        # 同门控、并列注入；静态文本，字节稳定（缓存前缀安全）。
+        stable_parts.append(OPS_CREDENTIAL_GUIDANCE)
 
     # Topology status sync (OPS-DELTA 批次二十四，§R): after container/service
     # state changes, actively diff topology vs actual and ask before writing.
