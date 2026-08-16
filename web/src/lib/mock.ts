@@ -11,9 +11,6 @@ import type {
   ApprovalItem,
   AuditEvent,
   AuditSessionSummary,
-  ExecRecord,
-  ExecResponse,
-  SessionSummary,
 } from "@/lib/api";
 
 export function isMockEnabled(): boolean {
@@ -111,71 +108,3 @@ export const MOCK_AUDIT_EVENTS: AuditEvent[] = [
     result: { exit_code: 0, output_preview: "approval apv_20260815_001 created" },
   },
 ];
-
-export const MOCK_SESSIONS: SessionSummary[] = [
-  { session_id: "20260815_121956_6b88bf", title: "gateway-svc 发布", started_at: iso(200), last_activity_at: iso(1), model: "deepseek-v4-flash", running: true },
-  { session_id: "20260815_101234_1a2b3c", title: "harbor 排查", started_at: iso(320), last_activity_at: iso(150), model: "deepseek-v4-flash", running: false },
-  { session_id: "20260814_223001_77aabb", title: "拓扑同步", started_at: iso(900), last_activity_at: iso(860), model: "deepseek-v4-flash", running: false },
-];
-
-/** 模拟一次执行：按契约三态返回（文档 IP / 占位符）。 */
-export function mockRunExec(command: string): ExecResponse {
-  const lower = command.toLowerCase();
-  if (lower.includes("delete") || lower.includes("rm -rf")) {
-    return {
-      status: "denied",
-      code: "denied",
-      reason: "该命令被安全策略拒绝（模拟数据）",
-    };
-  }
-  if (lower.includes("restart") || lower.includes("rollout")) {
-    return {
-      status: "needs_approval",
-      exec_id: "exec_001",
-      approval_id: "apv_20260815_001",
-      pending: true,
-    };
-  }
-  return {
-    status: "executed",
-    exec_id: "exec_001",
-    exit_code: 0,
-    output:
-      "$ " + command + "\n" +
-      "node1  prod  k3s  control-plane  203.0.113.10\n" +
-      "（模拟数据）",
-  };
-}
-
-export function mockExecRecord(execId: string, command: string): ExecRecord {
-  return {
-    exec_id: execId,
-    command,
-    env: "prod",
-    host: "203.0.113.10",
-    status: "executed",
-    exit_code: 0,
-    output: "（模拟数据）command executed on 203.0.113.10",
-    executed_at: iso(0),
-    duration_ms: 312,
-  };
-}
-
-/** 模拟 SSE 事件流（终端面板联调用）。 */
-export async function mockExecStream(
-  _execId: string,
-  onEvent: (event: { type: string; data: unknown }) => void,
-  signal?: AbortSignal,
-): Promise<void> {
-  const chunks = [
-    { type: "exec:start", data: { exec_id: "exec_001" } },
-    { type: "exec:output", data: { chunk: "$ vigil status\n" } },
-    { type: "exec:output", data: { chunk: "gateway running · 203.0.113.10 · uptime 12h\n" } },
-    { type: "exec:exit", data: { exit_code: 0 } },
-  ];
-  for (const ev of chunks) {
-    if (signal?.aborted) return;
-    onEvent(ev);
-    await new Promise((r) => setTimeout(r, 120));
-  }
-}

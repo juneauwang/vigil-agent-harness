@@ -2,7 +2,7 @@
  * Vigil Console —— 精简数据层（复用后端 /api/*，凭据过滤不变）。
  *
  * 本批按「UI 壳批二十八 API 契约」（2026-08-15）接入 Approvals / Audit /
- * Exec / Incidents / Sessions。后端由 Codex 实现，未就绪时端点 404 →
+ * Incidents。后端由 Codex 实现，未就绪时端点 404 →
  * 页面按错误信封显示空态；开发期可用 mock 模式（localStorage vigil-mock=1
  * 或 ?mock=1）加载文档 IP 占位数据（lib/mock.ts）。
  */
@@ -234,54 +234,10 @@ export interface AuditEventsResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
-export type ExecStatus = "executed" | "needs_approval" | "denied" | "pending" | "error";
-
-export interface ExecResponse {
-  status: ExecStatus;
-  exec_id?: string;
-  approval_id?: string;
-  pending?: boolean;
-  exit_code?: number;
-  output?: string;
-  code?: string;
-  reason?: string;
-  error?: { code?: string; message?: string; details?: Record<string, unknown> };
-}
-
-export interface ExecRecord {
-  exec_id: string;
-  command?: string;
-  env?: string;
-  host?: string;
-  status?: ExecStatus;
-  exit_code?: number;
-  output?: string;
-  executed_at?: string;
-  duration_ms?: number;
-  approval_id?: string;
-  error?: { code?: string; message?: string; details?: Record<string, unknown> };
-}
-
 export interface IncidentsResponse {
   incidents?: unknown[];
   total?: number;
   schema_version?: number;
-  error?: { code?: string; message?: string; details?: Record<string, unknown> };
-}
-
-export interface SessionSummary {
-  session_id: string;
-  title?: string | null;
-  started_at?: string;
-  last_activity_at?: string | null;
-  model?: string | null;
-  running?: boolean;
-}
-
-export interface SessionsResponse {
-  sessions?: SessionSummary[];
-  total?: number;
-  has_more?: boolean;
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
@@ -333,74 +289,12 @@ export const api = {
       { method: "DELETE" },
     ),
 
-  // 批二十八契约：Exec / Terminal
-  runExec: (req: {
-    command: string;
-    host?: string;
-    env?: string;
-    session_id?: string;
-    timeout_seconds?: number;
-  }) =>
-    fetchJSON<ExecResponse>("/api/exec", { method: "POST", body: JSON.stringify(req) }),
-  getExec: (execId: string) => fetchJSON<ExecRecord>(`/api/exec/${encodeURIComponent(execId)}`),
-  /** SSE 流：解析 exec:start / exec:output / exec:exit / exec:error 事件。 */
-  execStream: (
-    execId: string,
-    onEvent: (event: { type: string; data: unknown }) => void,
-    signal?: AbortSignal,
-  ): Promise<void> => {
-    const headers = new Headers();
-    const token = typeof window !== "undefined" ? window.__VIGIL_SESSION_TOKEN__ : undefined;
-    if (token) headers.set("X-Vigil-Session-Token", token);
-    return fetch(`${BASE}/api/exec/${encodeURIComponent(execId)}/stream`, {
-      headers,
-      signal,
-    }).then(async (res) => {
-      if (!res.ok || !res.body) {
-        const text = await res.text().catch(() => "");
-        throw parseErrorBody(text, res.status);
-      }
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        // SSE 事件以空行分隔
-        let idx: number;
-        while ((idx = buffer.indexOf("\n\n")) >= 0) {
-          const block = buffer.slice(0, idx);
-          buffer = buffer.slice(idx + 2);
-          let eventType = "message";
-          let data = "";
-          for (const line of block.split("\n")) {
-            if (line.startsWith("event:")) eventType = line.slice(6).trim();
-            else if (line.startsWith("data:")) data += (data ? "\n" : "") + line.slice(5).trim();
-          }
-          if (data) {
-            try {
-              onEvent({ type: eventType, data: JSON.parse(data) });
-            } catch {
-              onEvent({ type: eventType, data });
-            }
-          }
-        }
-      }
-    });
-  },
-
   // 批二十八契约：Incidents（结构占位，返回空列表 + schema）
   getIncidents: (params?: { limit?: number; offset?: number }) =>
     fetchJSON<IncidentsResponse>(
       `/api/incidents?${new URLSearchParams(cleanParams({ limit: params?.limit, offset: params?.offset }))}`,
     ),
 
-  // 批二十八契约：Sessions（活动 + 最近历史）
-  getSessions: (params?: { limit?: number; offset?: number }) =>
-    fetchJSON<SessionsResponse>(
-      `/api/sessions?${new URLSearchParams(cleanParams({ limit: params?.limit, offset: params?.offset }))}`,
-    ),
 };
 
 function cleanParams(p: Record<string, string | number | undefined>): Record<string, string> {

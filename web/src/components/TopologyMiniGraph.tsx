@@ -3,9 +3,10 @@ import type { TopologyView } from "@/lib/api";
 import { cn } from "@/lib/ops";
 
 /**
- * 轻量拓扑示意（只读预览，非交互图）：集群盒 → 主机条 → 服务点 + 纤细连线。
- * 琥珀点 = 关键链路服务。节点带悬停名称 tooltip；SVG 保留原始宽度，
- * 窄容器横向滚动（避免等比压扁看不清）。
+ * 轻量拓扑示意（只读总览，不可点击，点击联动为未来批次）：集群盒 →
+ * 主机条 → 服务点 + 纤细连线。琥珀点 = 关键链路服务。节点仅保留悬停
+ * 名称 tooltip（无 onClick / 无 pointer 光标 / 无 hover 高亮）；SVG
+ * 保留原始宽度，窄容器横向滚动（避免等比压扁看不清）。
  */
 const W = 960;
 const CLUSTER_Y = 10;

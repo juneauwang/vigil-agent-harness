@@ -79,7 +79,7 @@ export function DetailBox({ detail }: { detail?: Record<string, unknown> | null 
         {open ? "收起" : "详情"}
       </button>
       {open && (
-        <div className="mt-2 rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] p-3">
+        <div className="mt-2 w-full min-w-0 max-w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] p-3">
           <DetailTree data={detail} />
         </div>
       )}
