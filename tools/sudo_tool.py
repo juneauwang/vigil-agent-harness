@@ -408,6 +408,22 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
                 + collected_note
             )
 
+    # 批三十五：远端/本机执行成功 = 与该 host 真实交互成功 → 打活性点。
+    # 本地别名（localhost/127.0.0.1/空）→ 解析本机主机名并按拓扑 host 名匹配，
+    # 匹配不到不打点（runtime_state 只收拓扑已知 host）。
+    try:
+        from hermes_cli.runtime_state import mark_host_activity
+        if host and host not in _LOCAL_HOST_ALIASES:
+            mark_host_activity(host)
+        else:
+            import socket as _socket
+            from hermes_cli.subcommands.topo_export import _topology_host_names
+            local = _socket.gethostname()
+            if local in _topology_host_names():
+                mark_host_activity(local)
+    except Exception:
+        pass
+
     result_payload = {
         "status": "ok",
         "host": host or "local",

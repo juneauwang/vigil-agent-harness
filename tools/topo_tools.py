@@ -895,6 +895,15 @@ def _runner_for_host(topo: Dict[str, Any], host_name: str):
     )
     if host_row is None:
         return _build_local_runner()
+    # 批三十五：拓扑把本机注册为 docker-host（如 LAPTOP-T2JA2ERE，env: local）时，
+    # 按本机名匹配走本地 runner——状态同步对"本机"应本地 docker 探测而非 SSH 回环，
+    # 与 sudo_tool 本地别名→本机名的打点口径一致。
+    try:
+        import socket as _socket
+        if host_name.lower() == _socket.gethostname().lower():
+            return _build_local_runner()
+    except Exception:
+        pass
     cred = host_row.get("credential") or {}
     if not isinstance(cred, dict):
         cred = {}
@@ -977,6 +986,14 @@ def topo_status_sync(
     for host_name, ents in sorted(by_host.items()):
         host_runner = runner or _runner_for_host(topo, host_name)
         states, probe_err = _probe_host_container_states(host_runner, host_name)
+        if probe_err is None and host_name:
+            # 批三十五：状态同步探测成功 = 与该 host 真实交互成功 → 打活性点。
+            # （dry-run confirm=False 同样算交互——probe 本身已真实执行）
+            try:
+                from hermes_cli.runtime_state import mark_host_activity
+                mark_host_activity(host_name, home=home)
+            except Exception:
+                pass
         for e in ents:
             rec = {
                 "entity": e.get("name"),

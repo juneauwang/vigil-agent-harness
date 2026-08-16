@@ -2491,6 +2491,24 @@
 - **边界**：历史端点走注册表进程内会话——重启后会话不在注册表 → 404（会话列表本就只列活会话，与现状一致）；deepseek 官方快照缺 cache-write 单价 → 降级忽略 cache-write 的近似估算（与 E4 硬编码价格表口径一致）；历史工具摘要为 `_preview` 单行截断预览（完整内容在会话日志/state.db）；TUI modal 超时 120s（沿用 `_prompt_text_input` 原默认）；web_dist 已随 `npm run build` 更新（含新 ChatPage chunk）。
 - **核销方式**：测试常驻——批次 33 套件全绿；季度体检检查：会话状态分槽是否被改回单 state（切页丢消息复发）、`_prompt_text_input` 非主线程路径是否又退化回 return None（/topo 挂死复发）、退出汇总是否又丢命中率/价格、topo 状态组装是否被后续拓扑图批次正确接管（第三层 status 继续透出）。
 
+### 52. 批次三十五 拓扑图 react-flow + 活性 last_seen + 详情抽屉（Codex 产出，2026-08-16）
+
+- **背景（用户拍板 2026-08-16）**：拓扑页三处升级——①静态 SVG 缩略图（纯装饰、信息量趋零）重做为可交互拓扑图（react-flow：缩放/平移/节点 label/状态着色/点击联动）；②在线/离线 = 活性（liveness），第一层实现 lazy last_seen（agent 交互即活性，零主动探测成本）；③详情展示从"卡片内展开+横向滚动条"升级为右侧详情抽屉。基线 b1a5e5f（批三十四后）。
+- **任务 1（活性打点 lazy last_seen，后端，零探测成本）**：
+  1. **运行时状态存储（新 hermes_cli/runtime_state.py）**：`<VIGIL_HOME>/runtime_state.json`（0600 原子写 tmp+os.replace，`{host: {last_seen: epoch}}`），`mark_host_activity`（空 host 不打）/`get_host_activity`/`load_activity`；进程内锁线程安全。last_seen 只进运行时文件，拓扑 yaml/hosts 结构零改动（静态事实层与运行时瞬态分离）。
+  2. **三处打点（host 明确的成功交互路径，失败不打）**：sudo_exec（tools/sudo_tool.py `_sudo_exec_handler` returncode==0 后；本地别名 → 本机主机名经 `_topology_host_names()` 匹配，匹配不到不打）；topo_status_sync（tools/topo_tools.py per-host `probe_err is None` 后，dry-run confirm=False 同样算交互——probe 已真实执行）；vssh（hermes_cli/subcommands/vssh.py `run()` 在 `os.execvpe` 前——到达即凭据解析+argv 构造成功）。
+  3. **本机 host 按拓扑名匹配走本地 runner**：`_runner_for_host` 增加"host_name == socket.gethostname() → 本地 runner"——拓扑把本机注册为 docker-host（LAPTOP-T2JA2ERE，env: local）时无 SSH credential 也能本地 docker 探测并打点（而非 SSH 回环报凭据缺失），与 sudo_tool 本地打点口径一致。
+  4. **API 合并**：topo_export.build_view 每 host card 合并 `load_activity()` 的 last_seen（epoch）；无记录 → 不返回该字段（前端显示"未探测"）。
+- **任务 2（react-flow 拓扑图，前端主）**：
+  1. **依赖**：`@xyflow/react@^12.11.3`（web 为 npm workspace 成员，锁文件随根 package-lock.json 同步）。
+  2. **图模型（web/src/lib/topologyGraph.ts 纯函数 buildGraphModel）**：集群→主机→服务三层手摆布局（按集群分组列排，宿主相同服务纵向排布，结构清晰不重叠、label 全可见）；`MAX_GRAPH_NODES=300` 溢出保护（超限停止加节点防卡死）；host→services 实线、cross_host 连线、key_paths 链路琥珀粗线高亮；`nodeToneClass`/`entityFromNode`/`kindLabel`（节点→实体引用→抽屉）。数据来自现有 GET /api/topology，零新端点。
+  3. **图组件（web/src/components/TopologyGraph.tsx）**：ReactFlow fitView/Controls/MiniMap/Background，节点不可拖拽；四种自定义节点组件（cluster 容器视觉/host 活性点+状态/service 状态着色/cross）；running 绿/stopped 灰/离线红复用 --vigil-ok/--vigil-error 状态色系；点节点 → 详情抽屉。TopologyPage 替换缩略图位置，保留下方卡片/列表视图（图=总览导航，卡片/列表=明细）；TopologyMiniGraph 保留（OverviewPage 仍引用，未删）。
+- **任务 3（详情抽屉 web/src/components/DetailDrawer.tsx）**：右侧滑出抽屉（fixed 定位 + 遮罩点击关闭 + aria-label；复用 CSS 变量 + dropdown/审批 modal 阴影层次）；内容 = 顶部标题（实体名 + EnvBadge + StatusPill）+ DetailTree 全宽渲染（长命令不折行，overlay 滚动）；触发统一——图中节点点击 + 卡片"详情"按钮都开抽屉；卡片内展开组件 DetailBox 退役删除（DetailTree 保留）。HostCard 加活性行（在线/离线/未探测），ListRow 加活性列。
+- **测试**：后端 tests/hermes_cli/test_batch35_runtime_state.py（13：runtime_state roundtrip/多 host/0600 权限/空 host 不打点/build_view 有·无 last_seen 两态合并/status_sync 成功打·失败不打/本机名=拓扑名走本地 runner/sudo_exec 成功打·认证失败不打/vssh 打点·无参列主机不打）。前端 52 vitest 全绿（topologyGraph 5：三层映射/连线+keypath/布局不重叠/300 上限/entityFromNode+着色；DetailDrawer SSR 3；ops lastSeenInfo 3 等）+ `npm run build` ✓ + `tsc -b` ✓。回归：批三十三拓扑状态组装 + 批十四 vssh + sudo_exec + topo_tools + topo_export 组合 **119 通过**。
+- **实测（真实 ~/.vigil，dashboard 8803 + playwright chromium，真实模型回合）**：a 拓扑图渲染——48 节点、集群/主机/服务/cross 三层 label 全含、controls/minimap 在、12 个 emerald 运行态着色节点；b 缩放/平移均改变 viewport（生效）；c 点服务节点 → 抽屉（含"服务"kind + host/env/cluster/type detail 键）→ 遮罩关闭；点卡片"查看详情"→ 抽屉 → "关闭详情"关闭；d **last_seen 关键场景**——对话页发"请用 topo_status_sync 检查 host LAPTOP-T2JA2ERE（confirm=false，dry-run）"，agent 真实跑工具成功（本机名→本地 runner），回拓扑页该 host 节点显示"在线 · 刚刚活跃"，未交互 host 显示"未探测"；e 卡片/列表视图切换正常、"拓扑总览"标签在；页面 console 零 error。截图 /tmp/b35-shots/（a-graph/b-zoomed/c-drawer-from-node/c-drawer-from-card/d-activity）。
+- **边界**：last_seen 阈值 10 分钟（web/src/lib/ops.ts `LAST_SEEN_ACTIVE_MINUTES`）——≤10 分钟"在线 · X 分钟前活跃"（绿点），超"离线 · 已 X 分钟无活动"（灰点），无记录"未探测"；图节点上限 300；活性零主动探测成本（不探活，agent 交互即活性；定时探活/prom 对接留第二/三层）；本机打点按拓扑 host 名匹配（runtime_state 只收拓扑已知 host）；last_seen 只进 runtime_state.json（0600 原子写），拓扑 yaml/hosts 零改动；sudo_exec 本地别名（localhost/127.0.0.1/空）不直接打点，先解析本机名匹配拓扑。
+- **核销方式**：测试常驻——批次 35 套件全绿（13 后端 + 52 前端 + 119 回归）；季度体检检查：打点是否仍只三处成功路径（sudo_exec/status_sync/vssh）、runtime_state 是否仍只进运行时文件（未漏进拓扑 yaml）、本机名→本地 runner 是否被改回 SSH 回环、图上限 300/阈值 10 分钟是否被削弱、DetailBox 是否被复活且抽屉触发被改回卡片内展开。
+
 ### 51. 批次三十四 审批全局弹窗——全局轮询 + modal + 铃铛角标实时化（Codex 产出，2026-08-16）
 
 - **背景（用户拍板 2026-08-16）**：审批是 Vigil 安全模型的核心交互，应是"全局一等交互"而非对话页内嵌——现状审批卡只在对话页 SSE（chat:approval_pending）出现，在拓扑页/审批页时 agent 请求审批完全不可见（多 session 并行审批的可见性痛点，批二十方案 B 同源）。决策：**前端轮询**（审批低频分钟级，3-5s 延迟可接受；SSE 留作以后可选）+ **页面内居中 modal**（非 OS toast，App.tsx 层全局挂载）+ **队列语义**（一次弹一个，处理完弹下一个，同 id 不重复弹）+ **忽略 = 标记 seen 收起**（≠拒绝，命令继续等待，超时照现有 timeout_policy）。后端零改动——审批注册表 + GET /api/approvals + POST approve/deny 现成（web_server.py），本批只动 web/src/**。

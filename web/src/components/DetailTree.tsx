@@ -1,5 +1,4 @@
-import { useState, type ReactNode } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { type ReactNode } from "react";
 
 /** 递归 key-value 渲染（已脱敏数据；React 转义是最后一道 XSS 边界）。 */
 function renderValue(value: unknown): ReactNode {
@@ -59,30 +58,6 @@ export function DetailTree({ data }: { data: Record<string, unknown> }) {
           <span className="min-w-0 flex-1 overflow-x-auto">{renderValue(v)}</span>
         </div>
       ))}
-    </div>
-  );
-}
-
-/** 详情展开（点击切换，内容来自已脱敏 details dict）。 */
-export function DetailBox({ detail }: { detail?: Record<string, unknown> | null }) {
-  const [open, setOpen] = useState(false);
-  if (!detail) return null;
-  return (
-    <div>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="vigil-btn h-6 gap-1 px-2 text-xs"
-        aria-expanded={open}
-      >
-        {open ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-        {open ? "收起" : "详情"}
-      </button>
-      {open && (
-        <div className="mt-2 w-full min-w-0 max-w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] p-3">
-          <DetailTree data={detail} />
-        </div>
-      )}
     </div>
   );
 }

@@ -92,6 +92,8 @@ export interface TopologyCard {
   port?: string | number;
   on_key_path?: boolean;
   kind?: string;
+  /** 批三十五：host 活性（lazy last_seen，epoch 秒；无记录不返回该字段）。 */
+  last_seen?: number;
 }
 
 export interface TopologyService {
