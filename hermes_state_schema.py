@@ -890,6 +890,23 @@ class SessionSchemaMixin:
                 # rows, but clear migrated rows so future writes do not keep
                 # one large prompt copy per session.
                 self._dedupe_legacy_system_prompts(cursor)
+            if current_version < 26:
+                # v26: explicit session lifecycle ``status`` column (batch 38).
+                # The column itself is added declaratively by
+                # _reconcile_columns() (NOT NULL DEFAULT 'running'); this
+                # one-time backfill promotes pre-existing rows that already
+                # carry a terminal ``ended_at`` to 'ended' so legacy data is
+                # not misread as live. Gated on the version (not
+                # unconditional) so a later explicit write of
+                # 'failed'/'interrupted'/'finalize_error' with ``ended_at``
+                # set is never clobbered on a subsequent restart.
+                try:
+                    cursor.execute(
+                        "UPDATE sessions SET status = 'ended' "
+                        "WHERE ended_at IS NOT NULL AND status = 'running'"
+                    )
+                except sqlite3.OperationalError:
+                    pass
 
             # The FTS storage layout is versioned independently of the main
             # schema (see the v23 note above). Stamp the current layout so the

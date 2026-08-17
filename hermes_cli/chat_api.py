@@ -106,6 +106,9 @@ class ChatSession:
     title: str = ""
     last_activity_at: float = field(default_factory=time.time)
     busy: bool = False
+    # 最近一次审批的终态（"approval_timeout" / "denied" / None）——批三十八
+    # 审批超时/拒绝路径 finalize 用。审批核心逻辑不动，只在本会话层记录结果。
+    last_approval_outcome: Optional[str] = None
     _turn_done: threading.Event = field(default_factory=threading.Event)
 
     def __post_init__(self) -> None:
@@ -320,11 +323,89 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
             "grade": grade,
             "timeout_at": (av or {}).get("timeout_at"),
         })
-        return wait_web_approval(approval_id) or "timeout"
+        remaining = _approval_remaining_seconds(av)
+        if remaining is not None and remaining <= 0:
+            session.last_approval_outcome = "approval_timeout"
+            return "timeout"
+        choice = wait_web_approval(approval_id, timeout=remaining)
+        choice = choice or "timeout"
+        if choice == "timeout":
+            session.last_approval_outcome = "approval_timeout"
+        elif choice == "deny":
+            session.last_approval_outcome = "denied"
+        return choice
 
     return _cb
 
 
+def _approval_remaining_seconds(view: Optional[dict]) -> Optional[float]:
+    """审批剩余等待秒数（由 timeout_at 推导；缺字段/解析失败 → None 表示不限时）。
+
+    批三十八：web 审批的 wait 语义本身不唤醒等待方（reclaim 只标记 timeout），
+    会话层在这里自限等待窗口，超时返回 "timeout" 让 turn 走 fail-closed 收尾，
+    而不是无限阻塞卡死整个 session（§AW）。审批核心逻辑零改动。
+    """
+    if not view:
+        return None
+    timeout_at = view.get("timeout_at")
+    if not timeout_at:
+        return None
+    try:
+        deadline = datetime.fromisoformat(str(timeout_at).replace("Z", "+00:00"))
+        return max(0.0, (deadline - datetime.now(timezone.utc)).total_seconds())
+    except ValueError:
+        return None
+
+
+def _live_session_id(session: "ChatSession") -> str:
+    """会话行 id：压缩后 agent.session_id 会轮转到压缩子行，finalize/复活必须
+    打活行而不是对话创建时的 chat_session_id（批三十八）。"""
+    agent = getattr(session, "agent", None)
+    live = str(getattr(agent, "session_id", None) or "")
+    return live or session.chat_session_id
+
+
+def _ensure_session_running(session: "ChatSession") -> None:
+    """turn 起点：把会话行状态复位为 running（上一 turn 收尾已落终态）。"""
+    session_db = getattr(session, "session_db", None)
+    if session_db is None:
+        return
+    try:
+        session_db.set_session_status(_live_session_id(session), "running")
+    except Exception:
+        _log.debug("chat turn start status reset skipped (session=%s)", session.chat_session_id, exc_info=True)
+
+
+def _finalize_turn_session(session: "ChatSession", *, interrupted: bool, failed: bool) -> None:
+    """turn 收尾统一入口：会话行落显式终态（批三十八）。
+
+    优先级：interrupt > 审批超时/拒绝 > failed/error > 正常结束。落库失败时
+    SessionDB.finalize_session_row 内部兜底打 finalize_error，这里只记日志。
+    """
+    session_db = getattr(session, "session_db", None)
+    if session_db is None:
+        return
+    approval_outcome = getattr(session, "last_approval_outcome", None)
+    if interrupted:
+        status, reason = "interrupted", "interrupted"
+    elif approval_outcome in ("approval_timeout", "denied"):
+        status, reason = "ended", approval_outcome
+    elif failed:
+        status, reason = "ended", "error"
+    else:
+        status, reason = "ended", "turn_complete"
+    try:
+        session_db.finalize_session_row(
+            _live_session_id(session),
+            status=status,
+            end_reason=reason,
+        )
+    except Exception:
+        _log.warning(
+            "chat turn finalize failed (session=%s status=%s reason=%s)",
+            session.chat_session_id, status, reason,
+            exc_info=True,
+        )
 def _run_chat_turn(
     session: "ChatSession",
     message: str,
@@ -351,15 +432,19 @@ def _run_chat_turn(
             _log.debug("chat event push failed", exc_info=True)
 
     tk1 = tk2 = None
+    turn_interrupted = False
+    turn_failed = False
     try:
         tk1 = set_hermes_interactive_context(True)
         tk2 = set_current_session_key(session.chat_session_id)
         set_approval_callback(_approval_callback_factory(session, queue, loop))
+        session.last_approval_outcome = None
 
         history = _load_conversation_history(session)
         if not session.title:
             session.title = _preview(message, 60)
             session.last_activity_at = time.time()
+        _ensure_session_running(session)
 
         def _stream_cb(text: str) -> None:
             _push({"type": "chat:delta", "text": text})
@@ -372,6 +457,9 @@ def _run_chat_turn(
                     "input_summary": event.get("input_summary", ""),
                 })
             elif event.get("type") == "tool_end":
+                # 批三十八 §AS A4：工具/API 完成即刷新活动时间，不只在 turn
+                # 起点写一次（注册表排序/停止轮询据此判断进度）。
+                session.last_activity_at = time.time()
                 _push({
                     "type": "chat:tool_result",
                     "name": event.get("name", ""),
@@ -389,6 +477,7 @@ def _run_chat_turn(
             )
         except Exception as exc:
             _log.warning("chat turn failed (session=%s): %s", session.chat_session_id, exc)
+            turn_failed = True
             _push({
                 "type": "chat:error",
                 "message": f"{type(exc).__name__}: {exc}",
@@ -396,20 +485,24 @@ def _run_chat_turn(
             return
 
         if not isinstance(result, dict):
+            turn_failed = True
             _push({"type": "chat:error", "message": "agent 返回异常结果"})
             return
         error = result.get("error")
         if error:
+            turn_failed = True
             _push({"type": "chat:error", "message": str(error)})
             return
+        turn_interrupted = bool(result.get("interrupted", False))
+        turn_failed = bool(result.get("failed", False))
         _push({
             "type": "chat:done",
             "final_response": result.get("final_response") or "",
             "api_calls": result.get("api_calls"),
             "completed": bool(result.get("completed", True)),
             "partial": bool(result.get("partial", False)),
-            "interrupted": bool(result.get("interrupted", False)),
-            "failed": bool(result.get("failed", False)),
+            "interrupted": turn_interrupted,
+            "failed": turn_failed,
         })
     finally:
         set_approval_callback(None)
@@ -417,6 +510,11 @@ def _run_chat_turn(
             reset_current_session_key(tk2)
         if tk1 is not None:
             reset_hermes_interactive_context(tk1)
+        _finalize_turn_session(
+            session,
+            interrupted=turn_interrupted,
+            failed=turn_failed,
+        )
         session.last_activity_at = time.time()
         session.busy = False
         session._turn_done.set()

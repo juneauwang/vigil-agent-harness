@@ -1173,7 +1173,94 @@ def cmd_sessions(args, sessions_parser=None):
             size_mb = os.path.getsize(db_path) / (1024 * 1024)
             print(f"Database size: {size_mb:.1f} MB")
 
+    elif action == "status":
+        _cmd_session_status(db, args.session_id)
+
     else:
         sessions_parser.print_help()
 
     db.close()
+
+
+def _cmd_session_status(db, session_id: str) -> None:
+    """``vigil sessions status <id>`` —— 一眼定位假卡死 vs 真卡死（批三十八 §AS A5）。
+
+    输出显式 status/ended_at/end_reason + busy（跨进程活动注册表）+ 有效
+    last_activity（last_activity_at 与 messages 最大时间戳取新）+ 最近工具调用。
+    """
+    from datetime import datetime, timezone
+
+    resolved = db.resolve_session_id(session_id)
+    row = db.get_session(resolved) if resolved else None
+    if row is None:
+        print(f"Session not found: {session_id}")
+        return
+
+    def _fmt(ts):
+        if not ts:
+            return "-"
+        try:
+            return datetime.fromtimestamp(
+                float(ts), tz=timezone.utc
+            ).strftime("%Y-%m-%d %H:%M:%S UTC")
+        except (TypeError, ValueError, OSError):
+            return str(ts)
+
+    status = row.get("status") or (
+        "ended" if row.get("ended_at") is not None else "running"
+    )
+    try:
+        from hermes_state_common import _sql_session_last_active
+
+        with db._read_ctx() as conn:
+            cursor = conn.execute(
+                "SELECT " + _sql_session_last_active("s") + " AS last_active "
+                "FROM sessions s WHERE s.id = ?",
+                (resolved,),
+            )
+            last_active_row = cursor.fetchone()
+        last_active = (
+            last_active_row["last_active"]
+            if last_active_row is not None
+            else row.get("last_activity_at")
+        )
+    except Exception:
+        last_active = row.get("last_activity_at")
+
+    busy = _session_busy_signal(resolved)
+    tools = []
+    try:
+        tools = db.get_recent_tool_calls(resolved, limit=5)
+    except Exception:
+        pass
+
+    print(f"Session:        {row.get('id')}")
+    print(f"Title:          {row.get('title') or '-'}")
+    print(f"Source:         {row.get('source') or '-'}")
+    print(f"Status:         {status}")
+    print(f"Started at:     {_fmt(row.get('started_at'))}")
+    print(f"Ended at:       {_fmt(row.get('ended_at'))}")
+    print(f"End reason:     {row.get('end_reason') or '-'}")
+    print(f"Busy:           {'yes' if busy else 'no'}")
+    print(f"Last activity:  {_fmt(last_active)}")
+    print(f"Messages:       {row.get('message_count') or 0}")
+    print(f"Tool calls:     {row.get('tool_call_count') or 0}")
+    if tools:
+        print("Recent tools:")
+        for t in tools:
+            print(f"  - {t['tool_name']} @ {_fmt(t['timestamp'])}: {t['output_preview'] or '-'}")
+    if status == "finalize_error":
+        print("Note: this session's finalize itself failed — check errors.log for the cause.")
+
+
+def _session_busy_signal(session_id: str) -> bool:
+    """Busy 信号来自跨进程活动注册表（CLI/gateway/TUI 租约）。"""
+    try:
+        from hermes_cli.active_sessions import active_session_registry_snapshot
+
+        for ent in active_session_registry_snapshot():
+            if str(ent.get("session_id") or "") == session_id:
+                return True
+    except Exception:
+        pass
+    return False
