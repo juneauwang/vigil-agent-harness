@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import {
   Bot,
   Check,
@@ -14,9 +14,11 @@ import {
   Wrench,
   XCircle,
   X,
+  Brain,
+  ListOrdered,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { ChatSessionSummary } from "@/lib/api";
+import type { ChatModelOption, ChatSessionSummary } from "@/lib/api";
 import {
   approvalIsTimedOut,
   applyChatEvent,
@@ -29,6 +31,7 @@ import {
   toggleToolExpanded,
   type ChatApprovalCard,
   type ChatMessage,
+  type ChatStepStatus,
   type ChatTurnState,
 } from "@/lib/chat";
 import { Markdown } from "@/components/Markdown";
@@ -38,17 +41,77 @@ import { cn } from "@/lib/ops";
 /**
  * 对话 Session 页（批三十一，UI 壳核心价值页）：
  * POST /api/chat/sessions + GET /api/chat/sessions + POST
- * /api/chat/sessions/{id}/messages（SSE：chat:delta/tool/tool_result/
- * approval_pending/done/error）。流式打字机渲染；工具调用折叠行；审批卡弹
- * 在消息流内（走现有 POST /api/approvals/{id}/approve|deny）；同会话串行，
- * agent 忙时输入禁用。
+ * /api/chat/sessions/{id}/messages（SSE：chat:delta/chat:reasoning/tool/
+ * tool_result/approval_pending/done/error）。流式打字机渲染；工具调用折叠行；
+ * 审批卡弹在消息流内（走现有 POST /api/approvals/{id}/approve|deny）；同会话
+ * 串行，agent 忙时输入禁用。
+ *
+ * 批四十一：工具输出按服务端 tool_id 挂接（§5）；推理折叠展示（§3）；工具/
+ * 审批有序步骤序列（§4）；停止后 busy 校验（§23）；审批详情完整展示（§6）；
+ * 切回 busy 指示恢复（§7）；会话级模型下拉（§8）。
  */
+
+const STEP_STATUS_LABEL: Record<ChatStepStatus, string> = {
+  running: "进行中",
+  done: "完成",
+  failed: "失败",
+  pending: "等待审批",
+  approved: "已批准",
+  denied: "已拒绝",
+};
+
+const STEP_STATUS_CLASS: Record<ChatStepStatus, string> = {
+  running: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+  done: "bg-[var(--vigil-ok)]/15 text-[var(--vigil-ok)]",
+  failed: "bg-red-500/15 text-red-600 dark:text-red-400",
+  pending: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  approved: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  denied: "bg-red-500/15 text-red-600 dark:text-red-400",
+};
+
+/** 推理过程折叠块（批四十一 §3）：默认折叠为一行摘要，展开看完整文本。 */
+function ReasoningBlock({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const summary = trimmed.split("\n")[0].slice(0, 80) || "推理过程";
+  return (
+    <div className="mt-2 overflow-hidden rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-black/5 dark:hover:bg-white/5"
+      >
+        {open ? (
+          <ChevronDown className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
+        ) : (
+          <ChevronRight className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
+        )}
+        <Brain className="size-3.5 shrink-0 text-violet-500" />
+        <span className="font-medium">查看推理过程（{trimmed.length} 字）</span>
+        <span className="ml-auto min-w-0 flex-1 truncate text-[var(--vigil-muted)]">
+          {open ? "" : summary}
+        </span>
+      </button>
+      {open && (
+        <pre className="scroll-thin max-h-72 overflow-y-auto whitespace-pre-wrap break-words border-t border-[var(--vigil-border)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-[var(--vigil-text)] opacity-90">
+          {trimmed}
+        </pre>
+      )}
+    </div>
+  );
+}
 
 function ToolRow({
   tool,
+  stepNo,
+  status,
   onToggle,
 }: {
   tool: ChatMessage["tools"][number];
+  stepNo: number;
+  status: ChatStepStatus;
   onToggle: () => void;
 }) {
   return (
@@ -59,6 +122,9 @@ function ToolRow({
         aria-expanded={tool.expanded}
         className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-xs hover:bg-black/5 dark:hover:bg-white/5"
       >
+        <span className="w-4 shrink-0 text-center font-mono text-[10px] text-[var(--vigil-muted)]">
+          {stepNo}
+        </span>
         {tool.expanded ? (
           <ChevronDown className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
         ) : (
@@ -66,15 +132,16 @@ function ToolRow({
         )}
         <Wrench className="size-3.5 shrink-0 text-sky-500" />
         <span className="font-mono font-medium">{tool.name}</span>
-        {tool.ok !== undefined && (
-          <span
-            className={cn(
-              "ml-auto shrink-0 text-[10px]",
-              tool.ok ? "text-[var(--vigil-ok)]" : "text-[var(--vigil-error)]",
-            )}
-          >
-            {tool.ok ? "✓" : "✗"}
-          </span>
+        <span
+          className={cn(
+            "ml-auto shrink-0 rounded px-1.5 py-px text-[10px]",
+            STEP_STATUS_CLASS[status],
+          )}
+        >
+          {STEP_STATUS_LABEL[status]}
+        </span>
+        {tool.ok !== undefined && tool.ok === false && (
+          <span className="shrink-0 text-[10px] text-[var(--vigil-error)]">✗</span>
         )}
       </button>
       {tool.expanded && (
@@ -90,7 +157,7 @@ function ToolRow({
           {tool.outputSummary !== undefined && (
             <div>
               <div className="text-[10px] uppercase tracking-wide text-[var(--vigil-muted)]">输出</div>
-              <pre className="scroll-thin whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--vigil-text)] opacity-85">
+              <pre className="scroll-thin max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--vigil-text)] opacity-85">
                 {tool.outputSummary || "（空输出）"}
               </pre>
             </div>
@@ -101,6 +168,7 @@ function ToolRow({
   );
 }
 
+/** 审批卡：长命令可滚动 + 叙述完整展示（批四十一 §6），批准/拒绝后状态标签。 */
 function ApprovalCard({
   card,
   onResolve,
@@ -109,8 +177,8 @@ function ApprovalCard({
   onResolve: (card: ChatApprovalCard, status: "approved" | "denied") => void;
 }) {
   const busy = card.status === "approved" || card.status === "denied";
-  // 批三十八 §AW：审批超时由会话层自限等待（后端 turn 落 ended(approval_timeout)），
-  // 卡片这里做客户端兜底展示——timeout_at 过期后不再继续转圈，提示"审批超时"。
+  const [expanded, setExpanded] = useState(false);
+  const longCommand = (card.command ?? "").length > 80;
   const [timedOut, setTimedOut] = useState(false);
   useEffect(() => {
     const check = () => setTimedOut(approvalIsTimedOut(card));
@@ -121,7 +189,7 @@ function ApprovalCard({
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-2 rounded-md border px-3 py-2 text-xs",
+        "flex flex-col gap-1.5 rounded-md border px-3 py-2 text-xs",
         card.status === "approved"
           ? "border-emerald-500/50 bg-emerald-500/10"
           : card.status === "denied"
@@ -129,13 +197,49 @@ function ApprovalCard({
             : "border-amber-500/50 bg-amber-500/10",
       )}
     >
-      <ShieldAlert className={cn("size-4 shrink-0", card.status === "approved" ? "text-emerald-500" : card.status === "denied" ? "text-red-500" : "text-amber-500")} />
-      <span className="font-medium">该命令需要审批</span>
-      {card.grade && <span className="rounded bg-amber-500/15 px-1.5 py-px text-[10px] text-amber-600 dark:text-amber-400">L{card.grade}</span>}
-      {card.env && <span className="text-[var(--vigil-muted)]">{card.env}</span>}
-      <span className="min-w-0 flex-1 truncate font-mono">{card.command}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <ShieldAlert className={cn("size-4 shrink-0", card.status === "approved" ? "text-emerald-500" : card.status === "denied" ? "text-red-500" : "text-amber-500")} />
+        <span className="font-medium">该命令需要审批</span>
+        {card.grade && <span className="rounded bg-amber-500/15 px-1.5 py-px text-[10px] text-amber-600 dark:text-amber-400">L{card.grade}</span>}
+        {card.env && <span className="text-[var(--vigil-muted)]">{card.env}</span>}
+        <span className="ml-auto shrink-0 text-[10px]">
+          {card.status === "pending" && timedOut ? (
+            <span className="text-red-500">审批超时，已终止</span>
+          ) : card.status === "approved" ? (
+            <span className="text-emerald-500">已批准</span>
+          ) : card.status === "denied" ? (
+            <span className="text-red-500">已拒绝</span>
+          ) : (
+            <span className="text-amber-500">等待审批</span>
+          )}
+        </span>
+      </div>
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="min-w-0 text-left font-mono text-[11px]"
+        title={longCommand ? "点击展开/收起完整命令" : card.command}
+      >
+        <span className="block whitespace-pre-wrap break-words">
+          {expanded || !longCommand ? card.command : `${card.command.slice(0, 80)}…`}
+        </span>
+      </button>
+      {expanded && longCommand && (
+        <button
+          type="button"
+          onClick={() => setExpanded(false)}
+          className="self-start text-[10px] text-[var(--vigil-muted)] underline"
+        >
+          收起
+        </button>
+      )}
+      {card.description && (
+        <span className="whitespace-pre-wrap break-words text-[11px] text-[var(--vigil-muted)]">
+          {card.description}
+        </span>
+      )}
       {card.status === "pending" && !timedOut && (
-        <>
+        <div className="flex items-center gap-2">
           <button
             type="button"
             disabled={busy}
@@ -152,13 +256,63 @@ function ApprovalCard({
           >
             <X className="size-3.5" /> 拒绝
           </button>
-        </>
+        </div>
       )}
-      {card.status === "pending" && timedOut && (
-        <span className="text-red-500">审批超时，已终止</span>
+    </div>
+  );
+}
+
+function StepList({
+  msg,
+  onToggleTool,
+  onResolveApproval,
+}: {
+  msg: ChatMessage;
+  onToggleTool: (toolId: number) => void;
+  onResolveApproval: (card: ChatApprovalCard, status: "approved" | "denied") => void;
+}) {
+  const toolById = new Map(msg.tools.map((t) => [t.id, t]));
+  const approvalById = new Map(msg.approvals.map((a) => [a.approvalId, a]));
+  const steps = msg.steps;
+  if (steps.length === 0) return null;
+
+  const current = steps.find((s) => s.status === "running" || s.status === "pending");
+  return (
+    <div className="mt-2 space-y-1.5">
+      {steps.length > 1 && (
+        <div className="flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
+          <ListOrdered className="size-3" />
+          <span>
+            共 {steps.length} 步
+            {current && <> · 当前：{STEP_STATUS_LABEL[current.status]}</>}
+          </span>
+        </div>
       )}
-      {card.status === "approved" && <span className="text-emerald-500">已批准</span>}
-      {card.status === "denied" && <span className="text-red-500">已拒绝</span>}
+      <ol className="space-y-1.5">
+        {steps.map((step, i) => {
+          const no = i + 1;
+          if (step.kind === "tool") {
+            const tool = toolById.get(Number(step.ref));
+            if (!tool) return null;
+            return (
+              <li key={`tool-${step.ref}`}>
+                <ToolRow tool={tool} stepNo={no} status={step.status} onToggle={() => onToggleTool(tool.id)} />
+              </li>
+            );
+          }
+          const card = approvalById.get(String(step.ref));
+          if (!card) return null;
+          return (
+            <li key={`approval-${step.ref}`} className="ml-3">
+              <div className="flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
+                <span className="w-4 text-center font-mono">{no}</span>
+                <span>审批</span>
+              </div>
+              <ApprovalCard card={card} onResolve={onResolveApproval} />
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }
@@ -200,23 +354,49 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval }: {
           </div>
         )}
         {msg.content ? <Markdown text={msg.content} /> : null}
-        {msg.tools.length > 0 && (
-          <div className="mt-2 space-y-1.5">
-            {msg.tools.map((t) => (
-              <ToolRow key={t.id} tool={t} onToggle={() => onToggleTool(t.id)} />
-            ))}
-          </div>
-        )}
-        {msg.approvals.length > 0 && (
-          <div className="mt-2 space-y-1.5">
-            {msg.approvals.map((a) => (
-              <ApprovalCard key={a.approvalId} card={a} onResolve={onResolveApproval} />
-            ))}
-          </div>
-        )}
+        <ReasoningBlock text={msg.reasoning} />
+        <StepList
+          msg={msg}
+          onToggleTool={onToggleTool}
+          onResolveApproval={onResolveApproval}
+        />
       </div>
     </div>
   );
+}
+
+/** 批四十一 §23：停止后校验注册表 busy 翻转（最多 10s），翻转后强制重拉
+ * 历史 + 保留"已停止"本地行；未翻转给可见警告，不静默残留。 */
+async function verifyBusyCleared(
+  sid: string,
+  setStates: Dispatch<SetStateAction<Record<string, ChatTurnState>>>,
+  setStopWarning: Dispatch<SetStateAction<string | null>>,
+  setBusyMap?: Dispatch<SetStateAction<Record<string, boolean>>>,
+): Promise<void> {
+  const deadline = Date.now() + 10_000;
+  try {
+    while (Date.now() < deadline) {
+      const resp = await api.listChatSessions();
+      const s = (resp.sessions ?? []).find((x) => x.id === sid);
+      if (s && !s.busy) {
+        const h = await api.getChatHistory(sid);
+        setStates((prev) => {
+          const recovered = stateFromHistory(h.messages ?? [], false);
+          return { ...prev, [sid]: markTurnInterrupted(recovered) };
+        });
+        setStopWarning(null);
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    setStopWarning("服务端仍显示忙碌（可能仍在收尾）。可在会话列表刷新或稍后重试。");
+    // 解除本地/注册表快照 busy，避免输入永久禁用——若后端真还忙，发送会被
+    // 409 busy 拦下并显示错误，用户仍可操作而非静默卡死。
+    setBusyMap?.((prev) => ({ ...prev, [sid]: false }));
+  } catch {
+    setStopWarning("未能确认忙碌状态已清除，可在会话列表刷新重试。");
+    setBusyMap?.((prev) => ({ ...prev, [sid]: false }));
+  }
 }
 
 export default function ChatPage() {
@@ -226,26 +406,44 @@ export default function ChatPage() {
   // sessionId 存 map）。切页/切回不再丢消息；A 忙时可切到 B 发消息；切回
   // A 由历史端点 + 轮询恢复现场。
   const [states, setStates] = useState<Record<string, ChatTurnState>>({});
+  // 批四十一 §7：注册表 busy 快照（每次 listChatSessions 更新）——切回时
+  // 即使本地槽位丢失，也能恢复"处理中"指示。
+  const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [stopWarning, setStopWarning] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
   const [stopping, setStopping] = useState(false);
+  // 批四十一 §8：可选模型目录 + 每会话选择。
+  const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([]);
+  const [modelSelections, setModelSelections] = useState<Record<string, string>>({});
   const abortRefs = useRef<Record<string, AbortController>>({});
   const loadedRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const activeState = (activeId && states[activeId]) || createChatState();
+  // 有效 busy：本地槽位 busy 或注册表快照 busy（§7：busi指示不依赖消息流）。
+  const activeBusy = activeBusyOf(activeId, states, busyMap);
+
+  const trackSessions = useCallback((list: ChatSessionSummary[]) => {
+    const map: Record<string, boolean> = {};
+    for (const s of list) map[s.id] = Boolean(s.busy);
+    setBusyMap((prev) => ({ ...prev, ...map }));
+    return list;
+  }, []);
 
   const refreshSessions = useCallback(async () => {
     try {
       const resp = await api.listChatSessions();
-      if (resp.error) return;
-      setSessions(resp.sessions ?? []);
-      return resp.sessions ?? [];
+      if (resp.error) return [];
+      const list = resp.sessions ?? [];
+      trackSessions(list);
+      setSessions(list);
+      return list;
     } catch {
       return [];
     }
-  }, []);
+  }, [trackSessions]);
 
   const loadSessionHistory = useCallback(async (id: string) => {
     if (loadedRef.current.has(id)) return;
@@ -253,42 +451,56 @@ export default function ChatPage() {
     try {
       const resp = await api.getChatHistory(id);
       setStates((prev) => {
-        // 槽位已有消息（如拉取期间用户已发消息/流式渲染中）→ 不覆盖现场。
         const existing = prev[id];
         if (existing && existing.messages.length > 0) return prev;
         return { ...prev, [id]: stateFromHistory(resp.messages ?? [], Boolean(resp.busy)) };
       });
+      // 同步注册表 busy 快照（历史端点自带 busy）。
+      setBusyMap((prev) => ({ ...prev, [id]: Boolean(resp.busy) }));
     } catch {
-      // 拉取失败：允许重试（下次切回再试），空状态也能发消息。
       loadedRef.current.delete(id);
     }
   }, []);
 
-  const createSession = useCallback(async () => {
-    setError(null);
-    setBusyAction(true);
-    try {
-      const resp = await api.createChatSession();
-      const sid = resp.chat_session_id;
-      setActiveId(sid);
-      loadedRef.current.add(sid); // 新会话无历史，跳过 GET
-      setStates((prev) => ({ ...prev, [sid]: createChatState() }));
-      await refreshSessions();
-    } catch (e) {
-      setError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusyAction(false);
-    }
-  }, [refreshSessions]);
+  const createSession = useCallback(
+    async (model?: string) => {
+      setError(null);
+      setBusyAction(true);
+      try {
+        const resp = await api.createChatSession(model);
+        const sid = resp.chat_session_id;
+        setActiveId(sid);
+        loadedRef.current.add(sid);
+        setStates((prev) => ({ ...prev, [sid]: createChatState() }));
+        setModelSelections((prev) => ({
+          ...prev,
+          [sid]: resp.model ?? modelOptions.find((m) => m.default)?.id ?? "",
+        }));
+        await refreshSessions();
+      } catch (e) {
+        setError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusyAction(false);
+      }
+    },
+    [refreshSessions, modelOptions],
+  );
 
-  // 初始化：列活会话；无则新建。
+  // 初始化：拉可选模型目录 + 列活会话；无则新建。
   useEffect(() => {
     let alive = true;
+    void api.getModels().then((resp) => {
+      if (!alive) return;
+      setModelOptions(resp.models ?? []);
+      const def = resp.default_model ?? "";
+      if (def) setModelSelections((prev) => ({ ...prev, __default: def }));
+    }).catch(() => {});
     api
       .listChatSessions()
       .then(async (resp) => {
         if (!alive) return;
         const list = resp.sessions ?? [];
+        trackSessions(list);
         setSessions(list);
         if (list.length > 0) {
           setActiveId(list[0].id);
@@ -310,6 +522,7 @@ export default function ChatPage() {
       alive = false;
       for (const c of Object.values(abortRefs.current)) c?.abort();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // 切到无缓存的会话 → 拉历史恢复现场（1a：切页/切回消息完整）。
@@ -318,24 +531,57 @@ export default function ChatPage() {
     void loadSessionHistory(activeId);
   }, [activeId, loadSessionHistory]);
 
-  // 后台 turn 收尾轮询：当前会话 busy（切走被 abort 的流）时轮询注册表，
+  // 批四十一 §7：activeId 变化/挂载时立即重拉注册表 busy（切回时恢复
+  // "处理中"指示，不等 2s 轮询）。
+  useEffect(() => {
+    if (!activeId) return;
+    let alive = true;
+    void refreshSessions().then((list) => {
+      if (!alive) return;
+      const s = (list ?? []).find((x) => x.id === activeId);
+      if (s && s.busy) {
+        setStates((prev) => {
+          const slot = prev[activeId];
+          if (slot && slot.busy) return prev;
+          // 槽位缺失或本地 busy 丢失 → 用注册表 busy 恢复指示（保留已有消息，
+          // 消息列表增量事件缺失也不丢"处理中"视觉）。
+          const st = slot ? { ...slot, busy: true } : { ...createChatState(), busy: true };
+          return { ...prev, [activeId]: st };
+        });
+      }
+    });
+    return () => {
+      alive = false;
+    };
+  }, [activeId, refreshSessions]);
+
+  // 后台 turn 收尾轮询：当前会话 busy（本地或注册表快照）时轮询注册表，
   // busy 翻转 → 重拉历史拿最终内容（1b 验收③：在跑的显示"处理中"，跑完恢复）。
   useEffect(() => {
-    if (!activeId || !activeState.busy) return;
+    if (!activeId || !activeBusy) return;
     const timer = window.setInterval(async () => {
       try {
         const resp = await api.listChatSessions();
+        trackSessions(resp.sessions ?? []);
         const s = (resp.sessions ?? []).find((x) => x.id === activeId);
         if (s && !s.busy) {
           const h = await api.getChatHistory(activeId);
-          setStates((prev) => ({ ...prev, [activeId]: stateFromHistory(h.messages ?? [], false) }));
+          setStates((prev) => {
+            const existing = prev[activeId];
+            // 批四十一 §23：stop 场景本地"已停止"行不持久化——恢复历史后
+            // 若原槽位有 interrupted 标记，重挂一次，保证停止状态可见。
+            const hadInterrupted = existing?.messages.some((m) => m.interrupted) ?? false;
+            const st = stateFromHistory(h.messages ?? [], false);
+            return { ...prev, [activeId]: hadInterrupted ? markTurnInterrupted(st) : st };
+          });
+          setBusyMap((prev) => ({ ...prev, [activeId]: false }));
         }
       } catch {
         // transient network hiccup — next tick retries
       }
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [activeId, activeState.busy]);
+  }, [activeId, activeBusy, trackSessions]);
 
   // 新内容自动滚底。
   useEffect(() => {
@@ -348,9 +594,10 @@ export default function ChatPage() {
       const text = draft.trim();
       const sid = activeId;
       const st = (sid && states[sid]) || createChatState();
-      if (!text || !sid || chatInputDisabled(st)) return;
+      if (!text || !sid || chatInputDisabled(st) || activeBusy) return;
       setDraft("");
       setError(null);
+      setStopWarning(null);
       setStates((prev) => ({ ...prev, [sid]: pushUserMessage(prev[sid] ?? createChatState(), text) }));
       const ctrl = new AbortController();
       abortRefs.current[sid] = ctrl;
@@ -376,7 +623,7 @@ export default function ChatPage() {
         if (abortRefs.current[sid] === ctrl) delete abortRefs.current[sid];
       }
     },
-    [activeId, draft, refreshSessions, states],
+    [activeId, draft, refreshSessions, states, activeBusy],
   );
 
   const stopTurn = useCallback(async () => {
@@ -385,6 +632,7 @@ export default function ChatPage() {
     if (!sid || !chatInputDisabled(st) || stopping) return;
     setStopping(true);
     setError(null);
+    setStopWarning(null);
     try {
       await api.interruptChatSession(sid);
     } catch (err) {
@@ -401,6 +649,8 @@ export default function ChatPage() {
       [sid]: markTurnInterrupted(prev[sid] ?? createChatState()),
     }));
     void refreshSessions();
+    // 批四十一 §23：本地 busy 已解除，独立校验循环核对注册表翻转。
+    void verifyBusyCleared(sid, setStates, setStopWarning, setBusyMap);
   }, [activeId, refreshSessions, states, stopping]);
 
   const resolveApproval = useCallback(
@@ -433,6 +683,7 @@ export default function ChatPage() {
       if (activeId) abortRefs.current[activeId]?.abort();
       setActiveId(id);
       setError(null);
+      setStopWarning(null);
     },
     [activeId],
   );
@@ -448,7 +699,35 @@ export default function ChatPage() {
     [activeId],
   );
 
-  const disabled = chatInputDisabled(activeState) || !activeId || busyAction;
+  // 批四十一 §8：切换会话模型（会话级，新消息生效）。
+  const changeSessionModel = useCallback(
+    async (sid: string, model: string) => {
+      if (!sid || !model || modelSelections[sid] === model) return;
+      setModelSelections((prev) => ({ ...prev, [sid]: model }));
+      try {
+        const resp = await api.setChatSessionModel(sid, model);
+        setModelSelections((prev) => ({ ...prev, [sid]: resp.model }));
+        setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, model: resp.model } : s)));
+      } catch (e) {
+        const msg = e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e);
+        setError(`模型切换失败：${msg}`);
+        // 回滚到会话原模型。
+        const s = sessions.find((x) => x.id === sid);
+        setModelSelections((prev) => ({ ...prev, [sid]: s?.model ?? modelSelections.__default ?? "" }));
+      }
+    },
+    [modelSelections, sessions],
+  );
+
+  const disabled = chatInputDisabled(activeState) || activeBusy || !activeId || busyAction;
+  const lastMsg = activeState.messages[activeState.messages.length - 1];
+  // 已点过停止（末条为本地"已停止"行）：隐藏停止按钮，避免 inert 按钮误导。
+  const stopIssued = Boolean(lastMsg?.interrupted);
+  const activeModel =
+    modelSelections[activeId ?? ""] ??
+    sessions.find((s) => s.id === activeId)?.model ??
+    modelSelections.__default ??
+    "";
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -476,7 +755,7 @@ export default function ChatPage() {
           </select>
           <button
             type="button"
-            onClick={() => void createSession()}
+            onClick={() => void createSession(modelSelections[activeId ?? ""] ?? undefined)}
             disabled={busyAction}
             className="vigil-btn h-8 whitespace-nowrap border border-[var(--vigil-border)] text-xs"
           >
@@ -495,12 +774,37 @@ export default function ChatPage() {
         </div>
       )}
 
+      {stopWarning && (
+        <div className="mb-2 flex items-center gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+          <ShieldAlert className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1">{stopWarning}</span>
+          <button
+            type="button"
+            onClick={() => {
+              const sid = activeId;
+              if (sid) void verifyBusyCleared(sid, setStates, setStopWarning, setBusyMap);
+            }}
+            className="shrink-0 underline"
+          >
+            重试
+          </button>
+        </div>
+      )}
+
       {/* 消息列表 */}
       <div className="scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] p-3">
         {activeState.messages.length === 0 && (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-sm text-[var(--vigil-muted)]">
             <Bot className="size-8 opacity-60" />
-            {activeId ? "发一条消息开始对话" : "创建会话后开始对话"}
+            {activeBusy ? (
+              <span className="flex items-center gap-2">
+                <Loader2 className="size-4 animate-spin" /> agent 处理中…
+              </span>
+            ) : activeId ? (
+              "发一条消息开始对话"
+            ) : (
+              "创建会话后开始对话"
+            )}
           </div>
         )}
         {activeState.messages.map((m) => (
@@ -516,6 +820,30 @@ export default function ChatPage() {
 
       {/* 输入行 */}
       <form onSubmit={(e) => void send(e)} className="mt-2 shrink-0">
+        {modelOptions.length > 0 && activeId && (
+          <div className="mb-1.5 flex items-center gap-2">
+            <span className="text-[10px] text-[var(--vigil-muted)]">模型</span>
+            <select
+              value={activeModel}
+              onChange={(e) => void changeSessionModel(activeId, e.target.value)}
+              disabled={activeBusy || busyAction}
+              title="会话模型（新消息生效）"
+              aria-label="会话模型"
+              className="h-7 max-w-[320px] rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 font-mono text-[11px] text-[var(--vigil-text)] outline-none disabled:opacity-60"
+            >
+              {modelOptions.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                  {m.tag ? ` · ${m.tag}` : ""}
+                  {m.default ? " · 默认" : ""}
+                </option>
+              ))}
+            </select>
+            <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--vigil-muted)]">
+              {modelOptions.find((m) => m.id === activeModel)?.description || ""}
+            </span>
+          </div>
+        )}
         <div className="flex items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-3 py-2">
           <input
             value={draft}
@@ -525,12 +853,12 @@ export default function ChatPage() {
             spellCheck={false}
             className="h-9 min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
           />
-          {chatInputDisabled(activeState) && (
+          {(activeBusy || chatInputDisabled(activeState)) && (
             <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[var(--vigil-muted)] sm:inline-flex">
-              <Loader2 className="size-3.5 animate-spin" /> agent 思考中…
+              <Loader2 className="size-3.5 animate-spin" /> agent 处理中…
             </span>
           )}
-          {chatInputDisabled(activeState) && !busyAction && (
+          {activeBusy && !busyAction && !stopIssued && (
             <StopButton stopping={stopping} onStop={() => void stopTurn()} />
           )}
           <button
@@ -545,4 +873,14 @@ export default function ChatPage() {
       </form>
     </div>
   );
+}
+
+/** 有效 busy = 本地槽位 busy 或注册表快照 busy（§7：指示不丢失）。 */
+function activeBusyOf(
+  activeId: string | null,
+  states: Record<string, ChatTurnState>,
+  busyMap: Record<string, boolean>,
+): boolean {
+  if (!activeId) return false;
+  return Boolean((states[activeId] && states[activeId].busy) || busyMap[activeId]);
 }

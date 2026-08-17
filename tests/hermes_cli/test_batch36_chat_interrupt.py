@@ -93,7 +93,7 @@ def stub_agent_factory(monkeypatch):
                  result: dict = None) -> _InterruptibleStubAgent:
         agent = _InterruptibleStubAgent(block_event=block_event, result=result)
         holder["agent"] = agent
-        monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid: agent)
+        monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid, model=None: agent)
         return agent
 
     return _install, holder

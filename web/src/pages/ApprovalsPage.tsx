@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { Check, Clock, ShieldCheck, X, XCircle } from "lucide-react";
+import { Check, ChevronDown, ChevronUp, Clock, ShieldCheck, X, XCircle } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { ApprovalItem, ApprovalScope } from "@/lib/api";
 import { isMockEnabled, MOCK_APPROVALS } from "@/lib/mock";
@@ -12,6 +12,50 @@ import { cn } from "@/lib/ops";
  * 仅 allow_* 时可选）+ deny；超时 → 409 timeout（fail-closed）。
  * mock 模式（localStorage vigil-mock=1）用文档 IP 占位数据。
  */
+/** 批四十一 §6：审批记录可展开详情——完整命令（等宽 + 滚动 + 展开全文，
+ * 保留缩进）+ 完整 description + 审批人/时间等元信息。 */
+function CommandDetail({ item }: { item: ApprovalItem }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = (item.command ?? "").split("\n");
+  const long = lines.length > 1 || (item.command ?? "").length > 80;
+  const preview = expanded || !long ? item.command : lines[0].slice(0, 80) + "…";
+  return (
+    <div className="max-w-[480px]">
+      <div className="font-mono text-xs">
+        <div className="whitespace-pre-wrap break-words text-[var(--vigil-text)]">{preview}</div>
+        {!expanded && long && <div className="mt-0.5 text-[10px] text-[var(--vigil-muted)]">…</div>}
+      </div>
+      {item.description && (
+        <div className="mt-0.5 truncate text-[11px] text-[var(--vigil-muted)]" title={item.description}>
+          {item.description}
+        </div>
+      )}
+      {long && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 flex items-center gap-1 text-[10px] text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+          aria-expanded={expanded}
+        >
+          {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+          {expanded ? "收起" : "展开全文"}
+        </button>
+      )}
+      {expanded && (
+        <pre className="scroll-thin mt-1 max-h-64 overflow-y-auto whitespace-pre-wrap break-words rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2 py-1.5 font-mono text-[11px] leading-relaxed text-[var(--vigil-text)]">
+          {item.command}
+        </pre>
+      )}
+      {(item.session_key || item.source) && (
+        <div className="mt-1 text-[10px] text-[var(--vigil-muted)]">
+          {item.session_key && <span className="mr-2">session: {item.session_key}</span>}
+          {item.source && <span>来源: {item.source}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ApprovalsPage() {
   const mock = isMockEnabled();
   const [items, setItems] = useState<ApprovalItem[]>([]);
@@ -219,12 +263,7 @@ export default function ApprovalsPage() {
                 <tr key={item.id}>
                   <td className="font-mono text-[11px] text-[var(--vigil-muted)]">{item.id}</td>
                   <td>
-                    <div className="max-w-[420px] truncate font-mono text-xs" title={item.command}>
-                      {item.command}
-                    </div>
-                    {item.description && (
-                      <div className="truncate text-[11px] text-[var(--vigil-muted)]">{item.description}</div>
-                    )}
+                    <CommandDetail item={item} />
                   </td>
                   <td><span className={cn("vigil-env", item.env === "prod" ? "env-prod" : "env-test")}>{item.env ?? "-"}</span></td>
                   <td className="text-[var(--vigil-muted)]">{item.grade ?? "-"}</td>

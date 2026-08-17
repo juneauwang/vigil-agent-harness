@@ -6449,6 +6449,7 @@ def run_conversation(
                                 "input_summary": _redact_tool_event_text(
                                     _tc.function.arguments
                                 ),
+                                "tool_id": getattr(_tc, "id", "") or "",
                             })
                         except Exception:
                             logger.debug(
@@ -6470,6 +6471,7 @@ def run_conversation(
                                 "name": _tc.function.name,
                                 "output_summary": _redact_tool_event_text(_tool_content),
                                 "ok": _tool_result_ok(_tool_content),
+                                "tool_id": getattr(_tc, "id", "") or "",
                             })
                         except Exception:
                             logger.debug(

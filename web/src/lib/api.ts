@@ -254,6 +254,27 @@ export interface ChatSessionSummary {
   created_at: string;
   busy: boolean;
   last_message_preview?: string;
+  /** 批四十一 §8：会话级模型（缺省 = 配置默认）。 */
+  model?: string;
+}
+
+/** 批四十一 §8：可选模型目录项（GET /api/models，静态目录 + 配置默认，
+ * 零敏感信息；选项严格来自该接口，前端不硬编码）。 */
+export interface ChatModelOption {
+  id: string;
+  name: string;
+  description?: string;
+  /** 快/省 vs 强/慢 标注（目录描述派生；默认空）。 */
+  tag?: string;
+  /** 配置中当前默认模型。 */
+  default?: boolean;
+}
+
+export interface ChatModelsResponse {
+  models?: ChatModelOption[];
+  provider?: string;
+  default_model?: string;
+  error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
 export interface ChatSessionsResponse {
@@ -267,11 +288,15 @@ export interface ChatHistoryMessage {
   id: number;
   role: "user" | "assistant";
   content: string;
+  /** 批四十一 §3：推理过程纯文本（默认折叠展示）。 */
+  reasoning?: string;
   tools: {
     name: string;
     input_summary: string;
     output_summary?: string | null;
     ok?: boolean | null;
+    /** 批四十一 §5：服务端工具调用唯一 id（空串=旧格式）。 */
+    tool_id?: string | null;
   }[];
   timestamp?: number | null;
 }
@@ -340,11 +365,19 @@ export const api = {
 
   // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
   // approval_pending/done/error）
-  createChatSession: () =>
-    fetchJSON<{ chat_session_id: string; created_at?: string }>("/api/chat/sessions", {
+  createChatSession: (model?: string) =>
+    fetchJSON<{ chat_session_id: string; created_at?: string; model?: string }>("/api/chat/sessions", {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify(model ? { model } : {}),
     }),
+  /** 批四十一 §8：可选模型目录（静态目录 + 配置默认）。 */
+  getModels: () => fetchJSON<ChatModelsResponse>("/api/models"),
+  /** 批四十一 §8：切换会话模型（会话级生效，新消息生效）。 */
+  setChatSessionModel: (sessionId: string, model: string) =>
+    fetchJSON<{ chat_session_id: string; model: string }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/model`,
+      { method: "POST", body: JSON.stringify({ model }) },
+    ),
   listChatSessions: () => fetchJSON<ChatSessionsResponse>("/api/chat/sessions"),
   /** 批三十六：中断当前 turn（对话页"停止"按钮）。会话不忙 → 409 not_busy。 */
   interruptChatSession: (sessionId: string) => {

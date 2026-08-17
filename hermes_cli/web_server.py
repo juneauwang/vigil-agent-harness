@@ -3682,7 +3682,8 @@ async def approve_approval(approval_id: str,
             status_code=status_code,
             content=_api_error(result["code"], result.get("message", ""), result.get("details")),
         )
-    return {"status": "approved", "scope": result["scope"]}
+    # 批四十一 §2：幂等化——重复批准返回当前终态（200），状态标签照实际结果。
+    return {"status": result.get("status", "approved"), "scope": result.get("scope")}
 
 
 @app.post("/api/approvals/{approval_id}/deny")
@@ -3700,7 +3701,22 @@ async def deny_approval(approval_id: str,
             status_code=status_code,
             content=_api_error(result["code"], result.get("message", ""), result.get("details")),
         )
-    return {"status": "denied"}
+    # 批四十一 §2：幂等化。
+    return {"status": result.get("status", "denied")}
+
+
+@app.get("/api/approvals/{approval_id}")
+async def get_approval_detail(approval_id: str):
+    """批四十一 §6：审批详情端点——返回单条完整记录（command/description 全量，
+    不截断；security 相关字段同列表视图）。不存在 → 404。"""
+    from tools.approval import get_web_approval
+    view = get_web_approval(approval_id)
+    if view is None:
+        return JSONResponse(
+            status_code=404,
+            content=_api_error("not_found", f"审批不存在: {approval_id}"),
+        )
+    return _redact_tree(view)
 
 
 # ------------------------- 三、Terminal / 执行 API ---------------------------

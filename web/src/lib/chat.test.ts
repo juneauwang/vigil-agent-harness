@@ -205,3 +205,109 @@ describe("审批超时展示（批三十八 §AW）", () => {
     expect(approvalIsTimedOut({ status: "pending", timeoutAt: "not-a-date" })).toBe(false);
   });
 });
+
+describe("批四十一 §5 工具输出零错位（硬性回归）", () => {
+  it("并行同名单工具：结果按服务端 tool_id 挂接，不倒挂", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "call_1", name: "terminal", input_summary: "nvidia-smi" }));
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "call_2", name: "terminal", input_summary: "mysql -e 'select count(*)'" }));
+    // 结果按完成顺序到达（call_1 先到）——旧实现按"最后一个同名"会挂到
+    // call_2 上，这里断言严格按 id 挂接。
+    s = applyChatEvent(s, ev("chat:tool_result", { tool_id: "call_1", name: "terminal", output_summary: "NVIDIA 4090", ok: true }));
+    s = applyChatEvent(s, ev("chat:tool_result", { tool_id: "call_2", name: "terminal", output_summary: "count=128", ok: true }));
+    const [t1, t2] = s.messages[0].tools;
+    expect(t1.toolId).toBe("call_1");
+    expect(t1.outputSummary).toBe("NVIDIA 4090");
+    expect(t2.toolId).toBe("call_2");
+    expect(t2.outputSummary).toBe("count=128");
+    expect(t1.ok).toBe(true);
+    expect(t2.ok).toBe(true);
+    // 步骤状态：两个工具都完成
+    expect(s.messages[0].steps.map((x) => x.status)).toEqual(["done", "done"]);
+  });
+
+  it("异构工具交错结果不串门", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "c_a", name: "terminal", input_summary: "ls" }));
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "c_b", name: "read_file", input_summary: "/etc/hosts" }));
+    s = applyChatEvent(s, ev("chat:tool_result", { tool_id: "c_a", name: "terminal", output_summary: "file1", ok: true }));
+    s = applyChatEvent(s, ev("chat:tool_result", { tool_id: "c_b", name: "read_file", output_summary: "127.0.0.1 localhost", ok: true }));
+    const tools = s.messages[0].tools;
+    expect(tools[0].name).toBe("terminal");
+    expect(tools[0].outputSummary).toBe("file1");
+    expect(tools[1].name).toBe("read_file");
+    expect(tools[1].outputSummary).toBe("127.0.0.1 localhost");
+  });
+
+  it("无 tool_id（旧服务端）：兜底按最后一个同名未出结果挂接", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { name: "terminal", input_summary: "a" }));
+    s = applyChatEvent(s, ev("chat:tool", { name: "terminal", input_summary: "b" }));
+    s = applyChatEvent(s, ev("chat:tool_result", { name: "terminal", output_summary: "out1", ok: true }));
+    const tools = s.messages[0].tools;
+    expect(tools[1].outputSummary).toBe("out1");
+    expect(tools[0].outputSummary).toBeUndefined();
+  });
+
+  it("history 恢复：工具行保留 tool_id，步骤按完成态生成", () => {
+    const history: ChatHistoryMessage[] = [
+      {
+        id: 1, role: "assistant", content: "",
+        tools: [
+          { name: "terminal", input_summary: "nvidia-smi", output_summary: "NVIDIA", ok: true, tool_id: "call_1" },
+          { name: "terminal", input_summary: "mysql", output_summary: "rows", ok: false, tool_id: "call_2" },
+        ],
+      },
+    ];
+    const s = stateFromHistory(history, false);
+    expect(s.messages[0].tools[0].toolId).toBe("call_1");
+    expect(s.messages[0].tools[1].toolId).toBe("call_2");
+    expect(s.messages[0].steps.map((x) => x.status)).toEqual(["done", "failed"]);
+  });
+});
+
+describe("批四十一 §3 推理过程", () => {
+  it("chat:reasoning 增量归并进同一消息的 reasoning 字段", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:reasoning", { text: "先查拓扑" }));
+    s = applyChatEvent(s, ev("chat:reasoning", { text: "再看状态" }));
+    s = applyChatEvent(s, ev("chat:delta", { text: "结论" }));
+    s = applyChatEvent(s, ev("chat:done", { final_response: "结论完整版" }));
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0].reasoning).toBe("先查拓扑再看状态");
+    expect(s.messages[0].content).toBe("结论完整版");
+  });
+
+  it("history 恢复带 reasoning（默认折叠的数据源）", () => {
+    const history: ChatHistoryMessage[] = [
+      { id: 1, role: "assistant", content: "ok", reasoning: "hidden chain of thought", tools: [] },
+    ];
+    const s = stateFromHistory(history, false);
+    expect(s.messages[0].reasoning).toBe("hidden chain of thought");
+  });
+});
+
+describe("批四十一 §4 有序步骤序列", () => {
+  it("工具+审批按到达顺序串成步骤，状态标签随事件更新", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "c1", name: "terminal", input_summary: "kubectl get nodes" }));
+    s = applyChatEvent(s, ev("chat:approval_pending", { approval_id: "apv_1", command: "kubectl delete pod x", env: "prod" }));
+    s = applyChatEvent(s, ev("chat:approval_pending", { approval_id: "apv_2", command: "kubectl delete pod y", env: "prod" }));
+    s = applyChatEvent(s, ev("chat:tool_result", { tool_id: "c1", name: "terminal", output_summary: "node1 Ready", ok: true }));
+    const msg = s.messages[0];
+    expect(msg.steps.map((x) => x.kind)).toEqual(["tool", "approval", "approval"]);
+    expect(msg.steps.map((x) => x.status)).toEqual(["done", "pending", "pending"]);
+    s = markApprovalResolved(s, "apv_1", "approved");
+    expect(s.messages[0].steps[1].status).toBe("approved");
+    s = markApprovalResolved(s, "apv_2", "denied");
+    expect(s.messages[0].steps[2].status).toBe("denied");
+  });
+
+  it("空消息的 tool/approval 事件自动创建 assistant 气泡并串步", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "c1", name: "terminal", input_summary: "ls" }));
+    s = applyChatEvent(s, ev("chat:approval_pending", { approval_id: "apv_2", command: "rm -rf x", env: "test" }));
+    expect(s.messages).toHaveLength(1);
+    expect(s.messages[0].steps.map((x) => x.kind)).toEqual(["tool", "approval"]);
+  });
+});

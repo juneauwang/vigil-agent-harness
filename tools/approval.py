@@ -2582,7 +2582,13 @@ def approve_web_approval(approval_id: str, scope: str = "once") -> dict:
             entry["status"] = "timeout"
             return {"code": "timeout", "message": "审批已超时（wait 策略：不自动批准，命令保持 pending）"}
         if entry["status"] != "pending":
-            return {"code": "invalid_request", "message": f"审批已处于 {entry['status']} 状态"}
+            # 批四十一 §2：幂等化——重复批准/拒绝不再报 invalid_request，
+            # 返回当前终态（200），前端连点/重放不会把已裁决的请求当错误。
+            return {
+                "status": entry["status"],
+                "scope": entry.get("scope"),
+                "already_resolved": True,
+            }
         if scope not in ("once", "session", "permanent"):
             return {"code": "invalid_request", "message": "scope 必须是 once/session/permanent"}
         if scope == "session" and not entry["allow_session"]:
@@ -2610,7 +2616,12 @@ def deny_web_approval(approval_id: str, reason: Optional[str] = None) -> dict:
             entry["status"] = "timeout"
             return {"code": "timeout", "message": "审批已超时（wait 策略：不自动拒绝，命令保持 pending）"}
         if entry["status"] != "pending":
-            return {"code": "invalid_request", "message": f"审批已处于 {entry['status']} 状态"}
+            # 批四十一 §2：幂等化（同 approve）。
+            return {
+                "status": entry["status"],
+                "scope": entry.get("scope"),
+                "already_resolved": True,
+            }
         entry["status"] = "denied"
         entry["reason"] = reason
         entry["_choice"] = "deny"

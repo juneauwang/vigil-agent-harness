@@ -126,9 +126,11 @@ def test_approvals_scope_validation_and_deny(client, env_home):
     assert r.json()["error"]["code"] == "invalid_request"
     r = client.post(f"/api/approvals/{aid}/approve", json={"scope": "once"})
     assert r.status_code == 200 and r.json() == {"status": "approved", "scope": "once"}
-    # 已裁决 → 400。
+    # 批四十一 §2 幂等化：已裁决重复批准 → 200 + 当前状态（不报错）。
     r = client.post(f"/api/approvals/{aid}/approve", json={"scope": "once"})
-    assert r.status_code == 400
+    assert r.status_code == 200
+    assert r.json()["status"] == "approved"
+    assert r.json()["scope"] == "once"
 
     aid2 = register_web_approval(command="rm -rf /tmp/x", description="d", env="test")
     r = client.post(f"/api/approvals/{aid2}/deny", json={"reason": "人工拒绝"})
