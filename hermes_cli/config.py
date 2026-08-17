@@ -2157,6 +2157,45 @@ def print_config_warnings(config: Optional[Dict[str, Any]] = None) -> None:
     sys.stderr.write("\n".join(lines) + "\n\n")
 
 
+def _audit_config_write(*, source: str, config: Dict[str, Any]) -> list:
+    """Post-write schema validation + audit trail (OPS-DELTA 批次四十 §AS C2).
+
+    Config writes are legal (users own their config.yaml), but illegal
+    structure must be VISIBLE and AUDITABLE — the tool-layer write block is
+    not the only line of defense, and a scripted ``python + yaml.safe_dump``
+    bypass used to slip past it with zero trace. Runs
+    :func:`validate_config_structure` on the just-written raw config;
+    error-severity issues are appended to ``<VIGIL_HOME>/logs/config-audit.log``
+    (timestamped, with the writing source) and returned so the caller can
+    surface them. Warnings are not audited (noise); errors only.
+    """
+    try:
+        issues = validate_config_structure(config)
+    except Exception:
+        return []
+    errors = [i for i in issues if i.severity == "error"]
+    if not errors:
+        return []
+    try:
+        from datetime import datetime
+
+        from hermes_constants import get_hermes_home
+
+        log_dir = Path(get_hermes_home()) / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        audit_path = log_dir / "config-audit.log"
+        stamp = datetime.now().isoformat(timespec="seconds")
+        lines = [f"[{stamp}] source={source}"]
+        for issue in errors:
+            lines.append(f"  ERROR {issue.message}")
+        with open(audit_path, "a", encoding="utf-8") as fh:
+            fh.write("\n".join(lines) + "\n")
+    except Exception:
+        pass
+    logger.warning("config write audit: %d error-level issue(s) via %s", len(errors), source)
+    return errors
+
+
 def warn_deprecated_cwd_env_vars(config: Optional[Dict[str, Any]] = None) -> None:
     """Warn if MESSAGING_CWD or TERMINAL_CWD is set in .env instead of config.yaml.
 
@@ -3698,6 +3737,11 @@ def save_config(
         )
         _secure_file(config_path)
         _RAW_CONFIG_CACHE.pop(str(config_path), None)
+
+        # OPS-DELTA 批次四十 §AS C2：统一写入入口后置校验 + 审计。脚本绕过
+        # 路径（terminal python + yaml.safe_dump 之外的任何 save_config 调用）
+        # 写出的非法结构在此留痕；只审计 error 级，不噪音。
+        _audit_config_write(source="save_config", config=normalized)
         _LAST_EXPANDED_CONFIG_BY_PATH[str(config_path)] = copy.deepcopy(current_normalized)
 
 
@@ -4983,8 +5027,47 @@ def set_config_value(key: str, value: str, force: bool = False):
     # Preserve values for string-typed settings.  In particular, enum members
     # such as approvals.mode="off" must not become YAML booleans.  Unknown keys
     # retain the historical best-effort coercion behavior.
+    #
+    # OPS-DELTA 批次四十 §AS C1：list/dict-typed keys (e.g.
+    # ``platform_toolsets.cli``) accept YAML list/dict syntax and are stored
+    # as real structures. A plain scalar for such a key is REJECTED — storing
+    # it as a string silently corrupts downstream readers that iterate the
+    # value as a character list (the §AS C1 bug), so the CLI refuses instead
+    # of writing a config that looks set but behaves broken.
     coerced_value: Any = value
-    if not isinstance(_default_value_for_key(key), str):
+    default_value = _default_value_for_key(key)
+    if isinstance(default_value, (list, dict)):
+        try:
+            parsed = yaml.safe_load(value)
+        except Exception:
+            parsed = None
+        if isinstance(parsed, (list, dict)):
+            coerced_value = parsed
+        else:
+            print(
+                f"✗ '{key}' expects a list or mapping, but the value is a "
+                "plain scalar.",
+                file=sys.stderr,
+            )
+            print(
+                "  Storing it as a string would silently break readers that "
+                "iterate the value as a character list.",
+                file=sys.stderr,
+            )
+            print(
+                "  Use YAML list syntax, e.g.:",
+                file=sys.stderr,
+            )
+            print(
+                f"    vigil config set {key} '[\"item1\", \"item2\"]'",
+                file=sys.stderr,
+            )
+            print(
+                "  Or edit the file directly with:  vigil config edit",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    elif not isinstance(default_value, str):
         if value.lower() in {'true', 'yes', 'on'}:
             coerced_value = True
         elif value.lower() in {'false', 'no', 'off'}:
@@ -5076,7 +5159,7 @@ def set_config_value(key: str, value: str, force: bool = False):
     ensure_hermes_home()
     from utils import atomic_yaml_write
     atomic_yaml_write(config_path, user_config, sort_keys=False)
-    
+
     # Keep .env in sync for keys that terminal_tool reads directly from env vars.
     # config.yaml is authoritative, but terminal_tool only reads TERMINAL_ENV etc.
     env_var = terminal_config_env_var_for_key(key)
@@ -5107,6 +5190,26 @@ def set_config_value(key: str, value: str, force: bool = False):
     else:
         _display_value = value
     print(f"✓ Set {key} = {_display_value} in {config_path}")
+
+    # OPS-DELTA 批次四十 §AS C2：写入后结构校验 + 审计（接受可写、保护下移）。
+    # 非法结构已保存但必须可见可审计——脚本绕过路径（python + yaml.safe_dump）
+    # 走 save_config 同样触发审计。
+    _audit_errors = _audit_config_write(source=f"config set {key}", config=user_config)
+    if _audit_errors:
+        print(
+            color(
+                "⚠ config.yaml 写入后校验发现错误（已保存，但运行时可能不生效）：",
+                Colors.YELLOW,
+            ),
+            file=sys.stderr,
+        )
+        for _issue in _audit_errors:
+            print(color(f"  ✗ {_issue.message}", Colors.YELLOW), file=sys.stderr)
+        print(
+            color("  Run 'vigil doctor' for fix suggestions.", Colors.DIM),
+            file=sys.stderr,
+        )
+
     warn_unpinned_cron_jobs_after_model_config_change(key, value, user_config)
 
     # Post-write unknown-key notice (#34067): value IS saved, but tell the

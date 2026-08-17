@@ -10,6 +10,11 @@ Implements the program-layer contract from ``ops-agent-harness.md`` §1 and
                               回滚预案) whose phase order is enforced by
                               ``runbook_checkpoint``.
 
+Runbook 格式门控（OPS-DELTA 批次四十 §AU）：runbook 只支持 ``.yaml``
+（schema v0.1）。``runbooks/`` 下的非 ``.yaml`` 文件（.md/.yml/其他）不会被
+``runbook_load`` 加载——能力门控检查会对此发警告（不再静默忽略），写入端
+（write_file 落盘到 runbooks/ 目录）也会拒绝非 ``.yaml`` 扩展名。
+
 Runbooks are loaded on demand (alert/task-triggered), NOT injected into the
 system prompt.  The tool only returns content and tracks checklist state —
 commands are executed by the agent through the terminal tool, so every
@@ -89,6 +94,7 @@ _DEFAULT_LOAD_SCHEMA = {
     "name": "runbook_load",
     "description": (
         "加载运维 runbook（程序层：结构化 YAML，含触发条件 + 步骤 + 命令 + 回滚）。"
+        "runbook 只支持 .yaml（schema v0.1），.md/其他格式不会被加载。"
         "按 runbook 名精确加载，或按触发关键字/症状模糊匹配（省略参数时列出全部）。"
         "L4 部署 checklist（kind=deploy, checklist=true）会附带当前阶段门状态。"
         "本工具只返回内容，不执行任何命令——步骤里的命令由你通过终端执行，"
@@ -152,6 +158,7 @@ _DEFAULT_CREATE_SCHEMA = {
     "name": "runbook_create",
     "description": (
         "创建/更新运维 runbook（程序层：结构化 YAML，runbooks/<name>.yaml，schema v0.1）。"
+        "runbook 只支持 .yaml——.md/其他格式不会被加载。"
         "runbook 是 Vigil 程序层机制（触发条件 + 步骤 + 命令 + 回滚），不是 Markdown 文档："
         "runbook_load 可按名/触发词加载，runbook_checkpoint 可门控部署阶段。"
         "用户说'沉淀/记录/保存为 runbook'时应调用本工具。命令一律拒绝明文密码/token——"
@@ -323,6 +330,52 @@ def _ops_config() -> Dict[str, Any]:
         return {}
 
 
+_warned_ignored_runbooks: set = set()
+
+
+def _ignored_runbook_files(home: Optional[Path] = None) -> list:
+    """runbooks/ 下会被静默忽略的非 ``.yaml`` 文件（§AU 可见性门控）。"""
+    runbooks_dir = _runbooks_dir(home or _hermes_home())
+    try:
+        if not runbooks_dir.is_dir():
+            return []
+        return sorted(
+            p.name for p in runbooks_dir.iterdir()
+            if p.is_file()
+            and p.suffix.lower() != ".yaml"
+            and not p.name.startswith(".")
+        )
+    except Exception:
+        return []
+
+
+def _warn_ignored_runbook_files(home: Optional[Path] = None) -> None:
+    """非 ``.yaml`` runbook 文件的存在必须可见（§AU：静默失败 = 误导排查）。
+
+    发现 runbooks/ 下有不会被加载的文件（.md/.yml/其他）→ logger.warning
+    点名文件。同一 runbooks 目录只警告一次（check_fn 每 30s 重跑，去重防刷屏）。
+    """
+    try:
+        runbooks_dir = _runbooks_dir(home or _hermes_home())
+    except Exception:
+        return
+    ignored = _ignored_runbook_files(home)
+    if not ignored:
+        return
+    key = str(runbooks_dir)
+    if key in _warned_ignored_runbooks:
+        return
+    _warned_ignored_runbooks.add(key)
+    shown = ", ".join(ignored[:5])
+    more = f" 等 {len(ignored)} 个" if len(ignored) > 5 else ""
+    logger.warning(
+        "runbooks/ 发现 %d 个非 .yaml 文件被忽略（%s%s）——runbook 仅支持 "
+        "schema v0.1 的 .yaml，.md/其他格式不会被 runbook_load 加载；"
+        "如需普通文档请放到 runbooks/ 之外。",
+        len(ignored), shown, more,
+    )
+
+
 def _runbook_data_exists(home: Optional[Path] = None) -> bool:
     """runbooks/ 目录存在且含至少一个 yaml。"""
     runbooks_dir = _runbooks_dir(home or _hermes_home())
@@ -342,10 +395,14 @@ def check_runbook_requirements() -> bool:
       - 缺省（无该键）→ 按数据存在性（runbooks/ 有 yaml 即可用）；
       - 显式 ``enabled: true`` → 仍要求数据就位；
       - 显式 ``enabled: false`` → 始终关闭（向后兼容既有关闭配置）。
+
+    OPS-DELTA 批次四十 §AU：门控检查同时扫描 runbooks/ 下的非 ``.yaml``
+    文件并发警告（格式门控可见，不再静默忽略）。
     """
     ops = _ops_config()
     if ops.get("runbooks", {}).get("enabled") is False:
         return False
+    _warn_ignored_runbook_files()
     return _runbook_data_exists()
 
 

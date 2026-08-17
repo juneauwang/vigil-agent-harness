@@ -7,6 +7,7 @@ Short tokens (< 18 chars) are fully masked. Longer tokens preserve
 the first 6 and last 4 characters for debuggability.
 """
 
+import contextlib
 import json
 import logging
 import os
@@ -41,6 +42,41 @@ _CREDENTIAL_VALUES_LOADED = False
 _CREDENTIAL_VALUES_LOCK = threading.Lock()
 _REGISTERED_VALUE_MIN_LEN = 6
 _REGISTERED_VALUE_MASK = "«redacted-value»"
+
+
+# =========================================================================
+# 可逆打码捕获（OPS-DELTA 批次四十 §AS B2）
+#
+# write_file 落盘场景与终端展示语义分离：展示可破坏性打码，落盘必须保真
+# （或可恢复）。``reversible_write_redaction`` 上下文内，``_mask_token`` 不再
+# 返回 head/tail 截断掩码，而是登记 ``«redacted:N»`` 占位（N 为线程内自增 id）
+# 并记录原文 → 调用方把占位 + 原文写进备份文件，文档即可还原。线程隔离：
+# 各线程各自的占位表，互不污染；仅当前线程的 redact 调用受捕获影响。
+# =========================================================================
+_tls = threading.local()
+
+
+@contextlib.contextmanager
+def reversible_write_redaction():
+    """Context manager enabling reversible placeholder capture for write_file.
+
+    Yields the placeholder map (``int -> original value``) populated by every
+    ``_mask_token`` call during the redaction. The caller must persist the map
+    (with the original content) so ``restore`` can rebuild the document.
+    """
+    _tls.redact_placeholders = {}
+    _tls.redact_counter = 0
+    try:
+        yield _tls.redact_placeholders
+    finally:
+        try:
+            del _tls.redact_placeholders
+        except AttributeError:
+            pass
+        try:
+            del _tls.redact_counter
+        except AttributeError:
+            pass
 
 
 def _credential_values_file() -> Path | None:
@@ -907,10 +943,20 @@ def mask_secret(
 
 
 def _mask_token(token: str) -> str:
-    """Mask a log token — conservative 18-char floor, preserves 6 prefix / 4 suffix."""
-    # Empty input: historically this returned "***" rather than "". Preserve.
+    """Mask a log token — conservative 18-char floor, preserves 6 prefix / 4 suffix.
+
+    Under :func:`reversible_write_redaction` (write_file persistence) the
+    token is instead replaced with a ``«redacted:N»`` placeholder and the
+    original recorded in the thread-local map, so the written document stays
+    reversible (OPS-DELTA 批次四十 §AS B2).
+    """
     if not token:
         return "***"
+    placeholders = getattr(_tls, "redact_placeholders", None)
+    if placeholders is not None:
+        _tls.redact_counter += 1
+        placeholders[_tls.redact_counter] = token
+        return f"«redacted:{_tls.redact_counter}»"
     return mask_secret(token, head=6, tail=4, floor=18)
 
 
@@ -1084,6 +1130,7 @@ def redact_sensitive_text(
     file_read: bool = False,
     credential_values: bool = False,
     redact_url_credentials: bool = False,
+    persist_write: bool = False,
 ) -> str:
     """Apply all redaction patterns to a block of text.
 
@@ -1122,6 +1169,17 @@ def redact_sensitive_text(
     (MAX_TOKENS=4096, prompt_tokens: 123 — issue #43025). Other code_file
     surfaces (MoA advisory text, execute_code stdout, …) keep the legacy
     behavior byte-identical.
+
+    Set persist_write=True on the write_file persistence surface
+    (OPS-DELTA 批次四十 §AS B2). Document persistence ≠ terminal display:
+    the display-oriented registered-value pass (which masks registered
+    strings anywhere — model names, field names and low-entropy bare values
+    alike) is SKIPPED so ordinary documents round-trip byte-identical, while
+    every credential-shape pass (prefix tokens, secret-key ENV/JSON/YAML,
+    private keys, DB connstrings, JWTs, auth headers) still fires. Callers
+    should wrap the call in :func:`reversible_write_redaction` so the values
+    that ARE masked become ``«redacted:N»`` placeholders with the original
+    recorded for restore.
 
     Performance: each regex pattern is gated behind a cheap substring
     pre-check (e.g. ``"=" in text`` for ENV assignments, ``"://" in text``
@@ -1393,13 +1451,21 @@ def redact_sensitive_text(
     # OPS-DELTA 批次三十二：已知凭据值登记表（精确值打码，不依赖熵检测）。
     # 覆盖键名命中 + 高熵值兜底都漏的低熵裸密码形态（``echo 'wwplove815'``）。
     # 任何输出通道统一生效；值登记后即全局打码。
-    if not _CREDENTIAL_VALUES_LOADED:
-        with _CREDENTIAL_VALUES_LOCK:
-            _ensure_registry_loaded_locked()
-    if _CREDENTIAL_VALUES_SNAPSHOT and any(
-        v in text for v in _CREDENTIAL_VALUES_SNAPSHOT
-    ):
-        text = _mask_registered_values(text, file_read)
+    #
+    # OPS-DELTA 批次四十 §AS B2：persist_write（write_file 落盘）跳过本 pass。
+    # 登记表是展示面机制——模型名/字段名等公共形态也会被登记（dogfood 实测
+    # ``Qwen3_5_397B_A17B_FP8``、``finish_reason=tool_calls`` 被打成
+    # «redacted-value»，文档原文丢失）。文档落盘必须保真：真凭据由前缀/密钥
+    # 键名/私钥等凭据形态 pass 覆盖，askpass/tool 写前门控在 file_tools 层
+    # 拦截裸凭据脚本形态——登记值 pass 在这里只会破坏文档。
+    if not persist_write:
+        if not _CREDENTIAL_VALUES_LOADED:
+            with _CREDENTIAL_VALUES_LOCK:
+                _ensure_registry_loaded_locked()
+        if _CREDENTIAL_VALUES_SNAPSHOT and any(
+            v in text for v in _CREDENTIAL_VALUES_SNAPSHOT
+        ):
+            text = _mask_registered_values(text, file_read)
 
     return text
 
