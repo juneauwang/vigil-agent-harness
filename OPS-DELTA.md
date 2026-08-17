@@ -2640,3 +2640,71 @@
   扩展名校验在；askpass 值形态过滤在（真 askpass 仍拦截）；redact persist_write 跳过
   登记值 pass + 备份还原在；config set list 解析 + config-audit.log 审计在；migrate v34
   并集在（`_migrate_to_34` 注册于 MIGRATIONS）。
+
+### 58. 批次四十一 Chat 页 UI 八项缺陷收口（Codex 产出，2026-08-17，UI 反馈单 23-30）
+
+- **范围**：web/src/（ChatPage/ApprovalsPage/ApprovalModal/lib·api·chat）+ 后端最小支撑
+  （chat_api.py / web_server.py / tools/approval.py / agent/conversation_loop.py 一行持 id）。
+  前后端契约改动全部写在本条；审批核心裁决逻辑零改动（只做幂等化），不碰
+  conversation_loop/system_prompt/prompt_cache/compression/权限矩阵/拓扑/批四十 redact 防护。
+- **§5 工具输出零错位（硬性要求，最高优先）**：根因=并行同名单工具（如两个 terminal
+  命令）结果按"最后一个同名未出结果"挂接 → 完成顺序与工具顺序不一致时输出串位（查
+  nvidia 显 mysql 结果）；历史折叠的 reversed 匹配在结果行乱序入库时同源错位。修法：
+  ① `agent/conversation_loop.py` 的 tool_callback 事件增量 `tool_id`（模型 tool_call id，
+  纯增量字段，其它消费方零影响）；② `chat_api._tool_cb` 转发 `chat:tool`/`chat:tool_result`
+  带 tool_id（提供商无 id 时按 turn 内顺序补序号兜底）；③ 前端 `applyChatEvent` 按
+  tool_id 精确挂接（无 id 时回退旧按名行为）；④ `_history_to_view_messages` 改正序
+  挂接（结果行恒按 tool_calls 顺序落库）+ 保留 tool_id 字段。回归测试：前端交错
+  同名单事件零错位（chat.test.ts）+ 后端 SSE 事件 tool_id 序列断言（test_batch41_
+  chat_ui_support.py）+ 历史正序折叠断言。
+- **§23 停止后幽灵 busy 残留（反馈单 23）**：根因=本地 markTurnInterrupted 置 busy=false
+  后，后台轮询效应被短路（依赖本地 busy），注册表真 busy 残留时用户只见 409 且
+  UI 无察觉。修法：stopTurn 后独立跑 `verifyBusyCleared`（≤10s 每 2s 轮询注册表；
+  翻转→强制全量重拉历史+重挂"已停止"本地行；未翻转→可见警告"仍显示忙碌，可在会话
+  列表刷新重试"+解除本地快照 busy 防永久锁死）；轮询恢复路径保留 interrupted 标记
+  （markTurnInterrupted 幂等，不重复追加）。后端核查只读：`chat_session_messages` 的
+  busy 源=注册表 `session.busy`，worker finally 复位——批三十八已做，未改。
+- **§2 审批批准后不刷新/重复提交报错（反馈单 24）**：后端 `approve_web_approval`/
+  `deny_web_approval` 幂等化——已裁决重复请求返回当前终态（`{status, already_resolved}`
+  + 原 scope），不再 invalid_request；web 端点照实返回状态（200）。前端弹窗提交中
+  ref 同步防重入（连点只发一次）+ 成功即 dequeue 弹下一个（原逻辑保留）。
+- **§3 推理过程查看（反馈单 25）**：后端数据源核查=SessionDB 持久化 assistant 消息
+  自带 reasoning/reasoning_content，历史视图已可读——新增 `_history_to_view_messages`
+  输出 `reasoning`（纯文本）；流式新增 `chat:reasoning` 增量事件（turn 内设置
+  `agent.reasoning_callback`，finally 复位）。前端 assistant 消息渲染"查看推理过程"
+  折叠块（默认一行摘要，展开完整链，样式照代码块）。
+- **§4 工具/审批有序步骤序列（反馈单 26）**：前端消息模型新增 `steps` 有序序列
+  （工具/审批按事件到达顺序串①②③…，状态标签 完成/进行中/等待审批/待执行/已批准/
+  已拒绝），审批卡内联在对应步骤下方；多步时顶部显示"共 N 步 · 当前状态"。
+- **§6 审批详情可展开 + 长命令滚动（反馈单 28）**：后端关闭 description 单向截断
+  （chat_api 注册审批/SSE 事件存全量 redact 文本）；新增 GET /api/approvals/{id} 详情
+  端点（全量 command/description/grade/env/session_key/source）。前端审批列表行可展开
+  完整命令（等宽 + max-height 滚动 + 展开全文，保留缩进）+ 完整描述；弹窗长命令同样
+  处理。
+- **§7 多 session 切回 thinking/busy 指示恢复（反馈单 29）**：注册表 busy 快照
+  busyMap（每次 listChatSessions 更新）+ activeId 变化立即重拉列表；本地槽位丢失 busy
+  时用快照恢复"处理中"指示（独立于消息流事件）；有效 busy=本地||快照，轮询与输入禁
+  用都吃有效 busy；历史/轮询恢复路径不依赖增量事件。
+- **§8 对话页可选模型（反馈单 30）**：新增 GET /api/models（读 config + 静态目录，零网
+  络零敏感信息；默认模型标 default，tag 派生 快/省 vs 强/慢）；POST /api/chat/sessions
+  支持可选 model（目录校验，缺省用配置默认，会话级生效）；新增 POST
+  /api/chat/sessions/{id}/model 切换（目录校验、忙时 409、失败回滚字段）。前端输入区
+  上方模型下拉（选项严格来自接口，按会话记忆，新建会话继承当前选择）。
+- **端点变更清单**：新增 GET /api/models、GET /api/approvals/{id}、POST
+  /api/chat/sessions/{id}/model；POST /api/chat/sessions 接受 body {model}；approve/deny
+  幂等化（200 + 当前状态）；chat SSE 新增 chat:reasoning 事件；chat:tool/chat:tool_result
+  新增 tool_id 字段；GET /api/chat/sessions/{id}/messages 历史消息新增 reasoning 与
+  tools[].tool_id 字段。
+- **测试**：前端 vitest 87 全绿（批四十一新增 20：chat 状态机 tool_id/推理/步骤/幂等
+  markTurnInterrupted；ChatPage 组件 7——stop 校验恢复/10s 警告/切回 busy 恢复/模型下拉/
+  新建带模型/推理折叠展开/步骤标签；ApprovalModal 3——批准即关/连点单发/长命令展开；
+  ApprovalsPage 2——详情展开不截断/短命令直显）；`npm run build` ✓、`tsc -p . --noEmit` ✓
+  （ESLint 因仓库缺 @eslint/js 预存故障无法运行，与本次无关）。后端新增 20 例
+  （test_batch41_approval_idempotent.py 9 + test_batch41_chat_ui_support.py 11）；
+  回归：批三十一/三十三/三十六/三十八 chat 套件 + 批二十八 exec + 审批注册表/超时/
+  拒绝规则/智能策略 + 批四十六件套 58 + web_server 相关 36 全绿。预存失败与本批无关：
+  test_approval.py::TestLaunchctlGatewayLifecycle（launchctl 环境类，基线同失）。
+- **核销方式**：测试常驻——tool_id 交错序列回归（前端 chat.test.ts + 后端 SSE 断言）；
+  approvals 重复批准/拒绝返回 200+当前状态；chat:reasoning 事件 + 历史 reasoning 字段
+  在；步骤序列状态标签单测在；审批详情展开 + 长命令 jsdom 不截断断言在；ChatPage 组件
+  测试切回 busy 恢复 + stop 校验在；/api/models + 会话 model 创建/切换端点单测在。

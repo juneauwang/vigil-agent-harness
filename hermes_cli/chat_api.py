@@ -106,6 +106,9 @@ class ChatSession:
     title: str = ""
     last_activity_at: float = field(default_factory=time.time)
     busy: bool = False
+    # 批四十一 §8：会话级模型（空 = 配置默认；创建/切换时写入，agent 已按
+    # 该模型构建/切换，保留一份给列表视图展示）。
+    model: str = ""
     # 最近一次审批的终态（"approval_timeout" / "denied" / None）——批三十八
     # 审批超时/拒绝路径 finalize 用。审批核心逻辑不动，只在本会话层记录结果。
     last_approval_outcome: Optional[str] = None
@@ -121,15 +124,17 @@ class ChatSession:
             "created_at": self.created_at,
             "busy": self.busy,
             "last_message_preview": self.title,
+            "model": self.model,
         }
 
 
-def _create_chat_agent(chat_session_id: str):
+def _create_chat_agent(chat_session_id: str, model: Optional[str] = None):
     """构造会话 agent（mirror oneshot 的非交互路径；平台标记 web）。
 
     模型/运行时照 config.yaml model.* + resolve_runtime_provider；工具集取
     platform_toolsets.cli（用户经 ``vigil tools`` 的既有配置）；MCP 在构造前
     幂等发现；会话历史落 SQLite SessionDB（session_id = chat_session_id）。
+    批四十一 §8：``model`` 可选覆盖（会话级模型，缺省 = 配置默认）。
     """
     from hermes_cli.config import load_config
     from hermes_cli.fallback_config import get_fallback_chain
@@ -145,7 +150,8 @@ def _create_chat_agent(chat_session_id: str):
         cfg_model = model_cfg
     else:
         cfg_model = model_cfg.get("default") or model_cfg.get("model") or ""
-    effective_model = str(cfg_model or "").strip()
+    cfg_default = str(cfg_model or "").strip()
+    effective_model = str(model or "").strip() or cfg_default
     runtime = resolve_runtime_provider(target_model=effective_model or None)
 
     toolsets_list = sorted(_get_platform_tools(cfg, "cli"))
@@ -244,11 +250,19 @@ def _history_to_view_messages(history: list) -> list:
                     "input_summary": _preview(fn.get("arguments") or ""),
                     "output_summary": None,
                     "ok": None,
+                    # 批四十一 §5：历史工具行保留服务端 tool_call id（有则
+                    # 有，无则空串——按顺序正序挂接已能保证同名单工具不错位）。
+                    "tool_id": str(tc.get("id") or tc.get("tool_call_id") or ""),
                 })
             view.append({
                 "id": msg_id if msg_id is not None else len(view) + 1,
                 "role": "assistant",
                 "content": _redact_text(msg.get("content") or ""),
+                # 批四十一 §3：历史消息带 reasoning（模型 reasoning 字段或
+                # reasoning_content，纯文本拼接；前端默认折叠展示）。
+                "reasoning": _redact_text(
+                    (msg.get("reasoning") or msg.get("reasoning_content") or "")
+                ),
                 "tools": tools,
                 "timestamp": msg.get("timestamp"),
             })
@@ -256,13 +270,28 @@ def _history_to_view_messages(history: list) -> list:
         elif role == "tool":
             content = _preview(msg.get("content") or "")
             name = str(msg.get("tool_name") or "")
+            tcid = str(msg.get("tool_call_id") or "")
             matched = False
-            for t in reversed(pending_tools):
-                if t.get("output_summary") is None and (not name or t.get("name") == name):
+            # 优先 tool_call_id 精确挂接；否则按工具调用顺序正序匹配——工具
+            # 结果行恒以 tool_calls 顺序落库（并行执行也按原序收齐追加），
+            # 正序匹配保证同名单并行工具输出零错位。
+            for t in pending_tools:
+                if t.get("output_summary") is not None:
+                    continue
+                if tcid and t.get("tool_id") == tcid:
                     t["output_summary"] = content
                     t["ok"] = True
                     matched = True
                     break
+            if not matched:
+                for t in pending_tools:
+                    if t.get("output_summary") is not None:
+                        continue
+                    if not name or t.get("name") == name:
+                        t["output_summary"] = content
+                        t["ok"] = True
+                        matched = True
+                        break
             if not matched and name:
                 view.append({
                     "id": msg_id if msg_id is not None else len(view) + 1,
@@ -303,7 +332,9 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
         redacted_command = _redact_text(command)
         approval_id = register_web_approval(
             command=redacted_command,
-            description=_preview(description or ""),
+            # 批四十一 §6：description 存全量（调用方已 redact），前端可展开
+            # 完整详情，不再单向截断丢信息。
+            description=_redact_text(description or ""),
             env=env,
             grade=grade,
             session_key=session.chat_session_id,
@@ -318,7 +349,7 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
             "type": "chat:approval_pending",
             "approval_id": approval_id,
             "command": redacted_command,
-            "description": _preview(description or ""),
+            "description": _redact_text(description or ""),
             "env": env,
             "grade": grade,
             "timeout_at": (av or {}).get("timeout_at"),
@@ -449,10 +480,22 @@ def _run_chat_turn(
         def _stream_cb(text: str) -> None:
             _push({"type": "chat:delta", "text": text})
 
+        # 批四十一 §5：工具事件携带服务端唯一 tool_id（模型 tool_call id；
+        # 提供商缺 id 时按本次 turn 内工具到达顺序补一个序号兜底），前端按
+        # id 挂接输出——并行同名单工具调用不再错位挂接。
+        tool_seq: list[int] = [0]
+        tool_ids: list[str] = []
+
         def _tool_cb(event: dict) -> None:
+            tool_id = str(event.get("tool_id") or "")
             if event.get("type") == "tool_start":
+                if not tool_id:
+                    tool_seq[0] += 1
+                    tool_id = f"tool-{tool_seq[0]}"
+                tool_ids.append(tool_id)
                 _push({
                     "type": "chat:tool",
+                    "tool_id": tool_id,
                     "name": event.get("name", ""),
                     "input_summary": event.get("input_summary", ""),
                 })
@@ -460,12 +503,22 @@ def _run_chat_turn(
                 # 批三十八 §AS A4：工具/API 完成即刷新活动时间，不只在 turn
                 # 起点写一次（注册表排序/停止轮询据此判断进度）。
                 session.last_activity_at = time.time()
+                if not tool_id and tool_ids:
+                    tool_id = tool_ids.pop(0)
                 _push({
                     "type": "chat:tool_result",
+                    "tool_id": tool_id,
                     "name": event.get("name", ""),
                     "output_summary": event.get("output_summary", ""),
                     "ok": bool(event.get("ok", True)),
                 })
+
+        def _reasoning_cb(text: str) -> None:
+            _push({"type": "chat:reasoning", "text": text})
+
+        # 批四十一 §3：推理过程增量事件（模型输出 reasoning 时转发，默认不
+        # 出——chat:reasoning 事件仅供前端折叠展示，不参与对话上下文）。
+        session.agent.reasoning_callback = _reasoning_cb
 
         try:
             result = session.agent.run_conversation(
@@ -505,6 +558,10 @@ def _run_chat_turn(
             "failed": turn_failed,
         })
     finally:
+        try:
+            session.agent.reasoning_callback = None
+        except Exception:
+            pass
         set_approval_callback(None)
         if tk2 is not None:
             reset_current_session_key(tk2)
@@ -573,16 +630,125 @@ def _cancel_pending_approvals_for_session(chat_session_id: str) -> int:
 router = APIRouter()
 
 
+def _model_catalog() -> dict:
+    """批四十一 §8：会话可选模型目录（静态，零网络、零敏感信息）。
+
+    返回 {"models": [...], "provider": ..., "default_model": ...}。来源：
+    配置 model.default（始终在列、标 default）+ 静态目录（提供商的
+    _PROVIDER_MODELS / OpenRouter / Vercel AI Gateway 快照）。标注 tag 由
+    目录描述或模型名派生（快/省 vs 强/慢），纯展示不做准确承诺。
+    """
+    from hermes_cli.models import (
+        OPENROUTER_MODELS,
+        VERCEL_AI_GATEWAY_MODELS,
+        _PROVIDER_MODELS,
+    )
+
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+    except Exception:
+        cfg = {}
+    model_cfg = cfg.get("model") or {}
+    if isinstance(model_cfg, str):
+        default_model = str(model_cfg).strip()
+    else:
+        default_model = str(model_cfg.get("default") or model_cfg.get("model") or "").strip()
+    provider = str(model_cfg.get("provider") or "").strip() or "auto"
+
+    desc: dict = {}
+    if provider == "openrouter":
+        for mid, d in OPENROUTER_MODELS:
+            desc[mid] = d
+    elif provider in ("ai-gateway", "vercel"):
+        for mid, d in VERCEL_AI_GATEWAY_MODELS:
+            desc[mid] = d
+
+    try:
+        from hermes_cli.models import normalize_provider
+        provider_key = normalize_provider(provider) or provider
+    except Exception:
+        provider_key = provider
+    catalog: list[str] = []
+    for key in (provider_key, provider):
+        for mid in _PROVIDER_MODELS.get(key, []):
+            if mid not in catalog:
+                catalog.append(mid)
+    # 聚合器目录作为补充（OpenRouter 快照本身就有描述）。
+    for mid, _d in desc.items():
+        if mid not in catalog:
+            catalog.append(mid)
+
+    known = set(catalog) | set(desc)
+    if default_model and default_model not in known:
+        known.add(default_model)
+
+    def _tag(mid: str) -> str:
+        d = desc.get(mid, "")
+        low = mid.lower()
+        desc_low = d.lower()
+        if (
+            "mini" in low or "flash" in low or "lite" in low or "haiku" in low
+            or "fast" in low or "nano" in low or "compact" in low
+            or "cheap" in desc_low or "fast" in desc_low or "省" in desc_low or "快" in desc_low
+        ):
+            return "快/省"
+        if (
+            "opus" in low or "pro" in low or "max" in low or "sol" in low
+            or "ultra" in low or "reasoning" in low or "strong" in desc_low or "强" in desc_low
+        ):
+            return "强/慢"
+        return ""
+
+    # 目录顺序：配置默认置顶，其余按出现顺序。
+    ordered = [default_model] if default_model else []
+    for mid in catalog + [m for m in known if m not in catalog]:
+        if mid not in ordered:
+            ordered.append(mid)
+    models = [{
+        "id": mid,
+        "name": mid,
+        "description": desc.get(mid, ""),
+        "tag": _tag(mid),
+        "default": mid == default_model,
+    } for mid in ordered if mid]
+    return {"models": models, "provider": provider, "default_model": default_model}
+
+
+@router.get("/api/models")
+async def list_models():
+    """批四十一 §8：会话可选模型目录（静态目录 + 配置默认；零网络/敏感信息）。
+    前端选择器选项严格来自该接口。"""
+    return _model_catalog()
+
+
 @router.post("/api/chat/sessions")
-async def create_chat_session():
-    """创建会话：初始化 agent 实例并注册进进程内注册表。返回 {chat_session_id}。"""
+async def create_chat_session(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """创建会话：初始化 agent 实例并注册进进程内注册表。返回 {chat_session_id}。
+
+    批四十一 §8：body 可选 {model}——会话级模型（缺省用配置默认）。模型必须
+    在 /api/models 目录内（配置外模型不可选）。
+    """
+    model = str((payload or {}).get("model") or "").strip() or None
+    if model:
+        catalog = {m["id"] for m in _model_catalog()["models"]}
+        if model not in catalog:
+            return JSONResponse(
+                status_code=400,
+                content={"error": {"code": "invalid_request", "message": f"模型不在可选目录: {model}"}},
+            )
     with _CHAT_LOCK:
         _evict_if_needed()
-        session = ChatSession(chat_session_id=f"chat_{secrets_hex()}", agent=None, session_db=None)
+        session = ChatSession(
+            chat_session_id=f"chat_{secrets_hex()}",
+            agent=None,
+            session_db=None,
+            model=model or "",
+        )
         _CHAT_SESSIONS[session.chat_session_id] = session
     try:
         agent, session_db = await asyncio.to_thread(
-            _build_chat_agent_pair, session.chat_session_id
+            _build_chat_agent_pair, session.chat_session_id, model
         )
     except Exception as exc:
         with _CHAT_LOCK:
@@ -594,12 +760,16 @@ async def create_chat_session():
         )
     session.agent = agent
     session.session_db = session_db
-    return {"chat_session_id": session.chat_session_id, "created_at": session.created_at}
+    return {
+        "chat_session_id": session.chat_session_id,
+        "created_at": session.created_at,
+        "model": session.model or _model_catalog()["default_model"],
+    }
 
 
-def _build_chat_agent_pair(chat_session_id: str):
+def _build_chat_agent_pair(chat_session_id: str, model: Optional[str] = None):
     """返回 (agent, session_db) —— to_thread 包装便于异步端点不阻塞事件循环。"""
-    agent = _create_chat_agent(chat_session_id)
+    agent = _create_chat_agent(chat_session_id, model=model)
     return agent, getattr(agent, "_session_db", None)
 
 
@@ -747,6 +917,75 @@ async def chat_interrupt(chat_session_id: str):
         "chat_session_id": chat_session_id,
         "approvals_cancelled": cancelled,
     }
+
+
+@router.post("/api/chat/sessions/{chat_session_id}/model")
+async def chat_set_session_model(chat_session_id: str,
+                                 payload: Dict[str, Any] = Body(default_factory=dict)):
+    """批四十一 §8：切换会话模型（会话级生效，下一条消息起用新模型）。
+
+    模型必须在 /api/models 目录内；忙时 409（避免改模型打断进行中的 turn）；
+    会话不存在 404。切换复用 AIAgent.switch_model（runtime 照新模型解析）。
+    """
+    with _CHAT_LOCK:
+        session = _CHAT_SESSIONS.get(chat_session_id)
+    if session is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "not_found", "message": f"会话不存在: {chat_session_id}"}},
+        )
+    model = str((payload or {}).get("model") or "").strip()
+    if not model:
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"code": "invalid_request", "message": "model 必填"}},
+        )
+    catalog = {m["id"] for m in _model_catalog()["models"]}
+    if model not in catalog:
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"code": "invalid_request", "message": f"模型不在可选目录: {model}"}},
+        )
+    with _CHAT_LOCK:
+        if session.busy:
+            return JSONResponse(
+                status_code=409,
+                content={"error": {"code": "busy", "message": "会话正在处理消息，请稍候再切换模型"}},
+            )
+        if session.agent is None:
+            return JSONResponse(
+                status_code=409,
+                content={"error": {"code": "agent_not_ready", "message": "会话 agent 初始化未完成"}},
+            )
+        agent = session.agent
+        if model == session.model:
+            return {"chat_session_id": chat_session_id, "model": model}
+        session.model = model
+    try:
+        await asyncio.to_thread(_switch_session_agent_model, agent, model)
+    except Exception as exc:
+        with _CHAT_LOCK:
+            # 切换失败：回滚会话模型字段，避免视图与 agent 实际模型不一致。
+            session.model = ""
+        _log.warning("chat model switch failed (session=%s): %s", chat_session_id, exc)
+        return JSONResponse(
+            status_code=500,
+            content={"error": {"code": "model_switch_failed", "message": f"模型切换失败: {exc}"}},
+        )
+    return {"chat_session_id": chat_session_id, "model": model}
+
+
+def _switch_session_agent_model(agent, model: str) -> None:
+    """按目标模型解析 runtime 并原地切换 agent（to_thread 包装）。"""
+    from hermes_cli.runtime_provider import resolve_runtime_provider
+    runtime = resolve_runtime_provider(target_model=model or None)
+    agent.switch_model(
+        model,
+        runtime.get("provider"),
+        api_key=runtime.get("api_key") or "",
+        base_url=runtime.get("base_url") or "",
+        api_mode=runtime.get("api_mode") or "",
+    )
 
 
 def clear_chat_sessions() -> None:

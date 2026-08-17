@@ -91,7 +91,7 @@ def stub_agent_factory(monkeypatch):
     def _install(block_event: threading.Event = None) -> _StubAgent:
         agent = _StubAgent(block_event=block_event)
         holder["agent"] = agent
-        monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid: agent)
+        monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid, model=None: agent)
         return agent
 
     return _install, holder

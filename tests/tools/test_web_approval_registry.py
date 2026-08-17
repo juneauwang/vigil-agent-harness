@@ -89,8 +89,11 @@ def test_approve_scope_permissions():
     assert approve_web_approval(aid, scope="bogus")["code"] == "invalid_request"
     # 仍可 once（prod 变更确认门只允许 once）。
     assert approve_web_approval(aid, scope="once") == {"status": "approved", "scope": "once"}
-    # 已裁决条目不能重复批准。
-    assert approve_web_approval(aid, scope="once")["code"] == "invalid_request"
+    # 批四十一 §2 幂等化：已裁决条目重复批准返回当前终态（不报错、不改状态）。
+    repeat = approve_web_approval(aid, scope="once")
+    assert repeat["status"] == "approved"
+    assert repeat["already_resolved"] is True
+    assert get_web_approval(aid)["scope"] == "once"
 
 
 def test_smart_denied_forces_once_scope():
@@ -105,8 +108,11 @@ def test_deny_resolves_and_wakes_waiter():
     view = get_web_approval(aid)
     assert view["status"] == "denied"
     assert wait_web_approval(aid, timeout=0.5) == "deny"
-    # 已裁决不能重复拒绝。
-    assert deny_web_approval(aid)["code"] == "invalid_request"
+    # 批四十一 §2 幂等化：重复拒绝返回当前终态（不报错）。
+    repeat = deny_web_approval(aid)
+    assert repeat["status"] == "denied"
+    assert repeat["already_resolved"] is True
+    assert get_web_approval(aid)["status"] == "denied"
 
 
 def test_timeout_fail_closed_no_auto_approve_or_deny():

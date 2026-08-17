@@ -57,7 +57,7 @@ def env_home(tmp_path, monkeypatch):
 
 def _stub_agent_factory(monkeypatch):
     agent = object()
-    monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid: agent)
+    monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid, model=None: agent)
     return agent
 
 

@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useReducer } from "react";
-import { Check, EyeOff, ShieldAlert, X } from "lucide-react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { Check, ChevronDown, ChevronUp, EyeOff, ShieldAlert, X } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { ApprovalItem } from "@/lib/api";
 import { EnvBadge } from "@/components/StatusBits";
+import { cn } from "@/lib/ops";
 import {
   dequeueApproval,
   dropResolvedApprovals,
@@ -46,10 +47,44 @@ function queueReducer(
   }
 }
 
+/** 批四十一 §6：长命令统一等宽代码块 + max-height 滚动 + 展开全文（保留缩进）。 */
+function LongCommandBlock({ command }: { command: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const lines = (command ?? "").split("\n");
+  const long = lines.length > 1 || (command ?? "").length > 80;
+  if (!command) return null;
+  const preview = expanded || !long ? command : lines[0].slice(0, 80) + "…";
+  return (
+    <div className="rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-3 py-2">
+      <pre
+        className={cn(
+          "scroll-thin overflow-y-auto whitespace-pre break-words font-mono text-xs leading-relaxed text-[var(--vigil-text)]",
+          expanded ? "max-h-72" : "max-h-32",
+        )}
+      >
+        {preview}
+      </pre>
+      {long && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="mt-1 flex items-center gap-1 text-[10px] text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+        >
+          {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
+          {expanded ? "收起" : "展开全文"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export default function ApprovalModal() {
   const snap = useApprovalSnapshot();
   const [state, dispatch] = useReducer(queueReducer, initialApprovalQueue);
   const active = state.queue[0] ?? null;
+  // 批四十一 §2：提交中同步防重入（state.busy 只禁下一帧渲染的按钮，连点/重放
+  // 会用 ref 挡住第二枪）。
+  const inFlightRef = useRef(false);
 
   // poller 上报的新审批 → 入队。
   useEffect(() => {
@@ -67,6 +102,8 @@ export default function ApprovalModal() {
 
   const resolve = useCallback(
     async (item: ApprovalItem, action: "approved" | "denied") => {
+      if (inFlightRef.current) return;
+      inFlightRef.current = true;
       dispatch({ type: "busy", busy: true });
       dispatch({ type: "error", error: null });
       try {
@@ -78,6 +115,7 @@ export default function ApprovalModal() {
       } catch (e) {
         dispatch({ type: "error", error: formatApiError(e) });
       } finally {
+        inFlightRef.current = false;
         dispatch({ type: "busy", busy: false });
       }
     },
@@ -110,17 +148,13 @@ export default function ApprovalModal() {
           )}
         </div>
 
-        <div className="rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-3 py-2">
-          <div className="max-h-32 overflow-y-auto">
-            <code className="block whitespace-pre font-mono text-xs leading-relaxed text-[var(--vigil-text)]">
-              {active.command}
-            </code>
-          </div>
-        </div>
+        <LongCommandBlock command={active.command} />
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-[var(--vigil-muted)]">
           <EnvBadge env={active.env} />
-          {active.description && <span className="min-w-0 flex-1 truncate">{active.description}</span>}
+          {active.description && (
+            <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">{active.description}</span>
+          )}
         </div>
 
         {state.error && (
