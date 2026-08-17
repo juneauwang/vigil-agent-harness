@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  approvalIsTimedOut,
   applyChatEvent,
   chatInputDisabled,
   createChatState,
@@ -10,6 +11,8 @@ import {
   stateFromHistory,
   toggleToolExpanded,
 } from "./chat";
+
+const TIMEOUT_AT = "2026-08-17T12:00:00Z";
 
 const ev = (type: string, data: Record<string, unknown> = {}) => ({ type, data });
 
@@ -180,5 +183,25 @@ describe("停止（批三十六 markTurnInterrupted）", () => {
   it("interrupted 行不进入历史恢复（本地瞬态标记）", () => {
     const s = stateFromHistory([], false);
     expect(s.messages.some((m) => m.interrupted)).toBe(false);
+  });
+});
+
+describe("审批超时展示（批三十八 §AW）", () => {
+  it("pending + timeout_at 已过 → 超时", () => {
+    expect(approvalIsTimedOut({ status: "pending", timeoutAt: TIMEOUT_AT }, Date.parse(TIMEOUT_AT) + 1)).toBe(true);
+  });
+
+  it("pending + timeout_at 未到 → 未超时", () => {
+    expect(approvalIsTimedOut({ status: "pending", timeoutAt: TIMEOUT_AT }, Date.parse(TIMEOUT_AT) - 1)).toBe(false);
+  });
+
+  it("已批准/已拒绝不再计超时", () => {
+    expect(approvalIsTimedOut({ status: "approved", timeoutAt: TIMEOUT_AT }, Date.parse(TIMEOUT_AT) + 1)).toBe(false);
+    expect(approvalIsTimedOut({ status: "denied", timeoutAt: TIMEOUT_AT }, Date.parse(TIMEOUT_AT) + 1)).toBe(false);
+  });
+
+  it("无 timeout_at 或非法值 → 不算超时", () => {
+    expect(approvalIsTimedOut({ status: "pending", timeoutAt: null })).toBe(false);
+    expect(approvalIsTimedOut({ status: "pending", timeoutAt: "not-a-date" })).toBe(false);
   });
 });

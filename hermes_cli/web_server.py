@@ -324,6 +324,10 @@ from hermes_cli.memory_oauth import router as _memory_oauth_router  # noqa: E402
 
 app.include_router(_memory_oauth_router)
 
+# 会话生命周期状态映射（批三十八 status 字段）——供 /api/sessions running 与
+# 状态页 active 计数消费。
+from hermes_state_common import session_status_is_running  # noqa: E402
+
 # 对话 Session API（UI 壳核心价值页 /api/chat/*）——独立模块，不在 web_server
 # main 文件里继续堆端点。会话/agent 常驻进程内注册表，SSE 事件流见 chat_api.py。
 from hermes_cli.chat_api import router as _chat_router  # noqa: E402
@@ -1720,7 +1724,7 @@ def _count_status_active_sessions() -> int:
         now = time.time()
         return sum(
             1 for s in sessions
-            if s.get("ended_at") is None
+            if session_status_is_running(s.get("status"), ended_at=s.get("ended_at"))
             and (now - s.get("last_active", s.get("started_at", 0))) < 300
         )
     finally:
@@ -4258,7 +4262,9 @@ async def ui_sessions_list(
         _row["running"] = bool(
             _row.get("is_active")
             or (str(_row.get("session_id")) in active_ids)
-            or _row.get("ended_at") is None
+            or session_status_is_running(
+                _row.get("status"), ended_at=_row.get("ended_at")
+            )
         )
     total = data.get("total") or len(sessions)
     return {
@@ -12736,7 +12742,7 @@ def _list_cron_job_runs_sync(job_id: str, profile: Optional[str] = None, limit: 
         now = time.time()
         for s in runs:
             s["is_active"] = (
-                s.get("ended_at") is None
+                session_status_is_running(s.get("status"), ended_at=s.get("ended_at"))
                 and (now - s.get("last_active", s.get("started_at", 0))) < 300
             )
             s["archived"] = bool(s.get("archived"))

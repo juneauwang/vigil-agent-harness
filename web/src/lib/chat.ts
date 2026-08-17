@@ -52,6 +52,17 @@ export interface ChatTurnState {
   activeMessageId: number | null;
 }
 
+/** 批三十八 §AW：审批卡是否已超时（timeout_at 过期且仍 pending）。 */
+export function approvalIsTimedOut(
+  card: Pick<ChatApprovalCard, "status" | "timeoutAt">,
+  now: number = Date.now(),
+): boolean {
+  if (card.status !== "pending" || !card.timeoutAt) return false;
+  const deadline = Date.parse(card.timeoutAt);
+  if (Number.isNaN(deadline)) return false;
+  return now >= deadline;
+}
+
 export function createChatState(): ChatTurnState {
   return { messages: [], busy: false, nextId: 1, activeMessageId: null };
 }

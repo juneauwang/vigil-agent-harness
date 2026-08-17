@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional  # noqa: F401
 
 from fastapi import APIRouter, HTTPException, Query, Request  # noqa: F401
 
+from hermes_state_common import session_status_is_running
 from hermes_cli.web_deps import late
 from hermes_cli.web_models import (
     BulkDeleteSessions,
@@ -143,7 +144,7 @@ def get_sessions(
             row_profile = profile_name or _cron_default_profile()
             for s in sessions:
                 s["is_active"] = (
-                    s.get("ended_at") is None
+                    session_status_is_running(s.get("status"), ended_at=s.get("ended_at"))
                     and (now - s.get("last_active", s.get("started_at", 0))) < 300
                 )
                 s["profile"] = row_profile
@@ -295,7 +296,7 @@ async def search_sessions(
                             "ended_at": row.get("ended_at"),
                             "last_active": row.get("last_active") or row.get("started_at"),
                             "is_active": (
-                                row.get("ended_at") is None
+                                session_status_is_running(row.get("status"), ended_at=row.get("ended_at"))
                                 and (now - (row.get("last_active") or row.get("started_at") or 0)) < 300
                             ),
                             "message_count": row.get("message_count") or 0,

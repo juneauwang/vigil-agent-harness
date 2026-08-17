@@ -12506,6 +12506,22 @@ def main():
         "--limit", type=int, default=500, help="Max sessions to load (default: 500)"
     )
 
+    sessions_status = sessions_subparsers.add_parser(
+        "status",
+        help="Show one session's lifecycle status (status/ended_at/end_reason/busy/last_activity/recent tools)",
+        description=(
+            "One-glance session observability (batch 38 §AS A5): prints the "
+            "explicit lifecycle status, terminal timestamps/reason, busy "
+            "signal, effective last-activity (freshest of last_activity_at "
+            "and the latest message timestamp), and the most recent tool "
+            "calls — so a fake-stuck (finalized but UI stale) and a real "
+            "stuck (no terminal state) session are distinguishable."
+        ),
+    )
+    sessions_status.add_argument(
+        "session_id",
+        help="Session ID (exact or unique prefix)",
+    )
 
     # cmd_sessions lives in hermes_cli/sessions_cmd.py (main.py decomposition).
     # sessions_parser is threaded in via functools.partial because the
@@ -12513,6 +12529,40 @@ def main():
     # closure capture of this main()-local).
     sessions_parser.set_defaults(
         func=_functools.partial(cmd_sessions, sessions_parser=sessions_parser)
+    )
+
+    # =========================================================================
+    # db command  (batch 38 §AQ: built-in read-only state.db inspection)
+    # =========================================================================
+    from hermes_cli.db_cmd import cmd_db
+
+    db_parser = subparsers.add_parser(
+        "db",
+        help="Inspect the Vigil state database (read-only; no sqlite3 CLI needed)",
+        description=(
+            "Built-in read-only entry into state.db for diagnosing Vigil "
+            "itself (session status/busy flags, approval records, runbooks). "
+            "Only SELECT / EXPLAIN / PRAGMA statements are allowed; write "
+            "statements are rejected with a risk warning (batch 38 §AQ)."
+        ),
+    )
+    db_subparsers = db_parser.add_subparsers(dest="db_action")
+    db_query = db_subparsers.add_parser(
+        "query",
+        help="Run a read-only query against state.db",
+    )
+    db_query.add_argument(
+        "sql",
+        help="SQL statement (SELECT / EXPLAIN / PRAGMA only)",
+    )
+    db_query.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Max rows to print (default: 50)",
+    )
+    db_parser.set_defaults(
+        func=_functools.partial(cmd_db, db_parser=db_parser)
     )
 
     # =========================================================================

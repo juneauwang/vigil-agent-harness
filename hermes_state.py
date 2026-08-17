@@ -67,6 +67,11 @@ from hermes_state_common import (  # noqa: F401  (re-exported for back-compat)
     MAX_FTS5_QUERY_CHARS,
     SCHEMA_SQL,
     SCHEMA_VERSION,
+    SESSION_LIFECYCLE_STATUSES,
+    SESSION_STATUS_ENDED,
+    SESSION_STATUS_FINALIZE_ERROR,
+    SESSION_STATUS_INTERRUPTED,
+    SESSION_STATUS_RUNNING,
     _PREVIEW_CONTENT_SQL,
     _PREVIEW_HEAD_CHARS,
     _PREVIEW_MAX_CHARS,
@@ -3577,7 +3582,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 (total_messages, total_tool_calls, child_session_id),
             )
             updated = conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = 'compression' "
+                "UPDATE sessions SET ended_at = ?, end_reason = 'compression', "
+                "status = 'ended' "
                 "WHERE id = ? AND ended_at IS NULL",
                 (time.time(), parent_session_id),
             )
@@ -3597,20 +3603,26 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         desynced CLI session_id after ``/resume`` or ``/branch``) targets them
         with a different reason. Use ``reopen_session()`` first if you
         intentionally need to re-end a closed session with a new reason.
+
+        Also transitions the explicit ``status`` column to ``'ended'`` so
+        consumers can read the lifecycle state directly instead of inferring
+        it from ``ended_at`` (batch 38).
         """
         def _do(conn):
             conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = ? "
+                "UPDATE sessions SET ended_at = ?, end_reason = ?, status = 'ended' "
                 "WHERE id = ? AND ended_at IS NULL",
                 (time.time(), end_reason, session_id),
             )
         self._execute_write(_do)
 
     def reopen_session(self, session_id: str) -> None:
-        """Clear ended_at/end_reason so a session can be resumed."""
+        """Clear ended_at/end_reason and flip status back to 'running' so a
+        session can be resumed (batch 38 status column)."""
         def _do(conn):
             conn.execute(
-                "UPDATE sessions SET ended_at = NULL, end_reason = NULL WHERE id = ?",
+                "UPDATE sessions SET ended_at = NULL, end_reason = NULL, "
+                "status = 'running' WHERE id = ?",
                 (session_id,),
             )
         self._execute_write(_do)
@@ -3651,7 +3663,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         def _do(conn):
             cursor = conn.execute(
-                "UPDATE sessions SET ended_at = ?, end_reason = ? "
+                "UPDATE sessions SET ended_at = ?, end_reason = ?, status = 'ended' "
                 "WHERE id = ? AND (ended_at IS NULL "
                 "OR end_reason IN ('agent_close', 'ws_orphan_reap'))",
                 (now, reason, session_id),
@@ -3663,6 +3675,97 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             return bool(rows)
         except Exception:
             return False
+
+    def set_session_status(
+        self,
+        session_id: str,
+        status: str,
+        *,
+        end_reason: Optional[str] = None,
+        ended_at: Optional[float] = None,
+    ) -> None:
+        """Explicit lifecycle-status write (batch 38).
+
+        Unlike :meth:`end_session` (first-reason-wins, no-ops on an already
+        ended row) this is an unconditional write used by the unified
+        finalize entry and by multi-turn surfaces (web chat) that reopen a
+        row at turn start. Unknown statuses raise ``ValueError`` so a typo
+        cannot silently write a status consumers won't understand.
+        """
+        if status not in SESSION_LIFECYCLE_STATUSES:
+            raise ValueError(f"Unknown session status: {status!r}")
+        if not session_id:
+            return
+
+        def _do(conn):
+            if end_reason is None and ended_at is None:
+                conn.execute(
+                    "UPDATE sessions SET status = ? WHERE id = ?",
+                    (status, session_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE sessions SET status = ?, "
+                    "ended_at = COALESCE(ended_at, ?), "
+                    "end_reason = COALESCE(end_reason, ?) "
+                    "WHERE id = ?",
+                    (status, ended_at if ended_at is not None else time.time(),
+                     end_reason, session_id),
+                )
+
+        self._execute_write(_do)
+
+    def finalize_session_row(
+        self,
+        session_id: str,
+        *,
+        status: str,
+        end_reason: Optional[str] = None,
+        ended_at: Optional[float] = None,
+    ) -> bool:
+        """Unified session finalize entry (batch 38).
+
+        Guarantees a queryable terminal state instead of a silent skip: the
+        status write runs inside try/except, and when it fails a best-effort
+        second write stamps ``finalize_error`` (re-raising the original
+        exception afterwards so the caller still sees the failure). A
+        ``finalize_error`` row is exactly the "finalize itself failed" state
+        ``vigil sessions status`` and the dashboard surface, rather than a
+        row that looks mid-life forever.
+
+        ``ended_at``/``end_reason`` are COALESCE'd so an existing terminal
+        boundary (e.g. compression) is preserved while the status advances.
+        """
+        if not session_id:
+            return False
+        if status not in SESSION_LIFECYCLE_STATUSES:
+            raise ValueError(f"Unknown session status: {status!r}")
+        try:
+            self.set_session_status(
+                session_id,
+                status,
+                end_reason=end_reason,
+                ended_at=ended_at,
+            )
+            return True
+        except Exception:
+            logger.exception(
+                "finalize_session_row failed for session %s (status=%s); "
+                "stamping finalize_error",
+                session_id,
+                status,
+            )
+            try:
+                self.set_session_status(
+                    session_id,
+                    SESSION_STATUS_FINALIZE_ERROR,
+                )
+            except Exception:
+                logger.exception(
+                    "finalize_error stamp also failed for session %s",
+                    session_id,
+                )
+            raise
 
     def update_session_cwd(
         self,
@@ -5224,7 +5327,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 """
                 UPDATE sessions
                 SET ended_at = ?,
-                    end_reason = 'orphaned_compression'
+                    end_reason = 'orphaned_compression',
+                    status = 'ended'
                 WHERE api_call_count = 0
                   AND end_reason IS NULL
                   AND ended_at IS NULL
@@ -7092,6 +7196,43 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 msg["display_metadata"] = self._decode_display_metadata(msg["display_metadata"])
             result.append(msg)
         return result
+
+    def get_recent_tool_calls(
+        self,
+        session_id: str,
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """Recent tool invocations (newest first) for ``vigil sessions status``.
+
+        Returns at most *limit* rows carrying ``tool_name`` with the raw
+        output content truncated to a bounded preview — the status command
+        is an observability surface, not a transcript dump.
+        """
+        if limit < 1:
+            return []
+        with self._read_ctx() as conn:
+            cursor = conn.execute(
+                "SELECT tool_name, content, timestamp FROM messages "
+                "WHERE session_id = ? AND role = 'tool' "
+                "AND tool_name IS NOT NULL AND tool_name != '' "
+                "ORDER BY id DESC LIMIT ?",
+                (session_id, limit),
+            )
+            rows = cursor.fetchall()
+        previews = []
+        for row in rows:
+            name = row["tool_name"] if isinstance(row, sqlite3.Row) else row[0]
+            content = row["content"] if isinstance(row, sqlite3.Row) else row[1]
+            ts = row["timestamp"] if isinstance(row, sqlite3.Row) else row[2]
+            content = self._decode_content(content) if content is not None else ""
+            if isinstance(content, str):
+                content = " ".join(content.split())[:120]
+            previews.append({
+                "tool_name": name,
+                "output_preview": content or "",
+                "timestamp": ts,
+            })
+        return previews
 
     def get_messages_around(
         self,

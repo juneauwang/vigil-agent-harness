@@ -18,6 +18,7 @@ import {
 import { api, ApiError } from "@/lib/api";
 import type { ChatSessionSummary } from "@/lib/api";
 import {
+  approvalIsTimedOut,
   applyChatEvent,
   chatInputDisabled,
   createChatState,
@@ -108,6 +109,15 @@ function ApprovalCard({
   onResolve: (card: ChatApprovalCard, status: "approved" | "denied") => void;
 }) {
   const busy = card.status === "approved" || card.status === "denied";
+  // 批三十八 §AW：审批超时由会话层自限等待（后端 turn 落 ended(approval_timeout)），
+  // 卡片这里做客户端兜底展示——timeout_at 过期后不再继续转圈，提示"审批超时"。
+  const [timedOut, setTimedOut] = useState(false);
+  useEffect(() => {
+    const check = () => setTimedOut(approvalIsTimedOut(card));
+    check();
+    const timer = window.setInterval(check, 1000);
+    return () => window.clearInterval(timer);
+  }, [card.status, card.timeoutAt]);
   return (
     <div
       className={cn(
@@ -124,7 +134,7 @@ function ApprovalCard({
       {card.grade && <span className="rounded bg-amber-500/15 px-1.5 py-px text-[10px] text-amber-600 dark:text-amber-400">L{card.grade}</span>}
       {card.env && <span className="text-[var(--vigil-muted)]">{card.env}</span>}
       <span className="min-w-0 flex-1 truncate font-mono">{card.command}</span>
-      {card.status === "pending" && (
+      {card.status === "pending" && !timedOut && (
         <>
           <button
             type="button"
@@ -143,6 +153,9 @@ function ApprovalCard({
             <X className="size-3.5" /> 拒绝
           </button>
         </>
+      )}
+      {card.status === "pending" && timedOut && (
+        <span className="text-red-500">审批超时，已终止</span>
       )}
       {card.status === "approved" && <span className="text-emerald-500">已批准</span>}
       {card.status === "denied" && <span className="text-red-500">已拒绝</span>}
@@ -533,4 +546,3 @@ export default function ChatPage() {
     </div>
   );
 }
-

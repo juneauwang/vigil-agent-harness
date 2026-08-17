@@ -6,7 +6,7 @@ reference them without importing hermes_state (which would be a cycle).
 hermes_state re-imports every name here for backward compatibility.
 """
 
-from typing import Any
+from typing import Any, Optional
 
 from agent.skill_commands import (
     SKILL_EXCERPT_JOINT,
@@ -164,7 +164,39 @@ def _sql_session_last_active_by_id(session_id_expr: str) -> str:
     )
 
 
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
+
+# ── Explicit session lifecycle status (batch 38) ──────────────────────────
+# The sessions.status column is the single source of truth for whether a
+# session is alive, terminal, or stuck-in-an-error-finalize. Consumers
+# (dashboard /api/sessions, `vigil sessions status`) read this instead of
+# inferring liveness from ended_at IS NULL; ended_at remains as the
+# terminal timestamp + compatibility fallback.
+SESSION_STATUS_RUNNING = "running"
+SESSION_STATUS_ENDED = "ended"
+SESSION_STATUS_FAILED = "failed"
+SESSION_STATUS_INTERRUPTED = "interrupted"
+SESSION_STATUS_FINALIZE_ERROR = "finalize_error"
+
+SESSION_LIFECYCLE_STATUSES = frozenset({
+    SESSION_STATUS_RUNNING,
+    SESSION_STATUS_ENDED,
+    SESSION_STATUS_FAILED,
+    SESSION_STATUS_INTERRUPTED,
+    SESSION_STATUS_FINALIZE_ERROR,
+})
+
+
+def session_status_is_running(status: Optional[str], *, ended_at: Optional[float] = None) -> bool:
+    """Map the explicit lifecycle status to a UI liveness boolean (batch 38).
+
+    Consumers (dashboard /api/sessions, cron run lists) read the explicit
+    ``status`` column; legacy rows without a status fall back to the
+    pre-status heuristic (``ended_at IS NULL`` == alive).
+    """
+    if status:
+        return status == SESSION_STATUS_RUNNING
+    return ended_at is None
 
 
 # FTS storage-layout version, tracked INDEPENDENTLY of SCHEMA_VERSION in the
@@ -223,6 +255,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at REAL NOT NULL,
     ended_at REAL,
     end_reason TEXT,
+    status TEXT NOT NULL DEFAULT 'running',
     message_count INTEGER DEFAULT 0,
     tool_call_count INTEGER DEFAULT 0,
     input_tokens INTEGER DEFAULT 0,
