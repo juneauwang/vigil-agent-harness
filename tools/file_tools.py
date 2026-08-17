@@ -1826,18 +1826,61 @@ def _mark_verification_stale(
 
 
 def _redact_write_content(content: str):
-    """write_file 内容过 redact（与工具输出展示同一条通道，OPS-DELTA 批次十九 §AE）。
+    """write_file 内容过 redact（OPS-DELTA 批次四十 §AS B2 可逆化改造）。
 
-    ``code_file=True, credential_values=True`` 与 redact_terminal_output 的
-    一般路径一致（同一条通道）：key 名命中（token/password/…）+ 值形态兜底
-    （任意键名高熵值）都会打码值、保留 key。返回 (写入内容, 是否疑似凭据)——
-    疑似凭据时调用方写打码内容 + chmod 600 + 警告（报告类文件不再成为凭据
-    泄露出口：§AE inventory 同步报告把凭据明文写进 644 权限 MD）。
+    落盘场景与终端展示语义分离：``persist_write=True`` 跳过展示面登记值 pass
+    （模型名/字段名等被登记后不再破坏文档），真凭据由凭据形态 pass 覆盖；
+    可逆捕获上下文把被掩码的每个值记录为 ``«redacted:N»`` 占位 + 原文。
+    返回 (写入内容, 是否疑似凭据, 占位映射)——疑似凭据时调用方先备份原文
+    （sidecar JSON，0600）再写打码内容 + chmod 600 + 警告，文档可逆恢复。
     """
-    masked = redact_sensitive_text(content, code_file=True, credential_values=True)
+    from agent.redact import reversible_write_redaction
+
+    with reversible_write_redaction() as placeholders:
+        masked = redact_sensitive_text(
+            content, code_file=True, credential_values=True, persist_write=True
+        )
     if masked == content:
-        return content, False
-    return masked, True
+        return content, False, {}
+    return masked, True, dict(placeholders)
+
+
+def _check_runbook_write_path(path: str, task_id: str = "default") -> str | None:
+    """Refuse non-``.yaml`` writes into the ops ``runbooks/`` directory (§AU).
+
+    Runbooks are loaded by extension (``runbooks/*.yaml``, schema v0.1). A
+    ``.md``/``.yml``/other file dropped into ``runbooks/`` is silently ignored
+    by ``runbook_load`` — the old behavior left the user believing their
+    runbook existed when nothing was ever loaded. Write-side format gating
+    makes the contract visible at the write itself.
+    """
+    try:
+        from hermes_constants import get_hermes_home
+        from tools.runbook_tools import _runbooks_dir
+
+        runbooks_root = os.path.normpath(str(_runbooks_dir(get_hermes_home())))
+    except Exception:
+        return None
+    if not runbooks_root:
+        return None
+    try:
+        resolved = os.path.normpath(str(_resolve_path_for_task(path, task_id)))
+    except (OSError, ValueError):
+        try:
+            resolved = os.path.normpath(str(Path(_expand_tilde(path)).resolve()))
+        except (OSError, ValueError):
+            return None
+    if resolved != runbooks_root and not resolved.startswith(runbooks_root + os.sep):
+        return None
+    suffix = Path(resolved).suffix.lower()
+    if suffix == ".yaml":
+        return None
+    return (
+        f"write_file 拒绝：runbook 只支持 .yaml（schema v0.1），"
+        f"非 .yaml 文件（{Path(resolved).name}）不会被 runbook_load 加载。\n"
+        "请用 .yaml 扩展名（结构见 runbook_create 工具）；.md 等普通文档"
+        "请放到 runbooks/ 目录之外。"
+    )
 
 
 _ASKPASS_BARE_VALUE_RE = re.compile(
@@ -1845,15 +1888,44 @@ _ASKPASS_BARE_VALUE_RE = re.compile(
 )
 
 
-def _check_askpass_script_write(path: str, content: str, task_id: str = "default") -> str | None:
-    """裸 askpass 脚本写入拦截（OPS-DELTA 批次三十二）。
+def _looks_like_bare_askpass_value(value: str) -> bool:
+    """True when an echo/printf quoted value *looks like a bare credential*.
 
-    特征：内容含 ``echo '<8-32 字符>'``（裸密码 echo 形态）且目标路径在
-    ``~/.vigil`` 或 ``~/credential/`` 下——agent 手写 askpass 脚本绕过
-    credential_vault 受控通道的现场形态。命中 → 拦截并引导受控通道。
+    OPS-DELTA 批次四十 §AS B1：收窄后的值形态判据——裸密码是无空白、无
+    命令替换、非命令拼接的连续串。``echo "$(cat $t/comm) $(grep ...)"``
+    这类诊断命令是程序化读取（含 ``$()`` / 空格 / 命令拼接），不是凭据。
+    """
+    if not value:
+        return False
+    v = value.strip()
+    if not v:
+        return False
+    if "$(" in v or "`" in v:
+        return False
+    if any(ch.isspace() for ch in v):
+        return False
+    if any(sep in v for sep in ("|", "&&", ";", ">")):
+        return False
+    return True
+
+
+def _check_askpass_script_write(path: str, content: str, task_id: str = "default") -> str | None:
+    """裸 askpass 脚本写入拦截（OPS-DELTA 批次三十二，收窄于批次四十）。
+
+    特征：内容含 ``echo '<8-32 字符>'``（裸密码 echo 形态）且引号内的值
+    形态像凭据（无空格/无 ``$()``/无管道拼接——§AS B1 收窄，诊断命令
+    ``echo "$(cat …) $(grep …)"`` 不再误伤），且目标路径在 ``~/.vigil``
+    或 ``~/credential/`` 下——agent 手写 askpass 脚本绕过 credential_vault
+    受控通道的现场形态。命中 → 拦截并引导受控通道。
     检测必须在 redact 之前（值登记后 redact 会把密码打码，形态即消失）。
     """
     if not content or not _ASKPASS_BARE_VALUE_RE.search(content):
+        return None
+    if not any(
+        _looks_like_bare_askpass_value(m.group(1))
+        for m in _ASKPASS_BARE_VALUE_RE.finditer(content)
+    ):
+        # 命中 echo+引号形态但值都是命令替换/拼接/含空白——非裸凭据，放行。
         return None
     try:
         resolved = str(_resolve_path_for_task(path, task_id))
@@ -1886,15 +1958,100 @@ def _check_askpass_script_write(path: str, content: str, task_id: str = "default
     return None
 
 
-def _lockdown_credential_file(path: str, result_dict: dict) -> None:
-    """疑似凭据文件收紧为 0600 + 合并警告（§AE：644 报告文件泄露出口）。"""
+def _lockdown_credential_file(path: str, result_dict: dict, backup_path: str | None = None) -> None:
+    """疑似凭据文件收紧为 0600 + 合并警告（§AE：644 报告文件泄露出口）。
+
+    *backup_path* 指向写入前保存的原文 sidecar（§AS B2）——警告里注明可逆
+    恢复位置，用户不再面对"原文被破坏性打码"的死局。
+    """
     try:
         os.chmod(path, 0o600)
     except OSError as exc:
         logger.warning("write_file: chmod 600 failed for %s: %s", path, exc)
     warning = "检测到疑似凭据内容，文件权限已设为 600（值已打码）"
+    if backup_path:
+        warning += f"；原文已备份（可逆恢复）: {backup_path}"
     existing = result_dict.get("_warning")
     result_dict["_warning"] = f"{existing}；{warning}" if existing else warning
+
+
+def _redact_backup_path(target: str) -> Path:
+    """Sidecar backup path for a redacted write target (§AS B2)."""
+    target_path = Path(target)
+    return target_path.with_name(target_path.name + ".redact-backup.json")
+
+
+def _backup_original_write(target: str, original: str, placeholders: dict) -> str | None:
+    """Persist the ORIGINAL content before the masked write (reversible, 0600).
+
+    Returns the backup path string, or None on failure (best-effort: the
+    masked write still proceeds, but the warning then can't advertise a
+    restore point).
+    """
+    try:
+        from datetime import datetime
+
+        backup = _redact_backup_path(target)
+        payload = {
+            "version": 1,
+            "path": str(Path(target).resolve()),
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "placeholders": {
+                f"«redacted:{k}»": v for k, v in (placeholders or {}).items()
+            },
+            "original": original,
+        }
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        tmp = backup.with_name(backup.name + ".tmp")
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        try:
+            os.chmod(tmp, 0o600)
+        except OSError:
+            pass
+        os.replace(tmp, backup)
+        try:
+            os.chmod(backup, 0o600)
+        except OSError:
+            pass
+        return str(backup)
+    except Exception as exc:
+        logger.warning("write_file: redact backup failed for %s: %s", target, exc)
+        return None
+
+
+def restore_redacted_write(path: str) -> str:
+    """Restore the original content of a write_file that was redacted (§AS B2).
+
+    Reads the ``<target>.redact-backup.json`` sidecar written before the
+    masked write and rewrites the target with the original content
+    byte-identically. Not a registered tool — a recovery utility surfaced by
+    the write warning, callable by tests/operators.
+    """
+    target = _expand_tilde(path)
+    backup = _redact_backup_path(target)
+    if not backup.is_file():
+        return tool_error(
+            f"未找到可逆备份: {backup}（该文件写入时未触发凭据打码，无需恢复）"
+        )
+    try:
+        data = json.loads(backup.read_text(encoding="utf-8"))
+        original = data.get("original")
+        if not isinstance(original, str):
+            return tool_error(f"可逆备份损坏（缺少 original 字段）: {backup}")
+        Path(target).write_text(original, encoding="utf-8")
+    except Exception as exc:
+        return tool_error(f"恢复失败: {exc}")
+    return json.dumps(
+        {
+            "status": "restored",
+            "path": str(Path(target).resolve()),
+            "bytes_written": len(original),
+            "note": "已用 redact 备份还原原文（«redacted:N» 占位已还原）。",
+        },
+        ensure_ascii=False, indent=2,
+    )
 
 
 def write_file_tool(path: str, content: str, task_id: str = "default",
@@ -1911,6 +2068,9 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     sensitive_err = _check_sensitive_path(path, task_id)
     if sensitive_err:
         return tool_error(sensitive_err)
+    runbook_format_err = _check_runbook_write_path(path, task_id)
+    if runbook_format_err:
+        return tool_error(runbook_format_err)
     if not cross_profile:
         cross_warning = _check_cross_profile_path(path, task_id)
         if cross_warning:
@@ -1926,7 +2086,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
     askpass_err = _check_askpass_script_write(path, content, task_id)
     if askpass_err:
         return tool_error(askpass_err)
-    write_content, credential_sensitive = _redact_write_content(content)
+    write_content, credential_sensitive, redact_placeholders = _redact_write_content(content)
     try:
         # Resolve once for the registry lock + stale check.  Failures here
         # fall back to the legacy path — write proceeds, per-task staleness
@@ -1937,6 +2097,11 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             _resolved = None
 
         if _resolved is None:
+            backup_path = None
+            if credential_sensitive:
+                # §AS B2：写打码内容前先把原文备份到 sidecar（0600），
+                # 文档可逆恢复；备份失败不阻断写（警告里不宣称恢复点）。
+                backup_path = _backup_original_write(path, content, redact_placeholders)
             stale_warning = _check_file_staleness(path, task_id)
             file_ops = _get_file_ops(task_id)
             result = file_ops.write_file(path, write_content)
@@ -1944,7 +2109,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             if stale_warning:
                 result_dict["_warning"] = stale_warning
             if credential_sensitive and not result_dict.get("error"):
-                _lockdown_credential_file(path, result_dict)
+                _lockdown_credential_file(path, result_dict, backup_path=backup_path)
             if not result_dict.get("error"):
                 _mark_verification_stale(task_id, [path], session_id=session_id)
             _update_read_timestamp(path, task_id)
@@ -1954,6 +2119,9 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
         # subagents can't interleave on the same file.  Different paths
         # remain fully parallel.
         with file_state.lock_path(_resolved):
+            backup_path = None
+            if credential_sensitive:
+                backup_path = _backup_original_write(_resolved, content, redact_placeholders)
             # Cross-agent staleness wins over per-task warning when both
             # fire — its message names the sibling subagent.
             cross_warning = file_state.check_stale(task_id, _resolved)
@@ -1968,7 +2136,7 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
             if effective_warning:
                 result_dict["_warning"] = effective_warning
             if credential_sensitive and not result_dict.get("error"):
-                _lockdown_credential_file(_resolved, result_dict)
+                _lockdown_credential_file(_resolved, result_dict, backup_path=backup_path)
             # Always report the ABSOLUTE path actually written, so a wrong-cwd
             # mismatch is visible in the response instead of silently routing
             # the edit to the wrong checkout.

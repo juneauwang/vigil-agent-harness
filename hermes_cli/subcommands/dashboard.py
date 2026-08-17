@@ -14,7 +14,7 @@ import argparse
 from typing import Callable
 
 
-def _add_server_runtime_args(parser) -> None:
+def _add_server_runtime_args(parser, *, include_lifecycle: bool = True) -> None:
     """Attach the runtime flags shared by ``dashboard`` and ``serve``.
 
     Both subcommands boot the *same* ``web_server.start_server`` (the
@@ -66,28 +66,33 @@ def _add_server_runtime_args(parser) -> None:
         default="",
         help=argparse.SUPPRESS,
     )
-    # Lifecycle flags — mutually exclusive with each other and with the
-    # start-a-server flags above (if both are passed, --stop / --status win
-    # because they exit before the server is started).  The server has no
-    # service manager and no PID file, so these scan the process table for
-    # `vigil dashboard` / `vigil serve` cmdlines and SIGTERM them directly —
-    # the same path `vigil update` uses to clean up stale servers.
-    parser.add_argument(
-        "--stop",
-        action="store_true",
-        help="Stop all running Vigil web server processes and exit",
-    )
-    parser.add_argument(
-        "--status",
-        action="store_true",
-        help="List running Vigil web server processes and exit",
-    )
+    # Lifecycle flags — kept for backward compatibility with the
+    # `--stop` / `--status` flag forms; the canonical shape is now the
+    # `vigil dashboard stop|status` subcommands (OPS-DELTA 批次四十 §AG).
+    # DEPRECATED in help, never an error: scripts that still pass the flags
+    # keep working.  If both are passed, --stop / --status win because they
+    # exit before the server is started.  The server has no service manager
+    # and no PID file, so these scan the process table for `vigil dashboard`
+    # / `vigil serve` cmdlines and SIGTERM them directly — the same path
+    # `vigil update` uses to clean up stale servers.
+    if include_lifecycle:
+        parser.add_argument(
+            "--stop",
+            action="store_true",
+            help="DEPRECATED — use `vigil dashboard stop`. Stop all running Vigil web server processes and exit",
+        )
+        parser.add_argument(
+            "--status",
+            action="store_true",
+            help="DEPRECATED — use `vigil dashboard status`. List running Vigil web server processes and exit",
+        )
 
 
 def build_dashboard_parser(
     subparsers, *, cmd_dashboard: Callable, cmd_dashboard_register: Callable,
     cmd_dashboard_install: Callable = None, cmd_dashboard_uninstall: Callable = None,
     cmd_dashboard_status: Callable = None,
+    cmd_dashboard_stop: Callable = None, cmd_dashboard_restart: Callable = None,
 ) -> None:
     """Attach the ``dashboard`` and ``serve`` subcommands.
 
@@ -216,6 +221,65 @@ def build_dashboard_parser(
     dashboard_register_parser.set_defaults(func=cmd_dashboard_register)
 
     # -----------------------------------------------------------------
+    # `vigil dashboard start / stop / restart` — lifecycle subcommands
+    # (OPS-DELTA 批次四十 §AG). start == bare `vigil dashboard` server
+    # launch; stop == the --stop kill path; restart == stop then start,
+    # matching the systemctl/docker mental model. `--stop` / `--status`
+    # flags remain for backward compatibility (deprecated in help).
+    # -----------------------------------------------------------------
+    start_parser = dashboard_subparsers.add_parser(
+        "start",
+        help="Start the web UI dashboard (same as bare `vigil dashboard`)",
+        description=(
+            "Launch the Vigil Agent web dashboard. Equivalent to running "
+            "`vigil dashboard` without a subcommand; accepts the same "
+            "server runtime flags (--port, --host, --no-open, ...)."
+        ),
+    )
+    _add_server_runtime_args(start_parser, include_lifecycle=False)
+    start_parser.add_argument(
+        "--no-open", action="store_true", help="Don't open browser automatically"
+    )
+    start_parser.add_argument(
+        "--tui",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    start_parser.set_defaults(func=cmd_dashboard)
+
+    stop_parser = dashboard_subparsers.add_parser(
+        "stop",
+        help="Stop all running Vigil web server processes (graceful)",
+        description=(
+            "Stop every running `vigil dashboard` / `vigil serve` process "
+            "with SIGTERM (SIGKILL after the grace window). No-op with exit "
+            "0 when nothing is running."
+        ),
+    )
+    stop_parser.set_defaults(func=cmd_dashboard_stop)
+
+    restart_parser = dashboard_subparsers.add_parser(
+        "restart",
+        help="Restart running Vigil web server processes (stop then start)",
+        description=(
+            "Stop any running `vigil dashboard` / `vigil serve` processes, "
+            "then start the dashboard fresh. When nothing is running it just "
+            "starts (like `systemctl restart` on a stopped unit). Accepts the "
+            "same server runtime flags as `vigil dashboard start`."
+        ),
+    )
+    _add_server_runtime_args(restart_parser, include_lifecycle=False)
+    restart_parser.add_argument(
+        "--no-open", action="store_true", help="Don't open browser automatically"
+    )
+    restart_parser.add_argument(
+        "--tui",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    restart_parser.set_defaults(func=cmd_dashboard_restart)
+
+    # -----------------------------------------------------------------
     # `vigil dashboard install / uninstall / status` — systemd 常驻
     # 产品化（批三十六）：自动创建/卸载/查看常驻 dashboard unit，中间
     # 市场用户不再手写 unit。install 覆盖旧 unit 行为明确（先停再写）。
@@ -249,10 +313,12 @@ def build_dashboard_parser(
     if cmd_dashboard_status is not None:
         status_parser = dashboard_subparsers.add_parser(
             "status",
-            help="Show the systemd dashboard service status (active/exited + URL)",
+            help="Show running dashboard processes (PID/port) + systemd service status",
             description=(
-                "Summarize the vigil-dashboard.service state: active/exited, "
-                "auto-start enabled, and the access URL/port."
+                "Report live dashboard processes (PID, port, process start "
+                "time, host last-activity) and, when the systemd unit is "
+                "installed, the vigil-dashboard.service state (active/exited, "
+                "auto-start enabled, access URL/port)."
             ),
         )
         status_parser.set_defaults(func=cmd_dashboard_status)

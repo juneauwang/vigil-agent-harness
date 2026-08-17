@@ -2566,3 +2566,77 @@
 - **测试**：新增 15 例后端（tests/tools/test_batch39_topo_sync.py——白名单 needs_review 顶层不落 attrs 1；三层一致 false/true 2；status 同步 1；L2 写失败 warning 不伤 L3 1；v0.1 无 L2 不触发 1；entity=/host= 查询 L3 权威（含 L3 缺字段保留 L2）3；_entity_filename 剥后缀/重名去重/write_discovery fallback 3；存量 *.yaml.yaml 查询兼容 1；共享帮助函数缺行补建/越界拒绝/status_sync confirm 收敛 3）。回归：全 topo 套件 173 全绿（tools topo 五件 + batch33 topo slash/status + topo_slash_command + topo_export + web_server topology 缓存/网关 + memory topo_provider）。预存环境失败与本批无关（launchctl/daytona/credential_files/web_tools_config/视频生成/voice/watch/vercel 等，stash 基线同失，均不涉 topo 模块）。
 - **边界**：L2 索引行只镜像审核/状态生命周期字段（needs_review/source/last_verified/status），不复制全量档案；`{base}-{base}` 去重只作用于文件名路径，实体名 `name:` 不变；存量 `.yaml.yaml` 不自动重命名（后续可手动）；topo_update 返回值契约不变（仅 audit 新增 l2_index_synced/l2_index_warning 字段）。
 - **核销方式**：测试常驻——批次 39 套件全绿；季度体检检查：`_TOPLEVEL_UPDATE_FIELDS` 是否仍含 needs_review、topo_update 写 L3 后是否仍调 `sync_l2_index_row`、查询路径是否仍走 `_enrich_entity_detail`（needs_review 以 L3 为权威）、`_entity_filename` 是否仍剥扩展名/去重（新写入出现 `.yaml.yaml` 即回归）。
+
+### 57. 批次四十 CLI 命令集统一 + 写防护/配置管理缺陷（Codex 产出，2026-08-17）
+
+- **背景（2026-08-17 dogfood 第 6 天 §AG/§AU/§AS B·C）**：dashboard 命令集形态不统一
+  （stop 是 `--stop` flag 不是子命令）；runbook 格式门控静默失败（runbooks/ 下非
+  .yaml 被忽略无警告）；write_file 防护误判 + redact 破坏性打码（`finish_reason=
+  tool_calls`、`Qwen3_5_397B_A17B_FP8` 被打成 «redacted-value»，原文丢失）；config
+  管理三缺陷（config set 把 list 当 str 存、配置写入防护只在工具层可绕过、存量显式
+  platform_toolsets 覆盖新默认且 migrate 不合并）。基线 fcd8b08（批三十九后）。
+- **任务 1（dashboard 子命令统一，hermes_cli/subcommands/dashboard.py + main.py）**：
+  新增 `vigil dashboard start|stop|restart` 子命令（start=裸启动、stop=优雅停、
+  restart=stop+start，对齐 systemctl/docker 直觉）；`--stop`/`--status` flag 保留兼容
+  仅 help 标 deprecated 不报错；`status` 子命令统一为"进程表（PID/端口/进程启动时间/
+  host 最近活跃 heartbeat）+ systemd unit 摘要"（批三十六的 systemd status 语义并入，
+  dashboard_service 本体不动）；`_report_dashboard_status` 输出补 port/started/
+  last host activity；`cmd_dashboard_stop`/`cmd_dashboard_restart` 独立 handler，
+  `--stop` 分支委托同一 kill 路径（安全不变量：stop 永不落入 server-start）。
+- **任务 2（runbook 格式门控可见，tools/runbook_tools.py + file_tools.py）**：
+  `check_runbook_requirements` 扫描 runbooks/ 下非 `.yaml` 文件（.md/.yml/其他）→
+  `_warn_ignored_runbook_files` 去重警告（点名文件 + "仅支持 schema v0.1 的 .yaml"）；
+  写入端 `_check_runbook_write_path`：write_file 落盘 runbooks/ 目录非 .yaml 扩展名
+  → 拒绝并提示正确格式（.yaml 放行）；runbook_load/create 描述补"只支持 .yaml"。
+- **任务 3（askpass 正则收窄，tools/file_tools.py §AS B1）**：`_check_askpass_script_write`
+  加 `_looks_like_bare_askpass_value` 值形态过滤——含 `$()`/反引号/空白/管道/`&&`/`;`/`>`
+  的 echo 值不算裸凭据（runbook 诊断 `echo "$(cat $t/comm) $(grep ...)"` 放行）；
+  真 askpass 形态（shebang+echo 裸值 / printf 裸值 / 无 shebang 裸值写 ~/.vigil、
+  ~/credential、~/.vigil/secrets）仍拦截（安全底线不回退，terminal 硬线不动）。
+- **任务 4（redact 可逆化，agent/redact.py + file_tools.py §AS B2）**：`redact_sensitive_text`
+  新增 `persist_write=True`（write_file 落盘）——跳过展示面登记值 pass（模型名/字段名
+  等公共形态不再被登记表破坏文档），真凭据由前缀/密钥键名/私钥等凭据形态 pass 覆盖；
+  `reversible_write_redaction` 上下文管理器 + `_mask_token` 捕获：被掩码值落为
+  `«redacted:N»` 可逆占位并记录原文；`_redact_write_content` 返回 (masked, 敏感, 占位表)；
+  写打码内容前先写 `<target>.redact-backup.json`（0600，含原文 + 占位映射），
+  `restore_redacted_write` 还原 byte-identical 原文；`_lockdown_credential_file` 警告
+  注明恢复点。展示面（终端输出）登记值打码行为不变。
+- **任务 5（config set list 值修复，hermes_cli/config.py §AS C1）**：`set_config_value`
+  对 default 为 list/dict 的 key 先 `yaml.safe_load`——解析为 list/dict 按结构落盘；
+  解析为标量 → 拒绝并提示 `vigil config edit`（不再 str 落库后被下游当字符列表遍历）；
+  bool/int/float 与 str-typed key 既有行为回归不变。
+- **任务 6（config 写防护收敛，hermes_cli/config.py §AS C2）**：方向=接受可写、保护下移。
+  新增 `_audit_config_write`（写入后 `validate_config_structure` + 追加
+  `<VIGIL_HOME>/logs/config-audit.log`，带时间戳 + source + error 级问题）；
+  `config set` 落盘后校验并打印警告（已保存但可能不生效）；`save_config` 统一入口
+  后置审计（脚本绕过路径 python+yaml.safe_dump 留痕）；工具层 `_check_sensitive_path`
+  拒写 config.yaml 保留（不再是唯一防线）。
+- **任务 7（platform_toolsets 并集迁移，config_migrations.py §AS C3）**：版本 33→34，
+  新增 `_migrate_to_34`：存量显式 `platform_toolsets.cli` 列表 ∪ 默认 topo/runbook
+  （缺哪个补哪个），经 `_persist_migration` 落盘 + results.config_added diff 提示 +
+  非 quiet 打印"已合并默认工具集"；无显式列表不动（不产生 defaults dump）。kanban
+  隐式展开核查：`kanban_*` 工具在 `_VIGIL_CORE_TOOLS` → 复合 toolset 展开使
+  `_get_platform_tools('cli')` 含 kanban——意图内（schema 由 kanban_tools check_fn
+  门控：无 VIGIL_KANBAN_TASK / 无 profile 显式启用即零工具），不收敛，加回归测试。
+- **测试**：新增 58 例后端（tests/hermes_cli/test_batch40_dashboard_lifecycle.py 15——
+  子命令分发/--stop 兼容/stop 不落 server-start/restart 三态/status PID+端口+心跳；
+  test_batch40_config_set_list.py 5；test_batch40_config_audit.py 5；test_batch40_
+  migrate_platform_toolsets.py 7——并集迁移/diff/无 dump/kanban 门控；tests/tools/
+  test_batch40_runbook_gate.py 9——.md 警告/纯 yaml 无警告/写端扩展名拒绝；
+  test_batch40_askpass_narrow.py 10——诊断放行/真 askpass 拦截；test_batch40_redact_
+  reversible.py 7——登记模型名原文保留/真凭据打码+备份+还原/展示面不回退）。
+  回归：401 例（dashboard 生命周期+批三十六 service、runbook 三件+ops 注册、askpass
+  拦截、redact registry+8 个 redaction 套件、file_tools 五件、config 五件 + toolsets/
+  toolset_validation 等）全绿。预存失败与本批无关：test_toolset_validation 断言
+  'vigil' 而输入 'hermes'（基线同失）、test_update_stale_dashboard ps fallback
+  （基线同失）、launchctl/daytona/credential_files/web_tools_config/视频生成/voice/
+  watch/vercel 等环境类。
+- **边界**：`--stop`/`--status` flag 永不移除（兼容）；`restart` 无进程时直接启动；
+  落盘可逆备份只覆盖 write_file 单次写入（后续手动编辑不再同步 sidecar）；迁移是
+  一次性版本步进（用户可在迁移后手动删 topo/runbook）；`«redacted:N»` 占位与
+  `«redacted-value»` 等既有 mask 同风格（`_already_masked_value` 已识别，防二次打码）。
+- **核销方式**：测试常驻——批次 40 六件套全绿；季度体检检查：dashboard 子命令
+  start/stop/restart 存在且 stop 分支在 server-start 之前；runbook 门控警告与写端
+  扩展名校验在；askpass 值形态过滤在（真 askpass 仍拦截）；redact persist_write 跳过
+  登记值 pass + 备份还原在；config set list 解析 + config-audit.log 审计在；migrate v34
+  并集在（`_migrate_to_34` 注册于 MIGRATIONS）。

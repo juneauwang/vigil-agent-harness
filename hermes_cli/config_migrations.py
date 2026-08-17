@@ -644,6 +644,49 @@ def _migrate_to_33(results: Dict[str, Any], quiet: bool) -> None:
             )
 
 
+def _migrate_to_34(results: Dict[str, Any], quiet: bool) -> None:
+    # ── Version 33 → 34: union-merge platform_toolsets.cli with topo/runbook ──
+    # DEFAULT_CONFIG added `platform_toolsets.cli: [hermes-cli, topo, runbook]`
+    # (OPS-DELTA #14), but an EXPLICIT on-disk list fully overrides the default
+    # and migrations never merged — existing configs saved as [hermes-cli]
+    # silently lost the topo/runbook defaults (the §AS C3 bug). Union the
+    # schema defaults into the explicit cli list so存量用户拿到新默认。
+    # 经 _persist_migration 落盘（显式键保留）；其余 schema 默认不落盘，
+    # 不产生 defaults dump。
+    _c = _cfg()
+    read_raw_config = _c.read_raw_config
+    _persist_migration = _c._persist_migration
+
+    config = read_raw_config()
+    pt = config.get("platform_toolsets")
+    if not isinstance(pt, dict):
+        return
+    cli_list = pt.get("cli")
+    if not isinstance(cli_list, list):
+        return
+    merged: list = list(cli_list)
+    added: list = []
+    for ts in ("topo", "runbook"):
+        if ts not in merged:
+            merged.append(ts)
+            added.append(ts)
+    if not added:
+        return
+    pt["cli"] = merged
+    config["platform_toolsets"] = pt
+    _persist_migration(config)
+    results["config_added"].append(
+        "platform_toolsets.cli += " + ", ".join(added)
+        + " (union-merged from schema defaults)"
+    )
+    if not quiet:
+        print(
+            "  ✓ 已合并默认工具集到 platform_toolsets.cli: +"
+            + ", ".join(added)
+            + "（存量显式列表不再覆盖新默认）"
+        )
+
+
 #: Registry of (target_version, migration_fn), strictly ascending. The driver
 #: applies every entry whose target version is greater than the on-disk
 #: version captured before the ladder started. Order matters: later steps may
@@ -665,6 +708,7 @@ MIGRATIONS: Tuple[Tuple[int, Callable[[Dict[str, Any], bool], None]], ...] = (
     (31, _migrate_to_31),
     (32, _migrate_to_32),
     (33, _migrate_to_33),
+    (34, _migrate_to_34),
 )
 
 

@@ -10004,10 +10004,15 @@ def _render_distribution_plan(plan) -> None:
 
 
 def _report_dashboard_status() -> int:
-    """Print live listening dashboard processes and return the count."""
+    """Print live listening dashboard processes and return the count.
+
+    Status output includes PID, resolved port/host, process start time, and
+    host last-activity (runtime_state heartbeat) so the operator can match a
+    running process against the UI stop button (OPS-DELTA 批次四十 §AG).
+    """
     from gateway.status import _pid_exists
 
-    live: list[tuple[int, str]] = []
+    live: list[tuple[int, str, str, int]] = []
     for pid, command in _scan_dashboard_processes():
         runtime = _parse_dashboard_runtime(command)
         if runtime is None:
@@ -10019,16 +10024,55 @@ def _report_dashboard_status() -> int:
             continue
         if not _dashboard_listening(host, port):
             continue
-        live.append((pid, command))
+        live.append((pid, command, host, port))
 
     if not live:
         print("No vigil dashboard processes running.")
         return 0
 
     print(f"{len(live)} vigil dashboard process(es) running:")
-    for pid, command in live:
+    for pid, command, host, port in live:
         print(f"    PID {pid}: {command}")
+        print(f"        port: {port} ({host})")
+        started = _process_start_time(pid)
+        if started:
+            print(f"        started: {started}")
+        activity = _host_last_activity(host)
+        if activity:
+            print(f"        last host activity: {activity}")
     return len(live)
+
+
+def _process_start_time(pid: int) -> str | None:
+    """Best-effort process start time via ``ps -o lstart`` (POSIX only)."""
+    if sys.platform == "win32" or not pid:
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=5,
+        )
+        started = (result.stdout or "").strip()
+        return started or None
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _host_last_activity(host: str) -> str | None:
+    """Best-effort host heartbeat from runtime_state.json (epoch → local time)."""
+    if not host:
+        return None
+    try:
+        from hermes_cli.runtime_state import get_host_activity
+        from datetime import datetime
+
+        ts = get_host_activity(host)
+        if not ts:
+            return None
+        return datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
 
 
 def _dashboard_listening(host: str, port: int) -> bool:
@@ -10315,18 +10359,10 @@ def cmd_dashboard(args):
         count = _report_dashboard_status()
         sys.exit(0 if count == 0 else 0)  # status is informational, always 0
 
-    # --stop: kill any running dashboards and exit, no deps needed.
+    # --stop: kill any running dashboards and exit, no deps needed.  Delegates
+    # to the same handler as `vigil dashboard stop` (OPS-DELTA 批次四十 §AG).
     if getattr(args, "stop", False):
-        pids = _find_stale_dashboard_pids()
-        if not pids:
-            print("No vigil dashboard processes running.")
-            sys.exit(0)
-        # Reuse the same SIGTERM-grace-SIGKILL path used after `vigil update`.
-        _kill_stale_dashboard_processes(reason="requested via --stop")
-        # _kill_stale_dashboard_processes prints outcomes itself.  Exit 0 if
-        # we killed at least one, 1 if they were all unkillable.
-        remaining = _find_stale_dashboard_pids()
-        sys.exit(1 if remaining else 0)
+        return cmd_dashboard_stop(args)
 
     # `serve` is the headless backend: no UI build, no SPA mount, neutral
     # ready sentinel. Resolved once and threaded through the re-exec, the
@@ -10638,10 +10674,55 @@ def cmd_dashboard_uninstall(args):
 
 
 def cmd_dashboard_status(args):
-    """Show the systemd dashboard service status summary."""
-    from hermes_cli.dashboard_service import cmd_dashboard_status as _impl
+    """Show unified dashboard status: live process table (PID/port/heartbeat)
+    plus the systemd service summary when installed (OPS-DELTA 批次四十 §AG)."""
+    from hermes_cli.dashboard_service import cmd_dashboard_status as _svc_status
 
-    raise SystemExit(_impl(args))
+    _report_dashboard_status()
+    print()
+    raise SystemExit(_svc_status(args))
+
+
+def cmd_dashboard_stop(args):
+    """Stop all running Vigil web server processes and exit (graceful).
+
+    Shared by the deprecated ``--stop`` flag and the ``vigil dashboard stop``
+    subcommand. SIGTERM first, SIGKILL survivors after the grace window
+    (dashboard_procs); exits 0 when everything stopped, 1 when survivors
+    remain (permission denied etc.), 0 when nothing was running.
+    """
+    pids = _find_stale_dashboard_pids()
+    if not pids:
+        print("No vigil dashboard processes running.")
+        sys.exit(0)
+    # Reuse the same SIGTERM-grace-SIGKILL path used after `vigil update`.
+    _kill_stale_dashboard_processes(reason="requested via `vigil dashboard stop`")
+    # _kill_stale_dashboard_processes prints outcomes itself.  Exit 0 if
+    # we killed at least one, 1 if they were all unkillable.
+    remaining = _find_stale_dashboard_pids()
+    sys.exit(1 if remaining else 0)
+
+
+def cmd_dashboard_restart(args):
+    """Restart the dashboard: stop any running processes, then start fresh.
+
+    Mirrors ``systemctl restart`` on a stopped unit — when nothing is running
+    it simply starts. The start phase re-enters ``cmd_dashboard`` with the
+    server-runtime args (port/host/no-open/...) intact.
+    """
+    pids = _find_stale_dashboard_pids()
+    if pids:
+        _kill_stale_dashboard_processes(reason="restarted via `vigil dashboard restart`")
+        remaining = _find_stale_dashboard_pids()
+        if remaining:
+            print(
+                "✗ Could not stop all dashboard processes; aborting restart.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        print("No vigil dashboard processes running; starting fresh.")
+    return cmd_dashboard(args)
 
 
 def cmd_gateway_enroll(args):
@@ -12641,6 +12722,8 @@ def main():
         cmd_dashboard_install=cmd_dashboard_install,
         cmd_dashboard_uninstall=cmd_dashboard_uninstall,
         cmd_dashboard_status=cmd_dashboard_status,
+        cmd_dashboard_stop=cmd_dashboard_stop,
+        cmd_dashboard_restart=cmd_dashboard_restart,
     )
 
 
