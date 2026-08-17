@@ -36,10 +36,12 @@ import yaml
 
 from tools.topo_discovery import (
     _LOCAL_HOST_ALIASES,
+    _L2_INDEX_SYNC_FIELDS,
     _build_local_runner,
     _build_ssh_runner,
     _parse_docker_ps,
     discover_host,
+    sync_l2_index_row,
 )
 from tools.registry import registry, tool_error
 
@@ -56,7 +58,7 @@ _STALE_DAYS = 30
 # Known top-level schema fields that topo_update may rewrite directly; every
 # other key lands in the entity's ``attrs`` map.
 _TOPLEVEL_UPDATE_FIELDS = frozenset(
-    {"env", "type", "endpoint", "owner", "status", "healthcheck", "depends_on", "depended_by"}
+    {"env", "type", "endpoint", "owner", "status", "healthcheck", "depends_on", "depended_by", "needs_review"}
 )
 
 _DEFAULT_TOPO_SCHEMA = {
@@ -123,7 +125,7 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
                 "type": "object",
                 "description": (
                     "要写入的字段。env/type/endpoint/owner/status/healthcheck/depends_on/"
-                    "depended_by 为顶层字段，其余键写入 attrs。"
+                    "depended_by/needs_review 为顶层字段，其余键写入 attrs。"
                     "正例：{\"endpoint\": \"1.2.3.4\", \"owner\": \"x\"}；"
                     "反例：{\"attrs\": {\"endpoint\": \"...\"}}（应直接传 endpoint，"
                     "attrs 键会被自动展开合并，不需要包这一层）。"
@@ -464,14 +466,37 @@ def _resolve_entity_detail(home: Path, entity: Dict[str, Any]) -> Optional[Path]
     return (home / _ENTITIES_DIRNAME / f"{name}.yaml").resolve()
 
 
+def _entity_detail_candidates(path: Path) -> List[Path]:
+    """批三十九：存量 ``*.yaml.yaml`` 双后缀文件兼容候选（剥一层再匹配）。
+
+    精确路径不存在时按双方向扩展：请求 ``X.yaml`` 但磁盘上是 ``X.yaml.yaml``
+    （补一层），或请求 ``X.yaml.yaml`` 但磁盘上是 ``X.yaml``（剥一层）。只影响
+    读取命中，不自动重命名存量文件。
+    """
+    candidates: List[Path] = [path]
+    low = str(path).lower()
+    if low.endswith((".yaml", ".yml")):
+        candidates.append(Path(str(path) + ".yaml"))
+    if low.endswith(".yaml.yaml") or low.endswith(".yml.yaml"):
+        candidates.append(Path(str(path)[: -len(".yaml")]))
+    uniq: List[Path] = []
+    for cand in candidates:
+        if cand not in uniq:
+            uniq.append(cand)
+    return uniq
+
+
 def _load_entity_file(home: Path, entity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     path = _resolve_entity_detail(home, entity)
-    if path is None or not path.is_file():
+    if path is None:
+        return None
+    file_path = next((c for c in _entity_detail_candidates(path) if c.is_file()), None)
+    if file_path is None:
         return None
     try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        data = yaml.safe_load(file_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        logger.warning("topo: failed to parse %s: %s", path, exc)
+        logger.warning("topo: failed to parse %s: %s", file_path, exc)
         return None
     if isinstance(data, dict):
         data = _normalize(data)
@@ -640,7 +665,7 @@ def _query_host(topo: Dict[str, Any], home: Path, host: str, detail: bool) -> st
     result["_env_ref"] = _env_for_entity(topo, match)
     index = _load_host_index(home, match) or {}
     result["services"] = [
-        _with_cluster(dict(s), result["cluster"])
+        _enrich_entity_detail(home, _with_cluster(dict(s), result["cluster"]))
         for s in index.get("services") or [] if isinstance(s, dict)
     ]
     result["stale"] = _stale_flag(result.get("last_verified"))
@@ -682,7 +707,10 @@ def _query_entity(topo: Dict[str, Any], home: Path, entity: str, detail: bool) -
     if match is None:
         return tool_error(f"拓扑表中不存在实体: {entity}")
 
-    result = dict(match)
+    # 批三十九任务 2：实体视图合并 L3 detail（needs_review 以 L3 为权威，
+    # status/type/env/attrs 只补齐缺失），host=<name> 与 entity=<name> 两条
+    # 路径同款，读回退兜住 L2 未同步的存量漂移。
+    result = dict(_enrich_entity_detail(home, match))
     result.setdefault("cluster", "default")
     cred = _credential_ref(result)
     if cred is not None:
@@ -691,7 +719,7 @@ def _query_entity(topo: Dict[str, Any], home: Path, entity: str, detail: bool) -
     if matched_layer == "host":
         index = _load_host_index(home, match) or {}
         result["services"] = [
-            _with_cluster(dict(s), result["cluster"])
+            _enrich_entity_detail(home, _with_cluster(dict(s), result["cluster"]))
             for s in index.get("services") or [] if isinstance(s, dict)
         ]
     result["stale"] = _stale_flag(result.get("last_verified"))
@@ -780,13 +808,17 @@ def topo_update(
             )
 
     existing: Dict[str, Any] = {}
-    if target_path.is_file():
+    existing_path = next(
+        (c for c in _entity_detail_candidates(target_path) if c.is_file()),
+        None,
+    )
+    if existing_path is not None:
         try:
-            existing = yaml.safe_load(target_path.read_text(encoding="utf-8")) or {}
+            existing = yaml.safe_load(existing_path.read_text(encoding="utf-8")) or {}
             if not isinstance(existing, dict):
                 existing = {}
         except Exception as exc:
-            return tool_error(f"实体档案解析失败: {target_path} ({exc})")
+            return tool_error(f"实体档案解析失败: {existing_path} ({exc})")
 
     attrs_expanded = False
     for key, value in updates.items():
@@ -836,6 +868,35 @@ def topo_update(
     except Exception as exc:
         return tool_error(f"写入拓扑实体失败: {exc}")
 
+    # 批三十九任务 1：写 L3 详情后同步 L2 hosts 索引对应行（仅服务行有索引行；
+    # 第一层 host/cross_host 行的自身行在 topology.yaml，不属于 L2 索引层）。
+    # 同步字段 = needs_review/source/last_verified/status（与 L3 写的一致），
+    # 索引缺行按 L2 行形态补建——索引层缺行本身就是漂移。写失败不吞掉：记日志
+    # + 返回里带 warning，L3 已写入不受影响。
+    l2_synced_host = ""
+    l2_warning = ""
+    if isinstance(match, dict) and match.get("_host"):
+        host_name = _entity_host_name(match)
+        host_row = next(
+            (h for h in topo.get("hosts") or []
+             if isinstance(h, dict) and h.get("name") == host_name),
+            None,
+        )
+        sync_fields = {k: existing[k] for k in _L2_INDEX_SYNC_FIELDS if k in existing}
+        if sync_fields:
+            l2_warning = sync_l2_index_row(
+                home,
+                host_name=host_name,
+                entity=match,
+                fields=sync_fields,
+                services_index=(host_row.get("services_index") if host_row else None),
+                cluster=str(host_row.get("cluster") or match.get("cluster") or "default"),
+            )
+            if not l2_warning:
+                l2_synced_host = host_name
+    if l2_warning:
+        logger.warning("topo: %s（entity=%s）", l2_warning, entity)
+
     audit = {
         "entity": entity,
         "env": env_name,
@@ -846,6 +907,10 @@ def topo_update(
     }
     if attrs_expanded:
         audit["note"] = "updates 含 attrs 键：字段键直接传，不需要包 attrs 层；已自动展开合并。"
+    if l2_synced_host:
+        audit["l2_index_synced"] = l2_synced_host
+    if l2_warning:
+        audit["l2_index_warning"] = l2_warning
     return json.dumps({"status": "updated", **audit}, ensure_ascii=False, indent=2)
 
 
@@ -881,7 +946,10 @@ def _enrich_entity_detail(home: Path, entity: Dict[str, Any]) -> Dict[str, Any]:
     """合并第三层详情档案到实体行：attrs/status/type 存在 L3（topo_update
     写 status 的目标文件），L2 索引行只有 name/type/env/detail 引用。
 
-    L2 行已有字段优先（不覆盖），detail 档案只补齐缺失的 attrs/status/type。
+    L2 行已有字段优先（不覆盖），detail 档案只补齐缺失的 attrs/status/type/env。
+    ``needs_review`` 例外：审核态以 L3 detail 为权威（批三十九任务 2）——L3 显式
+    携带该字段时直接覆盖 L2 值，配合 topo_update 写同步双管齐下，单边失效也不漂移
+    （旧 L2 行无该字段/值是老数据，用 setdefault 语义兜底保留）。
     """
     detail = _load_entity_file(home, entity)
     if not detail:
@@ -894,6 +962,8 @@ def _enrich_entity_detail(home: Path, entity: Dict[str, Any]) -> Dict[str, Any]:
     for key in ("status", "type", "env"):
         if detail.get(key) and not merged.get(key):
             merged[key] = detail[key]
+    if detail.get("needs_review") is not None:
+        merged["needs_review"] = detail["needs_review"]
     return merged
 
 
