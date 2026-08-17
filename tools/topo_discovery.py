@@ -81,6 +81,29 @@ def _sanitize_name(value: str) -> str:
     return value or "unknown"
 
 
+def _strip_entity_ext(value: str) -> str:
+    """剥掉 name 里尾部多余的 ``.yaml``/``.yml`` 后缀（批三十九：杜绝 ``*.yaml.yaml`` 双后缀）。
+
+    实体名可能带扩展名形态（如 LLM 传 ``dsl-review.yaml``），文件名只保留一层
+    ``.yaml``。只剥 name 段；cluster/host 段值域不携带扩展名形态，不动。
+    """
+    while value.lower().endswith((".yaml", ".yml")):
+        value = value[:-5] if value.lower().endswith(".yaml") else value[:-4]
+    return value
+
+
+def _dedupe_repeated_name(value: str) -> str:
+    """名字重复校验（批三十九）：name 段已是 ``{base}-{base}`` 重复形态时去重。
+
+    来源：compose 项目前缀与基础名同名时拼接 ``{project}-{name}`` 产生
+    ``dsl-review-dsl-review`` 这类怪异实体名（§AV 实测）。文件名层再兜底剥一层
+    重复段，避免把重复形态写进磁盘路径；实体名本身（L2 行 ``name`` / L3 文件
+    ``name:`` 字段）保持不变。
+    """
+    m = re.fullmatch(r"(.+?)-\1", value)
+    return m.group(1) if m else value
+
+
 _ENV_TIERS = ("local", "test", "dev", "prod")
 
 
@@ -113,11 +136,14 @@ def _entity_filename(cluster: str, host: str, name: str, fallback_env: str = "")
     """L3 实体文件名：``entities/{cluster}__{host}__{name}.yaml``（OPS-DELTA #42）。
 
     三字段都过 :func:`_sanitize_name`（字符集 ``[A-Za-z0-9_.-]``，``__`` 分隔
-    无歧义）；cluster 空用 env 兜底，再空用 "default"。同 host 不同应用 /
-    同应用不同 host / 同应用同 host 不同 cluster 的文件名互不冲突。
+    无歧义）；name 段先剥 ``.yaml``/``.yml`` 再拼文件名（批三十九：杜绝
+    ``*.yaml.yaml`` 双后缀），并对 ``{base}-{base}`` 重复形态去重；cluster 空用
+    env 兜底，再空用 "default"。同 host 不同应用 / 同应用不同 host / 同应用同
+    host 不同 cluster 的文件名互不冲突。
     """
     cluster = cluster or fallback_env or "default"
-    parts = [_sanitize_name(cluster), _sanitize_name(host), _sanitize_name(name)]
+    name = _dedupe_repeated_name(_strip_entity_ext(_sanitize_name(name)))
+    parts = [_sanitize_name(cluster), _sanitize_name(host), name]
     return f"entities/{'__'.join(parts)}.yaml"
 
 
@@ -635,8 +661,10 @@ def _service_from_container(c: Dict[str, Any], host: str, env: str,
     service_name = c.get("compose_service") or c.get("name")
     project = c.get("compose_project") or ""
     name = _sanitize_name(service_name)
-    if project and project != name and name in (details or {}):
-        # 同名跨项目：前缀项目名保持唯一。
+    if project and project != name and not name.startswith(f"{project}-") and name in (details or {}):
+        # 同名跨项目：前缀项目名保持唯一。name 已带 ``{project}-`` 前缀（或
+        # project 与 name 同名）时不再叠加，防止产生 ``dsl-review-dsl-review``
+        # 这类重复形态的怪异实体名（批三十九 §AV）。
         name = _sanitize_name(f"{project}-{name}")
     endpoint = f"{host}:{ports[0]}" if ports else None
     detail_path = _entity_filename(cluster, host, name, env)
@@ -987,6 +1015,84 @@ def _read_host_index(home: Path, hostname: str) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+# ---------------------------------------------------------------------------
+# L3 写实体 → L2 hosts 索引同步（批三十九任务 1/4 统一入口）
+# ---------------------------------------------------------------------------
+
+# 写 L3 详情后需要同步到 L2 hosts 索引行的字段（审核/审计/状态生命周期字段）。
+# 取值与 topo_update 写入 L3 的一致；其余顶层字段（endpoint/owner 等）留在 L3
+# detail——L2 是"服务索引"，不是全量档案副本。
+_L2_INDEX_SYNC_FIELDS = frozenset({"needs_review", "source", "last_verified", "status"})
+
+
+def sync_l2_index_row(
+    home: Path,
+    *,
+    host_name: str,
+    entity: Dict[str, Any],
+    fields: Dict[str, Any],
+    services_index: Optional[str] = None,
+    cluster: str = "default",
+) -> str:
+    """写 L3 实体详情后，同步 L2 hosts 索引对应行的审核/状态字段（批三十九）。
+
+    新老写入路径共用这一入口，杜绝第三处"只写 L3 不同步 L2"的漂移：
+      - 索引文件 = ``hosts/<host>.yaml``，或调用方传入的 ``services_index``
+        （越界检查，与 topo_tools._safe_entity_path 同语义）；
+      - name 匹配的行存在 → 用 ``fields`` 覆盖同步字段；
+      - 行缺失 → 按 ``entity``（L2 行形态）补建一行再应用 fields——索引层缺行
+        本身就是漂移，补建优先，不静默丢实体；
+      - 写盘失败不吞掉：返回可读 warning 文案（调用方记日志 + 带进返回），
+        成功返回空串。只改写入路径，不改调用方返回契约。
+    """
+    home = Path(home)
+    host_name = str(host_name or "").strip()
+    if not host_name:
+        return "L2 索引同步跳过：host 名为空"
+    name = str((entity or {}).get("name") or "").strip()
+    if not name:
+        return "L2 索引同步跳过：实体行缺少 name"
+    index_rel = str(services_index or f"hosts/{_sanitize_name(host_name)}.yaml")
+    try:
+        root = home.resolve()
+        index_path = (home / index_rel).resolve()
+        index_path.relative_to(root)
+    except ValueError:
+        return f"L2 索引同步跳过：索引路径越界（{index_rel}）"
+    try:
+        data: Dict[str, Any] = {}
+        if index_path.is_file():
+            loaded = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                data = loaded
+        rows = data.get("services")
+        if not isinstance(rows, list):
+            rows = []
+        data["services"] = rows
+        row = next(
+            (r for r in rows if isinstance(r, dict) and str(r.get("name") or "") == name),
+            None,
+        )
+        if row is None:
+            row = {
+                k: v for k, v in entity.items()
+                if not str(k).startswith("_")
+            }
+            row["name"] = name
+            row.setdefault("cluster", cluster)
+            rows.append(row)
+        for k, v in fields.items():
+            row[k] = v
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        index_path.write_text(
+            yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        return ""
+    except Exception as exc:
+        return f"L2 索引同步失败：{exc}"
+
+
 def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
                     merge: bool = True) -> Dict[str, Any]:
     """把发现结果落盘为 v0.3 结构（hosts/<host>.yaml + topology.yaml + entities/）。
@@ -1118,7 +1224,7 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
         if name in existing_names and not force:
             # 合并：索引里已存在的实体（含手动维护）不重写详情文件。
             continue
-        rel = str(detail.get("detail") or f"entities/{name}.yaml")
+        rel = str(detail.get("detail") or f"entities/{_strip_entity_ext(_sanitize_name(name))}.yaml")
         fname = rel[len("entities/"):] if rel.startswith("entities/") else rel
         if "/" in fname or not _NAME_RE.fullmatch(fname):
             # 只接受 entities/ 下单层净化文件名（防路径穿越）。
