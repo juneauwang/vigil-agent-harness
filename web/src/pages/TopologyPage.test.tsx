@@ -102,3 +102,20 @@ describe("拓扑页 ports 字段展示（批三十七 §Y）", () => {
     expect(text).not.toContain("ports ");
   });
 });
+
+// 批次四十五（§BC）：删除"拓扑总览"冗余卡片后，graph/card 模式主图仍完整渲染
+// + 详情点跳正常（drawer 由卡片详情按钮承载；主图 onSelect 也喂同一 drawer state）。
+describe("批次四十五 冗余总览卡片删除（§BC）", () => {
+  it("不再渲染『拓扑总览（琥珀点 = 关键链路服务）』冗余卡", async () => {
+    const text = await renderPage(VIEW);
+    expect(text).not.toContain("拓扑总览（琥珀点 = 关键链路服务）");
+  });
+
+  it("graph/card 模式主图仍完整渲染三层拓扑 + 关键链路高亮", async () => {
+    const text = await renderPage(VIEW);
+    expect(text).toContain("node1");
+    expect(text).toContain("prometheus");
+    // 关键链路量规仍在（主图分区保留完整拓扑）
+    expect(text).toContain("条关键链路");
+  });
+});

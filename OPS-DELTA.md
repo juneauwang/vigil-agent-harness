@@ -2740,3 +2740,13 @@
 - **安全底线不回退**：`sshpass -p hunter2`、`mysql -psecret`/`mysql -p'secret'`（含紧贴形态）、`PASSWORD=hunter2`、`--password=abc`、`curl -u admin:secret123` 全部仍拦；测试断言 24 值边界（11 放行 + 8 拦截 + hint 2 + 完整路径 5）。
 - **测试**：批四十四新增 26 例全绿（`test_batch44_runbook_semantic_secret.py`——`_find_plaintext_secret` 直测 + `runbook_create` 完整路径）；回归：批二十五 create/checkpoint/vault-refs/批四十 gate 49 例全绿；`tests/tools/ -k runbook` 77 例（含 3 skip）全绿。全量 `tests/tools/` 95 失败均为预存失败与本批无关（video/voice/watch/web/zombie 等环境/模拟类；已 stash 基线上手工复现 3 类同失）。
 - **核销方式**：测试常驻——`mkdir -p /path`、`scp -p`、`docker -p 端口`、`psql -p 端口`、`-i 私钥路径`、DB 工具 `-P` 大写端口、`VAULT_PASS=secret/data/...` 引用全放行断言在；`sshpass -p`、`mysql -p'pwd'`/`-psecret`、`PASSWORD=hunter2`、`--password=abc` 真明文拦截断言在；错误消息含 topo_query/vssh/`<vault:path/field>` 正确写法 + 值不回显断言在。季度体检检查：`_PASSWORD_FLAG_COMMANDS` 白名单在、`_is_password_flag`/`_assign_value_is_plaintext` 语义判定在、`_secret_error_hint` 正确写法引导在。
+
+### 62. 批次四十五 Overview 连线拓扑总览——整网层级拓扑替换弱展示（Codex 产出，2026-08-18，dogfood §BC/§BD）
+
+- **范围**：纯前端 web/（OverviewPage.tsx / TopologyPage.tsx / TopologyPage.test.tsx + 新增 OverviewPage.test.tsx + 删除 TopologyMiniGraph.tsx）。后端/API 零改动（GET /api/topology 契约不变）；复用 buildGraphModel/TopologyGraph，未复制图模型逻辑；不动 react-flow 依赖（@xyflow/react）；其他 Overview 卡片（Runbook Queue/指标卡）不动；前端零凭据。
+- **§BC Overview 弱展示替换（dogfood §BC）**：Overview Topology 卡片弃用只读 SVG 版 TopologyMiniGraph（无连线语义/不可缩放/不可点跳），改用完整交互版 TopologyGraph + buildGraphModel——整网层级连线（集群→主机→服务 smoothstep + cross_host + 关键链路琥珀高亮边）可缩放/平移/点跳。新增 `drawer` state + 复用现有 DetailDrawer 组件（点节点 → 实体详细抽屉），不造端到端抽屉；卡片给足高度（`h-full min-h-[420px]`）。
+- **§BD TopologyPage 冗余总览卡片删除（dogfood §BD）**：删掉 TopologyPage 顶部"拓扑总览（琥珀点 = 关键链路服务）"卡片区块（该卡此前渲染与主图分区同一个 TopologyGraph，内容重复）。主图/列表/卡片分区照旧，"关键链路（N 条）"琥珀链段照旧，详情抽屉照旧。移除 TopologyPage 中不再使用的 TopologyGraph import。琥珀/关键链路信息已由主图 buildGraphModel 关键链路琥珀高亮承担，删卡不丢功能。
+- **§AZ 图例 + 空态增强（任务 3）**：Overview 卡片头部加一行图例色标（集群/主机/服务/关键链路琥珀）；key_paths 为空时仍显示完整层级拓扑 + 一行提示"未配置关键链路（key_paths），将仅按集群/主机/服务展示"，不因无关键链路而空卡。
+- **组件删除**：`web/src/components/TopologyMiniGraph.tsx` 整个删除（grep 确认仅 OverviewPage 引用，TopologyPage 已先在批五十二把 MiniGraph 替换为 TopologyGraph，无其他引用）。
+- **测试**：新增 OverviewPage.test.tsx 4 例（整网图渲染+关键链路图例、key_paths 空态提示+仍显示层级、加载失败显示错误、图表例呈现）；TopologyPage.test.tsx 增 2 例（不再渲染冗余卡片、graph/card 模式主图仍完整渲染三层+关键链路）。web/ `npx vitest run` 110 全绿（15 文件）；`npx tsc -b --noEmit` 通过。
+- **核销方式**：测试常驻——Overview 渲染整网层级拓扑（集群/主机/服务名在）+ TopologyPage 不再含"拓扑总览（琥珀点 = 关键链路服务）"文案断言在；key_paths 空态提示文案断言在。季度体检检查：Overview 用 TopologyGraph 而非 MiniGraph、TopologyPage 无冗余总览卡、TopologyMiniGraph.tsx 不存在、图例/空态提示在；TopologyPage 主图/详情抽屉/搜索/状态筛选照旧。
