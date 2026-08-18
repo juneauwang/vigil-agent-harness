@@ -32,8 +32,8 @@ const HISTORY: ChatHistoryMessage[] = [
 
 const MODELS = {
   models: [
-    { id: "m-fast", name: "m-fast", description: "快/省小模型", tag: "快/省", default: true },
-    { id: "m-strong", name: "m-strong", description: "强推理大模型", tag: "强/慢", default: false },
+    { id: "m-fast", name: "m-fast", description: "Anthropic Claude Haiku", tag: "快/省", default: true },
+    { id: "m-strong", name: "m-strong", description: "Anthropic Claude Opus", tag: "强/慢", default: false },
   ],
   provider: "openrouter",
   default_model: "m-fast",
@@ -107,6 +107,23 @@ function switchTo(select: HTMLSelectElement, value: string) {
   act(() => {
     select.value = value;
     select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+/** 填输入框 + 提交表单（React 受控 input 需走原生 setter）。 */
+async function sendMessage(text: string) {
+  const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+  await act(async () => {
+    setter.call(input, text);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  const form = input.closest("form")!;
+  await act(async () => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
   });
 }
 
@@ -208,6 +225,12 @@ describe("批四十一 §8 会话模型选择", () => {
     expect(modelSelect).toBeTruthy();
     const options = Array.from(modelSelect.options).map((o) => o.value);
     expect(options).toEqual(["m-fast", "m-strong"]);
+    // 批四十二 §AY：下拉只显示模型名 + 默认标识，不渲染用途 tag。
+    const optionTexts = Array.from(modelSelect.options).map((o) => o.textContent ?? "");
+    expect(optionTexts.join("|")).not.toContain("快/省");
+    expect(optionTexts.join("|")).not.toContain("强/慢");
+    expect(optionTexts[0]).toContain("默认");
+    expect(optionTexts[1]).not.toContain("默认");
 
     await act(async () => {
       modelSelect.value = "m-strong";
@@ -288,5 +311,120 @@ describe("批四十一 §3/§4 渲染：推理折叠 + 步骤序列", () => {
     expect(text).toContain("失败");
     const tools = Array.from(container.querySelectorAll("button")).filter((b) => b.textContent?.includes("terminal"));
     expect(tools.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("批四十二 §BI 结论渲染顺序", () => {
+  it("结论内容渲染在步骤序列之后（DOM 顺序），历史消息同样生效", async () => {
+    const richHistory: ChatHistoryMessage[] = [
+      {
+        id: 1, role: "assistant", content: "结论：Runbook 已成功创建",
+        tools: [
+          { name: "terminal", input_summary: "nvidia-smi", output_summary: "NVIDIA 4090", ok: true, tool_id: "c1" },
+        ],
+      },
+    ];
+    await mountWith([{ ...SESSION_A, busy: false }], undefined, () => richHistory);
+    const stepList = container.querySelector<HTMLElement>('[data-testid="step-list"]')!;
+    const content = container.querySelector<HTMLElement>('[data-testid="assistant-content"]')!;
+    expect(stepList).toBeTruthy();
+    expect(content).toBeTruthy();
+    expect(
+      stepList.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("结论为空时（流式/无内容）不渲染空占位，步骤序列仍在", async () => {
+    const richHistory: ChatHistoryMessage[] = [
+      {
+        id: 1, role: "assistant", content: "",
+        tools: [
+          { name: "terminal", input_summary: "nvidia-smi", output_summary: "NVIDIA 4090", ok: true, tool_id: "c1" },
+        ],
+      },
+    ];
+    await mountWith([{ ...SESSION_A, busy: false }], undefined, () => richHistory);
+    expect(container.querySelector('[data-testid="assistant-content"]')).toBeNull();
+    expect(container.querySelector('[data-testid="step-list"]')).toBeTruthy();
+  });
+});
+
+describe("批四十二 §BJ/§BK reasoning 按工具步挂载渲染", () => {
+  it("历史结构化推理挂回工具行：'该步推理'默认折叠，点击展开", async () => {
+    const richHistory: ChatHistoryMessage[] = [
+      {
+        id: 1, role: "assistant", content: "完成",
+        reasoning: { steps: [{ tool_id: "c1", text: "第一步推理：先看拓扑\n第二步：再看状态" }] },
+        tools: [
+          { name: "terminal", input_summary: "nvidia-smi", output_summary: "NVIDIA 4090", ok: true, tool_id: "c1" },
+        ],
+      },
+    ];
+    await mountWith([{ ...SESSION_A, busy: false }], undefined, () => richHistory);
+    expect(container.textContent).toContain("该步推理");
+    // 默认折叠：只显示首行摘要，不显示后续内容
+    expect(container.textContent).not.toContain("第二步：再看状态");
+    const reasonBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("该步推理"))!;
+    await act(async () => {
+      reasonBtn.click();
+    });
+    expect(container.textContent).toContain("第二步：再看状态");
+  });
+
+  it("审批卡显示触发步骤的推理摘要（可展开），默认折叠", async () => {
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    apiMock.chatStream.mockImplementation(async (_sid, _msg, onEvent) => {
+      onEvent({ type: "chat:tool", data: { tool_id: "call_1", name: "terminal", input_summary: "kubectl delete pod x" } });
+      onEvent({ type: "chat:reasoning", data: { tool_id: "call_1", text: "先确认删除 pod x 的影响范围\n再执行删除" } });
+      onEvent({ type: "chat:approval_pending", data: { approval_id: "apv_1", command: "kubectl delete pod x", env: "prod" } });
+      onEvent({ type: "chat:done", data: { final_response: "已删除" } });
+    });
+    await sendMessage("删除 pod");
+    expect(container.textContent).toContain("触发推理");
+    // 默认折叠：摘要只显示首行，第二行内容不可见
+    expect(container.textContent).not.toContain("再执行删除");
+    const reasonBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("触发推理"))!;
+    await act(async () => {
+      reasonBtn.click();
+    });
+    expect(container.textContent).toContain("再执行删除");
+  });
+});
+
+describe("批四十二 §BH 全局弹窗批准 → 对话内审批卡同步", () => {
+  it("全局批准广播后，对话内对应审批卡立即变已批准", async () => {
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    apiMock.chatStream.mockImplementation(async (_sid, _msg, onEvent) => {
+      onEvent({ type: "chat:tool", data: { tool_id: "call_1", name: "terminal", input_summary: "kubectl delete pod x" } });
+      onEvent({ type: "chat:approval_pending", data: { approval_id: "apv_1", command: "kubectl delete pod x", env: "prod" } });
+      onEvent({ type: "chat:done", data: { final_response: "已删除" } });
+    });
+    await sendMessage("删除 pod");
+    expect(container.textContent).toContain("等待审批");
+
+    // 模拟全局审批弹窗批准成功后的广播（ApprovalModal resolve → notify）。
+    const { notifyApprovalResolved } = await import("@/lib/approvalEvents");
+    await act(async () => {
+      notifyApprovalResolved("apv_1", "approved");
+    });
+    expect(container.textContent).toContain("已批准");
+    expect(container.textContent).not.toContain("等待审批");
+  });
+
+  it("全局拒绝广播后，对话内对应审批卡立即变已拒绝", async () => {
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    apiMock.chatStream.mockImplementation(async (_sid, _msg, onEvent) => {
+      onEvent({ type: "chat:tool", data: { tool_id: "call_1", name: "terminal", input_summary: "rm -rf x" } });
+      onEvent({ type: "chat:approval_pending", data: { approval_id: "apv_2", command: "rm -rf x", env: "test" } });
+      onEvent({ type: "chat:done", data: { final_response: "已处理" } });
+    });
+    await sendMessage("清理目录");
+    expect(container.textContent).toContain("等待审批");
+    const { notifyApprovalResolved } = await import("@/lib/approvalEvents");
+    await act(async () => {
+      notifyApprovalResolved("apv_2", "denied");
+    });
+    expect(container.textContent).toContain("已拒绝");
+    expect(container.textContent).not.toContain("等待审批");
   });
 });

@@ -4,6 +4,7 @@ import { api, ApiError } from "@/lib/api";
 import type { ApprovalItem, ApprovalScope } from "@/lib/api";
 import { isMockEnabled, MOCK_APPROVALS } from "@/lib/mock";
 import { cn } from "@/lib/ops";
+import { notifyApprovalResolved } from "@/lib/approvalEvents";
 
 /**
  * Approvals 审批中心（批二十八契约）：
@@ -144,10 +145,19 @@ export default function ApprovalsPage() {
 
   const approve = (item: ApprovalItem) => {
     const scope = scopeSel[item.id] ?? "once";
-    void act(item.id, () => (mock ? Promise.resolve() : api.approveApproval(item.id, scope)));
+    void act(item.id, async () => {
+      if (mock) return;
+      await api.approveApproval(item.id, scope);
+      // 批四十二 §BH：审批中心批准同样广播——对话页对应审批卡立即"已批准"。
+      notifyApprovalResolved(item.id, "approved");
+    });
   };
   const deny = (item: ApprovalItem) => {
-    void act(item.id, () => (mock ? Promise.resolve() : api.denyApproval(item.id)));
+    void act(item.id, async () => {
+      if (mock) return;
+      await api.denyApproval(item.id);
+      notifyApprovalResolved(item.id, "denied");
+    });
   };
 
   const statusBadge = (s: ApprovalItem["status"]) => {

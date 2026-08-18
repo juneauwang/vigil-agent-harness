@@ -7,6 +7,10 @@ import { api } from "@/lib/api";
 import type { ApprovalItem } from "@/lib/api";
 import type { ApprovalSnapshot } from "@/lib/approvalPoller";
 
+const approvalEventsMocks = vi.hoisted(() => ({
+  notifyApprovalResolved: vi.fn(),
+}));
+
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
   return {
@@ -19,6 +23,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
     },
   };
 });
+
+vi.mock("@/lib/approvalEvents", () => approvalEventsMocks);
 
 const apiMock = api as unknown as {
   approveApproval: ReturnType<typeof vi.fn>;
@@ -90,7 +96,23 @@ describe("批四十一 §2 审批弹窗批准即关 + 防连点", () => {
     });
     expect(apiMock.approveApproval).toHaveBeenCalledTimes(1);
     expect(apiMock.approveApproval).toHaveBeenCalledWith("apv_1", "once");
+    // 批四十二 §BH：成功后广播裁决结果（对话页审批卡回写）。
+    expect(approvalEventsMocks.notifyApprovalResolved).toHaveBeenCalledWith("apv_1", "approved");
     // 队列已清空 → 弹窗消失
+    expect(container.textContent).not.toContain("该命令需要审批");
+  });
+
+  it("拒绝成功 → 广播 denied，弹窗关闭", async () => {
+    await render();
+    const denyBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("拒绝"))!;
+    await act(async () => {
+      denyBtn.click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(apiMock.denyApproval).toHaveBeenCalledWith("apv_1");
+    expect(approvalEventsMocks.notifyApprovalResolved).toHaveBeenCalledWith("apv_1", "denied");
     expect(container.textContent).not.toContain("该命令需要审批");
   });
 

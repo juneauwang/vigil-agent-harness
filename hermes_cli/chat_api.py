@@ -254,15 +254,27 @@ def _history_to_view_messages(history: list) -> list:
                     # 有，无则空串——按顺序正序挂接已能保证同名单工具不错位）。
                     "tool_id": str(tc.get("id") or tc.get("tool_call_id") or ""),
                 })
+            reasoning_text = _redact_text(
+                (msg.get("reasoning") or msg.get("reasoning_content") or "")
+            )
+            # 批四十二 §BJ：历史推理结构保留向后兼容——0/多工具调用或空推理
+            # 输出旧单值字符串；恰一个带 id 工具调用时结构化归属该步
+            # {steps: [{tool_id, text}]}，前端按 tool_id 挂回对应工具行。
+            reasoning_view: Any = reasoning_text
+            if reasoning_text:
+                tc_ids = [
+                    str(tc.get("id") or tc.get("tool_call_id") or "")
+                    for tc in (msg.get("tool_calls") or [])
+                ]
+                if len(tc_ids) == 1 and tc_ids[0]:
+                    reasoning_view = {"steps": [{"tool_id": tc_ids[0], "text": reasoning_text}]}
             view.append({
                 "id": msg_id if msg_id is not None else len(view) + 1,
                 "role": "assistant",
                 "content": _redact_text(msg.get("content") or ""),
                 # 批四十一 §3：历史消息带 reasoning（模型 reasoning 字段或
                 # reasoning_content，纯文本拼接；前端默认折叠展示）。
-                "reasoning": _redact_text(
-                    (msg.get("reasoning") or msg.get("reasoning_content") or "")
-                ),
+                "reasoning": reasoning_view,
                 "tools": tools,
                 "timestamp": msg.get("timestamp"),
             })
@@ -486,6 +498,24 @@ def _run_chat_turn(
         tool_seq: list[int] = [0]
         tool_ids: list[str] = []
 
+        # 批四十二 §BJ：推理增量先入缓冲——模型推理先于工具执行到达，此时
+        # 还不知道该段推理会导向哪个 tool_call；待 tool_start 再按 tool_id
+        # 归属转发（chat:tool 先推，前端先建工具行再挂推理）。未被任何工具
+        # 认领的推理（如最终答复前的思考）在收尾事件前按消息级转发。
+        pending_reasoning: list[str] = []
+
+        def _flush_reasoning(tool_id: str = "") -> None:
+            if not pending_reasoning:
+                return
+            text = "".join(pending_reasoning)
+            pending_reasoning.clear()
+            if not text:
+                return
+            ev: Dict[str, Any] = {"type": "chat:reasoning", "text": text}
+            if tool_id:
+                ev["tool_id"] = tool_id
+            _push(ev)
+
         def _tool_cb(event: dict) -> None:
             tool_id = str(event.get("tool_id") or "")
             if event.get("type") == "tool_start":
@@ -499,6 +529,7 @@ def _run_chat_turn(
                     "name": event.get("name", ""),
                     "input_summary": event.get("input_summary", ""),
                 })
+                _flush_reasoning(tool_id)
             elif event.get("type") == "tool_end":
                 # 批三十八 §AS A4：工具/API 完成即刷新活动时间，不只在 turn
                 # 起点写一次（注册表排序/停止轮询据此判断进度）。
@@ -514,7 +545,7 @@ def _run_chat_turn(
                 })
 
         def _reasoning_cb(text: str) -> None:
-            _push({"type": "chat:reasoning", "text": text})
+            pending_reasoning.append(text)
 
         # 批四十一 §3：推理过程增量事件（模型输出 reasoning 时转发，默认不
         # 出——chat:reasoning 事件仅供前端折叠展示，不参与对话上下文）。
@@ -531,6 +562,7 @@ def _run_chat_turn(
         except Exception as exc:
             _log.warning("chat turn failed (session=%s): %s", session.chat_session_id, exc)
             turn_failed = True
+            _flush_reasoning()
             _push({
                 "type": "chat:error",
                 "message": f"{type(exc).__name__}: {exc}",
@@ -539,15 +571,18 @@ def _run_chat_turn(
 
         if not isinstance(result, dict):
             turn_failed = True
+            _flush_reasoning()
             _push({"type": "chat:error", "message": "agent 返回异常结果"})
             return
         error = result.get("error")
         if error:
             turn_failed = True
+            _flush_reasoning()
             _push({"type": "chat:error", "message": str(error)})
             return
         turn_interrupted = bool(result.get("interrupted", False))
         turn_failed = bool(result.get("failed", False))
+        _flush_reasoning()
         _push({
             "type": "chat:done",
             "final_response": result.get("final_response") or "",

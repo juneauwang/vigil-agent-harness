@@ -6,10 +6,12 @@ import {
   chatInputDisabled,
   createChatState,
   markApprovalResolved,
+  markApprovalResolvedInSessions,
   markTurnInterrupted,
   pushUserMessage,
   stateFromHistory,
   toggleToolExpanded,
+  type ChatTurnState,
 } from "./chat";
 
 const TIMEOUT_AT = "2026-08-17T12:00:00Z";
@@ -309,5 +311,94 @@ describe("批四十一 §4 有序步骤序列", () => {
     s = applyChatEvent(s, ev("chat:approval_pending", { approval_id: "apv_2", command: "rm -rf x", env: "test" }));
     expect(s.messages).toHaveLength(1);
     expect(s.messages[0].steps.map((x) => x.kind)).toEqual(["tool", "approval"]);
+  });
+});
+
+describe("批四十二 §BJ reasoning 按工具步挂载", () => {
+  it("chat:reasoning 带 tool_id → 归并进对应工具的 reasoning，不进消息级", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "call_1", name: "terminal", input_summary: "kubectl get nodes" }));
+    s = applyChatEvent(s, ev("chat:reasoning", { tool_id: "call_1", text: "先确认节点状态" }));
+    s = applyChatEvent(s, ev("chat:reasoning", { tool_id: "call_1", text: "再看调度" }));
+    s = applyChatEvent(s, ev("chat:tool_result", { tool_id: "call_1", name: "terminal", output_summary: "node1 Ready", ok: true }));
+    const msg = s.messages[0];
+    expect(msg.tools[0].reasoning).toBe("先确认节点状态再看调度");
+    expect(msg.reasoning).toBe("");
+  });
+
+  it("chat:reasoning 无 tool_id → 消息级归并（旧服务端/最终答复前思考）", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "call_1", name: "terminal", input_summary: "ls" }));
+    s = applyChatEvent(s, ev("chat:reasoning", { text: "整理结论" }));
+    const msg = s.messages[0];
+    expect(msg.reasoning).toBe("整理结论");
+    expect(msg.tools[0].reasoning).toBe("");
+  });
+
+  it("chat:reasoning 带 tool_id 但工具尚未到达 → 退回消息级", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:reasoning", { tool_id: "call_9", text: "提前到达的推理" }));
+    const msg = s.messages[0];
+    expect(msg.reasoning).toBe("提前到达的推理");
+    expect(msg.tools).toHaveLength(0);
+  });
+
+  it("并行工具：推理按各自 tool_id 各归各，不串", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "call_1", name: "terminal", input_summary: "a" }));
+    s = applyChatEvent(s, ev("chat:tool", { tool_id: "call_2", name: "terminal", input_summary: "b" }));
+    s = applyChatEvent(s, ev("chat:reasoning", { tool_id: "call_2", text: "第二个" }));
+    s = applyChatEvent(s, ev("chat:reasoning", { tool_id: "call_1", text: "第一个" }));
+    const msg = s.messages[0];
+    expect(msg.tools[0].reasoning).toBe("第一个");
+    expect(msg.tools[1].reasoning).toBe("第二个");
+  });
+
+  it("history 结构化 reasoning.steps 按 tool_id 挂回工具行，消息级为空", () => {
+    const history: ChatHistoryMessage[] = [
+      {
+        id: 1, role: "assistant", content: "结论",
+        reasoning: { steps: [{ tool_id: "call_1", text: "先看拓扑" }] },
+        tools: [{ name: "terminal", input_summary: "a", output_summary: "out", ok: true, tool_id: "call_1" }],
+      },
+    ];
+    const s = stateFromHistory(history, false);
+    expect(s.messages[0].tools[0].reasoning).toBe("先看拓扑");
+    expect(s.messages[0].reasoning).toBe("");
+    expect(s.messages[0].content).toBe("结论");
+  });
+
+  it("history 旧单值 reasoning 仍读消息级（向后兼容）", () => {
+    const history: ChatHistoryMessage[] = [
+      { id: 1, role: "assistant", content: "ok", reasoning: "hidden chain", tools: [] },
+    ];
+    const s = stateFromHistory(history, false);
+    expect(s.messages[0].reasoning).toBe("hidden chain");
+  });
+});
+
+describe("批四十二 §BH 跨会话审批裁决回写", () => {
+  const withCard = (sid: string, approvalId: string): [string, ChatTurnState] => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:approval_pending", { approval_id: approvalId, command: "rm -rf x", env: "test" }));
+    return [sid, s];
+  };
+
+  it("只重建含该审批卡的会话槽，其它槽原引用不动", () => {
+    const [, stateA] = withCard("A", "apv_1");
+    const [, stateB] = withCard("B", "apv_2");
+    const states = { A: stateA, B: stateB };
+    const next = markApprovalResolvedInSessions(states, "apv_1", "approved");
+    expect(next.A).not.toBe(stateA);
+    expect(next.A.messages[0].approvals[0].status).toBe("approved");
+    expect(next.A.messages[0].steps[0].status).toBe("approved");
+    expect(next.B).toBe(stateB); // 无匹配卡 → 原引用
+  });
+
+  it("无匹配卡时整体返回原引用（幂等，不触发重渲染）", () => {
+    const [, stateA] = withCard("A", "apv_1");
+    const states = { A: stateA };
+    const next = markApprovalResolvedInSessions(states, "nope", "approved");
+    expect(next).toBe(states);
   });
 });

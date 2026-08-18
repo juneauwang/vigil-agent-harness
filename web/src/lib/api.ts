@@ -264,7 +264,7 @@ export interface ChatModelOption {
   id: string;
   name: string;
   description?: string;
-  /** 快/省 vs 强/慢 标注（目录描述派生；默认空）。 */
+  /** 用途标注（目录派生；批四十二 §AY 起前端不再渲染，字段保留兼容）。 */
   tag?: string;
   /** 配置中当前默认模型。 */
   default?: boolean;
@@ -283,13 +283,24 @@ export interface ChatSessionsResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+/** 批四十二 §BJ：历史推理的结构化归属步（单工具调用消息的推理）。 */
+export interface ChatHistoryReasoningStep {
+  /** 服务端工具调用 id（与该消息 tools[].tool_id 对齐）。 */
+  tool_id?: string;
+  text?: string;
+}
+
+/** 批四十二 §BJ：历史推理结构——单值字符串（旧格式/消息级）或
+ * {steps:[{tool_id,text}]}（按工具步挂载）。前端两种都读。 */
+export type ChatHistoryReasoning = string | { steps?: ChatHistoryReasoningStep[] };
+
 /** 历史消息（对齐前端 ChatMessage 的字段；tools 折叠进 assistant 气泡）。 */
 export interface ChatHistoryMessage {
   id: number;
   role: "user" | "assistant";
   content: string;
-  /** 批四十一 §3：推理过程纯文本（默认折叠展示）。 */
-  reasoning?: string;
+  /** 批四十一 §3：推理过程纯文本（默认折叠展示）；批四十二起可结构化归属。 */
+  reasoning?: ChatHistoryReasoning;
   tools: {
     name: string;
     input_summary: string;

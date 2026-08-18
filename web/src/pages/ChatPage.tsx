@@ -25,6 +25,7 @@ import {
   chatInputDisabled,
   createChatState,
   markApprovalResolved,
+  markApprovalResolvedInSessions,
   markTurnInterrupted,
   pushUserMessage,
   stateFromHistory,
@@ -34,6 +35,7 @@ import {
   type ChatStepStatus,
   type ChatTurnState,
 } from "@/lib/chat";
+import { subscribeApprovalResolved } from "@/lib/approvalEvents";
 import { Markdown } from "@/components/Markdown";
 import StopButton from "@/components/StopButton";
 import { cn } from "@/lib/ops";
@@ -114,6 +116,9 @@ function ToolRow({
   status: ChatStepStatus;
   onToggle: () => void;
 }) {
+  const [reasoningOpen, setReasoningOpen] = useState(false);
+  const reasoning = (tool.reasoning ?? "").trim();
+  const reasoningSummary = reasoning.split("\n")[0].slice(0, 80) || "该步推理";
   return (
     <div className="overflow-hidden rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]">
       <button
@@ -144,6 +149,33 @@ function ToolRow({
           <span className="shrink-0 text-[10px] text-[var(--vigil-error)]">✗</span>
         )}
       </button>
+      {reasoning && (
+        <div className="border-t border-[var(--vigil-border)]">
+          <button
+            type="button"
+            onClick={() => setReasoningOpen((v) => !v)}
+            aria-expanded={reasoningOpen}
+            data-testid={`tool-reasoning-${tool.id}`}
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-black/5 dark:hover:bg-white/5"
+          >
+            {reasoningOpen ? (
+              <ChevronDown className="size-3 shrink-0 text-[var(--vigil-muted)]" />
+            ) : (
+              <ChevronRight className="size-3 shrink-0 text-[var(--vigil-muted)]" />
+            )}
+            <Brain className="size-3 shrink-0 text-violet-500" />
+            <span className="font-medium">该步推理（{reasoning.length} 字）</span>
+            <span className="ml-auto min-w-0 flex-1 truncate text-[var(--vigil-muted)]">
+              {reasoningOpen ? "" : reasoningSummary}
+            </span>
+          </button>
+          {reasoningOpen && (
+            <pre className="scroll-thin max-h-72 overflow-y-auto whitespace-pre-wrap break-words border-t border-[var(--vigil-border)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-[var(--vigil-text)] opacity-90">
+              {reasoning}
+            </pre>
+          )}
+        </div>
+      )}
       {tool.expanded && (
         <div className="space-y-1.5 border-t border-[var(--vigil-border)] px-2.5 py-2">
           {tool.inputSummary && (
@@ -168,16 +200,23 @@ function ToolRow({
   );
 }
 
-/** 审批卡：长命令可滚动 + 叙述完整展示（批四十一 §6），批准/拒绝后状态标签。 */
+/** 审批卡：长命令可滚动 + 叙述完整展示（批四十一 §6），批准/拒绝后状态标签。
+ * 批四十二 §BK：展示触发该审批的推理摘要（一行可展开，默认折叠）——盲批风险
+ * 防护，用户可先看 agent 为什么执行这条命令再决定。 */
 function ApprovalCard({
   card,
   onResolve,
+  triggerReasoning,
 }: {
   card: ChatApprovalCard;
   onResolve: (card: ChatApprovalCard, status: "approved" | "denied") => void;
+  triggerReasoning?: string;
 }) {
   const busy = card.status === "approved" || card.status === "denied";
   const [expanded, setExpanded] = useState(false);
+  const [reasonOpen, setReasonOpen] = useState(false);
+  const triggerText = (triggerReasoning ?? "").trim();
+  const triggerSummary = triggerText.split("\n")[0].slice(0, 80) || "触发推理";
   const longCommand = (card.command ?? "").length > 80;
   const [timedOut, setTimedOut] = useState(false);
   useEffect(() => {
@@ -238,6 +277,33 @@ function ApprovalCard({
           {card.description}
         </span>
       )}
+      {triggerText && (
+        <div className="overflow-hidden rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]">
+          <button
+            type="button"
+            onClick={() => setReasonOpen((v) => !v)}
+            aria-expanded={reasonOpen}
+            data-testid={`approval-reasoning-${card.approvalId}`}
+            className="flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11px] hover:bg-black/5 dark:hover:bg-white/5"
+          >
+            {reasonOpen ? (
+              <ChevronDown className="size-3 shrink-0 text-[var(--vigil-muted)]" />
+            ) : (
+              <ChevronRight className="size-3 shrink-0 text-[var(--vigil-muted)]" />
+            )}
+            <Brain className="size-3 shrink-0 text-violet-500" />
+            <span className="font-medium">触发推理（{triggerText.length} 字）</span>
+            <span className="ml-auto min-w-0 flex-1 truncate text-[var(--vigil-muted)]">
+              {reasonOpen ? "" : triggerSummary}
+            </span>
+          </button>
+          {reasonOpen && (
+            <pre className="scroll-thin max-h-64 overflow-y-auto whitespace-pre-wrap break-words border-t border-[var(--vigil-border)] px-2.5 py-2 font-mono text-[11px] leading-relaxed text-[var(--vigil-text)] opacity-90">
+              {triggerText}
+            </pre>
+          )}
+        </div>
+      )}
       {card.status === "pending" && !timedOut && (
         <div className="flex items-center gap-2">
           <button
@@ -276,9 +342,22 @@ function StepList({
   const steps = msg.steps;
   if (steps.length === 0) return null;
 
+  // 批四十二 §BK：审批的"触发推理"= 其前最近一个工具步骤的该步推理（SSE 中
+  // 推理先随 chat:tool 到、审批在工具执行内到，顺序天然满足）。
+  const triggerReasoningFor = (index: number): string => {
+    for (let i = index - 1; i >= 0; i--) {
+      const prev = steps[i];
+      if (prev.kind === "tool") {
+        const tool = toolById.get(Number(prev.ref));
+        return tool?.reasoning ?? "";
+      }
+    }
+    return "";
+  };
+
   const current = steps.find((s) => s.status === "running" || s.status === "pending");
   return (
-    <div className="mt-2 space-y-1.5">
+    <div data-testid="step-list" className="mt-2 space-y-1.5">
       {steps.length > 1 && (
         <div className="flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
           <ListOrdered className="size-3" />
@@ -308,7 +387,11 @@ function StepList({
                 <span className="w-4 text-center font-mono">{no}</span>
                 <span>审批</span>
               </div>
-              <ApprovalCard card={card} onResolve={onResolveApproval} />
+              <ApprovalCard
+                card={card}
+                onResolve={onResolveApproval}
+                triggerReasoning={triggerReasoningFor(i)}
+              />
             </li>
           );
         })}
@@ -353,13 +436,17 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval }: {
             {msg.error}
           </div>
         )}
-        {msg.content ? <Markdown text={msg.content} /> : null}
-        <ReasoningBlock text={msg.reasoning} />
         <StepList
           msg={msg}
           onToggleTool={onToggleTool}
           onResolveApproval={onResolveApproval}
         />
+        <ReasoningBlock text={msg.reasoning} />
+        {msg.content ? (
+          <div data-testid="assistant-content">
+            <Markdown text={msg.content} />
+          </div>
+        ) : null}
       </div>
     </div>
   );
@@ -587,6 +674,16 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [activeState.messages]);
+
+  // 批四十二 §BH：全局审批弹窗/审批中心裁决广播 → 所有会话槽位内对应
+  // approvalId 的审批卡立即回写（已批准/已拒绝），不依赖轮询或重拉历史。
+  useEffect(
+    () =>
+      subscribeApprovalResolved((id, status) => {
+        setStates((prev) => markApprovalResolvedInSessions(prev, id, status));
+      }),
+    [],
+  );
 
   const send = useCallback(
     async (e: FormEvent) => {
@@ -834,7 +931,6 @@ export default function ChatPage() {
               {modelOptions.map((m) => (
                 <option key={m.id} value={m.id}>
                   {m.name}
-                  {m.tag ? ` · ${m.tag}` : ""}
                   {m.default ? " · 默认" : ""}
                 </option>
               ))}

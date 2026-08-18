@@ -194,12 +194,15 @@ def test_history_view_reasoning_field():
 
 
 def test_reasoning_sse_events(client, stub_agent_factory):
+    # 批四十二 §BJ：无工具调用时推理缓冲到收尾按消息级转发（聚合单事件，
+    # 无 tool_id——旧结构兼容；带 tool 的归属另测于 test_batch42）。
     _install, _ = stub_agent_factory
     _install(emit_reasoning=True)
     sid = _new_session(client)
     events = _sse_events(client, f"/api/chat/sessions/{sid}/messages", json_body={"message": "hi"})
     reasoning = [d for (t, d) in events if t == "chat:reasoning"]
-    assert [d["text"] for d in reasoning] == ["先想第一步", "再想第二步"]
+    assert [d["text"] for d in reasoning] == ["先想第一步再想第二步"]
+    assert all("tool_id" not in d for d in reasoning)
     assert any(t == "chat:done" for (t, _d) in events)
 
 
