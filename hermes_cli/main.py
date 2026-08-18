@@ -10346,6 +10346,19 @@ def _is_electron_packaged_web_dist(path: str) -> bool:
     return "app.asar" in path.replace("\\", "/")
 
 
+def _resolve_dashboard_port(args) -> int:
+    """会话/仪表板端口的单点解析：显式 --port > config dashboard.port > 默认。
+
+    batch 43 §BF：config.yaml 的 ``dashboard.port`` 是行为配置的事实来源；
+    systemd unit / 显式参数只是执行/覆盖载体。``start``/``restart`` 都走这里，
+    保证 ``restart`` 无 --port 时继承上次用的端口（config 或已装 unit 的
+    ExecStart），不再无视 config 而退到代码默认 9119 撞 hermes dashboard。
+    """
+    from hermes_cli.dashboard_service import _resolve_dashboard_port as _svc_resolve
+
+    return _svc_resolve(getattr(args, "port", None))
+
+
 def cmd_dashboard(args):
     """Start the web UI server, or (with --stop/--status) manage running ones."""
     _token_file = getattr(args, "ssh_session_token_file", None)
@@ -10368,6 +10381,10 @@ def cmd_dashboard(args):
     # ready sentinel. Resolved once and threaded through the re-exec, the
     # build gate, and start_server.
     _headless_backend = getattr(args, "headless_backend", False)
+    # batch 43 §BF: single source for the port — explicit --port > config
+    # dashboard.port > built-in default. Mutate the resolved args in place so
+    # every downstream use (probe, re-exec argv, start_server) agrees.
+    args.port = _resolve_dashboard_port(args)
     _ssh_owner_nonce = getattr(args, "ssh_owner_nonce", None)
     if _ssh_owner_nonce and not re.fullmatch(r"[0-9a-f]{16}", _ssh_owner_nonce):
         raise SystemExit("--ssh-owner-nonce must be 16 lowercase hex characters")
@@ -10709,6 +10726,12 @@ def cmd_dashboard_restart(args):
     Mirrors ``systemctl restart`` on a stopped unit — when nothing is running
     it simply starts. The start phase re-enters ``cmd_dashboard`` with the
     server-runtime args (port/host/no-open/...) intact.
+
+    If the start phase fails (port already in use, build failure, auth-gate
+    rejection, ...) the dashboard has already been stopped by the stop phase
+    above, so we must exit loudly rather than let the restart look like a
+    silent no-op (OPS-DELTA 批次四十三 §AX — "停了起不来" must be spelled
+    out, not swallowed).
     """
     pids = _find_stale_dashboard_pids()
     if pids:
@@ -10722,7 +10745,19 @@ def cmd_dashboard_restart(args):
             sys.exit(1)
     else:
         print("No vigil dashboard processes running; starting fresh.")
-    return cmd_dashboard(args)
+    try:
+        return cmd_dashboard(args)
+    except SystemExit as exc:
+        code = exc.code if isinstance(exc.code, int) else 1
+        if code != 0:
+            print(
+                "✗ Dashboard stopped but failed to start during restart. "
+                "Run `vigil dashboard start --port {port}` to inspect and retry."
+                .format(port=getattr(args, "port", 9119)),
+                file=sys.stderr,
+            )
+            raise
+        raise
 
 
 def cmd_gateway_enroll(args):

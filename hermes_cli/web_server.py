@@ -18370,12 +18370,18 @@ def _maybe_open_browser(
         from urllib.parse import quote
         _open_url += f"/?profile={quote(initial_profile)}"
 
+    # batch 43 §BF: a browser-open failure (no GUI browser resolvable, gio
+    # "Operation not supported", etc.) must not surface as an error on an
+    # otherwise-healthy server. If the actual open fails, degrade to a quiet
+    # one-line access hint and suppress the exception entirely.
     def _open():
         try:
             time.sleep(1.0)
-            webbrowser.open(_open_url)
+            opened = webbrowser.open(_open_url)
+            if not opened:
+                print(f"  （无图形环境，跳过自动打开浏览器；访问 {_open_url}）")
         except Exception:
-            pass
+            print(f"  （无图形环境，跳过自动打开浏览器；访问 {_open_url}）")
 
     threading.Thread(target=_open, daemon=True).start()
 

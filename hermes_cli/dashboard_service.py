@@ -25,11 +25,57 @@ import sys
 from pathlib import Path
 from typing import Optional, Tuple
 
+# Re-exported config helpers as module attributes so tests can monkeypatch
+# the port-resolution source without importing hermes_cli.config directly.
+def load_config_readonly():
+    from hermes_cli.config import load_config_readonly as _lr
+    return _lr()
+
+
+def load_config():
+    from hermes_cli.config import load_config as _lc
+    return _lc()
+
+
+def save_config(cfg):
+    from hermes_cli.config import save_config as _sc
+    return _sc(cfg)
+
 UNIT_NAME = "vigil-dashboard.service"
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 UNIT_PATH = UNIT_DIR / UNIT_NAME
 
 _DEFAULT_PORT = 9119
+
+
+def _resolve_dashboard_port(
+    args_port: Optional[int] = None,
+    *,
+    fallback_to_unit: bool = True,
+) -> int:
+    """单点解析 dashboard 端口：显式 --port > config dashboard.port > 默认。
+
+    ``config dashboard.port`` 是行为配置的唯一事实来源（OPS-DELTA 批次四十三
+    §BF）；systemd unit 只是执行载体。install/start/restart 全部走这里：
+      - ``install`` 用解析值写 config dashboard.port + unit ExecStart --port
+        （两处一致，restart 继承"上次用的端口"）；
+      - ``restart`` 无显式 --port 时优先 config dashboard.port；config 也无时
+        回退解析已写 unit 的 ExecStart 端口（_unit_port），保证继承已装端口。
+    """
+    port = int(args_port) if args_port else None
+    if port is None:
+        try:
+            cfg = load_config_readonly()
+            cfg_port = (cfg.get("dashboard") or {}).get("port")
+            if cfg_port is not None:
+                port = int(cfg_port)
+        except Exception:
+            port = None
+    if port is None and fallback_to_unit:
+        port = _unit_port()
+    if port is None:
+        port = _DEFAULT_PORT
+    return int(port)
 
 
 def _unit_content(port: int, python: str, home: str) -> str:
@@ -113,7 +159,7 @@ def _is_active() -> bool:
 
 def cmd_dashboard_install(args) -> int:
     """安装/覆盖常驻 dashboard unit（systemd user 会话）。"""
-    port = int(getattr(args, "port", None) or _DEFAULT_PORT)
+    port = _resolve_dashboard_port(getattr(args, "port", None))
     ok, why = _systemd_user_available()
     if not ok:
         print(why)
@@ -156,6 +202,21 @@ def cmd_dashboard_install(args) -> int:
             print(f"✗ {step} 失败：{detail or 'unknown error'}")
             return 1
         print(f"    ✓ {step}")
+
+    # batch 43 §BF: persist the resolved port into config.yaml as
+    # dashboard.port so `vigil dashboard restart` (no --port) inherits the
+    # exact port the systemd unit runs on — the config is the single source
+    # of truth; the unit's ExecStart is just the execution carrier. Best-effort
+    # and non-fatal: a read-only home must not block install from writing the
+    # unit it was explicitly asked for.
+    try:
+        cfg = load_config()
+        if not isinstance(cfg.get("dashboard"), dict):
+            cfg["dashboard"] = {}
+        cfg["dashboard"]["port"] = int(port)
+        save_config(cfg)
+    except Exception as exc:
+        print(f"    ⚠ 未能写入 dashboard.port 到 config.yaml：{exc}")
 
     print(f"Dashboard 常驻服务已就绪：http://127.0.0.1:{port}")
     print(f"管理：vigil dashboard status | vigil dashboard uninstall")
