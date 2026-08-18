@@ -14,6 +14,7 @@ import {
   type ApprovalQueueState,
 } from "@/lib/approvalQueue";
 import { approvalPoller, useApprovalSnapshot } from "@/lib/approvalPoller";
+import { notifyApprovalResolved } from "@/lib/approvalEvents";
 
 /**
  * 审批全局弹窗（批三十四）：任何路由可见的页面内居中 modal。
@@ -110,6 +111,9 @@ export default function ApprovalModal() {
         if (action === "approved") await api.approveApproval(item.id, "once");
         else await api.denyApproval(item.id);
         dispatch({ type: "dequeue", id: item.id });
+        // 批四十二 §BH：广播裁决结果——对话页审批卡按 approvalId 同步回写，
+        // 弹窗关闭全局生效，不再等轮询/重拉历史。
+        notifyApprovalResolved(item.id, action);
         // 手动刷新一次，角标/审批中心不等下一个轮询 tick。
         void approvalPoller.refresh();
       } catch (e) {

@@ -42,6 +42,9 @@ export interface ChatToolEvent {
   outputSummary?: string;
   ok?: boolean;
   expanded: boolean;
+  /** 批四十二 §BJ：该工具调用导向的推理（chat:reasoning.tool_id 归属累加；
+   * 历史结构化 reasoning.steps 按 tool_id 回填）。空串 = 无归属。 */
+  reasoning: string;
 }
 
 export type ChatApprovalStatus = "pending" | "approved" | "denied" | "error";
@@ -174,12 +177,22 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
 
   // 批四十一 §3：推理增量归并进 active 消息的 reasoning 字段（无 active
   // 时先创建消息——推理通常先于正文到达）。
+  // 批四十二 §BJ：带 tool_id 的推理归属对应工具行（该步推理）；找不到归属
+  // 工具时退回消息级（旧服务端/推理先于 chat:tool 到达的边界场景）。
   if (ev.type === "chat:reasoning") {
     const text = String(data.text ?? "");
+    const toolId = data.tool_id != null ? String(data.tool_id) : "";
     const active = activeAssistant(next);
     if (active) {
-      active.reasoning += text;
       active.streaming = true;
+      if (toolId) {
+        const tool = active.tools.find((t) => t.toolId === toolId);
+        if (tool) {
+          tool.reasoning += text;
+          return next;
+        }
+      }
+      active.reasoning += text;
     } else {
       next.activeMessageId = next.nextId;
       next.nextId += 1;
@@ -204,7 +217,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     const toolId = data.tool_id != null ? String(data.tool_id) : "";
     if (active) {
       const localId = next.nextId++;
-      active.tools.push({ id: localId, toolId, name, inputSummary: summary, expanded: false });
+      active.tools.push({ id: localId, toolId, name, inputSummary: summary, expanded: false, reasoning: "" });
       active.steps.push({ kind: "tool", ref: localId, status: "running" });
     } else {
       next.activeMessageId = next.nextId;
@@ -216,7 +229,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
         content: "",
         reasoning: "",
         streaming: true,
-        tools: [{ id: localId, toolId, name, inputSummary: summary, expanded: false }],
+        tools: [{ id: localId, toolId, name, inputSummary: summary, expanded: false, reasoning: "" }],
         approvals: [],
         steps: [{ kind: "tool", ref: localId, status: "running" }],
       });
@@ -401,6 +414,8 @@ export function toggleToolExpanded(state: ChatTurnState, toolId: number): ChatTu
  *
  * 服务器消息带稳定行 id，这里重编号为本地自增（避免与流式渲染的 nextId
  * 冲突）；tools 已由服务端折叠进 assistant 气泡（含 tool_id/reasoning）。
+ * 批四十二 §BJ：历史 reasoning 兼容单值字符串（消息级）与结构化
+ * {steps:[{tool_id,text}]}（按 tool_id 挂回对应工具行的"该步推理"）。
  * busy 来自注册表（在跑的会话显示"处理中"，输入禁用直到后台 turn 完成）。
  */
 export function stateFromHistory(
@@ -421,20 +436,32 @@ export function stateFromHistory(
         steps: [],
       };
     }
-    const tools: ChatToolEvent[] = (m.tools ?? []).map((t) => ({
-      id: nextId++,
-      toolId: t.tool_id != null ? String(t.tool_id) : "",
-      name: t.name,
-      inputSummary: t.input_summary ?? "",
-      outputSummary: t.output_summary ?? undefined,
-      ok: t.ok ?? undefined,
-      expanded: false,
-    }));
+    const rawReasoning = m.reasoning ?? "";
+    const reasoningSteps =
+      typeof rawReasoning === "object" && Array.isArray(rawReasoning?.steps)
+        ? rawReasoning.steps
+        : [];
+    const tools: ChatToolEvent[] = (m.tools ?? []).map((t) => {
+      const toolId = t.tool_id != null ? String(t.tool_id) : "";
+      const step = reasoningSteps.find(
+        (st) => st.tool_id != null && String(st.tool_id) === toolId,
+      );
+      return {
+        id: nextId++,
+        toolId,
+        name: t.name,
+        inputSummary: t.input_summary ?? "",
+        outputSummary: t.output_summary ?? undefined,
+        ok: t.ok ?? undefined,
+        expanded: false,
+        reasoning: step?.text ?? "",
+      };
+    });
     return {
       id,
       role: "assistant",
       content: m.content ?? "",
-      reasoning: m.reasoning ?? "",
+      reasoning: typeof rawReasoning === "string" ? rawReasoning : "",
       streaming: false,
       tools,
       approvals: [],
@@ -446,4 +473,28 @@ export function stateFromHistory(
     };
   });
   return { messages, busy: Boolean(busy), nextId, activeMessageId: null };
+}
+
+/** 批四十二 §BH：跨会话审批裁决回写——只重建含该审批卡的状态槽（全局弹窗/
+ * 审批中心裁决后经 pub/sub 广播到所有 chat 会话）。幂等：重复通知/无匹配卡
+ * 返回原引用不触发重渲染。 */
+export function markApprovalResolvedInSessions(
+  states: Record<string, ChatTurnState>,
+  approvalId: string,
+  status: ChatApprovalStatus,
+): Record<string, ChatTurnState> {
+  let changed = false;
+  const next: Record<string, ChatTurnState> = {};
+  for (const [sid, st] of Object.entries(states)) {
+    const hasCard = st.messages.some((m) =>
+      m.approvals.some((a) => a.approvalId === approvalId),
+    );
+    if (!hasCard) {
+      next[sid] = st;
+      continue;
+    }
+    changed = true;
+    next[sid] = markApprovalResolved(st, approvalId, status);
+  }
+  return changed ? next : states;
 }
