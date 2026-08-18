@@ -1320,6 +1320,13 @@ DEFAULT_CONFIG = {
     # Web dashboard settings
     "dashboard": {
         "theme": "default",  # Dashboard visual theme: "default", "midnight", "ember", "mono", "cyberpunk", "rose"
+        # Bind port for the dashboard/serve web server — the single source of
+        # truth for the port. Resolution order: explicit --port flag >
+        # dashboard.port > built-in default (9119). ``dashboard install`` writes
+        # this key and pins the systemd unit ExecStart --port to the same value,
+        # so ``restart`` without an explicit --port inherits the running port.
+        # 0 = auto-assign an OS-free port at bind time (rare; logs the bound port).
+        "port": 9119,
         # Process-isolation rollout controls. Runtime reads these through the
         # raw config loader, so tui_gateway.server also owns explicit defaults.
         "turn_isolation": False,

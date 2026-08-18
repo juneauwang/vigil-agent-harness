@@ -65,6 +65,28 @@ def _scan_dashboard_processes(
         "hermes_cli/main.py serve",
     ]
     self_pid = os.getpid()
+
+    def _is_server_command(command: str) -> bool:
+        """A candidate matches the server patterns AND is not a lifecycle CLI.
+
+        The command token itself (the lifecycle subcommand) appears as a bare
+        word in the cmdline (``... dashboard restart``), so match on token
+        boundaries to avoid flagging a legitimate server whose args merely
+        mention a word like ``status``.
+        """
+        if not any(p in command for p in patterns):
+            return False
+        tokens = command.split()
+        if "dashboard" in tokens:
+            for i, tok in enumerate(tokens):
+                if tok == "dashboard" and i + 1 < len(tokens):
+                    nxt = tokens[i + 1]
+                    if nxt in {
+                        "restart", "stop", "status", "install", "uninstall",
+                        "register", "start", "help",
+                    }:
+                        return False
+        return True
     dashboard_processes: list[tuple[int, str]] = []
 
     try:
@@ -100,7 +122,7 @@ def _scan_dashboard_processes(
                 elif line.startswith("ProcessId="):
                     pid_str = line[len("ProcessId=") :]
                     if (
-                        any(p in current_cmd for p in patterns)
+                        _is_server_command(current_cmd)
                         and int(pid_str) != self_pid
                     ):
                         try:
@@ -133,7 +155,7 @@ def _scan_dashboard_processes(
                     except ValueError:
                         continue
                     command = parts[1]
-                    if any(p in command for p in patterns) and pid != self_pid:
+                    if _is_server_command(command) and pid != self_pid:
                         dashboard_processes.append((pid, command))
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return []

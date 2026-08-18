@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -214,3 +215,173 @@ class TestStatusSubcommand:
             cmd_dashboard_status(_ns())
         assert exc.value.code == 0
         assert "No vigil dashboard processes running" in capsys.readouterr().out
+
+
+class TestFindStaleDashboardPidsSelfExclusion:
+    """batch 43 §AX：``vigil dashboard restart`` 不得把自己当 server SIGTERM。"""
+
+    def test_restart_cmdline_is_not_treated_as_server(self):
+        import os
+
+        import hermes_cli.dashboard_procs as dp
+
+        self_cmdline = "python -m hermes_cli.main dashboard restart --port 9119"
+        server_cmdline = "python -m hermes_cli.main dashboard --port 9120 --no-open"
+        real_run = dp.subprocess.run
+
+        def _fake_run(cmd, *a, **kw):
+            if cmd and cmd[0] == "ps":
+                lines = [f"102 {server_cmdline}"]
+                # The restart (self) process has this cmdline.
+                lines.append(f"{os.getpid()} {self_cmdline}")
+                return type("R", (), {"returncode": 0, "stdout": "\n".join(lines)})()
+            return real_run(cmd, *a, **kw)
+
+        with patch("hermes_cli.dashboard_procs.subprocess.run", side_effect=_fake_run):
+            found = dp._scan_dashboard_processes()
+        pids = [pid for pid, _c in found]
+        # 真 server 进程在；restart（自身）进程绝不返回。
+        assert 102 in pids
+        assert os.getpid() not in pids
+
+    def test_stop_and_status_cmdlines_excluded_too(self):
+        import os
+
+        import hermes_cli.dashboard_procs as dp
+
+        real_run = dp.subprocess.run
+        cmds = {
+            os.getpid(): "python -m hermes_cli.main dashboard stop",
+            os.getpid() + 1: "python -m hermes_cli.main dashboard status",
+            205: "python -m hermes_cli.main dashboard --port 9120 --no-open",
+        }
+
+        def _fake_run(cmd, *a, **kw):
+            if cmd and cmd[0] == "ps":
+                lines = [f"{pid} {c}" for pid, c in cmds.items()]
+                return type("R", (), {"returncode": 0, "stdout": "\n".join(lines)})()
+            return real_run(cmd, *a, **kw)
+
+        with patch("hermes_cli.dashboard_procs.subprocess.run", side_effect=_fake_run):
+            found = dp._scan_dashboard_processes()
+        pids = [pid for pid, _c in found]
+        assert 205 in pids
+        assert os.getpid() not in pids
+        assert os.getpid() + 1 not in pids
+
+
+class TestRestartStartFailureOutput:
+    """batch 43 §AX：restart 的 start 阶段若失败，必须输出明确错误，禁止静默退出。"""
+
+    def test_restart_prints_failure_when_start_fails(self, capsys):
+        """stop 成功但 start 抛 SystemExit(1) → 输出"已停止但启动失败"提示。"""
+
+        def fake_cmd_dashboard(args):
+            raise SystemExit(1)  # 端口占用等 → start 失败
+
+        with patch("hermes_cli.main._find_stale_dashboard_pids",
+                   side_effect=[[12345], []]), \
+             patch("hermes_cli.main._kill_stale_dashboard_processes"), \
+             patch("hermes_cli.main.cmd_dashboard", side_effect=fake_cmd_dashboard), \
+             pytest.raises(SystemExit) as exc:
+            cmd_dashboard_restart(_ns())
+        assert exc.value.code == 1
+        err = capsys.readouterr().err
+        assert "stopped but failed to start" in err
+
+    def test_restart_start_success_no_extra_error(self, capsys):
+        """start 成功（exit 0）→ 不断言失败提示。"""
+        def fake_cmd_dashboard(args):
+            raise SystemExit(0)
+
+        with patch("hermes_cli.main._find_stale_dashboard_pids",
+                   side_effect=[[12345], []]), \
+             patch("hermes_cli.main._kill_stale_dashboard_processes"), \
+             patch("hermes_cli.main.cmd_dashboard", side_effect=fake_cmd_dashboard), \
+             pytest.raises(SystemExit) as exc:
+            cmd_dashboard_restart(_ns())
+        assert exc.value.code == 0
+        err = capsys.readouterr().err
+        assert "failed to start" not in err
+
+
+class TestPortSingleSourceResolution:
+    """batch 43 §BF：config dashboard.port 是端口单一事实来源。"""
+
+    def test_resolve_priority_explicit_port_wins(self, monkeypatch):
+        from hermes_cli import dashboard_service as svc
+
+        # 显式 --port 优先于 config/unit。
+        monkeypatch.setattr(svc, "_unit_port", lambda: 9999)
+        monkeypatch.setattr(svc, "load_config_readonly", lambda: {"dashboard": {"port": 9121}})
+        assert svc._resolve_dashboard_port(9130) == 9130
+
+    def test_resolve_falls_back_to_config_port(self, monkeypatch):
+        from hermes_cli import dashboard_service as svc
+
+        monkeypatch.setattr(
+            svc, "_unit_port", lambda: 9999,
+        )
+        monkeypatch.setattr(
+            svc, "load_config_readonly",
+            lambda: {"dashboard": {"port": 9121}},
+        )
+        assert svc._resolve_dashboard_port(None) == 9121
+
+    def test_resolve_falls_back_to_unit_when_no_config(self, monkeypatch):
+        from hermes_cli import dashboard_service as svc
+
+        monkeypatch.setattr(svc, "_unit_port", lambda: 9120)
+        monkeypatch.setattr(
+            svc, "load_config_readonly",
+            lambda: {"dashboard": {}},
+        )
+        assert svc._resolve_dashboard_port(None) == 9120
+
+    def test_resolve_default_when_no_source(self, monkeypatch):
+        from hermes_cli import dashboard_service as svc
+
+        monkeypatch.setattr(svc, "_unit_port", lambda: 9119)
+        monkeypatch.setattr(
+            svc, "load_config_readonly",
+            lambda: {},
+        )
+        assert svc._resolve_dashboard_port(None) == 9119
+
+    def test_install_persists_port_to_config_and_unit_agree(self, tmp_path, monkeypatch):
+        """install --port 9120 → config dashboard.port=9120 且 unit ExecStart 同端口。"""
+        import hermes_cli.dashboard_service as svc
+
+        monkeypatch.setattr(svc, "UNIT_DIR", tmp_path)
+        monkeypatch.setattr(svc, "UNIT_PATH", tmp_path / svc.UNIT_NAME)
+        monkeypatch.setattr(
+            svc, "_resolve_launcher", lambda: ("/opt/vigil/venv/bin/python", False)
+        )
+        monkeypatch.setattr(svc, "_systemd_user_available", lambda: (True, ""))
+
+        calls: list = []
+
+        def _run(*args, timeout=15):
+            calls.append(list(args))
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(svc, "_systemctl", _run)
+
+        written = {}
+        saved = {}
+
+        def _load():
+            return saved
+
+        def _save(cfg):
+            written["cfg"] = dict(cfg)
+
+        monkeypatch.setattr(svc, "load_config", _load)
+        monkeypatch.setattr(svc, "save_config", _save)
+        rc = svc.cmd_dashboard_install(SimpleNamespace(port=9120))
+        assert rc == 0
+        # config 落 dashboard.port
+        assert written["cfg"]["dashboard"]["port"] == 9120
+        # unit ExecStart 同端口
+        content = (tmp_path / svc.UNIT_NAME).read_text(encoding="utf-8")
+        assert "--port 9120" in content
