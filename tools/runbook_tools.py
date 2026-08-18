@@ -84,8 +84,14 @@ def _normalize_runbook_env(env: Any) -> Optional[str]:
 _PLAINTEXT_SECRET_ASSIGN_RE = re.compile(
     r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*(\S+)"
 )
+# -p 支持带空格（-p secret）与紧贴（-psecret / -pSECRET）两种形态；其余
+# --password/--token/--api-key 也带 = 与空格双重形态。
+# --password/--token/--api-key 支持空格与 = 双重形态；-p 支持空格（-p secret）、
+# 紧贴（-psecret / -pSECRET）、等号（-p=secret）三种。校验阶段再按命令语义判定
+# （_is_password_flag）是否真密码。
 _PLAINTEXT_SECRET_FLAG_RE = re.compile(
-    r"(?i)(--password|--passwd|--token|--api-key|-p)\s+(\S+)"
+    r"(?i)(--password|--passwd|--token|--api-key)(?:\s*[=\s]+\s*)(\S+)"
+    r"|-(p)(?:\s*[=\s]*)(\S+)"
 )
 # curl/scp 类 `-u user:password`（§AH 同源明文凭据形态）。
 _PLAINTEXT_CRED_FLAG_RE = re.compile(r"(?i)(-u|--user)\s+([^\s<]+:[^\s]+)")
@@ -661,56 +667,181 @@ def runbook_checkpoint(
 # runbook_create（正规创建入口）
 # ---------------------------------------------------------------------------
 
+# ── 批次四十四 §BN/§BL：语义识别替代词面匹配 ────────────────────────────────
+# 命令白名单：这些命令的 ``-p`` 明确是"密码"语义（sshpass -p SECRET、
+# mysql/mysqldump -p SECRET、pg_dump/psql 之外的工具等）。其余命令的 ``-p``
+# 是端口/无值 flag/保时间戳（docker/scp/psql 端口、mkdir 无值 flag），绝不
+# 当密码。原则：语义 > 词面，宁可漏给人工审，不可误杀逼绕词。
+_PASSWORD_FLAG_COMMANDS = frozenset({
+    "sshpass",
+    "mysql",
+    "mysqldump",
+    "mysqlimport",
+    "mariadb",
+    "mariadb-dump",
+    "pg_dump",
+    "pg_restore",
+    "redis-cli",
+    "mongosh",
+    "mongodump",
+    "sqlplus",
+    "sqlcmd",
+    "psql",
+})
+
+
+def _first_command_name(cmd: str) -> str:
+    """取命令第一个可执行名（basename），以便按命令类型判定 ``-p`` 语义。"""
+    if not cmd:
+        return ""
+    stripped = cmd.lstrip()
+    # 跳过常见前缀（sudo/env/CHAIN 环境变量赋值）拿真实命令。
+    toks = stripped.split()
+    name = ""
+    for tok in toks:
+        if tok in ("sudo", "env", "nohup", "time"):
+            continue
+        if "=" in tok and not tok.startswith("-"):
+            continue  # 前导环境变量赋值 VAR=...
+        name = tok
+        break
+    return name.split("/")[-1].strip("'\"")
+
+
+def _looks_like_attribute(value: str) -> bool:
+    """值形态是否像普通属性（端口/路径/变量/引用/URL）而非明文密码。
+
+    True → 放行（不是密码候选）；False → 是密码候选。
+    """
+    v = (value or "").strip().strip('\'"')
+    if not v:
+        return True  # 无值 flag → 非密码
+    if v.startswith("<vault:"):
+        return True
+    # 端口/数字：docker -p 8080:80、psql -p 5432
+    if v[0].isdigit():
+        return True
+    # 路径或 URL：mkdir -p /a/b、-i /root/x.pem、VAULT_PASS=secret/data/...
+    if "/" in v or "\\" in v or v.startswith(".") or ":" in v or "://" in v:
+        return True
+    # 变量：$VAR、${VAR}、%(name)s
+    if v.startswith("$") or "${" in v or "%(" in v:
+        return True
+    # 引用形态包含路径/占位符特征。
+    return False
+
+
+def _is_password_flag(flag: str, value: str, cmd: str) -> bool:
+    """``-p`` 是否为密码：命令在密码白名单 AND 值形态是密码候选。
+
+    ``-p``（小写）在密码白名单命令里通常是密码；``-P``（大写）在各数据库
+    工具里是端口（mysql/redis-cli -P 端口、pg_dump -P 密码属少数，此处让位于
+    端口），一律放行，避免误杀端口形态。
+    """
+    if flag == "-P":
+        return False  # -P 在 DB 工具里是端口，不按密码处理
+    if flag != "-p":
+        return True  # --password/--token/--api-key 词面明确，保持严格
+    cmd_name = _first_command_name(cmd)
+    if cmd_name not in _PASSWORD_FLAG_COMMANDS:
+        return False
+    # 密码命令里 `-p` 后无值（等下一行/无值 flag）→ 非密码。
+    value = (value or "").strip().strip("'\"")
+
+    if not value:
+        return False
+    # 值形态是属性（端口/路径/变量/引用）→ 放行。
+    if _looks_like_attribute(value):
+        return False
+    return True
+
+
+def _assign_value_is_plaintext(value: str) -> bool:
+    """赋值式（PASSWORD=... / --password=...）是否真明文。
+
+    值形态是引用/路径/URL/vault 占位符/变量 → 放行（VAULT_PASS=secret/data/...
+    是指向 secret 的引用，不是明文）；纯短串（无 /、$、<vault:、: 等特征）才
+    是真明文。
+    """
+    v = (value or "").strip().strip('\'"')
+    if not v:
+        return False
+    if v.startswith("<vault:"):
+        return False
+    if _looks_like_attribute(v):
+        return False
+    return True
+
+
 def _find_plaintext_secret(cmd: str) -> Optional[str]:
     """返回命令中疑似明文凭据的键名（password/--password/-p 等），无则 None。
 
-    <vault:path/field> 占位符放行（既有机制）；``-p`` 后接数字开头的值（如
-    docker/ssh 端口发布 ``-p 8080:80``）不算凭据。只报键名不报值——凭据值
-    绝不出现在错误消息/日志里。
+    <vault:path/field> 占位符放行（既有机制）。批次四十四 §BN/§BL 语义化：
+      - ``-p`` 只在密码命令白名单（sshpass/mysql/mysqldump/pg_dump/redis-cli/
+        mongosh 等）且值是密码候选（非数字/路径/变量/引用）时才算密码；
+        docker/scp/psql 端口、mkdir 无值 flag、-i 私钥路径一律放行。
+      - 赋值式命中（PASSWORD=hunter2）只在值是真明文时拦截；值是指向 secret
+        的路径/引用（VAULT_PASS=secret/data/... / $VAR / <vault:>）放行。
+    --password/--token/--api-key 词面语义明确是凭据，保持严格。
+    只报键名不报值——凭据值绝不出现在错误消息/日志里。
     """
     if not cmd or not isinstance(cmd, str):
         return None
-    m = _PLAINTEXT_SECRET_ASSIGN_RE.search(cmd)
-    if m:
-        if m.group(2).startswith("<vault:"):
-            return None
-        return m.group(1)
     for m in _PLAINTEXT_SECRET_FLAG_RE.finditer(cmd):
-        flag, value = m.group(1), m.group(2)
-        if flag == "-p" and value and value[0].isdigit():
+        # 三组交替：long-flag(空格/=) | -p(空格/=或紧贴)。归一取 flag+value。
+        if m.group(1) is not None and m.group(2) is not None:
+            flag, value = m.group(1), m.group(2)
+        elif m.group(3) is not None and m.group(4) is not None:
+            flag, value = "-" + m.group(3), m.group(4)
+        else:
+            continue
+        if not _is_password_flag(flag, value, cmd):
             continue
         if value.startswith("<vault:"):
             continue
         return flag
+    m = _PLAINTEXT_SECRET_ASSIGN_RE.search(cmd)
+    if m:
+        if m.group(2).startswith("<vault:"):
+            return None
+        if _assign_value_is_plaintext(m.group(2)):
+            return m.group(1)
     m = _PLAINTEXT_CRED_FLAG_RE.search(cmd)
     if m and "<vault:" not in m.group(2):
         return m.group(1)
     return None
 
 
+def _secret_error_hint(key: str) -> str:
+    """命中明文凭据时的纠错引导（批次四十四 §BL 建议）——学着改对，不自己绕词。"""
+    return (
+        f"疑似含明文凭据（{key}）。正确写法：优先用受控凭据通道——"
+        "目标主机经 topo_query 取凭据后经 vssh/sudo_exec 注入，或命令里用 "
+        "<vault:path/field> 占位符（执行时由你从保险箱/vault 读取并立即注入）。"
+        "若这只是本地文件路径/端口/连接参数而非凭据，可直接写（本校验只拦真明文）。"
+    )
+
+
 def _scan_commands_for_secrets(steps: List[Dict[str, Any]], rollback: Optional[List[Any]]) -> Optional[str]:
-    """扫描 steps/rollback 的 commands，命中明文凭据返回可读错误，无则 None。"""
+    """扫描 steps/rollback 的 commands，命中明文凭据返回可读错误，无则 None。
+
+    错误只报键名不报值；附带正确写法示例（§BL），让被拦的 agent 知道怎么改对
+    而非摸索绕词。
+    """
     for step in steps or []:
         if not isinstance(step, dict):
             continue
         for cmd in step.get("commands") or []:
             key = _find_plaintext_secret(cmd)
             if key:
-                return (
-                    f"步骤 {step.get('id')!r} 的命令疑似含明文凭据（{key}），"
-                    "runbook 拒绝明文密码/token——请改用 <vault:path/field> 占位符"
-                    "（执行时由你从保险箱/vault 读取并立即注入）。"
-                )
+                return f"步骤 {step.get('id')!r} 的命令{_secret_error_hint(key)}"
     for rb in rollback or []:
         if not isinstance(rb, dict):
             continue
         for cmd in rb.get("commands") or []:
             key = _find_plaintext_secret(cmd)
             if key:
-                return (
-                    f"rollback 命令疑似含明文凭据（{key}），请改用 <vault:path/field>"
-                    "占位符（执行时从保险箱读取注入）。"
-                )
+                return f"rollback 命令{_secret_error_hint(key)}"
     return None
 
 
