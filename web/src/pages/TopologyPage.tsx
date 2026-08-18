@@ -387,7 +387,7 @@ export default function TopologyPage() {
               title="业务请求链路：入口 → 网关 → 服务 → 存储；琥珀点 = 链上服务"
             >
               <Database className="size-3.5" />
-              拓扑总览（琥珀点 = 关键链路服务）
+              连线拓扑总览
             </div>
             <TopologyGraph view={view} onSelect={setDrawer} />
           </div>

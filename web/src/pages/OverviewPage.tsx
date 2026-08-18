@@ -3,8 +3,10 @@ import { useNavigate } from "react-router";
 import { ArrowRight, Boxes, ListChecks, Server, TriangleAlert, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { RunbookSummary, TopologyView } from "@/lib/api";
-import { TopologyMiniGraph } from "@/components/TopologyMiniGraph";
+import TopologyGraph from "@/components/TopologyGraph";
+import DetailDrawer from "@/components/DetailDrawer";
 import { EmptyState } from "@/components/EmptyState";
+import type { GraphEntityRef } from "@/lib/topologyGraph";
 import { cn } from "@/lib/ops";
 
 /** 4 指标卡（Nodes sky / Services emerald / Runbooks amber / Incidents rose）。 */
@@ -111,6 +113,7 @@ export default function OverviewPage() {
   const [runbooks, setRunbooks] = useState<RunbookSummary[]>([]);
   const [queueOpen, setQueueOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -174,7 +177,30 @@ export default function OverviewPage() {
           </div>
           {view ? (
             <div className="min-h-0 flex-1">
-              <TopologyMiniGraph view={view} />
+              <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--vigil-muted)]">
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-sm border border-[var(--vigil-primary)]/50 bg-[var(--vigil-card)]" />
+                  集群
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-sm border border-emerald-500/60 bg-emerald-500/10" />
+                  主机
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-sm border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]" />
+                  服务
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <span className="size-2.5 rounded-sm border border-amber-500/60 bg-amber-500/10" />
+                  关键链路
+                </span>
+              </div>
+              {view.key_paths.length === 0 && (
+                <p className="mb-2 text-[11px] text-[var(--vigil-muted)]">
+                  未配置关键链路（key_paths），将仅按集群/主机/服务展示。
+                </p>
+              )}
+              <TopologyGraph view={view} onSelect={setDrawer} className="h-full min-h-[420px]" />
             </div>
           ) : (
             <EmptyState
@@ -193,6 +219,8 @@ export default function OverviewPage() {
           />
         )}
       </div>
+
+      <DetailDrawer entity={drawer} onClose={() => setDrawer(null)} />
     </div>
   );
 }
