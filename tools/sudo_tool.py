@@ -18,15 +18,18 @@
   ``[sudo] password`` 提示再注入的时序本批不落地（验收时若真实远端时序不稳，
   返回明确错误而不是挂起）。
 
-**安全边界**：只接受单条只读诊断命令——拒绝嵌套 shell（``bash -c``）、重定向到
-文件（``>``/``>>``）、后台（``&``）、多命令分隔（``;``/``||``）、命令替换
-（``$(…)``/反引号）、内嵌 sudo（防 ``sudo -S <<<`` 形态死灰复燃）。
+**安全边界**：只接受单条只读诊断命令——嵌套 shell 按**执行形态**拒绝（``bash
+-c``、首 token 是 shell、管道到 shell、heredoc；``useradd -s /bin/bash`` 这类
+参数值里的 shell 路径放行，批次四十七 §BQ）、重定向到文件（``>``/``>>``/``>&``）、
+后台（``&``；``&&`` 顺序连接放行，批次四十七 §BR）、多命令分隔（``;``/``||``）、
+命令替换（``$(…)``/反引号）、内嵌 sudo（防 ``sudo -S <<<`` 形态死灰复燃）。
 
 **权限矩阵联动**：执行前 ``sudo <command>`` 过 ops_permissions 判定——prod 变更类
-→ 返回 require_confirmation（强制人工确认门）；deny → 拒绝；只读诊断（L1 查询档）
-直接执行。凭据缺失/认证失败 → 停下来问用户（提供凭据或手动执行），禁止翻
-~/.ssh/ 试密钥、禁止连续猜 vault 字段、禁止换用户名试登录（§Q/§AD 教训——
-会触发 SSH 认证熔断，且违反 fail-closed）。
+→ approve 决策走既有审批门（批次四十七 §BT：CLI 交互提示 / web 审批注册表弹窗 /
+gateway 回环，批准后才执行；无人在场 fail-closed）；deny → 拒绝；只读诊断
+（L1 查询档）直接执行。凭据缺失/认证失败 → 停下来问用户（提供凭据或手动执行），
+禁止翻 ~/.ssh/ 试密钥、禁止连续猜 vault 字段、禁止换用户名试登录（§Q/§AD 教训
+——会触发 SSH 认证熔断，且违反 fail-closed）。
 
 四层骨架（本批只落地 sudo 适配器，后续批次扩展）：
 agent → credential resolver（§T 四档来源）→ injector adapter（sudo/ssh）→ executor。
@@ -90,12 +93,29 @@ _SUDO_AUTH_FAILURE_HINTS = (
     "authentication failed",
 )
 
-# 命令校验黑名单（确定性拒绝，防注入；全部 fail-closed）
+# 命令校验黑名单（确定性拒绝，防注入；全部 fail-closed）。
+#
+# 批次四十七（§BQ/§BR）语义修正：嵌套 shell 看**执行形态**不是参数值——
+# /bin/bash 出现在参数值里（`useradd -s /bin/bash`）不是嵌套 shell，删掉旧的
+# 裸路径匹配；真正要拦的是 bash -c、首 token 是 shell、管道到 shell、heredoc
+# 这四种执行形态。`&&`（顺序执行）是最基础组合，无注入风险且独立 shell 下拆单
+# 条无意义 → 放行；只拦真正的后台 `&`（前不跟 `&`/`>`，后不跟 `&`）。
+# 每条规则：``(regex, reason, user_shell_skip)`` —— ``user_shell_skip`` 为 True
+# 时，useradd/chsh/usermod 命令跳过该词面规则（这些命令的 -c 是注释/选项，
+# 不是 ``bash -c``；shell 路径只作为 -s/--shell 的值出现，执行形态规则不跳过）。
+_SHELL_EXEC_RE = (
+    (re.compile(r"\b(bash|sh|zsh|dash|fish)\s+-c\b", re.IGNORECASE),
+     "嵌套 shell（bash -c …）", True),
+    (re.compile(r"^(?:/?(?:usr/)?bin/)?(?:bash|sh|zsh|dash|fish)(?:\s|$)", re.IGNORECASE),
+     "嵌套 shell（首 token 是 shell：sh -c … / bash script.sh / 交互 shell）", False),
+    (re.compile(r"\|\s*(?:/?(?:usr/)?bin/)?(?:bash|sh|zsh|dash|fish)(?:\s|$)", re.IGNORECASE),
+     "嵌套 shell（管道到 shell：curl … | sh）", False),
+    (re.compile(r"<<"), "heredoc（多命令脚本形态）", False),
+)
 _FORBIDDEN_COMMAND_PATTERNS = (
-    (re.compile(r"\b(bash|sh|zsh|dash|fish)\s+-c\b", re.IGNORECASE), "嵌套 shell（bash -c …）"),
-    (re.compile(r"(^|[\s/])/?bin/(bash|sh|zsh|dash)(\s|$)", re.IGNORECASE), "嵌套 shell（/bin/bash …）"),
-    (re.compile(r">"), "重定向（> / >> / 2>&1）"),
-    (re.compile(r"&"), "后台 / 逻辑与（& / && / >&）"),
+    (re.compile(r">"), "重定向（> / >> / 2>&1 / >&）"),
+    (re.compile(r"(?<![&>])&(?![&])"),
+     "后台执行（&）——多步操作可用 && 顺序连接，或写成脚本文件后 sudo_exec 执行脚本"),
     (re.compile(r";"), "多命令分隔（;）"),
     (re.compile(r"\|\|"), "逻辑或（||）"),
     (re.compile(r"\$\("), "命令替换（$(…)）"),
@@ -104,9 +124,26 @@ _FORBIDDEN_COMMAND_PATTERNS = (
     (re.compile(r"\n"), "多行命令"),
 )
 
+# §BQ 显式白名单：useradd/chsh/usermod 的 -s/--shell 参数值带 shell 路径是合法
+# 运维操作（建带 shell 的用户）。这些命令本身从不执行其参数——-c 是注释/选项而
+# 不是 ``bash -c``——因此对它们跳过词面的 ``bash -c`` 匹配（shell 路径只作为
+# -s/--shell 的值出现，执行形态规则仍全部生效）。
+_USER_SHELL_CMD_RE = re.compile(r"(^|/)(useradd|chsh|usermod)(\s|$)", re.IGNORECASE)
+
 
 def _validate_command(command: str) -> Optional[str]:
-    """单条只读命令校验：命中黑名单 → 返回拒绝原因；合法 → None。"""
+    """单条只读命令校验：命中黑名单 → 返回拒绝原因；合法 → None。
+
+    嵌套 shell 按执行形态判定（§BQ）：bash -c、首 token 是 shell、管道到
+    shell、heredoc 四类必拦；``useradd -s /bin/bash`` 这类参数值放行。``&&``
+    顺序连接放行（§BR），真正的后台 ``&`` 与重定向 ``>&`` 仍拦。
+    """
+    is_user_shell_cmd = bool(_USER_SHELL_CMD_RE.match(command))
+    for pattern, reason, user_shell_skip in _SHELL_EXEC_RE:
+        if is_user_shell_cmd and user_shell_skip:
+            continue  # useradd/chsh/usermod 的 -c 是注释/选项，不是 bash -c
+        if pattern.search(command):
+            return f"sudo_exec 拒绝 command：{reason}（fail-closed，只读诊断请走单条命令）"
     for pattern, reason in _FORBIDDEN_COMMAND_PATTERNS:
         if pattern.search(command):
             return f"sudo_exec 拒绝 command：{reason}（fail-closed，只读诊断请走单条命令）"
@@ -321,6 +358,24 @@ def _scp(ssh_argv: List[str], ssh_env: Dict[str, str], local: Path, dest: str) -
         raise RuntimeError(f"scp 上传失败：{detail[-1] if detail else '未知错误'}")
 
 
+def _require_ops_approval(command: str, decision: Dict[str, Any]) -> Optional[str]:
+    """ops 矩阵 approve → 走既有审批门（CLI 提示 / web 审批注册表 / gateway 回环）。
+
+    返回 None = 已获人工批准，可继续执行；否则返回 fail-closed 拒绝原因。
+
+    §BT 修复：此前 approve 决策直接返回 ``require_confirmation`` JSON 交给 LLM
+    转述，web 端永远没有审批记录落库 → 全局审批弹窗不触发、用户在聊天里"批准"
+    也不生效。现在复用 terminal 同款审批门（tools/approval.request_ops_approval）：
+    web/chat 经每线程回调落 /api/approvals → 弹窗出现 → 批准 → wait 返回 →
+    本工具继续执行；CLI 走交互提示；gateway 走通知回环/pending 注册表。
+    """
+    from tools.approval import request_ops_approval
+    result = request_ops_approval(command, decision)
+    if result.get("approved"):
+        return None
+    return result.get("message") or "审批未通过（fail-closed，不执行）"
+
+
 def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     host = str(args.get("host") or "").strip()
     command = str(args.get("command") or "").strip()
@@ -338,19 +393,9 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
         if decision.get("action") == "deny":
             return tool_error(f"权限矩阵拒绝执行：{decision.get('description') or 'deny'}")
         if decision.get("action") == "approve":
-            return json.dumps({
-                "status": "require_confirmation",
-                "action": "approve",
-                "grade": decision.get("grade"),
-                "env": decision.get("env"),
-                "require_confirmation": bool(decision.get("require_confirmation")),
-                "description": decision.get("description") or "",
-                "command": f"sudo {command}",
-                "message": (
-                    "该命令需要人工确认后才执行——向用户展示完整命令并取得确认后再执行；"
-                    "或改跑只读诊断命令（L1 查询档无需确认）。"
-                ),
-            }, ensure_ascii=False)
+            err = _require_ops_approval(f"sudo {command}", decision)
+            if err:
+                return tool_error(err)
 
     # 凭据解析：拓扑表 host 行 credential 引用（ssh_key/vault/askpass 三通道）。
     cred = _resolve_topology_credential(host, allow_fallback=False)
@@ -451,10 +496,12 @@ _SUDO_EXEC_SCHEMA = {
         "凭据缺失时本工具会内置 clarify 询问用户密码 → 自动存入凭据保险箱（0600）→"
         "执行，并提示在拓扑表补充 credential 声明；无交互通道或认证失败时**停下来问用户**"
         "（提供凭据或手动执行），禁止翻 ~/.ssh/ 试密钥、禁止猜 vault 字段、禁止换用户名试登录。"
-        "安全边界：只接受单条只读命令——拒绝 bash -c 嵌套 shell、重定向到文件（> / >>）、"
-        "后台（&）、多命令分隔（;）、命令替换（$()/反引号）、内嵌 sudo。"
-        "prod 环境变更类命令（重启/重建/配置下发）需人工确认；只读诊断（ps/ss/vmstat/cat）"
-        "直接执行。"
+        "安全边界：只接受单条只读命令——嵌套 shell 按执行形态拒绝（bash -c / "
+        "sh 前缀 / 管道到 sh / heredoc；useradd -s /bin/bash 这类参数值放行）、"
+        "重定向到文件（> / >> / >&）、后台（&；&& 顺序连接放行）、多命令分隔（;）、"
+        "命令替换（$()/反引号）、内嵌 sudo。"
+        "prod 环境变更类命令（重启/重建/配置下发）经人工审批门确认后才执行"
+        "（web 弹窗 / CLI 提示）；只读诊断（ps/ss/vmstat/cat）直接执行。"
     ),
     "parameters": {
         "type": "object",
