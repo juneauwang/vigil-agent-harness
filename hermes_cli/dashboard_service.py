@@ -26,12 +26,7 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 # Re-exported config helpers as module attributes so tests can monkeypatch
-# the port-resolution source without importing hermes_cli.config directly.
-def load_config_readonly():
-    from hermes_cli.config import load_config_readonly as _lr
-    return _lr()
-
-
+# the config write path without importing hermes_cli.config directly.
 def load_config():
     from hermes_cli.config import load_config as _lc
     return _lc()
@@ -48,6 +43,35 @@ UNIT_PATH = UNIT_DIR / UNIT_NAME
 _DEFAULT_PORT = 9119
 
 
+def _config_dashboard_port() -> Optional[int]:
+    """``dashboard.port`` ONLY when the user config explicitly sets it.
+
+    Presence-sensitive read (raw file, no DEFAULT_CONFIG merge): the schema
+    ships ``dashboard.port: 9119``, so a merged read would make every home
+    look like it "explicitly" pinned 9119 — the systemd-unit fallback would
+    never fire, which is the §BS bug class (hand-written unit on 9120 + no
+    config key → restart wrongly picked 9119). Managed-scope overlay wins at
+    the leaf, mirroring ``load_config`` merge order.
+    """
+    try:
+        from hermes_cli.config import read_raw_config as _raw
+
+        dash = _raw().get("dashboard") or {}
+        if "port" in dash and dash["port"] is not None:
+            return int(dash["port"])
+    except Exception:
+        pass
+    try:
+        from hermes_cli import managed_scope
+
+        dash = managed_scope.load_managed_config().get("dashboard") or {}
+        if "port" in dash and dash["port"] is not None:
+            return int(dash["port"])
+    except Exception:
+        pass
+    return None
+
+
 def _resolve_dashboard_port(
     args_port: Optional[int] = None,
     *,
@@ -61,16 +85,15 @@ def _resolve_dashboard_port(
         （两处一致，restart 继承"上次用的端口"）；
       - ``restart`` 无显式 --port 时优先 config dashboard.port；config 也无时
         回退解析已写 unit 的 ExecStart 端口（_unit_port），保证继承已装端口。
+
+    batch 46 §BS：``args_port`` 为 ``None`` 才算"未传"（parser 默认值已改为
+    ``None``，只有用户显式传了 ``--port`` 才是非 None）；显式传 0（OS 自动
+    分配）也原样透传。config 用 presence-sensitive 读——用户 config 没有显式
+    写 ``dashboard.port`` 时（schema 默认 9119 不算"显式"）继续回退 unit。
     """
-    port = int(args_port) if args_port else None
+    port = int(args_port) if args_port is not None else None
     if port is None:
-        try:
-            cfg = load_config_readonly()
-            cfg_port = (cfg.get("dashboard") or {}).get("port")
-            if cfg_port is not None:
-                port = int(cfg_port)
-        except Exception:
-            port = None
+        port = _config_dashboard_port()
     if port is None and fallback_to_unit:
         port = _unit_port()
     if port is None:

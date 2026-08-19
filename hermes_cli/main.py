@@ -10720,18 +10720,100 @@ def cmd_dashboard_stop(args):
     sys.exit(1 if remaining else 0)
 
 
+def _dashboard_restart_argv(args, port: int) -> list:
+    """argv for the detached server ``vigil dashboard restart`` spawns.
+
+    The child is a plain ``dashboard`` server process (NOT ``restart``), so
+    its cmdline matches the server scan: the next restart (or ``vigil
+    dashboard stop``) can find and stop it — the restart CLI itself stays a
+    lifecycle command and is never mistaken for a server (§AX self-exclusion
+    intact). ``--no-open`` + ``--skip-build`` mirror what the install unit
+    and the ``vigil update`` respawn path already do for background boots:
+    no browser pop, no surprise rebuild.
+    """
+    argv = [
+        sys.executable,
+        "-m", "hermes_cli.main",
+        "dashboard",
+        "--port", str(port),
+        "--host", getattr(args, "host", None) or "127.0.0.1",
+        "--no-open",
+        "--skip-build",
+    ]
+    if getattr(args, "isolated", False):
+        argv.append("--isolated")
+    if getattr(args, "insecure", False):
+        argv.append("--insecure")
+    if getattr(args, "open_profile", ""):
+        argv.extend(["--open-profile", str(getattr(args, "open_profile", ""))])
+    if getattr(args, "ssh_owner_nonce", None):
+        argv.extend(["--ssh-owner-nonce", str(getattr(args, "ssh_owner_nonce"))])
+    return argv
+
+
+def _dashboard_restart_log_path() -> Path:
+    """Log file for restart-spawned dashboards (same convention as respawn)."""
+    from hermes_constants import get_hermes_home
+
+    return get_hermes_home() / "logs" / "dashboard-restart.log"
+
+
+def _read_log_tail(path: Path, max_lines: int = 10) -> str:
+    """Last *max_lines* lines of a log file, or "" when unreadable."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        return "\n".join(lines[-max_lines:])
+    except Exception:
+        return ""
+
+
+def _wait_for_dashboard_ready(proc, log_path: Path, port: int, timeout: float = 45.0) -> bool:
+    """True once the spawned server prints its ``VIGIL_DASHBOARD_READY`` line.
+
+    The server prints that line (``flush=True``) only after uvicorn has
+    actually bound the socket — the same signal the desktop app waits on. A
+    plain TCP probe is NOT enough: a third-party listener squatting on the
+    port (the failure-path scenario) would answer the probe even though OUR
+    child is about to die on the bind. Only content appended AFTER the spawn
+    (``start_size``) is considered, so a previous run's READY line never
+    short-circuits. Bails early when the child exited on its own (bind
+    failure) instead of burning the whole timeout.
+    """
+    try:
+        start_size = log_path.stat().st_size if log_path.exists() else 0
+    except OSError:
+        start_size = 0
+    marker = f"VIGIL_DASHBOARD_READY port={port}"
+    deadline = _time.monotonic() + timeout
+    while _time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return False
+        try:
+            with open(log_path, "rb") as log_f:
+                log_f.seek(start_size)
+                if marker.encode("utf-8") in log_f.read():
+                    return True
+        except OSError:
+            pass
+        _time.sleep(0.3)
+    return False
+
+
 def cmd_dashboard_restart(args):
     """Restart the dashboard: stop any running processes, then start fresh.
 
     Mirrors ``systemctl restart`` on a stopped unit — when nothing is running
-    it simply starts. The start phase re-enters ``cmd_dashboard`` with the
-    server-runtime args (port/host/no-open/...) intact.
+    it simply starts. The start phase spawns a DETACHED ``dashboard`` server
+    child on the inherited port (explicit --port > config dashboard.port >
+    installed unit ExecStart > 9119) and waits for it to come up, so the
+    restart CLI returns like ``systemctl restart`` does and the running
+    server stays discoverable by the next restart / ``vigil dashboard stop``.
 
-    If the start phase fails (port already in use, build failure, auth-gate
-    rejection, ...) the dashboard has already been stopped by the stop phase
-    above, so we must exit loudly rather than let the restart look like a
-    silent no-op (OPS-DELTA 批次四十三 §AX — "停了起不来" must be spelled
-    out, not swallowed).
+    If the start phase fails (port already in use, auth-gate rejection, ...)
+    the dashboard has already been stopped by the stop phase above, so we
+    must exit loudly and point at the CORRECT inherited port — never the
+    hardcoded 9119 default (OPS-DELTA 批次四十六 §BS — "只停不启" + 错误
+    提示误导端口).
     """
     pids = _find_stale_dashboard_pids()
     if pids:
@@ -10745,19 +10827,57 @@ def cmd_dashboard_restart(args):
             sys.exit(1)
     else:
         print("No vigil dashboard processes running; starting fresh.")
+
+    # batch 46 §BS: resolve the inherited port ONCE and use it for both the
+    # spawn and the failure hint — the parser default is None now, so "no
+    # --port" flows into config → unit → default instead of pretending the
+    # user explicitly asked for 9119.
+    port = _resolve_dashboard_port(args)
+    host = getattr(args, "host", None) or "127.0.0.1"
+    log_path = _dashboard_restart_log_path()
     try:
-        return cmd_dashboard(args)
-    except SystemExit as exc:
-        code = exc.code if isinstance(exc.code, int) else 1
-        if code != 0:
-            print(
-                "✗ Dashboard stopped but failed to start during restart. "
-                "Run `vigil dashboard start --port {port}` to inspect and retry."
-                .format(port=getattr(args, "port", 9119)),
-                file=sys.stderr,
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    try:
+        with open(log_path, "ab") as log_f:
+            proc = subprocess.Popen(
+                _dashboard_restart_argv(args, port),
+                stdin=subprocess.DEVNULL,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True,
             )
-            raise
-        raise
+    except (OSError, ValueError) as exc:
+        print(
+            f"✗ Dashboard stopped but failed to start during restart. "
+            f"Run `vigil dashboard start --port {port}` to inspect and retry. "
+            f"(spawn error: {exc})",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    if port <= 0:
+        # --port 0 = OS-assigned: we can't probe a concrete port; the child
+        # announces the bound port on its own (VIGIL_DASHBOARD_READY).
+        print(f"✓ Dashboard restart spawned (PID {proc.pid}, OS-assigned port).")
+        print(f"  Log: {log_path}")
+        return 0
+
+    if not _wait_for_dashboard_ready(proc, log_path, port):
+        tail = _read_log_tail(log_path)
+        detail = f"\n{tail}" if tail else ""
+        print(
+            f"✗ Dashboard stopped but failed to start during restart. "
+            f"Run `vigil dashboard start --port {port}` to inspect and retry."
+            f"{detail}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    print(f"✓ Dashboard restarted: http://{host}:{port} (PID {proc.pid})")
+    print(f"  Log: {log_path}")
+    return 0
 
 
 def cmd_gateway_enroll(args):
