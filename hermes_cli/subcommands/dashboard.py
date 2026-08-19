@@ -24,7 +24,13 @@ def _add_server_runtime_args(parser, *, include_lifecycle: bool = True) -> None:
     browser-opening behavior and help framing differ.
     """
     parser.add_argument(
-        "--port", type=int, default=9119, help="Port (default 9119, 0 for auto-assign by OS)"
+        "--port",
+        type=int,
+        default=None,
+        help=(
+            "Port (default: config dashboard.port, else the installed "
+            "vigil-dashboard unit's port, else 9119; 0 for auto-assign by OS)"
+        ),
     )
     parser.add_argument(
         "--host", default="127.0.0.1", help="Host (default 127.0.0.1)"
@@ -296,8 +302,13 @@ def build_dashboard_parser(
             ),
         )
         install_parser.add_argument(
-            "--port", type=int, default=9119,
-            help="Port the unit should serve on (default 9119)",
+            "--port",
+            type=int,
+            default=None,
+            help=(
+                "Port the unit should serve on (default: config dashboard.port, "
+                "else 9119)"
+            ),
         )
         install_parser.set_defaults(func=cmd_dashboard_install)
     if cmd_dashboard_uninstall is not None:

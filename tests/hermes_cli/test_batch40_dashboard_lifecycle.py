@@ -138,52 +138,53 @@ class TestStopSubcommand:
 
 class TestRestartSubcommand:
     def test_restart_stops_then_starts(self, capsys):
-        """有进程 → 先 stop，再重入 cmd_dashboard（server-start 路径）。"""
-        started = []
-
-        def fake_cmd_dashboard(args):
-            started.append(args)
-            raise SystemExit(0)
-
+        """有进程 → 先 stop，再 spawn 分离的 dashboard server（继承 9120）。"""
         with patch("hermes_cli.main._find_stale_dashboard_pids",
                    side_effect=[[12345], []]), \
              patch("hermes_cli.main._kill_stale_dashboard_processes") as mock_kill, \
-             patch("hermes_cli.main.cmd_dashboard", side_effect=fake_cmd_dashboard), \
-             pytest.raises(SystemExit) as exc:
-            cmd_dashboard_restart(_ns())
-        assert exc.value.code == 0
+             patch("hermes_cli.main.subprocess.Popen") as mock_popen, \
+             patch("hermes_cli.main._wait_for_dashboard_ready", return_value=True), \
+             patch("hermes_cli.main._resolve_dashboard_port", return_value=9120):
+            fake_proc = type("P", (), {"pid": 4242, "poll": lambda self: None})()
+            mock_popen.return_value = fake_proc
+            rc = cmd_dashboard_restart(_ns(port=None))
+        assert rc == 0
         mock_kill.assert_called_once()
         assert "restart" in mock_kill.call_args.kwargs["reason"].lower()
-        assert len(started) == 1  # stop 后重入 start
+        argv = mock_popen.call_args.args[0]
+        assert "--port" in argv and argv[argv.index("--port") + 1] == "9120"
+        # 子进程是 server 形态（dashboard），不是 lifecycle（restart）→ 下次
+        # restart / `vigil dashboard stop` 能扫到并停掉它。
+        assert "dashboard" in argv
+        assert "restart" not in argv
+        assert "--no-open" in argv and "--skip-build" in argv
 
     def test_restart_without_running_starts_fresh(self, capsys):
-        """无进程 → 不 kill，直接 start（对齐 systemctl restart 停态语义）。"""
-        started = []
-
-        def fake_cmd_dashboard(args):
-            started.append(args)
-            raise SystemExit(0)
-
+        """无进程 → 不 kill，直接 spawn（对齐 systemctl restart 停态语义）。"""
         with patch("hermes_cli.main._find_stale_dashboard_pids", return_value=[]), \
              patch("hermes_cli.main._kill_stale_dashboard_processes") as mock_kill, \
-             patch("hermes_cli.main.cmd_dashboard", side_effect=fake_cmd_dashboard), \
-             pytest.raises(SystemExit) as exc:
-            cmd_dashboard_restart(_ns())
-        assert exc.value.code == 0
+             patch("hermes_cli.main.subprocess.Popen") as mock_popen, \
+             patch("hermes_cli.main._wait_for_dashboard_ready", return_value=True), \
+             patch("hermes_cli.main._resolve_dashboard_port", return_value=9120):
+            fake_proc = type("P", (), {"pid": 4242, "poll": lambda self: None})()
+            mock_popen.return_value = fake_proc
+            rc = cmd_dashboard_restart(_ns(port=None))
+        assert rc == 0
         mock_kill.assert_not_called()
-        assert "starting fresh" in capsys.readouterr().out
-        assert len(started) == 1
+        out = capsys.readouterr().out
+        assert "starting fresh" in out
+        assert "http://127.0.0.1:9120" in out
 
     def test_restart_aborts_when_stop_leaves_survivors(self, capsys):
         with patch("hermes_cli.main._find_stale_dashboard_pids",
                    side_effect=[[12345], [12345]]), \
              patch("hermes_cli.main._kill_stale_dashboard_processes"), \
-             patch("hermes_cli.main.cmd_dashboard") as mock_start, \
+             patch("hermes_cli.main.subprocess.Popen") as mock_popen, \
              pytest.raises(SystemExit) as exc:
             cmd_dashboard_restart(_ns())
         assert exc.value.code == 1
         assert "aborting restart" in capsys.readouterr().err
-        mock_start.assert_not_called()
+        mock_popen.assert_not_called()
 
 
 class TestStatusSubcommand:
@@ -271,82 +272,89 @@ class TestFindStaleDashboardPidsSelfExclusion:
 
 
 class TestRestartStartFailureOutput:
-    """batch 43 §AX：restart 的 start 阶段若失败，必须输出明确错误，禁止静默退出。"""
+    """batch 43 §AX + 批46 §BS：restart 的 start 阶段若失败，必须输出明确错误，
+    且提示里的端口是解析继承的那个（不是硬编码 9119）。"""
 
     def test_restart_prints_failure_when_start_fails(self, capsys):
-        """stop 成功但 start 抛 SystemExit(1) → 输出"已停止但启动失败"提示。"""
-
-        def fake_cmd_dashboard(args):
-            raise SystemExit(1)  # 端口占用等 → start 失败
-
+        """stop 成功但 spawn 的 server 起不来（端口占用等）→ 明确错误 + 正确端口。"""
+        fake_proc = type("P", (), {"pid": 4242, "poll": lambda self: 1})()
         with patch("hermes_cli.main._find_stale_dashboard_pids",
                    side_effect=[[12345], []]), \
              patch("hermes_cli.main._kill_stale_dashboard_processes"), \
-             patch("hermes_cli.main.cmd_dashboard", side_effect=fake_cmd_dashboard), \
+             patch("hermes_cli.main.subprocess.Popen", return_value=fake_proc), \
+             patch("hermes_cli.main._wait_for_dashboard_ready", return_value=False), \
+             patch("hermes_cli.main._resolve_dashboard_port", return_value=9120), \
              pytest.raises(SystemExit) as exc:
-            cmd_dashboard_restart(_ns())
+            cmd_dashboard_restart(_ns(port=None))
         assert exc.value.code == 1
         err = capsys.readouterr().err
         assert "stopped but failed to start" in err
+        # 提示引导继承端口 9120，绝不回落到 9119 默认。
+        assert "--port 9120" in err
 
     def test_restart_start_success_no_extra_error(self, capsys):
-        """start 成功（exit 0）→ 不断言失败提示。"""
-        def fake_cmd_dashboard(args):
-            raise SystemExit(0)
-
+        """start 成功（listening）→ 不输出失败提示。"""
+        fake_proc = type("P", (), {"pid": 4242, "poll": lambda self: None})()
         with patch("hermes_cli.main._find_stale_dashboard_pids",
                    side_effect=[[12345], []]), \
              patch("hermes_cli.main._kill_stale_dashboard_processes"), \
-             patch("hermes_cli.main.cmd_dashboard", side_effect=fake_cmd_dashboard), \
-             pytest.raises(SystemExit) as exc:
-            cmd_dashboard_restart(_ns())
-        assert exc.value.code == 0
+             patch("hermes_cli.main.subprocess.Popen", return_value=fake_proc), \
+             patch("hermes_cli.main._wait_for_dashboard_ready", return_value=True), \
+             patch("hermes_cli.main._resolve_dashboard_port", return_value=9120):
+            rc = cmd_dashboard_restart(_ns(port=None))
+        assert rc == 0
         err = capsys.readouterr().err
         assert "failed to start" not in err
 
 
 class TestPortSingleSourceResolution:
-    """batch 43 §BF：config dashboard.port 是端口单一事实来源。"""
+    """batch 43 §BF + 批46 §BS：config dashboard.port 是端口单一事实来源；
+    "未传 --port" 与 "显式 9119" 可区分（未传 → config/unit/默认 回退）。"""
 
     def test_resolve_priority_explicit_port_wins(self, monkeypatch):
         from hermes_cli import dashboard_service as svc
 
         # 显式 --port 优先于 config/unit。
         monkeypatch.setattr(svc, "_unit_port", lambda: 9999)
-        monkeypatch.setattr(svc, "load_config_readonly", lambda: {"dashboard": {"port": 9121}})
+        monkeypatch.setattr(svc, "_config_dashboard_port", lambda: 9121)
         assert svc._resolve_dashboard_port(9130) == 9130
 
     def test_resolve_falls_back_to_config_port(self, monkeypatch):
         from hermes_cli import dashboard_service as svc
 
-        monkeypatch.setattr(
-            svc, "_unit_port", lambda: 9999,
-        )
-        monkeypatch.setattr(
-            svc, "load_config_readonly",
-            lambda: {"dashboard": {"port": 9121}},
-        )
+        monkeypatch.setattr(svc, "_unit_port", lambda: 9999)
+        monkeypatch.setattr(svc, "_config_dashboard_port", lambda: 9121)
         assert svc._resolve_dashboard_port(None) == 9121
 
     def test_resolve_falls_back_to_unit_when_no_config(self, monkeypatch):
         from hermes_cli import dashboard_service as svc
 
         monkeypatch.setattr(svc, "_unit_port", lambda: 9120)
-        monkeypatch.setattr(
-            svc, "load_config_readonly",
-            lambda: {"dashboard": {}},
-        )
+        monkeypatch.setattr(svc, "_config_dashboard_port", lambda: None)
         assert svc._resolve_dashboard_port(None) == 9120
 
     def test_resolve_default_when_no_source(self, monkeypatch):
         from hermes_cli import dashboard_service as svc
 
         monkeypatch.setattr(svc, "_unit_port", lambda: 9119)
-        monkeypatch.setattr(
-            svc, "load_config_readonly",
-            lambda: {},
-        )
+        monkeypatch.setattr(svc, "_config_dashboard_port", lambda: None)
         assert svc._resolve_dashboard_port(None) == 9119
+
+    def test_resolve_explicit_9119_stays_9119(self, monkeypatch):
+        """显式 --port 9119 与"未传"不同：不触发 config/unit 回退，就用 9119。"""
+        from hermes_cli import dashboard_service as svc
+
+        monkeypatch.setattr(svc, "_unit_port", lambda: 9120)
+        monkeypatch.setattr(svc, "_config_dashboard_port", lambda: 9121)
+        assert svc._resolve_dashboard_port(9119) == 9119
+
+    def test_resolve_explicit_zero_passes_through(self, monkeypatch):
+        """显式 --port 0（OS 自动分配）原样透传，不落入回退链。"""
+        from hermes_cli import dashboard_service as svc
+
+        monkeypatch.setattr(svc, "_unit_port", lambda: 9120)
+        monkeypatch.setattr(svc, "_config_dashboard_port", lambda: 9121)
+        assert svc._resolve_dashboard_port(0) == 0
 
     def test_install_persists_port_to_config_and_unit_agree(self, tmp_path, monkeypatch):
         """install --port 9120 → config dashboard.port=9120 且 unit ExecStart 同端口。"""
