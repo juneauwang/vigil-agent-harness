@@ -16,7 +16,8 @@ export interface ApprovalSnapshot {
 }
 
 const MAX_SEEN_IDS = 200;
-const POLL_INTERVAL_MS = 4000;
+// 批次四十七 §BT：审批产生后弹窗须及时出现（验收：轮询间隔 ≤3s）。
+const POLL_INTERVAL_MS = 3000;
 
 export class ApprovalPoller {
   private seenIds = new Set<string>();

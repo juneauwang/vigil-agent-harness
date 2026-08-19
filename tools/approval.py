@@ -3879,6 +3879,58 @@ def request_tool_approval(
     )
 
 
+def request_ops_approval(command: str, ops_decision: dict) -> dict:
+    """Ops 权限矩阵 approve 决策 → 人工审批门（sudo_exec 等 ops 工具用）。
+
+    OPS-DELTA #64（§BT）：sudo_exec 此前把 ``require_confirmation`` JSON 直接
+    交回 LLM 转述，web 端永远没有审批记录落库 → 全局审批弹窗不触发、批准不生效。
+    本函数复用与 ``check_all_command_guards`` 的 ops_matrix 审批同一门
+    （``_run_approval_gate``）：CLI 走交互提示、web 经每线程回调落
+    ``register_web_approval``（/api/approvals 可见、弹窗出现）、gateway 走
+    通知回环或 pending 注册表；无人在场（cron/batch/裸脚本）fail-closed BLOCK。
+
+    语义与 terminal 的 ops 审批对齐：普通 approve 用 ``ops_matrix:{grade}:{env}``
+    key（会话/永久 allowlist 生效）；prod 变更确认门（require_confirmation）改用
+    ``ops_confirmation:{grade}:{env}`` key 且不提供 session/永久选项——每次都强制
+    人工确认，任何 allowlist 都不能跳过（同 check_all_command_guards 的
+    ``_ops_confirmation_required`` 语义）。
+    """
+    grade = str(ops_decision.get("grade") or "L2")
+    env = str(ops_decision.get("env") or "").strip().lower()
+    require_confirmation = bool(ops_decision.get("require_confirmation"))
+    pattern_key = (
+        f"ops_confirmation:{grade}:{env}"
+        if require_confirmation
+        else f"ops_matrix:{grade}:{env}"
+    )
+    description = str(
+        ops_decision.get("description")
+        or f"命令分级 {grade} 在 {env} 环境需要人工审批"
+    )
+    allow_permanent = not require_confirmation
+    allow_session = not require_confirmation
+    return _run_approval_gate(
+        pattern_key=pattern_key,
+        description=description,
+        display_target=command,
+        approval_callback=None,  # 回退到 terminal_tool 每线程回调（CLI/web/gateway）
+        allow_permanent=allow_permanent,
+        allow_session=allow_session,
+        cron_deny_message=(
+            f"BLOCKED: 提权命令 '{command}' 需要人工审批（{description}），"
+            "但 cron 任务没有用户在场审批。请改用无需审批的替代命令；"
+            "如需在 cron 放行，在 config.yaml 设置 approvals.cron_mode: approve。"
+        ),
+        autoapprove_log_prefix="sudo_exec ops 审批",
+        fail_closed_when_no_human=True,
+        no_human_block_message=(
+            f"BLOCKED: 提权命令 '{command}' 需要人工审批（{description}），"
+            "但当前没有交互用户或 gateway 在场审批。请手动执行该命令或"
+            "改用只读诊断命令（L1 查询档无需审批）。"
+        ),
+    )
+
+
 # =========================================================================
 # Combined pre-exec guard (tirith + dangerous command detection)
 # =========================================================================

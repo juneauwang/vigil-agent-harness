@@ -79,6 +79,31 @@ describe("审批全局轮询（批三十四）", () => {
     expect(fetcher).toHaveBeenCalledTimes(4);
   });
 
+  it("默认轮询间隔 ≤3s（§BT：审批产生后弹窗及时出现）", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn().mockResolvedValue(resp([]));
+    const p = new ApprovalPoller(fetcher); // 用默认间隔（3000ms）
+    p.start();
+    expect(fetcher).toHaveBeenCalledTimes(1); // 启动立即拉一次
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(fetcher).toHaveBeenCalledTimes(2); // 3s 内到点
+    p.stop();
+  });
+
+  it("重新 start 前 stop 停止后再 start 可恢复轮询（页面挂载/卸载语义）", async () => {
+    vi.useFakeTimers();
+    const fetcher = vi.fn().mockResolvedValue(resp([]));
+    const p = new ApprovalPoller(fetcher, 3000);
+    p.start();
+    p.stop(); // 模拟路由卸载（App 根组件 unmount）
+    await vi.advanceTimersByTimeAsync(3000 * 3);
+    expect(fetcher).toHaveBeenCalledTimes(1); // 停止后不再轮询
+    p.start(); // 模拟重新挂载：恢复轮询
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(fetcher).toHaveBeenCalledTimes(3); // 恢复：立即 1 次 + 周期 1 次
+    p.stop();
+  });
+
   it("轮询失败保留上次快照，不崩溃，下个 tick 恢复", async () => {
     const fetcher = vi.fn()
       .mockRejectedValueOnce(new Error("network down"))

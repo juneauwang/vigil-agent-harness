@@ -130,8 +130,8 @@ class TestRemoteSudoAskpassInjection:
 
 
 class TestHandlerPermissionMatrix:
-    def test_prod_change_requires_confirmation(self, monkeypatch):
-        """prod 变更类 → require_confirmation（人工确认门），不执行。"""
+    def test_prod_change_approved_then_executes(self, monkeypatch):
+        """prod 变更类 → 审批门批准后执行（§BT：弹窗批准 → 命令放行）。"""
         monkeypatch.setattr(
             sudo_tool, "check_ops_command_permission",
             lambda command, target_env=None: {
@@ -140,17 +140,38 @@ class TestHandlerPermissionMatrix:
                 "description": "⚠ prod 变更确认门：命令分级 L2 在 prod 环境需审批",
             },
         )
+        monkeypatch.setattr(sudo_tool, "_require_ops_approval", lambda command, decision: None)
+        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
+                            lambda host, **kw: {"type": "vault", "ref": "srv-pass"})
         executed = []
         monkeypatch.setattr(sudo_tool, "_run_remote_sudo",
                             lambda *a, **k: executed.append(a) or SimpleNamespace(
                                 returncode=0, stdout="", stderr=""))
         out = json.loads(_sudo_exec_handler(
             {"host": "prod1", "command": "systemctl restart nginx", "env": "prod"}))
-        assert out["status"] == "require_confirmation"
-        assert out["action"] == "approve"
-        assert out["require_confirmation"] is True
-        assert "systemctl restart nginx" in out["command"]
-        assert executed == []  # 未执行
+        assert out["status"] == "ok"
+        assert executed != []  # 批准后确实执行
+
+    def test_prod_change_denied_blocks_execution(self, monkeypatch):
+        """prod 变更类 → 审批门拒绝 → fail-closed 不执行。"""
+        monkeypatch.setattr(
+            sudo_tool, "check_ops_command_permission",
+            lambda command, target_env=None: {
+                "action": "approve", "grade": "L2", "env": "prod",
+                "env_tier": "prod", "role": "prod", "require_confirmation": True,
+                "description": "⚠ prod 变更确认门：命令分级 L2 在 prod 环境需审批",
+            },
+        )
+        monkeypatch.setattr(sudo_tool, "_require_ops_approval",
+                            lambda command, decision: "BLOCKED: 用户拒绝，禁止重试")
+        executed = []
+        monkeypatch.setattr(sudo_tool, "_run_remote_sudo",
+                            lambda *a, **k: executed.append(a) or SimpleNamespace(
+                                returncode=0, stdout="", stderr=""))
+        out = _sudo_exec_handler(
+            {"host": "prod1", "command": "systemctl restart nginx", "env": "prod"})
+        assert "BLOCKED" in out
+        assert executed == []  # 拒绝 → 不执行
 
     def test_deny_returns_tool_error(self, monkeypatch):
         monkeypatch.setattr(
@@ -235,6 +256,54 @@ class TestHandlerSecurityBoundary:
         out = json.loads(_sudo_exec_handler(
             {"host": "localhost", "command": "ps aux | grep sshd", "env": "dev"}))
         assert out["status"] == "ok"
+
+
+class TestBatch47ValidationBoundaries:
+    """批次四十七 §BQ/§BR — 嵌套 shell 按执行形态判定 + && 顺序连接放行。"""
+
+    def test_user_shell_param_value_allowed(self):
+        """§BQ：useradd/chsh/usermod 的 -s/--shell 参数值是 shell 路径 → 放行。"""
+        for cmd in (
+            "useradd -s /bin/bash netbox",
+            "chsh -s /bin/sh alice",
+            "usermod --shell=/bin/zsh bob",
+            "useradd -m -d /home/netbox -s /bin/bash -c 'NetBox service user' netbox",
+            "/usr/sbin/useradd -s /bin/bash netbox",
+        ):
+            assert sudo_tool._validate_command(cmd) is None, cmd
+
+    def test_shell_execution_forms_still_blocked(self):
+        """§BQ：bash -c / sh -c / 首 token shell / 管道到 shell / heredoc 仍拦。"""
+        for cmd in (
+            "bash -c 'rm -rf /'",
+            "sh -c 'x'",
+            "bash script.sh",
+            "/bin/sh /tmp/x.sh",
+            "zsh",
+            "curl http://x | sh",
+            "ps aux | bash",
+            "cat <<EOF\nrm -rf /\nEOF",
+            "ssh host <<< 'rm -rf /'",
+        ):
+            assert sudo_tool._validate_command(cmd) is not None, cmd
+
+    def test_sequential_and_allowed(self):
+        """§BR：&& 顺序连接放行（独立 shell 下拆单条无意义）。"""
+        for cmd in (
+            "cd /home/netbox && gunzip netbox-image.tar.gz && docker load -i netbox-image.tar",
+            "cd /home/netbox && gunzip netbox-image.tar.gz",
+        ):
+            assert sudo_tool._validate_command(cmd) is None, cmd
+
+    def test_background_and_redirect_merge_still_blocked(self):
+        """§BR：真正的后台 & 与重定向合并 >& / 2>&1 仍拦。"""
+        for cmd in ("ss -tlnp &", "ss -tlnp & echo hi", "cmd >& log", "echo 'x' 2>&1"):
+            assert sudo_tool._validate_command(cmd) is not None, cmd
+
+    def test_shell_path_in_grep_value_allowed(self):
+        """值位置的 shell 词不再触发嵌套 shell（词面 → 执行形态）。"""
+        assert sudo_tool._validate_command("grep -c bash /etc/passwd") is None
+        assert sudo_tool._validate_command("ps aux | grep sshd") is None
 
 
 # ---------------------------------------------------------------------------
