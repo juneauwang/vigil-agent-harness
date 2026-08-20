@@ -195,7 +195,9 @@ def _collect_sudo_password_via_clarify(host: str) -> Optional[str]:
 
 def _write_askpass_cat(vault_path: str) -> Path:
     """写 0700 askpass 脚本：``cat <vault_path>``（远端脚本用远端路径）。"""
-    script = Path(tempfile.mkstemp(prefix="vigil-sudo-askpass-", suffix=".sh")[1])
+    fd, path = tempfile.mkstemp(prefix="vigil-sudo-askpass-", suffix=".sh")
+    os.close(fd)  # 不关 fd 则脚本保持写打开，ssh/exec 报 Text file busy
+    script = Path(path)
     script.write_text(f"#!/bin/sh\ncat {vault_path}\n", encoding="utf-8")
     os.chmod(script, 0o700)
     return script
