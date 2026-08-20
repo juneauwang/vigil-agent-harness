@@ -15,6 +15,10 @@ import {
 } from "@/lib/approvalQueue";
 import { approvalPoller, useApprovalSnapshot } from "@/lib/approvalPoller";
 import { notifyApprovalResolved } from "@/lib/approvalEvents";
+import {
+  requestApprovalNotificationPermission,
+  showApprovalNotification,
+} from "@/lib/approvalNotification";
 
 /**
  * 审批全局弹窗（批三十四）：任何路由可见的页面内居中 modal。
@@ -24,6 +28,11 @@ import { notifyApprovalResolved } from "@/lib/approvalEvents";
  * 审批中心保留，命令继续等待，超时策略照现有 timeout_policy）。当前审批被
  * 别处裁决/超时 → 自动移出队列。无 ESC/遮罩点击关闭——忽略是显式动作，避免
  * 误触把安全交互藏掉。
+ *
+ * 批四十九：形态改右下角卡片（Grafana 通知风格，可堆叠排队）；审批到达 →
+ * 桌面通知（Web Notification API，权限首次请求，拒绝降级页内弹窗）；弹窗带
+ * 超时倒计时（timeout_at 推导，快超时红色）。安全语义不变：无自动消失、批准/
+ * 拒绝/忽略三按钮显式、队列一次一个、全局可见。
  */
 function formatApiError(e: unknown): string {
   if (e instanceof ApiError) return `[${e.code}] ${e.message}`;
@@ -79,6 +88,33 @@ function LongCommandBlock({ command }: { command: string }) {
   );
 }
 
+/** 批四十九：审批超时倒计时（timeout_at 推导；已过期 → "审批超时，已终止"）。 */
+function ApprovalCountdown({ timeoutAt, pending }: { timeoutAt?: string | null; pending: boolean }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  if (!pending || !timeoutAt) return null;
+  const deadline = Date.parse(timeoutAt);
+  if (Number.isNaN(deadline)) return null;
+  const ms = deadline - now;
+  if (ms <= 0) return <span className="shrink-0 text-[10px] text-red-500">审批超时，已终止</span>;
+  const total = Math.ceil(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return (
+    <span
+      className={cn(
+        "shrink-0 font-mono text-[10px]",
+        total <= 60 ? "text-red-500" : "text-[var(--vigil-muted)]",
+      )}
+    >
+      {m > 0 ? `${m}m ${s}s` : `${s}s`}
+    </span>
+  );
+}
+
 export default function ApprovalModal() {
   const snap = useApprovalSnapshot();
   const [state, dispatch] = useReducer(queueReducer, initialApprovalQueue);
@@ -91,6 +127,13 @@ export default function ApprovalModal() {
   useEffect(() => {
     if (snap.added.length > 0) {
       dispatch({ type: "enqueue", added: snap.added });
+      // 批四十九：审批到达 → 桌面通知（权限首次请求；拒绝降级页内弹窗）。
+      void (async () => {
+        const granted = await requestApprovalNotificationPermission();
+        if (granted) {
+          for (const item of snap.added) showApprovalNotification(item);
+        }
+      })();
     }
   }, [snap.added]);
 
@@ -134,14 +177,12 @@ export default function ApprovalModal() {
 
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
+      data-testid="approval-corner"
+      className="fixed bottom-4 right-4 z-[100] flex w-[400px] max-w-[calc(100vw-2rem)] flex-col gap-2"
+      role="region"
       aria-label="审批请求"
     >
-      {/* 深色遮罩（不绑定关闭：忽略必须显式按钮触发） */}
-      <div className="absolute inset-0 bg-black/50" />
-      <div className="relative flex w-full max-w-lg flex-col gap-3 rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-4 shadow-[0_8px_30px_rgba(0,0,0,0.2)]">
+      <div className="flex flex-col gap-3 rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-4 shadow-[0_8px_30px_rgba(0,0,0,0.2)]">
         <div className="flex items-center gap-2">
           <ShieldAlert className="size-5 shrink-0 text-amber-500" />
           <span className="text-sm font-semibold text-[var(--vigil-text)]">该命令需要审批</span>
@@ -150,6 +191,11 @@ export default function ApprovalModal() {
               L{active.grade}
             </span>
           )}
+          <ApprovalCountdown
+            key={active.id}
+            timeoutAt={active.timeout_at}
+            pending={active.status === "pending"}
+          />
         </div>
 
         <LongCommandBlock command={active.command} />
@@ -194,6 +240,11 @@ export default function ApprovalModal() {
           </button>
         </div>
       </div>
+      {state.queue.length > 1 && (
+        <div className="rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-3 py-1.5 text-[10px] text-[var(--vigil-muted)]">
+          还有 {state.queue.length - 1} 个审批待处理
+        </div>
+      )}
     </div>
   );
 }

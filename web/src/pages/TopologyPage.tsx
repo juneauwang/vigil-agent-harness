@@ -149,7 +149,11 @@ function HostCard({
   );
 
   return (
-    <div className={cn("vigil-card p-3.5", card.on_key_path && "border-amber-500/50")}>
+    <div
+      id={`topo-row-${card.name}`}
+      className={cn("vigil-card cursor-pointer p-3.5", card.on_key_path && "border-amber-500/50")}
+      onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })}
+    >
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Server className="size-4 text-[var(--vigil-muted)]" />
         <span className="font-semibold">{card.name}</span>
@@ -203,7 +207,11 @@ function CrossCard({
   if (!matchesSearch(card, q)) return null;
   if (!statusMatchesFilter(card.status, filter)) return null;
   return (
-    <div className={cn("vigil-card p-3.5", card.on_key_path && "border-amber-500/50")}>
+    <div
+      id={`topo-row-${card.name}`}
+      className={cn("vigil-card cursor-pointer p-3.5", card.on_key_path && "border-amber-500/50")}
+      onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })}
+    >
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Layers className="size-4 text-[var(--vigil-muted)]" />
         <span className="font-semibold">{card.name}</span>
@@ -220,9 +228,21 @@ function CrossCard({
 }
 
 /** 高密度列表视图行。 */
-function ListRow({ card, kind }: { card: TopologyCard; kind: string }) {
+function ListRow({
+  card,
+  kind,
+  onFocus,
+}: {
+  card: TopologyCard;
+  kind: string;
+  onFocus: (name: string) => void;
+}) {
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto_1fr_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm last:border-b-0 hover:bg-[var(--vigil-muted-bg)]">
+    <div
+      id={`topo-row-${card.name}`}
+      onClick={() => onFocus(card.name)}
+      className="grid cursor-pointer grid-cols-[1fr_auto_auto_auto_1fr_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm last:border-b-0 hover:bg-[var(--vigil-muted-bg)]"
+    >
       <span className="flex items-center gap-1.5 truncate">
         {card.on_key_path && <Link2 className="size-3 shrink-0 text-amber-500" />}
         <span className="font-medium">{card.name}</span>
@@ -254,6 +274,15 @@ export default function TopologyPage() {
   const [filter, setFilter] = useState<StatusFilterId>("all");
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
+  // 批四十九：图 ↔ 表联动——图中点选节点 → 列表滚动到该行；列表点行 →
+  // 图中高亮节点（TopologyGraph focusedName）。
+  const [focused, setFocused] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!focused) return;
+    const el = document.getElementById(`topo-row-${focused}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [focused]);
 
   useEffect(() => {
     let alive = true;
@@ -389,7 +418,12 @@ export default function TopologyPage() {
               <Database className="size-3.5" />
               连线拓扑总览
             </div>
-            <TopologyGraph view={view} onSelect={setDrawer} />
+            <TopologyGraph
+              view={view}
+              onSelect={setDrawer}
+              onNodeFocus={setFocused}
+              focusedName={focused}
+            />
           </div>
 
           {viewMode === "list" ? (
@@ -416,7 +450,7 @@ export default function TopologyPage() {
                     <div className="rounded border border-[var(--vigil-border)]/70">
                       {visibleHosts.map((host) => (
                         <div key={host.card.name}>
-                          <ListRow card={host.card} kind="host" />
+                          <ListRow card={host.card} kind="host" onFocus={setFocused} />
                           {host.services
                             .filter(
                               (s) =>
@@ -424,7 +458,7 @@ export default function TopologyPage() {
                                 statusMatchesFilter(s.card.status, filter),
                             )
                             .map((s) => (
-                              <ListRow key={s.card.name} card={s.card} kind="service" />
+                              <ListRow key={s.card.name} card={s.card} kind="service" onFocus={setFocused} />
                             ))}
                         </div>
                       ))}
@@ -435,7 +469,7 @@ export default function TopologyPage() {
                             statusMatchesFilter(c.card.status, filter),
                         )
                         .map((c) => (
-                          <ListRow key={c.card.name} card={c.card} kind="cross_host" />
+                          <ListRow key={c.card.name} card={c.card} kind="cross_host" onFocus={setFocused} />
                         ))}
                     </div>
                   </div>

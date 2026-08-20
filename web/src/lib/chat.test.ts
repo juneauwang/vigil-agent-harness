@@ -4,9 +4,11 @@ import {
   approvalIsTimedOut,
   applyChatEvent,
   chatInputDisabled,
+  clarifyIsTimedOut,
   createChatState,
   markApprovalResolved,
   markApprovalResolvedInSessions,
+  markClarifyResolved,
   markTurnInterrupted,
   pushUserMessage,
   stateFromHistory,
@@ -72,6 +74,43 @@ describe("chat 流式渲染状态机（批三十一）", () => {
     expect(s.messages[0].approvals[0].status).toBe("pending");
     s = markApprovalResolved(s, "apv_1", "approved");
     expect(s.messages[0].approvals[0].status).toBe("approved");
+  });
+
+  it("chat:clarify_pending 生成 clarify 卡，markClarifyResolved 更新状态（批四十九）", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:clarify_pending", {
+      clarify_id: "clfy_1",
+      question: "选哪个部署目标？",
+      choices: ["staging", "prod"],
+      multi_select: false,
+      timeout_at: TIMEOUT_AT,
+    }));
+    expect(s.messages[0].clarifies).toHaveLength(1);
+    const card = s.messages[0].clarifies[0];
+    expect(card.question).toBe("选哪个部署目标？");
+    expect(card.choices).toEqual(["staging", "prod"]);
+    expect(card.multiSelect).toBe(false);
+    expect(card.timeoutAt).toBe(TIMEOUT_AT);
+    expect(card.status).toBe("pending");
+    expect(s.messages[0].steps[0]).toEqual({ kind: "clarify", ref: "clfy_1", status: "pending" });
+    s = markClarifyResolved(s, "clfy_1", "answered");
+    expect(s.messages[0].clarifies[0].status).toBe("answered");
+    expect(s.messages[0].steps[0]).toEqual({ kind: "clarify", ref: "clfy_1", status: "answered" });
+  });
+
+  it("clarifyIsTimedOut：pending 且超过 deadline 才为真（批四十九）", () => {
+    const now = Date.parse("2026-08-17T12:00:00Z");
+    expect(clarifyIsTimedOut({ status: "pending", timeoutAt: "2026-08-17T11:59:00Z" }, now)).toBe(true);
+    expect(clarifyIsTimedOut({ status: "pending", timeoutAt: "2026-08-17T12:01:00Z" }, now)).toBe(false);
+    expect(clarifyIsTimedOut({ status: "answered", timeoutAt: "2026-08-17T11:59:00Z" }, now)).toBe(false);
+    expect(clarifyIsTimedOut({ status: "pending", timeoutAt: null })).toBe(false);
+  });
+
+  it("chat:done 收口仍 pending 的 clarify 卡（agent 已带应答/超时继续）", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:clarify_pending", { clarify_id: "clfy_1", question: "q", choices: null }));
+    s = applyChatEvent(s, ev("chat:done", { final_response: "ok" }));
+    expect(s.messages[0].clarifies[0].status).toBe("answered");
   });
 
   it("pushUserMessage 追加用户气泡并置 busy（输入禁用）", () => {

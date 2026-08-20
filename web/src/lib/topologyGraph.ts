@@ -1,4 +1,11 @@
 import type { Edge, Node } from "@xyflow/react";
+import {
+  forceCenter,
+  forceCollide,
+  forceLink,
+  forceManyBody,
+  forceSimulation,
+} from "d3-force";
 import type { TopologyCard, TopologyView } from "./api";
 import { statusTone } from "./ops";
 
@@ -6,23 +13,15 @@ import { statusTone } from "./ops";
  * 拓扑图数据模型（批三十五）：GET /api/topology → react-flow nodes/edges。
  *
  * 纯函数（前端单测覆盖）：三层结构 集群 → 主机 → 服务 + 跨主机实体；
- * 手摆分层布局（数据天然三层，按集群分组列排，结构清晰不重叠、label 可见）；
  * 连线 host→services、cluster→host/cross_host、key_paths 链内相邻实体成
  * 琥珀高亮边；节点上限保护（防超大拓扑拖垮画布）。
+ *
+ * 批四十九：布局从"手摆分层列排"（视觉 = 表格/列表）改为 d3-force 力导向
+ * （节点自由散布 + 关系连线，视觉 = 网络拓扑）。buildGraphModel 只产出节点/
+ * 连线数据（初始坐标 = 确定性散布，无表格语义）；layoutForceGraph 用 d3-force
+ * 同步跑固定 tick 数（种子固定 → 结果确定，前端单测可断言）。
  */
 export const MAX_GRAPH_NODES = 300;
-
-export const GRAPH_LAYOUT = {
-  clusterW: 420,
-  clusterTop: 52,
-  hostW: 180,
-  hostH: 46,
-  svcW: 132,
-  svcH: 38,
-  svcCols: 3,
-  blockGap: 26,
-  crossH: 40,
-} as const;
 
 export type GraphNodeKind = "cluster" | "host" | "service" | "cross_host";
 
@@ -36,6 +35,8 @@ export interface GraphEntityRef {
 
 export interface GraphNodeData extends GraphEntityRef {
   keyPath: boolean;
+  /** 批四十九：列表中选中/图中点选的高亮标记（列表 ↔ 图联动）。 */
+  selected?: boolean;
   // react-flow v12 Node<T> 要求 data 满足 Record<string, unknown>。
   [key: string]: unknown;
 }
@@ -46,6 +47,170 @@ export interface TopologyGraphModel {
   nodes: TopologyFlowNode[];
   edges: Edge[];
   overflow: boolean;
+}
+
+export interface ForceLayoutOptions {
+  /** 画布逻辑宽度（fitView 会按容器缩放，这里只决定相对散布）。 */
+  width?: number;
+  height?: number;
+  /** 同步推进的 tick 数（越大越收敛；300 节点上限内足够）。 */
+  ticks?: number;
+  /** 随机种子（默认固定 → 跨运行/跨测试确定）。 */
+  seed?: number;
+}
+
+/** 力导向布局默认画布（相对散布基准，最终由 fitView 适配容器）。 */
+const FORCE_LAYOUT_DEFAULTS = { width: 1400, height: 900, ticks: 240, seed: 20260820 } as const;
+
+interface _SimNode {
+  id: string;
+  x: number;
+  y: number;
+}
+
+interface _SimLink {
+  source: string;
+  target: string;
+}
+
+/** mulberry32 种子随机源：力导向结果跨运行确定（测试可复现）。 */
+function _seededRandom(seed: number): () => number {
+  let s = seed >>> 0;
+  return () => {
+    s += 0x6d2b79f5;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 初始散布：按索引均匀撒进画布 + 种子抖动（无任何表格/列排语义）。 */
+function _initialPositions(
+  nodes: TopologyFlowNode[],
+  rand: () => number,
+  width: number,
+  height: number,
+): Map<string, { x: number; y: number }> {
+  const map = new Map<string, { x: number; y: number }>();
+  const n = nodes.length;
+  if (n === 0) return map;
+  const cols = Math.max(1, Math.ceil(Math.sqrt(n * (width / height))));
+  const rows = Math.max(1, Math.ceil(n / cols));
+  nodes.forEach((node, i) => {
+    const cx = (i % cols) / Math.max(1, cols - 1);
+    const cy = Math.floor(i / cols) / Math.max(1, rows - 1);
+    map.set(node.id, {
+      x: (0.5 + 0.4 * (cx - 0.5)) * width + (rand() - 0.5) * width * 0.12,
+      y: (0.5 + 0.4 * (cy - 0.5)) * height + (rand() - 0.5) * height * 0.12,
+    });
+  });
+  return map;
+}
+
+/**
+ * d3-force 力导向布局（批四十九核心）：同步跑固定 tick 数后把坐标写回节点。
+ *
+ * 力模型：cluster→host→service 树形 link（距离 120）+ 全局斥力 + 按节点
+ * 类别半径的碰撞避免 + 画布中心。节点自由散布 + 连线表达关系——视觉上是
+ * 网络拓扑而非表格。返回新 model（不改入参），种子固定保证结果确定。
+ */
+export function layoutForceGraph(
+  model: TopologyGraphModel,
+  options: ForceLayoutOptions = {},
+): TopologyGraphModel {
+  const width = options.width ?? FORCE_LAYOUT_DEFAULTS.width;
+  const height = options.height ?? FORCE_LAYOUT_DEFAULTS.height;
+  const ticks = options.ticks ?? FORCE_LAYOUT_DEFAULTS.ticks;
+  const seed = options.seed ?? FORCE_LAYOUT_DEFAULTS.seed;
+  if (model.overflow || model.nodes.length === 0) return model;
+
+  const rand = _seededRandom(seed);
+  const init = _initialPositions(model.nodes, rand, width, height);
+  const simNodes: _SimNode[] = model.nodes.map((n) => ({
+    id: n.id,
+    x: init.get(n.id)?.x ?? 0,
+    y: init.get(n.id)?.y ?? 0,
+  }));
+  const simLinks: _SimLink[] = model.edges.map((e) => ({
+    source: String(e.source),
+    target: String(e.target),
+  }));
+
+  // 碰撞半径按类别：集群节点宽（≈400px），主机/服务小一些——防集群堆叠。
+  const kindById = new Map(model.nodes.map((n) => [n.id, n.data.kind]));
+  const collideRadius = (d: _SimNode): number => {
+    const kind = kindById.get(d.id);
+    if (kind === "cluster") return 130;
+    if (kind === "host") return 88;
+    if (kind === "cross_host") return 80;
+    return 58;
+  };
+
+  const sim = forceSimulation<_SimNode, _SimLink>(simNodes)
+    .force(
+      "link",
+      forceLink<_SimNode, _SimLink>(simLinks)
+        .id((d) => d.id)
+        .distance(120)
+        .strength(0.3),
+    )
+    .force("charge", forceManyBody<_SimNode>().strength(-220))
+    .force("collide", forceCollide<_SimNode>().radius(collideRadius).strength(0.7))
+    .force("center", forceCenter(width / 2, height / 2))
+    .stop();
+  sim.randomSource(rand);
+  for (let i = 0; i < ticks; i += 1) sim.tick();
+
+  const posById = new Map(simNodes.map((d) => [d.id, { x: d.x, y: d.y }]));
+  return {
+    ...model,
+    nodes: model.nodes.map((n) => {
+      const p = posById.get(n.id);
+      return p ? { ...n, position: { x: p.x, y: p.y } } : n;
+    }),
+  };
+}
+
+/** 集群筛选选项：与 buildGraphModel 的集群分组同源（"全部"由调用方渲染）。 */
+export function clusterOptions(view: TopologyView): string[] {
+  if (view.clusters.length > 0) return view.clusters.map((c) => c.name);
+  if (view.hosts.length > 0 || view.cross_host.length > 0) return ["default"];
+  return [];
+}
+
+/** 按集群过滤图模型（"全部"/空 → 原样返回；节点/连线两端都在才保留）。 */
+export function filterGraphModel(
+  model: TopologyGraphModel,
+  cluster: string,
+): TopologyGraphModel {
+  if (!cluster || cluster === "all") return model;
+  const hostByCluster = new Map<string, string>();
+  for (const n of model.nodes) {
+    if (n.data.kind === "host") {
+      hostByCluster.set(n.data.name, n.data.card.cluster || "default");
+    }
+  }
+  const keep = new Set<string>();
+  for (const n of model.nodes) {
+    const d = n.data;
+    if (d.kind === "cluster") {
+      if (d.name === cluster) keep.add(n.id);
+    } else if (d.kind === "host") {
+      if ((d.card.cluster || "default") === cluster) keep.add(n.id);
+    } else if (d.kind === "cross_host") {
+      if ((d.card.cluster || "default") === cluster) keep.add(n.id);
+    } else if (d.kind === "service") {
+      const hostCluster = d.hostName ? hostByCluster.get(d.hostName) : undefined;
+      if (hostCluster === cluster) keep.add(n.id);
+    }
+  }
+  const nodes = model.nodes.filter((n) => keep.has(n.id));
+  const ids = new Set(nodes.map((n) => n.id));
+  const edges = model.edges.filter(
+    (e) => ids.has(String(e.source)) && ids.has(String(e.target)),
+  );
+  return { ...model, nodes, edges };
 }
 
 const KIND_LABEL: Record<GraphNodeKind, string> = {
@@ -103,54 +268,48 @@ export function buildGraphModel(view: TopologyView): TopologyGraphModel {
   const crossId = (name: string) => `cross:${name}`;
 
   clusterNames.forEach((cname, ci) => {
-    const cx = ci * GRAPH_LAYOUT.clusterW;
     nodes.push({
       id: `cluster:${cname}`,
       type: "cluster",
-      position: { x: cx, y: 0 },
+      // 初始坐标：确定性散布（无表格语义），真实布局由 layoutForceGraph 计算。
+      position: { x: (ci % 7) * 180 + 60, y: Math.floor(ci / 7) * 200 + 40 },
       data: { kind: "cluster", name: cname, card: _clusterCard(cname, clusterMeta.get(cname)), keyPath: kpNames.has(cname) },
     });
     count += 1;
 
-    let y = GRAPH_LAYOUT.clusterTop;
     for (const host of view.hosts) {
       if ((host.card.cluster || "default") !== cname) continue;
       const card = host.card;
       nodes.push({
         id: hostId(card.name),
         type: "host",
-        position: { x: cx, y },
+        position: { x: ci * 180 + 40, y: 0 },
         data: { kind: "host", name: card.name, card, detail: host.detail, keyPath: kpNames.has(card.name) },
       });
       edges.push({
         id: `cluster-host:${cname}:${card.name}`,
         source: `cluster:${cname}`,
         target: hostId(card.name),
-        type: "smoothstep",
+        type: "default",
       });
       count += 1;
 
-      const rows = Math.max(1, Math.ceil(host.services.length / GRAPH_LAYOUT.svcCols));
-      host.services.forEach((svc, si) => {
+      host.services.forEach((svc, _si) => {
         const sc = svc.card;
         nodes.push({
           id: svcId(card.name, sc.name),
           type: "service",
-          position: {
-            x: cx + (si % GRAPH_LAYOUT.svcCols) * GRAPH_LAYOUT.svcW,
-            y: y + GRAPH_LAYOUT.hostH + 18 + Math.floor(si / GRAPH_LAYOUT.svcCols) * GRAPH_LAYOUT.svcH,
-          },
+          position: { x: ci * 180 + 60, y: 20 },
           data: { kind: "service", name: sc.name, card: sc, detail: svc.detail, hostName: card.name, keyPath: kpNames.has(sc.name) },
         });
         edges.push({
           id: `host-svc:${card.name}:${sc.name}`,
           source: hostId(card.name),
           target: svcId(card.name, sc.name),
-          type: "smoothstep",
+          type: "default",
         });
         count += 1;
       });
-      y += GRAPH_LAYOUT.hostH + 18 + rows * GRAPH_LAYOUT.svcH + GRAPH_LAYOUT.blockGap;
     }
 
     for (const ch of view.cross_host) {
@@ -159,17 +318,16 @@ export function buildGraphModel(view: TopologyView): TopologyGraphModel {
       nodes.push({
         id: crossId(card.name),
         type: "cross_host",
-        position: { x: cx, y },
+        position: { x: ci * 180 + 80, y: 40 },
         data: { kind: "cross_host", name: card.name, card, detail: ch.detail, keyPath: kpNames.has(card.name) },
       });
       edges.push({
         id: `cluster-cross:${cname}:${card.name}`,
         source: `cluster:${cname}`,
         target: crossId(card.name),
-        type: "smoothstep",
+        type: "default",
       });
       count += 1;
-      y += GRAPH_LAYOUT.crossH;
     }
   });
 
@@ -191,7 +349,7 @@ export function buildGraphModel(view: TopologyView): TopologyGraphModel {
         id: `kp:${chain[i]}:${chain[i + 1]}`,
         source: a,
         target: b,
-        type: "smoothstep",
+        type: "default",
         className: "topo-edge-keypath",
         style: { stroke: "#f59e0b", strokeWidth: 2.5, opacity: 1 },
       });

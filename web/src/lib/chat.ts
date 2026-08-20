@@ -14,14 +14,16 @@
 
 import type { ChatHistoryMessage } from "./api";
 
-export type ChatStepKind = "tool" | "approval";
+export type ChatStepKind = "tool" | "approval" | "clarify";
 export type ChatStepStatus =
   | "running"
   | "done"
   | "failed"
   | "pending"
   | "approved"
-  | "denied";
+  | "denied"
+  | "answered"
+  | "timed_out";
 
 /** 有序步骤：工具调用与审批卡按事件到达顺序串成①②③…；ref 指向 tools/
  * approvals 数组里的条目。 */
@@ -59,6 +61,18 @@ export interface ChatApprovalCard {
   status: ChatApprovalStatus;
 }
 
+/** 批四十九：对话流内 clarify 卡片（问题 + choices + 自由文本，非全局弹窗）。 */
+export type ChatClarifyStatus = "pending" | "answered" | "timed_out" | "error";
+
+export interface ChatClarifyCard {
+  clarifyId: string;
+  question: string;
+  choices: string[] | null;
+  multiSelect: boolean;
+  timeoutAt?: string | null;
+  status: ChatClarifyStatus;
+}
+
 export interface ChatMessage {
   id: number;
   role: "user" | "assistant";
@@ -68,6 +82,8 @@ export interface ChatMessage {
   streaming?: boolean;
   tools: ChatToolEvent[];
   approvals: ChatApprovalCard[];
+  /** 批四十九：clarify 卡片（对话流内呈现，与审批卡并列）。 */
+  clarifies: ChatClarifyCard[];
   /** 批四十一：工具/审批按到达顺序的有序步骤序列。 */
   steps: ChatStep[];
   error?: string;
@@ -85,6 +101,17 @@ export interface ChatTurnState {
 /** 批三十八 §AW：审批卡是否已超时（timeout_at 过期且仍 pending）。 */
 export function approvalIsTimedOut(
   card: Pick<ChatApprovalCard, "status" | "timeoutAt">,
+  now: number = Date.now(),
+): boolean {
+  if (card.status !== "pending" || !card.timeoutAt) return false;
+  const deadline = Date.parse(card.timeoutAt);
+  if (Number.isNaN(deadline)) return false;
+  return now >= deadline;
+}
+
+/** 批四十九：clarify 卡是否已超时（timeout_at 过期且仍 pending）。 */
+export function clarifyIsTimedOut(
+  card: Pick<ChatClarifyCard, "status" | "timeoutAt">,
   now: number = Date.now(),
 ): boolean {
   if (card.status !== "pending" || !card.timeoutAt) return false;
@@ -119,6 +146,7 @@ function cloneMessage(msg: ChatMessage): ChatMessage {
     ...msg,
     tools: msg.tools.map((t) => ({ ...t })),
     approvals: msg.approvals.map((a) => ({ ...a, timeoutAt: a.timeoutAt ?? null })),
+    clarifies: msg.clarifies.map((c) => ({ ...c, timeoutAt: c.timeoutAt ?? null })),
     steps: msg.steps.map((s) => ({ ...s })),
   };
 }
@@ -169,6 +197,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
         streaming: true,
         tools: [],
         approvals: [],
+        clarifies: [],
         steps: [],
       });
     }
@@ -204,6 +233,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
         streaming: true,
         tools: [],
         approvals: [],
+        clarifies: [],
         steps: [],
       });
     }
@@ -231,6 +261,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
         streaming: true,
         tools: [{ id: localId, toolId, name, inputSummary: summary, expanded: false, reasoning: "" }],
         approvals: [],
+        clarifies: [],
         steps: [{ kind: "tool", ref: localId, status: "running" }],
       });
     }
@@ -283,7 +314,40 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
         streaming: true,
         tools: [],
         approvals: [card],
+        clarifies: [],
         steps: [{ kind: "approval", ref: card.approvalId, status: "pending" }],
+      });
+    }
+    return next;
+  }
+
+  // 批四十九：LLM 调 clarify → 对话流内挂问题卡片（非全局弹窗；审批卡并列）。
+  if (ev.type === "chat:clarify_pending") {
+    const active = activeAssistant(next);
+    const card: ChatClarifyCard = {
+      clarifyId: String(data.clarify_id ?? ""),
+      question: String(data.question ?? ""),
+      choices: Array.isArray(data.choices) ? data.choices.map(String) : null,
+      multiSelect: Boolean(data.multi_select),
+      timeoutAt: data.timeout_at != null ? String(data.timeout_at) : null,
+      status: "pending",
+    };
+    if (active) {
+      active.clarifies.push(card);
+      active.steps.push({ kind: "clarify", ref: card.clarifyId, status: "pending" });
+    } else {
+      next.activeMessageId = next.nextId;
+      next.nextId += 1;
+      next.messages.push({
+        id: next.activeMessageId,
+        role: "assistant",
+        content: "",
+        reasoning: "",
+        streaming: true,
+        tools: [],
+        approvals: [],
+        clarifies: [card],
+        steps: [{ kind: "clarify", ref: card.clarifyId, status: "pending" }],
       });
     }
     return next;
@@ -295,6 +359,11 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     if (active) {
       active.content = finalText;
       active.streaming = false;
+      // 回合已结束：仍挂 pending 的 clarify 卡收口（agent 已带着应答/超时
+      // 继续）——状态交由卡片自身倒计时/应答回写精确展示。
+      for (const c of active.clarifies) {
+        if (c.status === "pending") c.status = clarifyIsTimedOut(c) ? "timed_out" : "answered";
+      }
     }
     next.busy = false;
     next.activeMessageId = null;
@@ -315,6 +384,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
         reasoning: "",
         tools: [],
         approvals: [],
+        clarifies: [],
         steps: [],
         error: msg,
       });
@@ -336,7 +406,16 @@ export function pushUserMessage(state: ChatTurnState, text: string): ChatTurnSta
     nextId: state.nextId + 1,
     messages: [
       ...state.messages,
-      { id: state.nextId, role: "user", content: text, reasoning: "", tools: [], approvals: [], steps: [] },
+      {
+        id: state.nextId,
+        role: "user",
+        content: text,
+        reasoning: "",
+        tools: [],
+        approvals: [],
+        clarifies: [],
+        steps: [],
+      },
     ],
   };
 }
@@ -369,6 +448,7 @@ export function markTurnInterrupted(state: ChatTurnState): ChatTurnState {
         streaming: false,
         tools: [],
         approvals: [],
+        clarifies: [],
         steps: [],
         interrupted: true,
       },
@@ -394,6 +474,32 @@ export function markApprovalResolved(
           clone,
           approvalId,
           status === "approved" ? "approved" : status === "denied" ? "denied" : "failed",
+        ),
+      };
+    }),
+  };
+}
+
+/** 批四十九：clarify 卡本地收口（提交成功 → answered；提交失败 → error；
+ * 倒计时到期 → timed_out）。步骤状态同步。 */
+export function markClarifyResolved(
+  state: ChatTurnState,
+  clarifyId: string,
+  status: ChatClarifyStatus,
+): ChatTurnState {
+  return {
+    ...state,
+    messages: state.messages.map((m) => {
+      const clone = cloneMessage(m);
+      return {
+        ...clone,
+        clarifies: clone.clarifies.map((c) =>
+          c.clarifyId === clarifyId ? { ...c, status } : c,
+        ),
+        steps: withStepStatus(
+          clone,
+          clarifyId,
+          status === "answered" ? "answered" : status === "timed_out" ? "timed_out" : "failed",
         ),
       };
     }),
@@ -433,6 +539,7 @@ export function stateFromHistory(
         reasoning: "",
         tools: [],
         approvals: [],
+        clarifies: [],
         steps: [],
       };
     }
@@ -465,6 +572,7 @@ export function stateFromHistory(
       streaming: false,
       tools,
       approvals: [],
+      clarifies: [],
       steps: tools.map((t) => ({
         kind: "tool" as const,
         ref: t.id,

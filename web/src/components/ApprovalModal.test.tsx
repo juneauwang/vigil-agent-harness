@@ -154,3 +154,50 @@ describe("批四十一 §6 弹窗长命令可滚动/展开全文", () => {
     expect(container.textContent).toContain("    print(h)");
   });
 });
+
+describe("批四十九 右下角弹窗 + 桌面通知 + 倒计时", () => {
+  it("右下角形态：fixed 右下角容器而非居中遮罩（无 inset-0 遮罩）", async () => {
+    await render();
+    const corner = container.querySelector('[data-testid="approval-corner"]');
+    expect(corner).toBeTruthy();
+    expect((corner as HTMLElement).className).toContain("fixed");
+    expect((corner as HTMLElement).className).toContain("bottom-4");
+    expect((corner as HTMLElement).className).toContain("right-4");
+    // 批三十四安全语义保留：无深色遮罩点击关闭（根本不再渲染遮罩层）。
+    expect(container.querySelector('[class*="bg-black"]')).toBeNull();
+  });
+
+  it("队列堆叠：多个 pending 时显示『还有 N 个审批待处理』", async () => {
+    const second: ApprovalItem = { ...PENDING, id: "apv_2", command: "systemctl restart nginx" };
+    snap = { approvals: [PENDING, second], total: 2, added: [PENDING, second] };
+    await render();
+    expect(container.textContent).toContain("还有 1 个审批待处理");
+    // 批准第一个后弹下一个（队列一次一个，审批两个都完成则消失）。
+    const approveBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("批准"))!;
+    await act(async () => {
+      approveBtn.click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(container.textContent).toContain("systemctl restart nginx");
+    expect(container.textContent).not.toContain("还有 1 个审批待处理");
+  });
+
+  it("超时倒计时：timeout_at 未到期显示剩余时间", async () => {
+    const future = new Date(Date.now() + 5 * 60_000).toISOString();
+    snap = { approvals: [{ ...PENDING, timeout_at: future }], total: 1, added: [{ ...PENDING, timeout_at: future }] };
+    await render();
+    expect(container.textContent).toMatch(/\d+m \d+s|\d+s/);
+  });
+
+  it("超时倒计时：已过期显示『审批超时，已终止』", async () => {
+    snap = {
+      approvals: [{ ...PENDING, timeout_at: "2020-01-01T00:00:00Z" }],
+      total: 1,
+      added: [{ ...PENDING, timeout_at: "2020-01-01T00:00:00Z" }],
+    };
+    await render();
+    expect(container.textContent).toContain("审批超时，已终止");
+  });
+});

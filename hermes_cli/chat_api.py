@@ -25,7 +25,7 @@ import logging
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Body
@@ -98,6 +98,35 @@ def _probe_ops_grade(command: str) -> Optional[str]:
 
 
 @dataclass
+class _WebClarifyEntry:
+    """批四十九：web chat 挂起 clarify（session 级，一次一个）。
+
+    形状对齐审批的挂起条目：线程内回调登记 → SSE chat:clarify_pending 推给
+    前端 → 回调线程阻塞在 threading.Event 上 → 前端 POST
+    /api/chat/sessions/{id}/clarify 写入 response 并 set 事件 → 回调返回。
+    状态挂在 ChatSession.pending_clarify 上：多 session 并行各自独立，不
+    用模块级全局表互踩（与 gateway 的 clarify_gateway 按 session_key 索引
+    同语义，只是 web 会话天然以 ChatSession 为容器）。
+    """
+    clarify_id: str
+    question: str
+    choices: Optional[List[str]]
+    multi_select: bool
+    timeout_at: Optional[str]
+    event: threading.Event = field(default_factory=threading.Event)
+    response: Optional[str] = None
+
+    def view(self) -> dict:
+        return {
+            "clarify_id": self.clarify_id,
+            "question": self.question,
+            "choices": list(self.choices) if self.choices else None,
+            "multi_select": bool(self.multi_select),
+            "timeout_at": self.timeout_at,
+        }
+
+
+@dataclass
 class ChatSession:
     chat_session_id: str
     agent: Any
@@ -112,6 +141,8 @@ class ChatSession:
     # 最近一次审批的终态（"approval_timeout" / "denied" / None）——批三十八
     # 审批超时/拒绝路径 finalize 用。审批核心逻辑不动，只在本会话层记录结果。
     last_approval_outcome: Optional[str] = None
+    # 批四十九：当前挂起的 web clarify（None = 无）。一次 turn 内至多一个。
+    pending_clarify: Optional[_WebClarifyEntry] = None
     _turn_done: threading.Event = field(default_factory=threading.Event)
 
     def __post_init__(self) -> None:
@@ -339,6 +370,8 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
     def _cb(command: str, description: str, *,
             allow_permanent: bool = True, allow_session: bool = True,
             smart_denied: bool = False) -> str:
+        _log.info("[%s] approval gate fired: cmd=%r desc=%r",
+                  session.chat_session_id, command[:80], (description or "")[:80])
         env = _default_ops_env()
         grade = _probe_ops_grade(command)
         redacted_command = _redact_text(command)
@@ -357,6 +390,7 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
         )
         from tools.approval import get_web_approval
         av = get_web_approval(approval_id)
+        _log.info("[%s] approval registered: id=%s status=%s", session.chat_session_id, approval_id, (av or {}).get("status"))
         _push({
             "type": "chat:approval_pending",
             "approval_id": approval_id,
@@ -398,6 +432,84 @@ def _approval_remaining_seconds(view: Optional[dict]) -> Optional[float]:
         return max(0.0, (deadline - datetime.now(timezone.utc)).total_seconds())
     except ValueError:
         return None
+
+
+def _clarify_callback_factory(session: "ChatSession", queue: asyncio.Queue, loop: asyncio.AbstractEventLoop):
+    """web 会话 clarify 回调（线程内调用，仿 _approval_callback_factory）。
+
+    LLM 调 clarify（tools/clarify_tool 语义 question/choices/multi_select，
+    工具定义零改动）→ 本回调登记挂起条目 → SSE ``chat:clarify_pending`` 推送
+    （session_id/question/choices/multi_select/timeout_at）→ 回调线程阻塞在
+    threading.Event 上 → 前端 POST /api/chat/sessions/{id}/clarify 写入应答并
+    set 事件 → 回调返回选择串。超时（clarify_timeout，config_defaults 已有，
+    不新增配置）→ 返回 ``[user did not respond within Xm]``，agent 自行决定。
+
+    状态挂在 ``session.pending_clarify``（多 session 并行各自独立，无全局表
+    互踩）；answer 不回显不落日志——敏感答复（sudo 密码等）沿用批三十二
+    redact 机制在持久化/展示层精确打码。
+    """
+    from tools.clarify_gateway import get_clarify_timeout
+
+    def _push(event: dict) -> None:
+        try:
+            loop.call_soon_threadsafe(queue.put_nowait, ("event", event))
+        except Exception:
+            _log.debug("chat clarify event push failed", exc_info=True)
+
+    def _cb(question: str, choices, multi_select: bool = False) -> str:
+        try:
+            timeout_s = float(get_clarify_timeout() or 3600)
+        except Exception:
+            timeout_s = 3600.0
+        deadline = None
+        if timeout_s > 0:
+            deadline = datetime.now(timezone.utc) + timedelta(seconds=timeout_s)
+        entry = _WebClarifyEntry(
+            clarify_id=f"clfy_{secrets_hex()}",
+            question=_redact_text(question or ""),
+            choices=[str(c) for c in (choices or [])] or None,
+            multi_select=bool(multi_select) and bool(choices),
+            timeout_at=deadline.strftime("%Y-%m-%dT%H:%M:%SZ") if deadline else None,
+        )
+        session.pending_clarify = entry
+        _push({
+            "type": "chat:clarify_pending",
+            "session_id": session.chat_session_id,
+            **entry.view(),
+        })
+        # 等应答：1s 切片轮询 deadline（对齐 gateway wait_for_response 的
+        # 分片语义；web 无 activity watchdog，分片只为超时及时返回）。
+        while entry.response is None and not entry.event.is_set():
+            if entry.timeout_at is None:
+                entry.event.wait(timeout=1.0)
+                continue
+            remaining = (deadline - datetime.now(timezone.utc)).total_seconds()
+            if remaining <= 0:
+                break
+            entry.event.wait(timeout=min(1.0, remaining))
+        session.pending_clarify = None
+        if entry.response is not None:
+            return entry.response
+        minutes = max(1, int(timeout_s / 60))
+        return f"[user did not respond within {minutes}m]"
+
+    return _cb
+
+
+def _cancel_pending_clarify_for_session(session: "ChatSession") -> bool:
+    """批四十九：中断当前 turn 前把本会话挂起 clarify 解挂（对齐审批 deny 唤醒）。
+
+    只解挂挂起条目（不改 clarify 工具/超时逻辑）：置空应答 + set 事件 →
+    阻塞中的 clarify 回调立刻返回，agent 线程继续收 interrupt 收尾，不会
+    僵尸挂到超时。
+    """
+    entry = getattr(session, "pending_clarify", None)
+    if entry is None:
+        return False
+    entry.response = ""
+    entry.event.set()
+    session.pending_clarify = None
+    return True
 
 
 def _live_session_id(session: "ChatSession") -> str:
@@ -481,6 +593,11 @@ def _run_chat_turn(
         tk1 = set_hermes_interactive_context(True)
         tk2 = set_current_session_key(session.chat_session_id)
         set_approval_callback(_approval_callback_factory(session, queue, loop))
+        # 批四十九：web chat clarify 回调接线（此前缺失 → LLM 调 clarify 只会
+        # 拿到 "Clarify tool is not available"，已知 bug）。会话级挂起条目 +
+        # SSE chat:clarify_pending + POST /clarify 应答端点。
+        session.pending_clarify = None
+        session.agent.clarify_callback = _clarify_callback_factory(session, queue, loop)
         session.last_approval_outcome = None
 
         history = _load_conversation_history(session)
@@ -597,6 +714,11 @@ def _run_chat_turn(
             session.agent.reasoning_callback = None
         except Exception:
             pass
+        try:
+            session.agent.clarify_callback = None
+        except Exception:
+            pass
+        session.pending_clarify = None
         set_approval_callback(None)
         if tk2 is not None:
             reset_current_session_key(tk2)
@@ -939,6 +1061,9 @@ async def chat_interrupt(chat_session_id: str):
                 content={"error": {"code": "not_busy", "message": "会话当前没有进行中的操作"}},
             )
     cancelled = _cancel_pending_approvals_for_session(chat_session_id)
+    # 批四十九：解挂本会话挂起 clarify（阻塞中的回调立刻返回，随 interrupt
+    # 一起收尾），否则 clarify 会僵尸挂到超时。
+    _cancel_pending_clarify_for_session(session)
     try:
         session.agent.interrupt(hard_cancel=True)
     except Exception:
@@ -951,6 +1076,63 @@ async def chat_interrupt(chat_session_id: str):
         "status": "interrupted",
         "chat_session_id": chat_session_id,
         "approvals_cancelled": cancelled,
+    }
+
+
+@router.post("/api/chat/sessions/{chat_session_id}/clarify")
+async def chat_clarify_answer(chat_session_id: str, payload: Dict[str, Any] = Body(default_factory=dict)):
+    """批四十九：web chat clarify 应答端点。
+
+    body ``{answer: str | str[]}``（多选时前端传数组；空串 = 用户"取消/跳过"，
+    agent 回合继续）。语义对齐 approval：会话不存在 → 404；无挂起 clarify →
+    409（no_pending_clarify）；已超时 → 409（clarify_timed_out，前端显示
+    "已超时，agent 自行决定"）。
+
+    安全：answer 不回显、不写日志——敏感答复（sudo 密码等）只经批三十二
+    redact 机制在持久化/展示层精确打码（clarify_tool 登记 + _redact_text 展示）。
+    """
+    with _CHAT_LOCK:
+        session = _CHAT_SESSIONS.get(chat_session_id)
+    if session is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "not_found", "message": f"会话不存在: {chat_session_id}"}},
+        )
+    with _CHAT_LOCK:
+        entry = session.pending_clarify
+    if entry is None:
+        return JSONResponse(
+            status_code=409,
+            content={"error": {"code": "no_pending_clarify", "message": "当前没有等待回答的 clarify"}},
+        )
+    if entry.timeout_at is not None:
+        try:
+            deadline = datetime.fromisoformat(str(entry.timeout_at).replace("Z", "+00:00"))
+            if datetime.now(timezone.utc) >= deadline:
+                return JSONResponse(
+                    status_code=409,
+                    content={"error": {"code": "clarify_timed_out", "message": "clarify 已超时，agent 已自行决定"}},
+                )
+        except ValueError:
+            pass
+    body = payload or {}
+    if "answer" not in body:
+        return JSONResponse(
+            status_code=400,
+            content={"error": {"code": "invalid_request", "message": "answer 必填"}},
+        )
+    answer = body.get("answer")
+    if isinstance(answer, list):
+        cleaned = [str(a).strip() for a in answer]
+    else:
+        cleaned = str(answer).strip() if answer is not None else ""
+    with _CHAT_LOCK:
+        entry.response = cleaned
+        entry.event.set()
+    return {
+        "status": "resolved",
+        "clarify_id": entry.clarify_id,
+        "chat_session_id": chat_session_id,
     }
 
 
