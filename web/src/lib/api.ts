@@ -348,6 +348,13 @@ export const api = {
       `/api/approvals/${encodeURIComponent(id)}/deny`,
       { method: "POST", body: "{}" },
     ),
+  // 批四十九：web chat clarify 应答（body {answer: string | string[]}；
+  // 多选传数组，取消/跳过传空串 → agent 回合继续）。
+  answerChatClarify: (sessionId: string, answer: string | string[]) =>
+    fetchJSON<{ status: string; clarify_id?: string; error?: unknown }>(
+      `/api/chat/sessions/${encodeURIComponent(sessionId)}/clarify`,
+      { method: "POST", body: JSON.stringify({ answer }) },
+    ),
 
   // 批二十八契约：Audit（运行轨迹，现成 JSON 化）
   getAuditSessions: (params?: { limit?: number; offset?: number }) =>

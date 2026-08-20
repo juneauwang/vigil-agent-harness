@@ -15,6 +15,7 @@ import {
   XCircle,
   X,
   Brain,
+  HelpCircle,
   ListOrdered,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
@@ -23,7 +24,9 @@ import {
   approvalIsTimedOut,
   applyChatEvent,
   chatInputDisabled,
+  clarifyIsTimedOut,
   createChatState,
+  markClarifyResolved,
   markApprovalResolved,
   markApprovalResolvedInSessions,
   markTurnInterrupted,
@@ -31,6 +34,7 @@ import {
   stateFromHistory,
   toggleToolExpanded,
   type ChatApprovalCard,
+  type ChatClarifyCard,
   type ChatMessage,
   type ChatStepStatus,
   type ChatTurnState,
@@ -60,6 +64,8 @@ const STEP_STATUS_LABEL: Record<ChatStepStatus, string> = {
   pending: "等待审批",
   approved: "已批准",
   denied: "已拒绝",
+  answered: "已回答",
+  timed_out: "已超时",
 };
 
 const STEP_STATUS_CLASS: Record<ChatStepStatus, string> = {
@@ -69,6 +75,8 @@ const STEP_STATUS_CLASS: Record<ChatStepStatus, string> = {
   pending: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
   approved: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
   denied: "bg-red-500/15 text-red-600 dark:text-red-400",
+  answered: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  timed_out: "bg-red-500/15 text-red-600 dark:text-red-400",
 };
 
 /** 推理过程折叠块（批四十一 §3）：默认折叠为一行摘要，展开看完整文本。 */
@@ -328,17 +336,191 @@ function ApprovalCard({
   );
 }
 
+/** 批四十九：对话流内 clarify 卡（问题 + choices 按钮 + 自由文本 + 提交/取消
+ * + 超时倒计时）。非全局弹窗（clarify 是"问题"，审批是"命令确认"）。提交 →
+ * POST /api/chat/sessions/{id}/clarify → 卡片收起、agent 回合继续；超时 →
+ * "已超时，agent 自行决定"（后端 timeout 语义，前端倒计时同步显示）。 */
+function ClarifyCard({
+  card,
+  onResolve,
+}: {
+  card: ChatClarifyCard;
+  onResolve: (card: ChatClarifyCard, answer: string | string[]) => void;
+}) {
+  // error 状态可重试（提交失败 → 按钮仍可用）；answered/timed_out 收口。
+  const busy = card.status === "answered" || card.status === "timed_out";
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [custom, setCustom] = useState("");
+  const [timedOut, setTimedOut] = useState(false);
+  const [remaining, setRemaining] = useState<number | null>(null);
+  useEffect(() => {
+    const check = () => {
+      setTimedOut(clarifyIsTimedOut(card));
+      if (card.timeoutAt) {
+        const ms = Date.parse(card.timeoutAt) - Date.now();
+        setRemaining(Number.isNaN(ms) ? null : Math.max(0, Math.floor(ms / 1000)));
+      } else {
+        setRemaining(null);
+      }
+    };
+    check();
+    const timer = window.setInterval(check, 1000);
+    return () => window.clearInterval(timer);
+  }, [card.status, card.timeoutAt]);
+
+  const expired = timedOut || card.status === "timed_out";
+  const hasChoices = (card.choices?.length ?? 0) > 0;
+  const toggle = (choice: string) => {
+    setSelected((prev) => {
+      const nextSet = new Set(prev);
+      if (card.multiSelect) {
+        if (nextSet.has(choice)) nextSet.delete(choice);
+        else nextSet.add(choice);
+      } else {
+        nextSet.clear();
+        nextSet.add(choice);
+      }
+      return nextSet;
+    });
+  };
+  const submit = () => {
+    if (busy || expired) return;
+    if (card.multiSelect && hasChoices) {
+      const picked = Array.from(selected);
+      const customText = custom.trim();
+      onResolve(card, picked.length > 0 ? picked : customText ? [customText] : []);
+      return;
+    }
+    const customText = custom.trim();
+    if (hasChoices && !customText) {
+      const picked = Array.from(selected);
+      onResolve(card, picked.length > 0 ? picked[0] : "");
+      return;
+    }
+    onResolve(card, customText);
+  };
+  const cancel = () => {
+    if (busy || expired) return;
+    onResolve(card, "");
+  };
+  const fmt = (s: number): string => {
+    const m = Math.floor(s / 60);
+    const sec = s % 60;
+    return m > 0 ? `${m}m ${sec}s` : `${sec}s`;
+  };
+
+  return (
+    <div
+      data-testid={`clarify-card-${card.clarifyId}`}
+      className={cn(
+        "flex flex-col gap-2 rounded-md border px-3 py-2 text-xs",
+        card.status === "answered"
+          ? "border-emerald-500/50 bg-emerald-500/10"
+          : expired
+            ? "border-red-500/50 bg-red-500/10"
+            : "border-sky-500/50 bg-sky-500/10",
+      )}
+    >
+      <div className="flex flex-wrap items-center gap-2">
+        <HelpCircle className="size-4 shrink-0 text-sky-500" />
+        <span className="font-medium">需要你回答</span>
+        {card.status === "answered" ? (
+          <span className="ml-auto text-emerald-500">已提交，agent 继续</span>
+        ) : expired ? (
+          <span className="ml-auto text-red-500">已超时，agent 自行决定</span>
+        ) : card.status === "error" ? (
+          <span className="ml-auto text-red-500">提交失败，请重试</span>
+        ) : (
+          <span className="ml-auto shrink-0 text-[10px]">
+            {remaining !== null && (
+              <span className={cn(remaining <= 60 ? "text-red-500" : "text-[var(--vigil-muted)]")}>
+                剩余 {fmt(remaining)}
+              </span>
+            )}
+          </span>
+        )}
+      </div>
+      <div className="whitespace-pre-wrap break-words text-[13px] text-[var(--vigil-text)]">
+        {card.question}
+      </div>
+      {hasChoices && (
+        <div className="flex flex-wrap gap-1.5">
+          {(card.choices ?? []).map((choice) => {
+            const on = selected.has(choice);
+            return (
+              <button
+                key={choice}
+                type="button"
+                disabled={busy || expired}
+                onClick={() => toggle(choice)}
+                aria-pressed={on}
+                className={cn(
+                  "rounded border px-2 py-1 text-[11px] transition-colors disabled:opacity-50",
+                  on
+                    ? "border-sky-500/70 bg-sky-500/15 text-sky-600 dark:text-sky-400"
+                    : "border-[var(--vigil-border)] bg-[var(--vigil-card)] text-[var(--vigil-text)] hover:bg-[var(--vigil-muted-bg)]",
+                )}
+              >
+                {card.multiSelect && <span className="mr-1">{on ? "☑" : "☐"}</span>}
+                {choice}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <input
+        value={custom}
+        onChange={(e) => setCustom(e.target.value)}
+        disabled={busy || expired}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder={hasChoices ? "其他（自行输入）…" : "输入回答…"}
+        data-testid={`clarify-input-${card.clarifyId}`}
+        className="h-8 min-w-0 rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 text-xs text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-50"
+      />
+      {card.status === "pending" && !expired && (
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={cancel}
+            className="vigil-btn h-7 border border-[var(--vigil-border)] px-2 text-xs text-[var(--vigil-muted)] disabled:opacity-50"
+          >
+            取消
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={submit}
+            data-testid={`clarify-submit-${card.clarifyId}`}
+            className="vigil-btn h-7 whitespace-nowrap border border-sky-500/50 px-2 text-xs text-sky-600 dark:text-sky-400 disabled:opacity-50"
+          >
+            提交
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function StepList({
   msg,
   onToggleTool,
   onResolveApproval,
+  onResolveClarify,
 }: {
   msg: ChatMessage;
   onToggleTool: (toolId: number) => void;
   onResolveApproval: (card: ChatApprovalCard, status: "approved" | "denied") => void;
+  onResolveClarify: (card: ChatClarifyCard, answer: string | string[]) => void;
 }) {
   const toolById = new Map(msg.tools.map((t) => [t.id, t]));
   const approvalById = new Map(msg.approvals.map((a) => [a.approvalId, a]));
+  const clarifyById = new Map(msg.clarifies.map((c) => [c.clarifyId, c]));
   const steps = msg.steps;
   if (steps.length === 0) return null;
 
@@ -379,19 +561,32 @@ function StepList({
               </li>
             );
           }
-          const card = approvalById.get(String(step.ref));
+          if (step.kind === "approval") {
+            const card = approvalById.get(String(step.ref));
+            if (!card) return null;
+            return (
+              <li key={`approval-${step.ref}`} className="ml-3">
+                <div className="flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
+                  <span className="w-4 text-center font-mono">{no}</span>
+                  <span>审批</span>
+                </div>
+                <ApprovalCard
+                  card={card}
+                  onResolve={onResolveApproval}
+                  triggerReasoning={triggerReasoningFor(i)}
+                />
+              </li>
+            );
+          }
+          const card = clarifyById.get(String(step.ref));
           if (!card) return null;
           return (
-            <li key={`approval-${step.ref}`} className="ml-3">
+            <li key={`clarify-${step.ref}`} className="ml-3">
               <div className="flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
                 <span className="w-4 text-center font-mono">{no}</span>
-                <span>审批</span>
+                <span>clarify</span>
               </div>
-              <ApprovalCard
-                card={card}
-                onResolve={onResolveApproval}
-                triggerReasoning={triggerReasoningFor(i)}
-              />
+              <ClarifyCard card={card} onResolve={onResolveClarify} />
             </li>
           );
         })}
@@ -400,10 +595,11 @@ function StepList({
   );
 }
 
-function MessageBubble({ msg, onToggleTool, onResolveApproval }: {
+function MessageBubble({ msg, onToggleTool, onResolveApproval, onResolveClarify }: {
   msg: ChatMessage;
   onToggleTool: (toolId: number) => void;
   onResolveApproval: (card: ChatApprovalCard, status: "approved" | "denied") => void;
+  onResolveClarify: (card: ChatClarifyCard, answer: string | string[]) => void;
 }) {
   if (msg.role === "user") {
     return (
@@ -440,6 +636,7 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval }: {
           msg={msg}
           onToggleTool={onToggleTool}
           onResolveApproval={onResolveApproval}
+          onResolveClarify={onResolveClarify}
         />
         <ReasoningBlock text={msg.reasoning} />
         {msg.content ? (
@@ -773,6 +970,40 @@ export default function ChatPage() {
     [activeId],
   );
 
+  // 批四十九：clarify 提交 → POST /api/chat/sessions/{id}/clarify；本地先收口
+  // 卡片（提交中禁用防连点），失败回滚为 error 可重试。
+  const resolveClarify = useCallback(
+    async (card: ChatClarifyCard, answer: string | string[]) => {
+      const sid = activeId;
+      if (!sid) return;
+      setStates((prev) => ({
+        ...prev,
+        [sid]: markClarifyResolved(prev[sid] ?? createChatState(), card.clarifyId, "answered"),
+      }));
+      try {
+        await api.answerChatClarify(sid, answer);
+      } catch (err) {
+        const apiErr = err instanceof ApiError ? err : null;
+        // 已超时 → 卡片显示"已超时"；无挂起（回合已收尾）→ 视为已提交。
+        const status: "timed_out" | "answered" | "error" =
+          apiErr?.code === "clarify_timed_out"
+            ? "timed_out"
+            : apiErr?.code === "no_pending_clarify"
+              ? "answered"
+              : "error";
+        if (status === "error") {
+          const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
+          setError(msg);
+        }
+        setStates((prev) => ({
+          ...prev,
+          [sid]: markClarifyResolved(prev[sid] ?? createChatState(), card.clarifyId, status),
+        }));
+      }
+    },
+    [activeId],
+  );
+
   const switchSession = useCallback(
     (id: string) => {
       if (id === activeId) return;
@@ -910,6 +1141,7 @@ export default function ChatPage() {
             msg={m}
             onToggleTool={toggleTool}
             onResolveApproval={resolveApproval}
+            onResolveClarify={resolveClarify}
           />
         ))}
         <div ref={bottomRef} />

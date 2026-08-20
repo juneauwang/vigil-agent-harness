@@ -2772,3 +2772,88 @@
 - **§BT 前端**：`web/src/lib/approvalPoller.ts` 轮询间隔 4000ms → 3000ms（验收：审批产生后弹窗 ≤3s 出现；聊天 SSE 另有 `chat:approval_pending` 即时推）。轮询 start/停止条件复核：`useApprovalPolling` 在 App 根挂载时 start、卸载时 stop，路由/会话切换不停止（§BP 同族确认无丢失）。
 - **测试**：后端新增/改造 33 例全绿——`test_batch47_sudo_approval.py` 8 例（产生→落库→批准→放行 全链路 mock、拒绝 fail-closed、确认门隐藏 session/永久、非确认门保留、无人在场 BLOCK、`_sudo_exec_handler` 端到端批准后确实执行/拒绝后不执行）；`test_sudo_exec.py` 边界 5 例（useradd/chsh/usermod -s/--shell 放行、执行形态四类仍拦、`&&` 放行、后台 `&`/`>&` 仍拦、值位置 shell 词不误判）+ 审批门用例改造 2 例。回归：sudo 系套件（clarify/熔断/askpass 窄化/ops 确认门/审批注册表/幂等/选项过滤/hardline）330 过（hardline 1 例跨文件预存泄漏与本次无关，见下）、vssh/runtime_state/system_prompt/chat_interrupt/exec_api 96 过；前端 112 全绿（新增 approvalPoller 2 例：默认间隔 ≤3s、stop 后重 start 恢复）+ `tsc --noEmit` ✓。预存失败与本批无关：`test_hardline_blocklist.py::test_sudo_stdin_guard_detects_without_password` 在同进程多文件直跑时被 `test_sudo_clarify_flow.py` 的 vault store 来源标记泄漏影响（基线 stash 同失；规范 per-file 隔离跑全绿）。
 - **核销方式**：测试常驻——`_validate_command` 边界用例在（`useradd -s /bin/bash` 过 / 执行形态四类拦 / `&&` 过 / `&`、`>&` 拦）；`request_ops_approval` 落库→批准→放行断言在；确认门 allow_session/allow_permanent=False 断言在；`_sudo_exec_handler` 批准后执行/拒绝后不执行断言在；前端默认轮询间隔 ≤3s + start/stop 断言在。季度体检检查：`tools/sudo_tool.py` 无裸 `&`/`/bin/` 词面拦截（改为执行形态 + `(?<![&>])&(?![&])`）、approve 决策必经 `request_ops_approval`、`web/src/lib/approvalPoller.ts` `POLL_INTERVAL_MS <= 3000` 在。
+
+---
+
+## OPS-DELTA #66：dogfood 三改——Overview 真拓扑图 + chat clarify 交互 + 右下角审批弹窗（2026-08-20）
+
+- **背景（用户 dogfood 原话）**：①"现在overview的拓扑不可缩放 拓扑页的总览鸡肋
+  需要再overview页做成真正的拓扑图 可以缩放 有主机和服务间的关系连线 然后可以改变
+  集群显示"（澄清："现在的react-flow 拓扑信息都是列表一样排下来 更像是表格不像拓扑"）
+  ②"chat ui里面llm想要使用clarify问我问题 但是没有对应的API处理 他没办法用 这个是
+  个已知的bug 没修吧" ③"右下角审批弹窗就没做 之前批次做了吗"（补充痛点："比如我在ui
+  里面让他干活 然后我切到其他程序 没有弹窗 没有通知 审批又有时限 本质上和我经常没
+  给你allow一个意思"）。
+- **范围**：`web/src/lib/topologyGraph.ts`（力导向布局引擎）、`web/src/components/
+  TopologyGraph.tsx`（集群切换标签栏 + 节点可拖 + 缩放 + 联动高亮）、`web/src/pages/
+  TopologyPage.tsx`（图↔表联动）、`hermes_cli/chat_api.py`（web clarify 回调工厂 +
+  应答端点 + 中断解挂）、`web/src/lib/chat.ts` + `web/src/pages/ChatPage.tsx`（clarify
+  卡片）、`web/src/lib/api.ts`（answerChatClarify）、`web/src/components/ApprovalModal.tsx`
+  （右下角形态 + 倒计时）、`web/src/lib/approvalNotification.ts`（新增，桌面通知）、
+  `web/package.json`（新增依赖 d3-force ~20KB）、对应前后端测试。**未碰**：审批/权限
+  矩阵后端逻辑（注册表、超时策略、命令门控）、clarify 工具定义（tools/clarify_tool.py）、
+  /api/topology 数据结构、新增 env var（clarify_timeout 复用既有配置项）。
+- **§BW 拓扑力导向布局（任务 1）**：根因=原 topologyGraph 用 GRAPH_LAYOUT 手摆分层
+  列排（集群按列、主机/服务分行）——视觉是表格/列表，不是网络拓扑；大拓扑 fitView
+  后缩到极小、控件不明显，用户实测"不可缩放"。修法：删除 GRAPH_LAYOUT 常量，新增
+  d3-force 力导向引擎 `layoutForceGraph`（forceLink 树形连接 120 + forceManyBody 斥力
+  + 按节点类别半径 forceCollide + forceCenter；种子固定的 mulberry32 随机源 → 布局
+  跨运行确定可单测；同步跑 240 tick，300 节点上限内可行）；`buildGraphModel` 只产
+  节点/连线数据（初始坐标 = 确定性散布，无表格语义）。组件：节点可拖（拖后固定，
+  刷新/切集群回到力导向）、fitView 适配 + minZoom 0.1 / maxZoom 2.5、Controls 常显。
+  集群切换（前端过滤，不加后端参数）：`clusterOptions` + `filterGraphModel` 纯函数，
+  TopologyGraph 图上方标签栏（"全部" + 各集群），切换 → 节点重排 + `key={cluster}`
+  重挂载触发 fitView。TopologyPage 总览同引擎 + 图↔表双视图联动：图中点选节点 →
+  列表滚动到该行（`topo-row-<name>` + scrollIntoView）；列表点行 → 图中节点高亮
+  （focusedName → data.selected → ring 高亮）。DetailDrawer 与琥珀关键链路边保留。
+- **§BX web chat clarify 交互（任务 2，修复已知 bug）**：根因=chat_api.py 只有
+  `_approval_callback_factory`（328 行），无 clarify 回调接线 → LLM 调 clarify 拿
+  "Clarify tool is not available"。修法（仿 approval 的 SSE + 注册表模式，工具定义
+  零改动）：新增 `_clarify_callback_factory`——线程内回调登记会话级挂起条目
+  `ChatSession.pending_clarify`（_WebClarifyEntry：clarify_id/question/choices/
+  multi_select/timeout_at + threading.Event）→ SSE `chat:clarify_pending` → 阻塞等
+  应答 → 返回选择串；超时（复用 `clarify_timeout`，config_defaults 已有，不新增配置）
+  → 返回 `[user did not respond within Xm]`（agent 自行决定）。新增应答端点 POST
+  /api/chat/sessions/{id}/clarify（body {answer: str | str[]}；404 会话不存在 / 409
+  no_pending_clarify / 409 clarify_timed_out / 400 缺 answer；200 resolved）。多
+  session 并行各自独立（状态挂会话上，无全局表互踩）；中断时 `_cancel_pending_
+  clarify_for_session` 解挂（置空应答 + set 事件，阻塞回调立刻返回随 interrupt 收尾，
+  不僵尸挂到超时）。安全：answer 不回显、不落日志，敏感答复（sudo 密码等）走批
+  三十二既有 redact 机制（clarify_tool 登记 + _redact_text 展示）。前端：clarify 卡
+  片只在对话流内呈现（clarify 是"问题"，审批是"命令确认"，不做全局弹窗——对齐批
+  三十四边界决策）：问题文本 + choices 单选/多选按钮 + 自由文本 + 提交/取消 + 超时
+  倒计时；提交 → POST /clarify → 卡片收起、agent 回合继续；超时 → "已超时，agent
+  自行决定"；`chat:done` 收口仍 pending 的卡。
+- **§BY 右下角审批弹窗 + 桌面通知 + 倒计时（任务 3）**：根因=批三十四弹窗是居中深色
+  遮罩 modal，用户切走看不到、审批有时限 → 命令卡住/超时。修法（只动前端呈现位置，
+  审批/权限矩阵后端零改动）：① ApprovalModal 改右下角卡片（Grafana 通知风格：
+  fixed bottom-4 right-4、卡片式、队列可堆叠——"还有 N 个审批待处理"）；② 新增
+  `web/src/lib/approvalNotification.ts`——审批到达时发系统级通知（标题"Vigil 需要
+  审批" + 命令摘要前 80 字符 + 剩余时限），权限首次触发时请求（幂等），拒绝 → 降级
+  仅页内弹窗不阻塞审批；点击通知 → 聚焦 dashboard 窗口（弹窗全局常驻，聚焦即见；
+  页面打开期间生效，无需 Service Worker）；③ 弹窗 + 通知都带超时倒计时（timeout_at
+  推导，≤60s 红色强调，过期显示"审批超时，已终止"）。批三十四安全语义全保留：无
+  自动消失（等显式动作）、批准/拒绝/忽略三按钮、队列一次弹一个（approvalQueue 复用）、
+  全局可见（App 根挂载）、无 ESC/遮罩点击关闭（根本不再渲染遮罩）。
+- **端点/事件变更清单**：新增 POST /api/chat/sessions/{id}/clarify（web chat clarify
+  应答）；chat SSE 新增 `chat:clarify_pending` 事件（session_id / question / choices /
+  multi_select / timeout_at）；/api/topology 零改动（集群切换纯前端过滤）；approval
+  相关端点零改动。
+- **测试**：前端 vitest 133 全绿 + `tsc -p . --noEmit` ✓——新增：topologyGraph 力导向
+  5 例（自由散布非列排/两两不重叠/种子确定/空图 overflow/集群过滤/集群选项）、
+  TopologyGraph 组件 3 例（标签栏 + 缩放控件、集群切换只显示选中集群、点选回调）、
+  chat.ts clarify 3 例（clarify_pending 卡片 + markClarifyResolved、clarifyIsTimedOut、
+  done 收口）、ChatPage 组件 2 例（卡片渲染 + 选择提交 answerChatClarify、超时显示）、
+  approvalNotification 6 例（权限门/正文摘要/触发/拒绝降级/请求幂等/点击聚焦）、
+  ApprovalModal 3 例（右下角形态无遮罩、队列堆叠"还有 N 个"、倒计时/超时文案）。
+  后端新增 7 例（test_batch49_chat_clarify.py：SSE 事件字段 + 应答等价全链路、多选
+  列表、超时 sentinel、多会话独立、端点契约 404/409/400/200、超时 409、answer 不落
+  日志 caplog）。回归：chat 系 6 套件 43 过、approval/sudo 系 5 套件 58 过、clarify
+  系 4 套件 54 过。
+- **核销方式**：测试常驻——力导向布局确定性断言（`layoutForceGraph` 种子固定）、
+  集群过滤断言、clarify 全链路（回调 → SSE → 应答 → 回合继续）与端点契约断言、
+  answer 不落日志断言、ApprovalModal 右下角形态/队列堆叠/倒计时断言、桌面通知 mock
+  断言（触发/权限拒绝降级/点击聚焦）。季度体检检查：`web/src/lib/topologyGraph.ts`
+  无 GRAPH_LAYOUT 列排常量（改为 d3-force）、`hermes_cli/chat_api.py` 有 clarify 回调
+  工厂 + /clarify 端点、`web/src/components/ApprovalModal.tsx` 右下角形态 + 通知接线。
+- **状态**：未 commit（待用户核验后由惯例提交；开发目录 master，基线 9e445cbb）。

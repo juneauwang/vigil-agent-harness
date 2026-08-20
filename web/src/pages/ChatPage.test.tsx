@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       getChatHistory: vi.fn(),
       createChatSession: vi.fn(),
       chatStream: vi.fn(),
+      answerChatClarify: vi.fn(),
       interruptChatSession: vi.fn(),
       setChatSessionModel: vi.fn(),
     },
@@ -45,6 +46,7 @@ const apiMock = api as unknown as {
   getChatHistory: ReturnType<typeof vi.fn>;
   createChatSession: ReturnType<typeof vi.fn>;
   chatStream: ReturnType<typeof vi.fn>;
+  answerChatClarify: ReturnType<typeof vi.fn>;
   interruptChatSession: ReturnType<typeof vi.fn>;
   setChatSessionModel: ReturnType<typeof vi.fn>;
 };
@@ -57,6 +59,7 @@ let container: HTMLDivElement;
 let root: Root;
 
 beforeEach(() => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers();
   container = document.createElement("div");
   document.body.appendChild(container);
@@ -212,6 +215,81 @@ describe("批四十一 §23 停止后 busy 校验清理", () => {
     expect(container.textContent).toContain("仍显示忙碌");
     const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
     expect(input.disabled).toBe(false);
+  });
+});
+
+describe("批四十九 对话流内 clarify 卡", () => {
+  it("clarify_pending 事件 → 问题卡出现；选选择 + 提交 → answerChatClarify 收到", async () => {
+    let emit: ((e: { type: string; data: unknown }) => void) | null = null;
+    let resolveStream: (() => void) | null = null;
+    apiMock.answerChatClarify.mockResolvedValue({ status: "resolved", clarify_id: "clfy_1" });
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    apiMock.chatStream.mockImplementation(async (_sid: string, _msg: string, onEvent: (e: { type: string; data: unknown }) => void) => {
+      emit = onEvent;
+      onEvent({
+        type: "chat:clarify_pending",
+        data: {
+          clarify_id: "clfy_1",
+          question: "选哪个部署目标？",
+          choices: ["staging", "prod"],
+          multi_select: false,
+          timeout_at: "2099-01-01T00:00:00Z",
+        },
+      });
+      await new Promise<void>((r) => {
+        resolveStream = r;
+      });
+    });
+    await sendMessage("继续部署");
+
+    expect(container.textContent).toContain("选哪个部署目标？");
+    expect(container.textContent).toContain("staging");
+    expect(container.textContent).toContain("prod");
+    const stagingBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.trim() === "staging")!;
+    expect(stagingBtn).toBeTruthy();
+    await act(async () => {
+      stagingBtn.click();
+    });
+    const submitBtn = container.querySelector<HTMLButtonElement>('button[data-testid="clarify-submit-clfy_1"]')!;
+    expect(submitBtn).toBeTruthy();
+    await act(async () => {
+      submitBtn.click();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(apiMock.answerChatClarify).toHaveBeenCalledWith("A", "staging");
+    // 回合收尾：卡片仍显示已提交（done 收口不覆盖已答状态）。
+    await act(async () => {
+      emit!({ type: "chat:done", data: { final_response: "好的，用 staging。" } });
+      resolveStream!();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container.textContent).toContain("已提交，agent 继续");
+  });
+
+  it("已超时的 clarify 卡显示『已超时，agent 自行决定』", async () => {
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    apiMock.chatStream.mockImplementation(async (_sid: string, _msg: string, onEvent: (e: { type: string; data: unknown }) => void) => {
+      onEvent({
+        type: "chat:clarify_pending",
+        data: {
+          clarify_id: "clfy_tmo",
+          question: "密码确认？",
+          choices: null,
+          multi_select: false,
+          timeout_at: "2020-01-01T00:00:00Z",
+        },
+      });
+      onEvent({ type: "chat:done", data: { final_response: "我自己决定了。" } });
+    });
+    await sendMessage("继续");
+    expect(container.textContent).toContain("密码确认？");
+    expect(container.textContent).toContain("已超时，agent 自行决定");
+    // 超时后提交按钮不再渲染（不可再答）。
+    expect(container.querySelector('button[data-testid="clarify-submit-clfy_tmo"]')).toBeNull();
   });
 });
 

@@ -26,8 +26,10 @@
     "@xterm/addon-webgl": "0.19.0",
     "@xterm/xterm": "6.0.0",
     "@xyflow/react": "^12.11.3",
+    "@xyflow/system": "^0.0.73",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
+    "d3-force": "^3.0.0",
     "gsap": "3.15.0",
     "leva": "0.10.1",
     "lucide-react": "0.577.0",
@@ -41,6 +43,7 @@
     "unicode-animations": "1.0.3"
   },
   "devDependencies": {
+    "@types/d3-force": "^3.0.10",
     "@types/node": "22.20.1",
     "@types/qrcode": "1.5.6",
     "@types/react": "19.2.17",

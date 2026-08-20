@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import type { TopologyHost, TopologyService, TopologyView } from "./api";
-import { buildGraphModel, entityFromNode, nodeToneClass } from "./topologyGraph";
+import {
+  buildGraphModel,
+  clusterOptions,
+  entityFromNode,
+  filterGraphModel,
+  layoutForceGraph,
+  nodeToneClass,
+} from "./topologyGraph";
 
 const svc = (name: string, status = "running"): TopologyService => ({
   card: { name, status, kind: "service" },
@@ -72,20 +79,69 @@ describe("拓扑图数据模型（批三十五）", () => {
     expect(m.nodes.find((n) => n.data.name === "kubelet")?.data.keyPath).toBe(false);
   });
 
-  it("布局：集群按列排、服务在主机下方成网格不重叠", () => {
+  it("力导向布局：节点自由散布（非列排表格）、两两不重叠、结果确定", () => {
     const m = buildGraphModel(VIEW);
-    const prod = m.nodes.find((n) => n.data.kind === "cluster" && n.data.name === "prod")!;
-    const local = m.nodes.find((n) => n.data.kind === "cluster" && n.data.name === "local")!;
-    expect(prod.position.x).toBe(0);
-    expect(local.position.x).toBeGreaterThan(prod.position.x);
-    // 同一 host 的多个服务 y 递增、x 分列
-    const gw = m.nodes.find((n) => n.data.name === "gateway-svc")!;
-    const db = m.nodes.find((n) => n.data.name === "order-db")!;
-    expect(db.position.x).toBeGreaterThan(gw.position.x);
-    expect(db.position.y).toBe(gw.position.y);
-    // 节点位置无重叠：位置两两不相等
-    const positions = m.nodes.map((n) => `${n.position.x},${n.position.y}`);
+    const laid = layoutForceGraph(m);
+    expect(laid.nodes).toHaveLength(m.nodes.length);
+    // 布局后所有节点坐标有限且两两不重叠。
+    const positions = laid.nodes.map((n) => `${n.position.x.toFixed(3)},${n.position.y.toFixed(3)}`);
     expect(new Set(positions).size).toBe(positions.length);
+    for (const n of laid.nodes) {
+      expect(Number.isFinite(n.position.x)).toBe(true);
+      expect(Number.isFinite(n.position.y)).toBe(true);
+    }
+    // 集群节点不再同列排布：x/y 都有散布（力导向二维散布，非表格列排）。
+    const clusters = laid.nodes.filter((n) => n.data.kind === "cluster");
+    const xs = new Set(clusters.map((n) => n.position.x.toFixed(1)));
+    const ys = new Set(clusters.map((n) => n.position.y.toFixed(1)));
+    expect(xs.size).toBeGreaterThan(1);
+    expect(ys.size).toBeGreaterThan(1);
+    // 固定种子 → 两次布局结果一致（确定性，测试可复现）。
+    const again = layoutForceGraph(m);
+    expect(again.nodes.map((n) => `${n.position.x},${n.position.y}`)).toEqual(
+      laid.nodes.map((n) => `${n.position.x},${n.position.y}`),
+    );
+  });
+
+  it("力导向布局：空图/overflow 原样返回", () => {
+    expect(layoutForceGraph({ nodes: [], edges: [], overflow: false })).toEqual({
+      nodes: [],
+      edges: [],
+      overflow: false,
+    });
+    const big = buildGraphModel({
+      ...VIEW,
+      hosts: Array.from({ length: 400 }, (_, i) => host(`h${i}`, "prod", [svc("s")])),
+      clusters: [{ name: "prod" }],
+    });
+    expect(big.overflow).toBe(true);
+    expect(layoutForceGraph(big).nodes).toHaveLength(0);
+  });
+
+  it("集群筛选：只保留选中集群的节点与两端都在的连线", () => {
+    const m = layoutForceGraph(buildGraphModel(VIEW));
+    const local = filterGraphModel(m, "local");
+    const names = local.nodes.map((n) => n.data.name);
+    expect(names).toContain("local");
+    expect(names).toContain("laptop");
+    expect(names).toContain("gitlab");
+    expect(names).not.toContain("prod");
+    expect(names).not.toContain("node1");
+    expect(names).not.toContain("gateway-svc");
+    expect(names).not.toContain("ingress");
+    for (const e of local.edges) {
+      const src = local.nodes.some((n) => n.id === e.source);
+      const dst = local.nodes.some((n) => n.id === e.target);
+      expect(src && dst).toBe(true);
+    }
+    // "全部"原样返回（同一引用）。
+    expect(filterGraphModel(m, "all")).toBe(m);
+  });
+
+  it("集群选项：显式集群优先，缺省归 default", () => {
+    expect(clusterOptions(VIEW)).toEqual(["prod", "local"]);
+    expect(clusterOptions({ ...VIEW, clusters: [] })).toEqual(["default"]);
+    expect(clusterOptions({ ...VIEW, clusters: [], hosts: [], cross_host: [] })).toEqual([]);
   });
 
   it("节点数量上限保护（超过返回 overflow）", () => {
