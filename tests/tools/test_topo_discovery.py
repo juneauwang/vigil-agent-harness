@@ -755,12 +755,12 @@ def test_cli_password_stdin_flows_to_prompt_credentials(tmp_path, monkeypatch):
 def test_host_expansion_ranges_and_lists():
     import hermes_cli.topo_discover as td
 
-    assert td._expand_hosts(["10.123.66.23[3-8]"]) == [
-        "10.123.66.233", "10.123.66.234", "10.123.66.235",
-        "10.123.66.236", "10.123.66.237", "10.123.66.238",
+    assert td._expand_hosts(["203.0.113.23[3-8]"]) == [
+        "203.0.113.233", "203.0.113.234", "203.0.113.235",
+        "203.0.113.236", "203.0.113.237", "203.0.113.238",
     ]
-    assert td._expand_hosts(["10.123.66.233,10.123.66.234"]) == [
-        "10.123.66.233", "10.123.66.234",
+    assert td._expand_hosts(["203.0.113.233,203.0.113.234"]) == [
+        "203.0.113.233", "203.0.113.234",
     ]
 
 
@@ -782,7 +782,7 @@ def test_cli_batch_scan_continues_after_single_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(td, "discover_host", fake_discover)
     monkeypatch.setattr(td, "write_discovery", lambda *a, **kw: {"written": []})
 
-    rc = td.main(["--host", "10.123.66.23[3-8]", "--env", "prod", "--dry-run", "--yes"])
+    rc = td.main(["--host", "203.0.113.23[3-8]", "--env", "prod", "--dry-run", "--yes"])
     assert rc == 0
     assert len(calls) == 6
 
@@ -800,7 +800,7 @@ def test_cli_batch_confirm_once_and_writes_each_success(tmp_path, monkeypatch):
     confirm_calls = []
     monkeypatch.setattr(td, "_confirm", lambda force, yes: confirm_calls.append(1) or True)
 
-    rc = td.main(["--host", "10.123.66.23[3-8]", "--env", "prod", "--yes"])
+    rc = td.main(["--host", "203.0.113.23[3-8]", "--env", "prod", "--yes"])
     assert rc == 0
     assert confirm_calls == [1]
     assert len(writes) == 6

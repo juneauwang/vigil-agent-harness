@@ -144,14 +144,14 @@ class TestSudoStdinInjectionBlindSpot:
 
     def test_sudo_S_herestring_password_masked(self):
         cmd = (
-            'ssh -i /root/wangwp10.pem wangwp10@10.123.66.237 '
+            'ssh -i /root/user.pem user@203.0.113.13 '
             '"sudo -S -p \'\' smem -s swap -r <<< \'Sup3rSecr3t!\'"'
         )
         out = redact_sensitive_text(cmd)
         assert "Sup3rSecr3t!" not in out
         # 骨架保留：ssh 目标、sudo -S -p ''、herestring 结构都在
         assert "sudo -S -p '' smem -s swap -r <<<" in out
-        assert "ssh -i /root/wangwp10.pem wangwp10@10.123.66.237" in out
+        assert "ssh -i /root/user.pem user@203.0.113.13" in out
 
     def test_sudo_S_herestring_short_password_masked(self):
         """短密码（<18 字符）也整段打码——sudo -S 出现即密码，不做值形态判断。"""

@@ -57,11 +57,11 @@ def _incident(**overrides):
 
 
 ALLOW_COMMANDS = [
-    "mkdir -p /root/wangwp10.pem",            # -p 后是路径 → 放行
+    "mkdir -p /root/user.pem",            # -p 后是路径 → 放行
     "scp -p server:/x /y",                     # scp -p 保时间戳
     "docker run -d -p 8080:80 nginx",          # docker -p 端口发布
     "psql -p 5432 -c 'select 1'",              # psql -p 端口
-    "ssh -i /root/wangwp10.pem root@host",     # -i 私钥路径（含 pem/-p 形态）
+    "ssh -i /root/user.pem root@host",     # -i 私钥路径（含 pem/-p 形态）
     "mysql -P 3306 -uroot db",                 # DB 工具 -P 大写端口
     "mysql -p 3306 -e 'select 1'",             # 数字值 → 端口
     "redis-cli -p 6379 ping",                  # redis-cli -p 端口
@@ -106,7 +106,7 @@ class TestErrorHint:
 class TestRunbookCreateSemantic:
     def test_allows_legit_port_and_path_forms(self, rb_home):
         data = _incident(steps=[{"id": "s1", "title": "x", "commands": [
-            "mkdir -p /root/wangwp10.pem",
+            "mkdir -p /root/user.pem",
             "docker run -d -p 8080:80 nginx",
         ]}])
         result = _load(runbook_create(**data, home=rb_home))

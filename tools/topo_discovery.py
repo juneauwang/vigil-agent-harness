@@ -355,7 +355,9 @@ def _build_local_runner(sudo_password_file: Optional[Path] = None) -> Callable[[
 
 def _make_askpass_script(vault_file: Path) -> Path:
     """写 0700 askpass 脚本：输出保险箱文件内容（密码），不进 argv/env。"""
-    script = Path(tempfile.mkstemp(prefix="vigil-askpass-", suffix=".sh")[1])
+    fd, path = tempfile.mkstemp(prefix="vigil-askpass-", suffix=".sh")
+    os.close(fd)  # 不关 fd 则脚本保持写打开，ssh/exec 报 Text file busy
+    script = Path(path)
     script.write_text(f"#!/bin/sh\ncat {vault_file}\n", encoding="utf-8")
     os.chmod(script, 0o700)
     return script
