@@ -159,13 +159,14 @@ class ChatSession:
         }
 
 
-def _create_chat_agent(chat_session_id: str, model: Optional[str] = None):
+def _create_chat_agent(chat_session_id: str, model: Optional[str] = None, provider: Optional[str] = None):
     """构造会话 agent（mirror oneshot 的非交互路径；平台标记 web）。
 
     模型/运行时照 config.yaml model.* + resolve_runtime_provider；工具集取
     platform_toolsets.cli（用户经 ``vigil tools`` 的既有配置）；MCP 在构造前
     幂等发现；会话历史落 SQLite SessionDB（session_id = chat_session_id）。
     批四十一 §8：``model`` 可选覆盖（会话级模型，缺省 = 配置默认）。
+    批五十一：``provider`` 可选显式路由（custom:<slug> 等），缺省 = 配置默认。
     """
     from hermes_cli.config import load_config
     from hermes_cli.fallback_config import get_fallback_chain
@@ -183,7 +184,10 @@ def _create_chat_agent(chat_session_id: str, model: Optional[str] = None):
         cfg_model = model_cfg.get("default") or model_cfg.get("model") or ""
     cfg_default = str(cfg_model or "").strip()
     effective_model = str(model or "").strip() or cfg_default
-    runtime = resolve_runtime_provider(target_model=effective_model or None)
+    runtime = resolve_runtime_provider(
+        requested=provider or None,
+        target_model=effective_model or None,
+    )
 
     toolsets_list = sorted(_get_platform_tools(cfg, "cli"))
     ensure_mcp_discovery_before_agent_build(
@@ -788,12 +792,19 @@ router = APIRouter()
 
 
 def _model_catalog() -> dict:
-    """批四十一 §8：会话可选模型目录（静态，零网络、零敏感信息）。
+    """批四十一 §8 + 批五十一：会话可选模型目录，聚合所有已配置 LLM。
 
-    返回 {"models": [...], "provider": ..., "default_model": ...}。来源：
-    配置 model.default（始终在列、标 default）+ 静态目录（提供商的
-    _PROVIDER_MODELS / OpenRouter / Vercel AI Gateway 快照）。标注 tag 由
-    目录描述或模型名派生（快/省 vs 强/慢），纯展示不做准确承诺。
+    返回 {"models": [...], "provider": ..., "default_model": ...}。来源（全部
+    本地、零网络、零敏感信息）：
+    1. 配置 model.default（始终在列、标 default）+ 当前 provider 静态目录
+    2. custom_providers（config.yaml list）— 每 entry 的 model / models 键
+    3. providers（config.yaml keyed dict，enabled）— 各 provider 的 model
+    4. fallback_providers / fallback_model（get_fallback_chain）
+    5. auth store（~/.vigil/auth.json providers）— 已登录 provider 的静态目录
+
+    条目 {id, name, provider, description, tag, default}；id = 模型名（兼容
+    既有调用），provider = 路由标识（custom:<slug> / provider 名 / 空）。
+    provider 相同的条目用 set 去重，default 置顶。
     """
     from hermes_cli.models import (
         OPENROUTER_MODELS,
@@ -811,37 +822,28 @@ def _model_catalog() -> dict:
         default_model = str(model_cfg).strip()
     else:
         default_model = str(model_cfg.get("default") or model_cfg.get("model") or "").strip()
-    provider = str(model_cfg.get("provider") or "").strip() or "auto"
+    provider = str(model_cfg.get("provider") or "").strip().lower() or "auto"
 
-    desc: dict = {}
-    if provider == "openrouter":
-        for mid, d in OPENROUTER_MODELS:
-            desc[mid] = d
-    elif provider in ("ai-gateway", "vercel"):
-        for mid, d in VERCEL_AI_GATEWAY_MODELS:
-            desc[mid] = d
+    # (provider, model) → 条目；provider 空 = 无归属（legacy 静态目录）。
+    entries: dict[tuple[str, str], dict] = {}
 
-    try:
-        from hermes_cli.models import normalize_provider
-        provider_key = normalize_provider(provider) or provider
-    except Exception:
-        provider_key = provider
-    catalog: list[str] = []
-    for key in (provider_key, provider):
-        for mid in _PROVIDER_MODELS.get(key, []):
-            if mid not in catalog:
-                catalog.append(mid)
-    # 聚合器目录作为补充（OpenRouter 快照本身就有描述）。
-    for mid, _d in desc.items():
-        if mid not in catalog:
-            catalog.append(mid)
+    def _add(pid: str, model: str, desc: str = "") -> None:
+        model = str(model or "").strip()
+        if not model:
+            return
+        key = (pid or "", model)
+        if key in entries:
+            return
+        entries[key] = {
+            "id": model,
+            "name": model,
+            "provider": pid or "",
+            "description": desc,
+            "tag": "",
+            "default": False,
+        }
 
-    known = set(catalog) | set(desc)
-    if default_model and default_model not in known:
-        known.add(default_model)
-
-    def _tag(mid: str) -> str:
-        d = desc.get(mid, "")
+    def _tag(mid: str, d: str) -> str:
         low = mid.lower()
         desc_low = d.lower()
         if (
@@ -857,19 +859,129 @@ def _model_catalog() -> dict:
             return "强/慢"
         return ""
 
-    # 目录顺序：配置默认置顶，其余按出现顺序。
-    ordered = [default_model] if default_model else []
-    for mid in catalog + [m for m in known if m not in catalog]:
-        if mid not in ordered:
-            ordered.append(mid)
-    models = [{
-        "id": mid,
-        "name": mid,
-        "description": desc.get(mid, ""),
-        "tag": _tag(mid),
-        "default": mid == default_model,
-    } for mid in ordered if mid]
-    return {"models": models, "provider": provider, "default_model": default_model}
+    # ── 源 1：当前 provider 静态目录 ────────────────────────────────────
+    desc: dict = {}
+    if provider == "openrouter":
+        for mid, d in OPENROUTER_MODELS:
+            desc[mid] = d
+    elif provider in ("ai-gateway", "vercel"):
+        for mid, d in VERCEL_AI_GATEWAY_MODELS:
+            desc[mid] = d
+
+    try:
+        from hermes_cli.models import normalize_provider
+        provider_key = normalize_provider(provider) or provider
+    except Exception:
+        provider_key = provider
+    for key in (provider_key, provider):
+        for mid in _PROVIDER_MODELS.get(key, []):
+            _add(provider, mid, desc.get(mid, ""))
+    for mid, d in desc.items():
+        _add(provider, mid, d)
+
+    # ── 源 2：custom_providers（config.yaml list）───────────────────────
+    cps = cfg.get("custom_providers")
+    if isinstance(cps, list):
+        try:
+            from hermes_cli.providers import custom_provider_slug
+        except Exception:
+            custom_provider_slug = None
+        for entry in cps:
+            if not isinstance(entry, dict):
+                continue
+            cpid = ""
+            if custom_provider_slug is not None:
+                cpid = custom_provider_slug(
+                    str(entry.get("name") or ""),
+                    str(entry.get("provider_key") or ""),
+                )
+            for mid in (entry.get("model"),):
+                _add(cpid, str(mid or ""))
+            models_cfg = entry.get("models")
+            if isinstance(models_cfg, dict):
+                for mid in models_cfg:
+                    _add(cpid, str(mid))
+
+    # ── 源 3：providers（config.yaml keyed dict，enabled）───────────────
+    provs = cfg.get("providers")
+    if isinstance(provs, dict):
+        try:
+            from hermes_cli.config import is_provider_enabled
+        except Exception:
+            is_provider_enabled = None
+        for pid, block in provs.items():
+            if not isinstance(block, dict):
+                continue
+            if is_provider_enabled is not None and not is_provider_enabled(block):
+                continue
+            for mid in (block.get("model"),):
+                _add(str(pid), str(mid or ""))
+            for mid in _PROVIDER_MODELS.get(str(pid), []):
+                _add(str(pid), mid)
+
+    # ── 源 4：fallback 链 ───────────────────────────────────────────────
+    try:
+        from hermes_cli.fallback_config import get_fallback_chain
+        for entry in get_fallback_chain(cfg):
+            if isinstance(entry, dict):
+                _add(
+                    str(entry.get("provider") or ""),
+                    str(entry.get("model") or ""),
+                )
+    except Exception:
+        pass
+
+    # ── 源 5：auth store 已登录 provider ────────────────────────────────
+    try:
+        from hermes_cli.auth import _load_auth_store
+        auth_provs = _load_auth_store().get("providers") or {}
+        if isinstance(auth_provs, dict):
+            for pid, state in auth_provs.items():
+                if not isinstance(state, dict):
+                    continue
+                for mid in _PROVIDER_MODELS.get(str(pid), []):
+                    _add(str(pid), mid)
+                _add(str(pid), str(state.get("model") or ""))
+    except Exception:
+        pass
+
+    # ── default 标记 + 排序 ─────────────────────────────────────────────
+    if default_model:
+        entries[(provider, default_model)] = {
+            "id": default_model,
+            "name": default_model,
+            "provider": provider,
+            "description": desc.get(default_model, ""),
+            "tag": _tag(default_model, desc.get(default_model, "")),
+            "default": True,
+        }
+    for key, ent in list(entries.items()):
+        ent["tag"] = _tag(ent["id"], ent["description"])
+
+    ordered = sorted(entries.values(), key=lambda e: (not e["default"], e["provider"], e["id"]))
+    return {
+        "models": ordered,
+        "provider": provider,
+        "default_model": default_model,
+    }
+
+
+def _catalog_lookup(model: str, provider: str = "") -> Optional[dict]:
+    """目录内查 (model, provider) 条目；provider 空时优先当前 provider，再任意。"""
+    catalog = _model_catalog()["models"]
+    if provider:
+        for m in catalog:
+            if m["id"] == model and (m.get("provider") or "") == provider:
+                return m
+        return None
+    cur = _model_catalog()["provider"]
+    for m in catalog:
+        if m["id"] == model and (m.get("provider") or "") == cur:
+            return m
+    for m in catalog:
+        if m["id"] == model:
+            return m
+    return None
 
 
 @router.get("/api/models")
@@ -885,15 +997,19 @@ async def create_chat_session(payload: Dict[str, Any] = Body(default_factory=dic
 
     批四十一 §8：body 可选 {model}——会话级模型（缺省用配置默认）。模型必须
     在 /api/models 目录内（配置外模型不可选）。
+    批五十一：body 可选 {provider}——显式路由 provider（custom:<slug> 等），
+    与 model 成对校验；缺省 = 目录内该模型的归属 provider。
     """
     model = str((payload or {}).get("model") or "").strip() or None
+    provider = str((payload or {}).get("provider") or "").strip() or None
     if model:
-        catalog = {m["id"] for m in _model_catalog()["models"]}
-        if model not in catalog:
+        entry = _catalog_lookup(model, provider or "")
+        if entry is None:
             return JSONResponse(
                 status_code=400,
                 content={"error": {"code": "invalid_request", "message": f"模型不在可选目录: {model}"}},
             )
+        provider = entry.get("provider") or provider
     with _CHAT_LOCK:
         _evict_if_needed()
         session = ChatSession(
@@ -905,7 +1021,7 @@ async def create_chat_session(payload: Dict[str, Any] = Body(default_factory=dic
         _CHAT_SESSIONS[session.chat_session_id] = session
     try:
         agent, session_db = await asyncio.to_thread(
-            _build_chat_agent_pair, session.chat_session_id, model
+            _build_chat_agent_pair, session.chat_session_id, model, provider
         )
     except Exception as exc:
         with _CHAT_LOCK:
@@ -924,9 +1040,9 @@ async def create_chat_session(payload: Dict[str, Any] = Body(default_factory=dic
     }
 
 
-def _build_chat_agent_pair(chat_session_id: str, model: Optional[str] = None):
+def _build_chat_agent_pair(chat_session_id: str, model: Optional[str] = None, provider: Optional[str] = None):
     """返回 (agent, session_db) —— to_thread 包装便于异步端点不阻塞事件循环。"""
-    agent = _create_chat_agent(chat_session_id, model=model)
+    agent = _create_chat_agent(chat_session_id, model=model, provider=provider)
     return agent, getattr(agent, "_session_db", None)
 
 
@@ -1143,6 +1259,8 @@ async def chat_set_session_model(chat_session_id: str,
 
     模型必须在 /api/models 目录内；忙时 409（避免改模型打断进行中的 turn）；
     会话不存在 404。切换复用 AIAgent.switch_model（runtime 照新模型解析）。
+    批五十一：body 可选 {provider}——显式路由 provider（custom:<slug> 等），
+    与 model 成对校验；缺省 = 目录内该模型的归属 provider。
     """
     with _CHAT_LOCK:
         session = _CHAT_SESSIONS.get(chat_session_id)
@@ -1152,17 +1270,19 @@ async def chat_set_session_model(chat_session_id: str,
             content={"error": {"code": "not_found", "message": f"会话不存在: {chat_session_id}"}},
         )
     model = str((payload or {}).get("model") or "").strip()
+    provider = str((payload or {}).get("provider") or "").strip() or None
     if not model:
         return JSONResponse(
             status_code=400,
             content={"error": {"code": "invalid_request", "message": "model 必填"}},
         )
-    catalog = {m["id"] for m in _model_catalog()["models"]}
-    if model not in catalog:
+    entry = _catalog_lookup(model, provider or "")
+    if entry is None:
         return JSONResponse(
             status_code=400,
             content={"error": {"code": "invalid_request", "message": f"模型不在可选目录: {model}"}},
         )
+    provider = entry.get("provider") or provider
     with _CHAT_LOCK:
         if session.busy:
             return JSONResponse(
@@ -1179,7 +1299,7 @@ async def chat_set_session_model(chat_session_id: str,
             return {"chat_session_id": chat_session_id, "model": model}
         session.model = model
     try:
-        await asyncio.to_thread(_switch_session_agent_model, agent, model)
+        await asyncio.to_thread(_switch_session_agent_model, agent, model, provider)
     except Exception as exc:
         with _CHAT_LOCK:
             # 切换失败：回滚会话模型字段，避免视图与 agent 实际模型不一致。
@@ -1192,10 +1312,13 @@ async def chat_set_session_model(chat_session_id: str,
     return {"chat_session_id": chat_session_id, "model": model}
 
 
-def _switch_session_agent_model(agent, model: str) -> None:
+def _switch_session_agent_model(agent, model: str, provider: Optional[str] = None) -> None:
     """按目标模型解析 runtime 并原地切换 agent（to_thread 包装）。"""
     from hermes_cli.runtime_provider import resolve_runtime_provider
-    runtime = resolve_runtime_provider(target_model=model or None)
+    runtime = resolve_runtime_provider(
+        requested=provider or None,
+        target_model=model or None,
+    )
     agent.switch_model(
         model,
         runtime.get("provider"),

@@ -110,7 +110,7 @@ def stub_agent_factory(monkeypatch):
         agent = _FinalizeStubAgent("", db, **kwargs)
         holder["agent"] = agent
         holder["db"] = db
-        def _fake_create(sid, model=None):
+        def _fake_create(sid, model=None, provider=None):
             # 生产路径 _create_chat_agent 会建行；stub 里等价物就是它。
             try:
                 db.create_session(sid, source="web")

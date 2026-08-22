@@ -2857,3 +2857,85 @@
   无 GRAPH_LAYOUT 列排常量（改为 d3-force）、`hermes_cli/chat_api.py` 有 clarify 回调
   工厂 + /clarify 端点、`web/src/components/ApprovalModal.tsx` 右下角形态 + 通知接线。
 - **状态**：未 commit（待用户核验后由惯例提交；开发目录 master，基线 9e445cbb）。
+
+---
+
+## OPS-DELTA #67：sudo 远端 scp 双重前缀修复 + dashboard Incidents 接入 watch inbox（2026-08-21）
+
+- **背景（用户 dogfood 原话/实测）**：① sudo_exec 对远端主机（prod）执行、凭据为
+  vault 类型时整条通道不可用：`scp: failed to upload file /tmp/vigil-sudo-askpass-XXX.sh
+  to wangwp10@10.123.66.233:/tmp/vigil-sudo-YYYY.sh`，真实 stderr `scp: dest open
+  "wangwp10@10.123.66.233:/tmp/vigil-sudo-...sh": No such file or directory`——表面像
+  认证失败，实际是 scp 把整串带冒号路径当字面量。② alertmanager 接入 vigil watch
+  （OPS-DELTA #9，纯配置启用）后 `vigil watch install` 常驻每 300s 拉告警写
+  `~/.vigil/watch/inbox/`，但 dashboard `/api/incidents` 是结构占位返回空数组
+  （web_server.py:4298-4310 原注释"Vigil 无监控/告警体系"），前端 IncidentsPage 是
+  页面壳——告警消费层缺 UI 一环。
+- **范围**：`tools/sudo_tool.py`（任务 1）、`hermes_cli/web_server.py` + `web/src/lib/api.ts`
+  + `web/src/pages/IncidentsPage.tsx`（任务 2）+ 新增测试（`tests/tools/test_sudo_exec.py`
+  回归 2 例、`tests/hermes_cli/test_batch50_incidents.py` 6 例、`web/src/pages/
+  IncidentsPage.test.tsx` 2 例）+ 既有占位契约测试改造（`test_batch28_exec_api.py`）。
+- **§BY 任务 1 根因（行号实锤）**：`tools/sudo_tool.py` `_run_remote_sudo` 调用 `_scp`
+  时 dest 已带 `f"{user}@{host}:{remote_script}"` 前缀（330-331 行），而
+  `_scp_argv_from_ssh`（223 行）构造 scp 目标又拼一次 `f"{ssh_argv[-1]}:{dest}"`
+  （ssh_argv[-1] 恒为 `user@host`）→ 双重前缀 → scp 把整串当字面量路径 → 远端
+  `dest open ... No such file`。`_scp_argv_from_ssh` docstring 写明 dest 应为纯远端
+  路径，调用方违反约定。修法：`_run_remote_sudo` 两处 `_scp` 只传纯路径
+  `remote_script` / `remote_vault`，`_scp_argv_from_ssh` 不动。全仓 grep 确认
+  `_scp(` 调用点仅这两处 + 测试（`tools/environments/ssh.py:177` 是自拼单前缀的独立
+  实现，无同类问题）。
+- **§BZ 任务 2 后端**：`/api/incidents` 从占位改为读 watch inbox——复用
+  `tools/watch_collect.inbox_dir()` / `_iter_inbox()`（不硬编码路径），按
+  `alertname|instance` 去重保留最新采集、collected_at 新的在前；条目字段
+  alertname/severity/instance/startsAt/state/collected_at/processed/source
+  （="alertmanager"）；保持响应 schema `{incidents, total, schema_version, limit,
+  offset, has_more}`，schema_version 1→2；inbox 缺失/为空/坏 JSON → 空列表 200 不
+  500。processed 只读展示（标记处理是 watch_digest agent 通道的事，本任务不做）。
+- **§BZ 任务 2 前端**：`web/src/lib/api.ts` 新增 `IncidentItem` 类型 +
+  `IncidentsResponse` 补 limit/offset/has_more；IncidentsPage 渲染告警列表
+  （severity 分级样式：critical=红 `--vigil-error` / warning=黄 `--vigil-warn` /
+  info=蓝 `--vigil-primary`；字段全展示；processed 显示"已处理"），空态文案"暂无告警"。
+- **测试**：后端新增 6 例（test_batch50_incidents.py：读 inbox 字段+去重保最新、
+  同键去重、processed 透传、分页 limit/offset/has_more、无/空 inbox 空列表 200、
+  坏 JSON 跳过）+ sudo 回归 2 例（mock `_scp` 断言 dest 纯路径无 `@`/`:`、
+  `_scp_argv_from_ssh` 纯路径 dest 单前缀）+ 占位契约测试改造（schema_version=2）。
+  回归：sudo 系 5 套件 + incidents/exec_api 2 套件共 82 过；前端 vitest 全量 136 过
+  （新增 IncidentsPage 2 例）+ `tsc -p . --noEmit` ✓。
+- **核销方式**：测试常驻——`test_sudo_exec.py` 纯路径 dest 断言（`@`/`:` 不在 dest）、
+  `_scp_argv_from_ssh` 单前缀断言、`test_batch50_incidents.py` inbox 契约断言（字段/
+  去重/分页/空态）。季度体检检查：`tools/sudo_tool.py` `_run_remote_sudo` 无
+  `f"{user}@{host}:"` 拼接、`hermes_cli/web_server.py` `/api/incidents` 调用
+  `watch_collect` inbox 读取且 schema_version>=2、`web/src/pages/IncidentsPage.tsx`
+  非空态壳。
+- **状态**：未 commit（待用户核验后由惯例提交；开发目录 master，基线 33f0d67c）。
+
+### 65. 批次五十一 模型目录聚合所有已配置 LLM——custom/DS 一键切换（2026-08-22，用户需求：公司 custom + DS 切换不便）
+
+- **为什么**：`/api/models` 目录只列当前 provider（deepseek）静态 2 模型，且创建/切换会话的
+  runtime 解析不传 requested provider（恒用 config model.provider）——就算目录塞进 custom
+  模型也会拿 deepseek 的 base_url/key 去跑。用户公司场景 custom + DS 并存，切模型要先改
+  config 重跑 setup，无法在 UI 切换。
+- **怎么改**：
+  - `hermes_cli/chat_api.py` `_model_catalog()` 聚合 5 源：① 当前 provider 静态目录 +
+    model.default（保留）② custom_providers（config.yaml list，provider 标识
+    `custom:<slug>`）③ providers（keyed dict，enabled 才进）④ fallback_providers /
+    fallback_model（get_fallback_chain）⑤ auth store 已登录 provider。条目
+    `{id, name, provider, description, tag, default}`，id = 模型名（兼容既有调用），
+    (provider, model) 去重，default 置顶。
+  - 新增 `_catalog_lookup(model, provider)`：provider 空时优先当前 provider 再任意。
+  - 创建会话（POST /api/chat/sessions）与切换（POST .../model）body 支持可选
+    `provider` 字段，与 model 成对校验；路由改
+    `resolve_runtime_provider(requested=provider, target_model=model)`——不传 provider
+    保持旧行为（兼容）。
+  - 前端：`web/src/lib/api.ts` ChatModelOption 加 provider 字段、createChatSession /
+    setChatSessionModel 带 provider；`web/src/pages/ChatPage.tsx` 下拉按 provider 分组
+    （optgroup），切换/新建时反查条目 provider 随提交。
+- **测试**：后端 batch41 新增 4 例（聚合 5 源断言、显式 provider 路由转发、provider
+  不匹配 400、切换带 provider runtime 按 requested 路由）+ 既有 7 个 chat 套件
+  stub 签名补 provider 参数；回归 chat 相关 10 套件 65 过。前端 vitest 全量 136 过
+  （ChatPage 用例加 provider 断言 + optgroup 分组断言）+ `tsc --noEmit` ✓。
+- **核销方式**：测试常驻——`test_batch41_chat_ui_support.py` 聚合断言（custom/
+  providers/fallback/auth 各源进目录）、provider 成对校验 400 断言、切换 requested
+  路由断言。季度体检检查：`chat_api.py` `_model_catalog` 含 custom_providers 来源、
+  `_switch_session_agent_model` 传 requested。
+- **状态**：未 commit（与批 50 一并待用户核验提交；开发目录 master）。

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
 import {
   Bot,
   Check,
@@ -751,7 +751,9 @@ export default function ChatPage() {
       setError(null);
       setBusyAction(true);
       try {
-        const resp = await api.createChatSession(model);
+        // 批五十一：模型条目带 provider（custom:<slug> 等），随创建提交路由。
+        const entry = model ? modelOptions.find((m) => m.id === model) : undefined;
+        const resp = await api.createChatSession(model, entry?.provider);
         const sid = resp.chat_session_id;
         setActiveId(sid);
         loadedRef.current.add(sid);
@@ -1027,13 +1029,14 @@ export default function ChatPage() {
     [activeId],
   );
 
-  // 批四十一 §8：切换会话模型（会话级，新消息生效）。
+  // 批四十一 §8：切换会话模型（会话级，新消息生效）。批五十一：随 model 提交 provider 路由。
   const changeSessionModel = useCallback(
     async (sid: string, model: string) => {
       if (!sid || !model || modelSelections[sid] === model) return;
       setModelSelections((prev) => ({ ...prev, [sid]: model }));
       try {
-        const resp = await api.setChatSessionModel(sid, model);
+        const entry = modelOptions.find((m) => m.id === model);
+        const resp = await api.setChatSessionModel(sid, model, entry?.provider);
         setModelSelections((prev) => ({ ...prev, [sid]: resp.model }));
         setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, model: resp.model } : s)));
       } catch (e) {
@@ -1044,7 +1047,7 @@ export default function ChatPage() {
         setModelSelections((prev) => ({ ...prev, [sid]: s?.model ?? modelSelections.__default ?? "" }));
       }
     },
-    [modelSelections, sessions],
+    [modelSelections, sessions, modelOptions],
   );
 
   const disabled = chatInputDisabled(activeState) || activeBusy || !activeId || busyAction;
@@ -1056,6 +1059,17 @@ export default function ChatPage() {
     sessions.find((s) => s.id === activeId)?.model ??
     modelSelections.__default ??
     "";
+  // 批五十一：下拉按 provider 分组（custom:<slug> / provider 名 / 默认）。
+  const groupedModels = useMemo(() => {
+    const groups = new Map<string, ChatModelOption[]>();
+    for (const m of modelOptions) {
+      const g = m.provider || "默认";
+      const list = groups.get(g);
+      if (list) list.push(m);
+      else groups.set(g, [m]);
+    }
+    return Array.from(groups.entries());
+  }, [modelOptions]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -1160,11 +1174,15 @@ export default function ChatPage() {
               aria-label="会话模型"
               className="h-7 max-w-[320px] rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 font-mono text-[11px] text-[var(--vigil-text)] outline-none disabled:opacity-60"
             >
-              {modelOptions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                  {m.default ? " · 默认" : ""}
-                </option>
+              {groupedModels.map(([group, items]) => (
+                <optgroup key={group} label={group}>
+                  {items.map((m) => (
+                    <option key={`${group}::${m.id}`} value={m.id}>
+                      {m.name}
+                      {m.default ? " · 默认" : ""}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             <span className="min-w-0 flex-1 truncate text-[10px] text-[var(--vigil-muted)]">

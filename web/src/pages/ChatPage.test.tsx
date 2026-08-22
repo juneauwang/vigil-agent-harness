@@ -33,8 +33,9 @@ const HISTORY: ChatHistoryMessage[] = [
 
 const MODELS = {
   models: [
-    { id: "m-fast", name: "m-fast", description: "Anthropic Claude Haiku", tag: "快/省", default: true },
-    { id: "m-strong", name: "m-strong", description: "Anthropic Claude Opus", tag: "强/慢", default: false },
+    { id: "m-fast", name: "m-fast", description: "Anthropic Claude Haiku", tag: "快/省", default: true, provider: "openrouter" },
+    { id: "m-strong", name: "m-strong", description: "Anthropic Claude Opus", tag: "强/慢", default: false, provider: "openrouter" },
+    { id: "internal-v2", name: "internal-v2", description: "公司内部 LLM", tag: "", default: false, provider: "custom:company-internal" },
   ],
   provider: "openrouter",
   default_model: "m-fast",
@@ -93,7 +94,10 @@ async function mountWith(
   apiMock.createChatSession.mockResolvedValue({ chat_session_id: "C", created_at: "", model: "m-fast" });
   apiMock.chatStream.mockResolvedValue(undefined);
   apiMock.interruptChatSession.mockResolvedValue({ status: "interrupted" });
-  apiMock.setChatSessionModel.mockResolvedValue({ chat_session_id: "A", model: "m-strong" });
+  apiMock.setChatSessionModel.mockImplementation(async (_sid: string, model: string) => ({
+    chat_session_id: "A",
+    model,
+  }));
   await act(async () => {
     root.render(<ChatPage />);
   });
@@ -302,7 +306,10 @@ describe("批四十一 §8 会话模型选择", () => {
     const modelSelect = container.querySelector<HTMLSelectElement>('select[aria-label="会话模型"]')!;
     expect(modelSelect).toBeTruthy();
     const options = Array.from(modelSelect.options).map((o) => o.value);
-    expect(options).toEqual(["m-fast", "m-strong"]);
+    expect(options).toEqual(["m-fast", "m-strong", "internal-v2"]);
+    // 批五十一：下拉按 provider 分组（optgroup）。
+    const groups = Array.from(modelSelect.querySelectorAll("optgroup")).map((g) => g.label);
+    expect(groups).toEqual(["openrouter", "custom:company-internal"]);
     // 批四十二 §AY：下拉只显示模型名 + 默认标识，不渲染用途 tag。
     const optionTexts = Array.from(modelSelect.options).map((o) => o.textContent ?? "");
     expect(optionTexts.join("|")).not.toContain("快/省");
@@ -317,7 +324,17 @@ describe("批四十一 §8 会话模型选择", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(apiMock.setChatSessionModel).toHaveBeenCalledWith("A", "m-strong");
+    expect(apiMock.setChatSessionModel).toHaveBeenCalledWith("A", "m-strong", "openrouter");
+
+    // 切到 custom provider 模型 → provider 随提交。
+    await act(async () => {
+      modelSelect.value = "internal-v2";
+      modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(apiMock.setChatSessionModel).toHaveBeenCalledWith("A", "internal-v2", "custom:company-internal");
   });
 
   it("新建会话带上当前选中的模型", async () => {
@@ -327,7 +344,7 @@ describe("批四十一 §8 会话模型选择", () => {
     });
     const modelSelect = container.querySelector<HTMLSelectElement>('select[aria-label="会话模型"]')!;
     await act(async () => {
-      modelSelect.value = "m-strong";
+      modelSelect.value = "internal-v2";
       modelSelect.dispatchEvent(new Event("change", { bubbles: true }));
     });
     await act(async () => {
@@ -340,7 +357,7 @@ describe("批四十一 §8 会话模型选择", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    expect(apiMock.createChatSession).toHaveBeenCalledWith("m-strong");
+    expect(apiMock.createChatSession).toHaveBeenCalledWith("internal-v2", "custom:company-internal");
   });
 });
 
