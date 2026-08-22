@@ -192,14 +192,9 @@ export default function OverviewPage() {
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="size-2.5 rounded-sm border border-amber-500/60 bg-amber-500/10" />
-                  关键链路
+                  服务依赖
                 </span>
               </div>
-              {view.key_paths.length === 0 && (
-                <p className="mb-2 text-[11px] text-[var(--vigil-muted)]">
-                  未配置关键链路（key_paths），将仅按集群/主机/服务展示。
-                </p>
-              )}
               <TopologyGraph view={view} onSelect={setDrawer} className="h-full min-h-[420px]" />
             </div>
           ) : (

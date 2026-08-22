@@ -101,8 +101,9 @@ class TestFirstRunSeeding:
         hc.ensure_hermes_home()
         assert (home / "topology.yaml").is_file()
         assert (home / "runbooks").is_dir() and any((home / "runbooks").glob("*.yaml"))
-        assert (home / "hosts").is_dir() and any((home / "hosts").glob("*.yaml"))
+        assert (home / "services").is_dir() and any((home / "services").glob("*.yaml"))
         assert (home / "entities").is_dir() and any((home / "entities").glob("*.yaml"))
+        assert (home / "hardware").is_dir() and any((home / "hardware").glob("*.yaml"))
 
     def test_seeding_idempotent_and_does_not_overwrite(self, tmp_path, monkeypatch):
         home = _fresh_home(tmp_path, monkeypatch)

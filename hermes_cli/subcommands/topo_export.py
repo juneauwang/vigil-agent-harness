@@ -139,7 +139,11 @@ def _topology_host_names(home: Optional[Path] = None) -> set:
 
 
 def _card_fields(row: Dict[str, Any]) -> Dict[str, Any]:
-    """紧凑卡片显示字段（白名单；row 已 sanitize，凭据值不可能在此）。"""
+    """紧凑卡片显示字段（白名单；row 已 sanitize，凭据值不可能在此）。
+
+    v0.4：服务行补 managed_by/extra_ports/log_paths/depends_on（图连线用）；
+    role/runtime 数组原样透传（前端数组渲染）。
+    """
     return {
         "name": row.get("name", ""),
         "type": row.get("type", ""),
@@ -153,6 +157,10 @@ def _card_fields(row: Dict[str, Any]) -> Dict[str, Any]:
         "description": row.get("description", ""),
         "port": row.get("port", ""),
         "ports": row.get("ports") or [],
+        "managed_by": row.get("managed_by", ""),
+        "extra_ports": row.get("extra_ports") or [],
+        "log_paths": row.get("log_paths") or [],
+        "depends_on": row.get("depends_on") or [],
     }
 
 
@@ -190,10 +198,10 @@ def build_view(home: Path) -> Optional[Dict[str, Any]]:
 
     结构：
       generated_at / data_root / version / sources / environments
-      clusters: [{name, env, description, owner}]
+      clusters: [{name, env, description, owner, type, provenance, endpoint}]
       hosts:    [{_card_fields + on_key_path + services[{card + detail}] + services_missing}]
-      cross_host: [{_card_fields + on_key_path + detail}]
-      key_paths: [[实体名链...]]
+      cross_host: [{_card_fields + on_key_path + detail}]（v0.4 恒空；v0.2/3 兼容）
+      key_paths: [[实体名链...]]（v0.4 恒空；v0.2/3 兼容）
       key_path_entity_names: {链上实体名}
       details:  { "<kind>:<name>": {sanitized 第三层档案} }
     """
@@ -261,6 +269,9 @@ def build_view(home: Path) -> Optional[Dict[str, Any]]:
             "env": str(row.get("env") or ""),
             "description": str(row.get("description") or ""),
             "owner": str(row.get("owner") or ""),
+            "type": str(row.get("type") or ""),
+            "provenance": str(row.get("provenance") or ""),
+            "endpoint": str(row.get("endpoint") or ""),
         })
     view["clusters"] = [c for c in view["clusters"] if c["name"]]
 

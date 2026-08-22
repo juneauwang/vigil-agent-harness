@@ -1,0 +1,5 @@
+# test-host —— 第二层服务目录（test 环境；cluster 缺省显示 default）。
+host: test-host
+updated_at: 2026-08-23
+services:
+  - {name: test-web, type: app, managed_by: docker, endpoint: "192.168.1.20:8080", extra_ports: [], log_paths: [], depends_on: [], source: manual, last_verified: 2026-08-06, needs_review: false, detail: entities/default__test-host__test-web.yaml}

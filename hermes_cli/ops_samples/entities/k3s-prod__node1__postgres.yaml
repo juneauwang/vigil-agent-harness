@@ -1,14 +1,17 @@
-# postgres —— 生产数据库实例（样例值请按实际核对）。
+# postgres —— 第三层实体档案（docker compose 部署）。
 name: postgres
-type: db
-env: prod
-cluster: k3s-prod
-ssh:                                      # 覆盖 host 级默认（OPS-DELTA #42）
-  user: dbadmin
-  credential: {type: ssh_key, ref: "~/.vigil/keys/example-db-key.pem", user: dbadmin}
-attrs:
-  version: "16"                           # 样例值，请核对
-  # 端口/密码不落拓扑文件（凭据只存引用）
-depended_by: [harbor, order-db]
-ops:
-  healthcheck: "pg_isready"
+detail: entities/k3s-prod__node1__postgres.yaml
+version: "16"
+updated_at: 2026-08-23
+checks: []
+snapshot:
+  captured_at: "2026-08-23T00:00:00+00:00"
+  source: manual
+  common: {version: "16", config_dir: /etc/postgresql, log_dir: /var/log/postgresql, data_dir: /var/lib/postgresql, mode: single}
+  by_type: {backup_dir: /backup/postgres, role: standalone}
+  by_runtime:
+    docker_compose:
+      project: db
+      workdir: /opt/db
+      services: [{name: db-postgres-1, state: running}]
+notes: ""

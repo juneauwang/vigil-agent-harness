@@ -1,12 +1,17 @@
-# argocd —— GitOps 发布（样例值请按实际核对）。
+# argocd —— 第三层实体档案（GitOps 部署控制器）。
 name: argocd
-type: service
-env: prod
-cluster: k3s-prod
-attrs:
-  namespace: argocd
-  # 对外地址待核对（NodePort/LB），确认后补 endpoint
-depends_on: [k3s-prod]
-depended_by: [gateway-svc]                # gateway-svc 由 argocd 发布
-ops:
-  healthcheck: "kubectl -n argocd get applications"
+detail: entities/k3s-prod__node1__argocd.yaml
+version: ""
+updated_at: 2026-08-23
+checks: []
+snapshot:
+  captured_at: "2026-08-23T00:00:00+00:00"
+  source: manual
+  common: {version: "", config_dir: "", log_dir: "", data_dir: "", mode: single}
+  by_type: {}
+  by_runtime:
+    kubectl:
+      namespace: argocd
+      deployments: []
+      pvc: []
+notes: "k8s 命名空间 argocd 内的 GitOps 控制器。"

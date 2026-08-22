@@ -121,7 +121,7 @@ def test_plugin_discoverable():
 
 
 def test_v2_render_injects_only_first_layer(tmp_path, monkeypatch):
-    """OPS-DELTA #6：v0.2 下 TOPO 段只注入第一层（hosts+cross_host），
+    """OPS-DELTA #6：v0.4 下 TOPO 段只注入第一层（clusters+hosts），
     服务在第二层、不进 system prompt（token 成本恒定）。"""
     import shutil
     from pathlib import Path as _P
@@ -129,7 +129,7 @@ def test_v2_render_injects_only_first_layer(tmp_path, monkeypatch):
     home = tmp_path / "hermes_home"
     home.mkdir()
     shutil.copy2(sample / "topology.yaml", home / "topology.yaml")
-    shutil.copytree(sample / "hosts", home / "hosts")
+    shutil.copytree(sample / "services", home / "services")
     monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
 
@@ -137,10 +137,10 @@ def test_v2_render_injects_only_first_layer(tmp_path, monkeypatch):
     provider.initialize("sess-1", hermes_home=str(home), platform="cli")
     block = provider.system_prompt_block()
 
-    # 第一层总览：主机 + 跨主机实体 + 关键链路。
+    # v0.4 第一层总览：集群（type 即 controller）+ 主机（role/runtime 数组渲染）。
     assert "node1" in block and "test-host" in block
-    assert "k3s-prod" in block and "ingress" in block
-    assert "ingress → gateway-svc → order-db" in block
+    assert "k3s-prod" in block
+    assert "type=k3s" in block
     assert "runtime=k3s" in block and "runtime=docker" in block
     # 第二层服务不进注入块。
     assert "harbor" not in block

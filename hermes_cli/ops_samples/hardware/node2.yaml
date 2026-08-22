@@ -1,0 +1,13 @@
+# node2 —— 硬件层：静态规格 + controller 枚举（样例值请核对）。
+host: node2
+updated_at: 2026-08-23
+hardware:
+  source: manual
+  cpu: {model: "Intel Xeon Platinum 8269CY", cores: 4}
+  memory_gb: 8
+  storage: {raid_controller: "", raid_tool: none, raid_level: none, disks: [{mount: /, size_gb: 40, type: ssd}]}
+  gpu: {controller: none, devices: []}
+network:
+  source: manual
+  interfaces: [{name: eth0, ip: 203.0.113.11, primary: true, role: worker}]
+  firewall: {controller: none}

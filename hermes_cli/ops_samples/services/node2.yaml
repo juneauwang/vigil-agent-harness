@@ -1,0 +1,5 @@
+# node2 —— 第二层服务目录（worker 节点）。
+host: node2
+updated_at: 2026-08-23
+services:
+  - {name: gateway-svc, type: gateway, managed_by: kubectl, endpoint: "203.0.113.11:8080", extra_ports: [], log_paths: [], depends_on: [order-db], source: manual, last_verified: 2026-08-06, needs_review: false, detail: entities/k3s-prod__node2__gateway-svc.yaml}

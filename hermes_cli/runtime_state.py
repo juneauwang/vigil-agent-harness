@@ -1,7 +1,7 @@
 """运行时瞬态状态存储（批三十五 lazy last_seen）。
 
-与静态事实层分离：topology.yaml / hosts/*.yaml 是权威拓扑（永远不含运行时
-瞬态）；本模块维护 ``<VIGIL_HOME>/runtime_state.json``（0600，原子写），
+与静态事实层分离：topology.yaml / services/*.yaml 是权威拓扑（v0.4 四层模型，
+永远不含运行时瞬态）；本模块维护 ``<VIGIL_HOME>/runtime_state.json``（0600，原子写），
 记录 agent 与各 host 最近一次真实交互成功的时间戳（epoch 秒）。
 
 活性语义：不主动探测（无定时探活/prom 对接），agent 交互即活性——

@@ -83,17 +83,36 @@ def _entity_line(entity: Dict[str, Any]) -> str:
 
 
 def _host_line(host: Dict[str, Any]) -> str:
-    """v0.2 第一层 host 紧凑行（runtime/role 是 host 属性，docker 不单独占层）。"""
+    """v0.4 第一层 host 紧凑行（role/runtime 是数组；v0.2/3 单值兼容）。"""
     bits = [str(host.get("name", "?")), f"env={host.get('env', '?')}"]
-    if host.get("role"):
-        bits.append(f"role={host.get('role')}")
-    if host.get("runtime"):
-        bits.append(f"runtime={host.get('runtime')}")
+    role = host.get("role")
+    if role:
+        bits.append(f"role={role if isinstance(role, str) else '/'.join(map(str, role))}")
+    runtime = host.get("runtime")
+    if runtime:
+        bits.append(f"runtime={runtime if isinstance(runtime, str) else '/'.join(map(str, runtime))}")
+    if host.get("os"):
+        bits.append(f"os={host.get('os')}")
     if host.get("endpoint"):
         bits.append(f"endpoint={host.get('endpoint')}")
     owner = host.get("owner")
     if owner:
         bits.append(f"owner={owner}")
+    return f"- {', '.join(bits)}"
+
+
+def _cluster_line(cluster: Dict[str, Any]) -> str:
+    """v0.4 cluster 紧凑行（type 即 controller + provenance + endpoint）。"""
+    bits = [str(cluster.get("name", "?")), f"type={cluster.get('type', '?')}"]
+    if cluster.get("env"):
+        bits.append(f"env={cluster.get('env')}")
+    if cluster.get("provenance"):
+        bits.append(f"provenance={cluster.get('provenance')}")
+    if cluster.get("endpoint"):
+        bits.append(f"endpoint={cluster.get('endpoint')}")
+    groups = cluster.get("host_groups") or []
+    if groups:
+        bits.append(f"host_groups={len(groups)}")
     return f"- {', '.join(bits)}"
 
 
@@ -103,9 +122,9 @@ def render_topo_block(home: Path, max_lines: int = 45) -> str:
     Returns "" when the topology table is missing/disabled so the injection
     slot stays silent (no prompt-cache churn for non-ops profiles).
 
-    OPS-DELTA #6：只注入第一层——v0.2 渲染 hosts + cross_host（服务索引在第二层，
-    不进 system prompt，token 开销恒定）；v0.1 数据走兼容路径渲染扁平
-    core_entities（走 tools.topo_tools 的 topo_first_layer 统一视图）。
+    OPS-DELTA #6：只注入第一层——v0.4 渲染 clusters + hosts（服务目录在第二层，
+    不进 system prompt，token 开销恒定，保持 <50 行约束）；v0.1 数据走兼容路径
+    渲染扁平 core_entities（走 tools.topo_tools 的 topo_first_layer 统一视图）。
     """
     topo, path = _load_topology_l1(home)
     if topo is None:
@@ -129,11 +148,17 @@ def render_topo_block(home: Path, max_lines: int = 45) -> str:
         lines.append("环境:")
         lines.extend(_env_line(e) for e in envs if isinstance(e, dict))
 
+    clusters = first.get("clusters") or []
+    if clusters:
+        lines.append("集群（type 即 controller）:")
+        lines.extend(_cluster_line(c) for c in clusters if isinstance(c, dict))
+
     hosts = first.get("hosts") or []
     if hosts:
         lines.append("主机:")
         lines.extend(_host_line(h) for h in hosts if isinstance(h, dict))
 
+    # v0.2/3 存量数据读取兼容：cross_host/key_paths 仍展示；v0.4 数据恒为空。
     cross_host = first.get("cross_host") or []
     if cross_host:
         lines.append("跨主机实体:")

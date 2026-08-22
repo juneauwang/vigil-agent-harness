@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 from pathlib import Path
 
 import pytest
@@ -99,7 +100,8 @@ def _default_runner(**overrides):
         "compose ls": COMPOSE_LS,
         "kubectl": KUBE,
         "ss -tlnp": SS_TLNP,
-        "nvidia-smi": NVIDIA,
+        "nvidia-smi --query-gpu=name": NVIDIA,
+        "nvidia-smi": "/usr/bin/nvidia-smi\n",
     }
     probes.update(overrides)
     return FakeRunner(**probes)
@@ -113,45 +115,59 @@ def test_discover_maps_services_ports_images():
     runner = _default_runner()
     d = discover_host("203.0.113.20", "prod", runner=runner)
 
-    assert d["version"] == 3
+    assert d["version"] == 4
     assert d["source"] == "discovered"
     assert d["needs_review"] is True
     assert d["last_verified"]
 
     host = d["host"]
     assert host["name"] == "203.0.113.20"
+    assert host["type"] == "host"
     assert host["env"] == "prod"
     assert host["cluster"] == "default"          # 未标 cluster → 显示 default
     assert host["endpoint"] == "203.0.113.20"
-    assert host["runtime"] == "docker"
+    assert host["runtime"] == ["docker"]         # v0.4：runtime 数组
+    assert host["role"] == ["docker-host"]       # v0.4：role 数组
     assert host["source"] == "discovered"
     assert host["needs_review"] is True
-    assert host["attrs"]["gpu"] == ["NVIDIA A100-SXM4-40GB, 40960 MiB"]
-    assert host["attrs"]["compose_projects"] == ["harbor", "db"]
 
     names = {s["name"]: s for s in d["services"]}
     assert "harbor" in names
+    # v0.4 服务行：type 判定表归类（registry）+ managed_by + L3 detail 引用。
+    assert names["harbor"]["type"] == "registry"
+    assert names["harbor"]["managed_by"] == "docker_compose"
     assert names["harbor"]["endpoint"] == "203.0.113.20:30443"
-    assert names["harbor"]["attrs"]["image"] == "harbor:v2.11.0"
-    assert names["harbor"]["attrs"]["ports"] == [30443]
-    assert names["postgres"]["attrs"]["ports"] == [5432]
-    # k8s 枚举：grafana svc（nodePort 30030）+ deploy（镜像）。
-    assert names["grafana"]["type"] == "k8s-service"
+    assert names["harbor"]["detail"] == "entities/prod__203.0.113.20__harbor.yaml"
+    assert names["postgres"]["type"] == "db"
+    # k8s 枚举：grafana svc（nodePort 30030）+ deploy（镜像）→ managed_by kubectl。
+    assert names["grafana"]["type"] == "monitor"
+    assert names["grafana"]["managed_by"] == "kubectl"
     assert names["grafana"]["endpoint"] == "203.0.113.20:30030"
-    # 端口扫描补条目：9090 未识别；22（sshd）与已映射端口不补。
-    assert "unidentified-9090" in names
+    # 端口扫描补条目：9090 未识别 → pending_review；22（sshd）与已映射端口不补。
+    assert "unidentified-9090" not in names
+    assert {s["name"] for s in d["pending_review"]} == {"unidentified-9090"}
     assert "unidentified-22" not in names
     assert "unidentified-5432" not in names
 
     # 第三层详情草案：L3 命名 entities/{cluster}__{host}__{name}.yaml，
-    # cluster 空用 env 兜底（本用例无 cluster → prod__host__name）。
+    # cluster 空用 env 兜底（本用例无 cluster → prod__host__name）；档案带
+    # detail 路径键 + snapshot 二维分支（common/by_type/by_runtime）。
     assert d["details"]["harbor"]["name"] == "harbor"
-    assert d["details"]["harbor"]["needs_review"] is True
-    assert d["details"]["harbor"]["cluster"] == "default"
-    assert names["harbor"]["detail"] == "entities/prod__203.0.113.20__harbor.yaml"
-    assert names["harbor"]["cluster"] == "default"
+    assert d["details"]["harbor"]["detail"] == names["harbor"]["detail"]
+    assert d["details"]["harbor"]["snapshot"]["common"]["version"] == "v2.11.0"
+    assert d["details"]["harbor"]["snapshot"]["by_type"] == {
+        "replication_targets": [], "storage_backend": "",
+    }
+    assert d["details"]["harbor"]["snapshot"]["by_runtime"]["docker_compose"]["project"] == "harbor"
+    assert d["details"]["postgres"]["snapshot"]["by_type"] == {
+        "backup_dir": "", "role": "standalone",
+    }
     assert names["grafana"]["detail"] == "entities/prod__203.0.113.20__grafana.yaml"
-    assert names["unidentified-9090"]["detail"] == "entities/prod__203.0.113.20__unidentified-9090.yaml"
+
+    # 硬件层：GPU 探针出 controller 枚举 + devices（静态规格，不落动态数据）。
+    gpu = d["hardware"]["hardware"]["gpu"]
+    assert gpu["controller"] == "nvidia-smi"
+    assert gpu["devices"] == [{"model": "NVIDIA A100-SXM4-40GB, 40960 MiB", "count": 1}]
 
 
 def test_discover_credentials_never_in_output_or_command_strings():
@@ -193,24 +209,25 @@ def test_discover_cluster_param_threads_into_host_row_and_details():
     d = discover_host("203.0.113.20", "prod", cluster="k3s-prod", runner=_default_runner())
     assert d["host"]["cluster"] == "k3s-prod"
     names = {s["name"]: s for s in d["services"]}
-    # 显式 cluster → L3 文件名用 cluster，不再用 env 兜底。
+    # 显式 cluster → L3 文件名用 cluster，不再用 env 兜底；档案 detail 同款。
     assert names["harbor"]["detail"] == "entities/k3s-prod__203.0.113.20__harbor.yaml"
-    assert names["harbor"]["cluster"] == "k3s-prod"
-    assert d["details"]["harbor"]["cluster"] == "k3s-prod"
     assert d["details"]["harbor"]["detail"] == names["harbor"]["detail"]
+    assert "cluster" not in d["details"]["harbor"]   # v0.4：L3 不放 type/env/cluster
 
 
 def test_discover_credential_derived_from_key_path_only():
     runner = _default_runner()
     d = discover_host("203.0.113.20", "prod",
                       {"user": "ops", "key_path": "/keys/node1.pem"}, runner=runner)
-    assert d["host"]["credential"] == {
-        "type": "ssh_key", "ref": "/keys/node1.pem", "user": "ops", "port": 22,
-    }
+    # v0.4：credential 单对象 → credentials 数组（ssh_key/vault 多凭据）。
+    assert d["host"]["credentials"] == [
+        {"type": "ssh_key", "ref": "/keys/node1.pem", "user": "ops", "port": 22},
+    ]
+    assert "credential" not in d["host"]              # v0.4：只有 credentials 数组
     # 密码走 askpass（无 key_path）→ 不写凭据引用，密码明文不进任何输出。
     d2 = discover_host("203.0.113.20", "prod",
                        {"user": "root", "password": "Sup3r-Secret!Password"}, runner=runner)
-    assert "credential" not in d2["host"]
+    assert "credentials" not in d2["host"]
     assert "Sup3r-Secret!Password" not in json.dumps(d2)
 
 
@@ -228,9 +245,11 @@ def test_discover_docker_unavailable_falls_through_to_other_probes():
     assert d["probes"]["docker"] != "ok"
     assert d["probes"]["kubectl"] == "ok"
     assert d["probes"]["ss"] == "ok"
-    assert {s["name"] for s in d["services"]} == {"grafana", "unidentified-9090"}
-    # 无 docker 容器 → runtime 跟随 k8s。
-    assert d["host"]["runtime"] == "k3s"
+    # v0.4：unidentified 端口进 pending_review（不入 services）。
+    assert {s["name"] for s in d["services"]} == {"grafana"}
+    assert {s["name"] for s in d["pending_review"]} == {"unidentified-9090"}
+    # 无 docker 容器 → runtime 跟随 k8s（v0.4 数组形态）。
+    assert d["host"]["runtime"] == ["k3s"]
 
 
 def test_discover_parses_compose_ls_plain_fallback():
@@ -238,7 +257,11 @@ def test_discover_parses_compose_ls_plain_fallback():
         **{"compose ls": "NAME    STATUS         CONFIG FILES\nharbor  running(1)    /opt/harbor/x.yaml\n"}
     )
     d = discover_host("203.0.113.20", "prod", runner=runner)
-    assert d["host"]["attrs"]["compose_projects"] == ["harbor"]
+    # v0.4：compose 项目信息不落 host.attrs——probes 记统计，L3 档案
+    # snapshot.by_runtime.docker_compose 带 project 名。
+    assert d["probes"]["compose"] == "ok(1 projects)"
+    assert d["details"]["harbor"]["snapshot"]["by_runtime"]["docker_compose"]["project"] == "harbor"
+    assert "attrs" not in d["host"]
 
 
 def test_discover_docker_permission_denied_is_explicit():
@@ -260,11 +283,16 @@ def test_discover_systemctl_services_merged_and_docker_priority():
     assert d["probes"]["systemctl"] == (
         "ok(2 服务，过滤 0 系统服务，另 0 个无端口系统服务未入表（可确认）)"
     )
-    assert names["node-exporter"]["type"] == "systemd-service"
-    assert names["node-exporter"]["attrs"]["unit"] == "node-exporter.service"
-    assert names["node-exporter"]["attrs"]["source_probe"] == "systemctl"
+    # v0.4：type 按判定表归类（node-exporter → monitor），managed_by=systemd；
+    # unit 信息进 L3 档案 snapshot.by_runtime.systemd，不再落服务行 attrs。
+    assert names["node-exporter"]["type"] == "monitor"
+    assert names["node-exporter"]["managed_by"] == "systemd"
+    assert d["details"]["node-exporter"]["snapshot"]["by_runtime"]["systemd"]["unit"] == {
+        "load": "loaded", "active": "active", "sub": "running",
+    }
     # systemctl 中出现 harbor 与 docker 容器同名 → docker 优先，不生成 systemd 行。
-    assert names["harbor"]["type"] == "service"
+    assert names["harbor"]["type"] == "registry"
+    assert names["harbor"]["managed_by"] == "docker_compose"
     assert "inactive" not in names
     # 有监听端口的 systemd 服务正常入表 → 无 pending，端口不重复补 unidentified。
     assert d["pending_review"] == []
@@ -367,7 +395,8 @@ def test_discover_systemd_no_listen_port_goes_pending_review():
     d = discover_host("203.0.113.20", "prod", runner=runner)
     names = {s["name"]: s for s in d["services"]}
     assert "prometheus" in names
-    assert names["prometheus"]["type"] == "systemd-service"
+    assert names["prometheus"]["type"] == "monitor"
+    assert names["prometheus"]["managed_by"] == "systemd"
     assert "chronyd" not in names
     assert "networkmanager" not in names
     # 无端口服务不进 details（不入落盘），只在 pending_review 可见。
@@ -375,7 +404,9 @@ def test_discover_systemd_no_listen_port_goes_pending_review():
     pending = {s["name"]: s for s in d["pending_review"]}
     assert set(pending) == {"chronyd", "networkmanager"}
     assert all(s["needs_review"] is True for s in pending.values())
-    assert all(s["type"] == "systemd-service" for s in pending.values())
+    # v0.4：type 按判定表归类（无端口系统服务兜底 app），managed_by=systemd。
+    assert all(s["type"] == "app" for s in pending.values())
+    assert all(s["managed_by"] == "systemd" for s in pending.values())
     # probes 文案带无端口统计（替代 LLM 手动过滤的机制保证）。
     assert "另 2 个无端口系统服务未入表（可确认）" in d["probes"]["systemctl"]
     # prometheus 的监听端口 9090 已被服务覆盖，不重复补 unidentified。
@@ -396,7 +427,7 @@ def test_discover_systemd_docker_same_name_skipped_not_pending():
     """与 docker 已发现服务同名的 systemd unit 直接跳过（不进 pending，不重复）。"""
     runner = _default_runner(**{"systemctl": SYSTEMCTL, "ss -tlnp": SS_TLNP_SYSTEMD})
     d = discover_host("203.0.113.20", "prod", runner=runner)
-    assert not any(s["name"] == "harbor" and s["type"] == "systemd-service"
+    assert not any(s["name"] == "harbor" and s["managed_by"] == "systemd"
                    for s in d["services"])
     assert not any(s["name"] == "harbor" for s in d["pending_review"])
 
@@ -416,10 +447,13 @@ def test_discover_skip_unidentified_filters_ss_entries():
 
 def test_discover_ss_entries_record_source_probe():
     d = discover_host("203.0.113.20", "prod", runner=_default_runner())
-    svc = next(s for s in d["services"] if s["name"] == "unidentified-9090")
-    assert svc["attrs"]["source_probe"] == "ss"
-    assert d["details"]["unidentified-9090"]["attrs"]["source_probe"] == "ss"
-    assert d["details"]["unidentified-9090"]["detail"] == svc["detail"]
+    # v0.4：ss 未识别端口 → pending_review（type=unknown 兜底），不占服务行。
+    svc = next(s for s in d["pending_review"] if s["name"] == "unidentified-9090")
+    assert svc["type"] == "unknown"
+    assert svc["managed_by"] == "unknown"
+    assert svc["endpoint"] == "203.0.113.20:9090"
+    assert svc["needs_review"] is True
+    assert "unidentified-9090" not in d["services"]
 
 
 def test_build_ssh_runner_includes_identities_only(monkeypatch):
@@ -544,9 +578,12 @@ def test_discover_localhost_uses_local_runner_no_ssh_argv(monkeypatch):
         assert "ssh" not in cmd
         assert kwargs.get("shell") is True
     assert d["host"]["endpoint"] == "localhost"
-    assert d["host"]["name"] == "localhost"
+    # v0.4：本机主机行名用本机 hostname（保大小写，与第一层手动登记行合并命中）。
+    assert d["host"]["name"] != "localhost"
+    assert d["host"]["name"] == socket.gethostname()
     # 本机发现不走 SSH → 不写 ssh_key 凭据引用。
     assert "credential" not in d["host"]
+    assert "credentials" not in d["host"]
 
 
 def test_discover_empty_host_defaults_to_localhost(monkeypatch):
@@ -814,32 +851,49 @@ def _discovery(host: str = "203.0.113.20", env: str = "prod"):
     return discover_host(host, env, runner=_default_runner())
 
 
-def test_write_discovery_writes_v3_structure(tmp_path):
+def test_write_discovery_writes_v4_structure(tmp_path):
     home = tmp_path / "hermes_home"
     home.mkdir()
     d = _discovery()
     result = write_discovery(home, d)
     assert result["written"]
 
-    index = home / "hosts" / "203.0.113.20.yaml"
+    # v0.4：第二层目录 services/<host>.yaml（不再有 hosts/）。
+    index = home / "services" / "203.0.113.20.yaml"
     assert index.is_file()
     data = yaml.safe_load(index.read_text(encoding="utf-8"))
     assert data["host"] == "203.0.113.20"
-    assert data["env"] == "prod"
-    assert data["cluster"] == "default"
+    assert data["updated_at"]
+    # unidentified 端口在 pending_review，不入服务索引 → 3 条。
     assert {s["name"] for s in data["services"]} == {
-        "harbor", "postgres", "grafana", "unidentified-9090"}
+        "harbor", "postgres", "grafana"}
 
     topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
-    assert topo["version"] == 3
+    assert topo["version"] == 4
+    assert "sources" not in topo and "cross_host" not in topo and "key_paths" not in topo
     assert topo["hosts"][0]["name"] == "203.0.113.20"
     assert topo["hosts"][0]["cluster"] == "default"
-    assert topo["hosts"][0]["services_index"] == "hosts/203.0.113.20.yaml"
+    assert topo["hosts"][0]["role"] == ["docker-host"]
+    assert topo["hosts"][0]["runtime"] == ["docker"]
+    assert "services_index" not in topo["hosts"][0]
 
-    # L3 命名：entities/{env}__{host}__{name}.yaml（cluster 空 → env 兜底）。
+    # L3 命名：entities/{env}__{host}__{name}.yaml（cluster 空 → env 兜底），
+    # 档案带 detail 路径键 + snapshot 结构。
     harbor = home / "entities" / "prod__203.0.113.20__harbor.yaml"
     assert harbor.is_file()
-    assert yaml.safe_load(harbor.read_text(encoding="utf-8"))["name"] == "harbor"
+    entity = yaml.safe_load(harbor.read_text(encoding="utf-8"))
+    assert entity["name"] == "harbor"
+    assert entity["detail"] == "entities/prod__203.0.113.20__harbor.yaml"
+    assert entity["snapshot"]["captured_at"] and entity["snapshot"]["source"] == "discovered"
+    assert entity["snapshot"]["by_runtime"]["docker_compose"]["project"] == "harbor"
+
+    # 硬件层 hardware/<host>.yaml 一并落盘。
+    hw = home / "hardware" / "203.0.113.20.yaml"
+    assert hw.is_file()
+    hw_data = yaml.safe_load(hw.read_text(encoding="utf-8"))
+    assert hw_data["host"] == "203.0.113.20"
+    assert hw_data["hardware"]["gpu"]["controller"] == "nvidia-smi"
+    assert hw_data["network"]["firewall"]["controller"] == "none"
 
     # 落盘结果能被 topo_tools 正常读取（第二层服务索引进扁平视图）。
     os.environ["VIGIL_HOME"] = str(home)
@@ -904,7 +958,7 @@ def test_write_discovery_existing_host_merges_unless_force(tmp_path):
     result = write_discovery(home, d)
     assert result["merged"] is True
     assert result["appended"] == 0
-    assert result["kept"] == 4
+    assert result["kept"] == 3
 
     # merge=False（显式关闭合并）→ 维持旧语义：拒绝，提示 --force。
     with pytest.raises(DiscoveryError) as exc:
@@ -915,7 +969,7 @@ def test_write_discovery_existing_host_merges_unless_force(tmp_path):
     result = write_discovery(home, d, force=True)
     assert result["written"]
     assert result["merged"] is False
-    assert result["appended"] == 4
+    assert result["appended"] == 3
     assert result["kept"] == 0
 
 
@@ -925,13 +979,14 @@ def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path)
     home.mkdir()
     d = _discovery()
     r1 = write_discovery(home, d)
-    assert r1["appended"] == 4 and r1["kept"] == 0 and r1["merged"] is False
+    assert r1["appended"] == 3 and r1["kept"] == 0 and r1["merged"] is False
 
-    # 手动维护：往索引加一条 app 手动实体（手动 endpoint + source=manual）。
-    index_path = home / "hosts" / "203.0.113.20.yaml"
+    # 手动维护：往索引加一条 app 手动实体（v0.4 服务行：无 env/cluster 冗余，
+    # type 用受控枚举 app + managed_by）。
+    index_path = home / "services" / "203.0.113.20.yaml"
     data = yaml.safe_load(index_path.read_text(encoding="utf-8"))
     data["services"].append({
-        "name": "app", "type": "service", "env": "prod", "cluster": "default",
+        "name": "app", "type": "app", "managed_by": "bare",
         "endpoint": "203.0.113.20:8080", "source": "manual", "needs_review": False,
         "detail": "entities/prod__203.0.113.20__app.yaml",
     })
@@ -942,23 +997,28 @@ def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path)
     # 重扫：发现结果比现有索引多一个 db 服务 → 只追加 db。
     d2 = dict(d)
     d2["services"] = list(d["services"]) + [{
-        "name": "db", "type": "service", "env": "prod", "cluster": "default",
+        "name": "db", "type": "db", "managed_by": "docker_compose",
         "endpoint": "203.0.113.20:5433", "source": "discovered",
         "last_verified": "2026-08-14", "needs_review": True,
         "detail": "entities/prod__203.0.113.20__db.yaml",
-        "attrs": {"image": "postgres:16"},
     }]
     d2["details"] = dict(d["details"])
     d2["details"]["db"] = {
-        "name": "db", "type": "service", "env": "prod", "cluster": "default",
-        "detail": "entities/prod__203.0.113.20__db.yaml",
-        "attrs": {"image": "postgres:16"},
-        "source": "discovered", "last_verified": "2026-08-14", "needs_review": True,
+        "name": "db", "detail": "entities/prod__203.0.113.20__db.yaml",
+        "version": "16", "updated_at": "2026-08-14",
+        "checks": [],
+        "snapshot": {
+            "captured_at": "2026-08-14T00:00:00+00:00", "source": "discovered",
+            "common": {"version": "16", "config_dir": "", "log_dir": "", "data_dir": "", "mode": "single"},
+            "by_type": {"backup_dir": "", "role": "standalone"},
+            "by_runtime": {"docker_compose": {"project": "db", "workdir": "", "services": []}},
+        },
+        "notes": "",
     }
     r2 = write_discovery(home, d2)
     assert r2["merged"] is True
     assert r2["appended"] == 1
-    assert r2["kept"] == 5
+    assert r2["kept"] == 4
 
     data2 = yaml.safe_load(index_path.read_text(encoding="utf-8"))
     names = {s["name"]: s for s in data2["services"]}
@@ -979,7 +1039,7 @@ def test_write_discovery_new_host_append_unchanged(tmp_path):
     r1 = write_discovery(home, _discovery("node-a"))
     r2 = write_discovery(home, _discovery("node-b"))
     assert r1["merged"] is False and r2["merged"] is False
-    assert r1["appended"] == 4 and r2["appended"] == 4
+    assert r1["appended"] == 3 and r2["appended"] == 3
     topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
     assert [h["name"] for h in topo["hosts"]] == ["node-a", "node-b"]
 
@@ -1010,7 +1070,7 @@ def test_write_discovery_dry_run_not_applied_by_cli(tmp_path, monkeypatch):
     assert calls["discover"] == 1
     assert calls["write"] == 0
     assert not (home / "topology.yaml").exists()
-    assert not (home / "hosts").exists()
+    assert not (home / "services").exists()
 
 
 def test_topo_discover_cli_help_and_missing_args(tmp_path):

@@ -1,14 +1,18 @@
-# harbor —— 第二层完整档案（topo_query detail=True 时加载）；样例值请按实际核对。
+# harbor —— 第三层实体档案（topo_query detail=True 时加载）；样例值请按实际核对。
 name: harbor
-type: registry
-env: prod
-cluster: k3s-prod
-endpoint: "203.0.113.10:30443"
-attrs:
-  version: v2.11
-  storage: /data/harbor
-  admin: your-name
-depends_on: [postgres]
-depended_by: [k3s-prod]                   # 镜像被 k3s-prod 拉取
-ops:
-  healthcheck: "curl -s http://localhost/api/v2.0/health"
+detail: entities/k3s-prod__node1__harbor.yaml
+version: v2.11
+updated_at: 2026-08-23
+checks:
+  - {action: verify, params: {url: "http://localhost/api/v2.0/health", expect: {http_status: 200, body_contains: healthy}}}
+snapshot:
+  captured_at: "2026-08-23T00:00:00+00:00"
+  source: manual
+  common: {version: v2.11, config_dir: /opt/harbor, log_dir: /var/log/harbor, data_dir: /data/harbor, mode: single}
+  by_type: {replication_targets: [], storage_backend: local}
+  by_runtime:
+    docker_compose:
+      project: harbor
+      workdir: /opt/harbor
+      services: [{name: harbor, state: running}]
+notes: "镜像仓库；被 k3s-prod 集群拉取（depends_on 在第二层服务行）。"

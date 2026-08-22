@@ -1,24 +1,17 @@
 # topology.yaml —— 第一层：平台拓扑总览（session 启动注入 system prompt，保持 <50 行）
-# schema v0.3（OPS-DELTA #42）：env 四值 local/test/dev/prod；cluster 三层贯通 + clusters 段；
-# L3 实体命名 entities/{cluster}__{host}__{name}.yaml；credential 只存引用不存密码明文，
-# 样例路径为占位符，投入前请替换。
-# 第一层 = 总览：clusters + hosts + cross_host；第二层 hosts/<hostname>.yaml；第三层 entities/。
-version: 3
-updated_at: 2026-08-13
-sources: [terraform.tfstate, agent, manual, discovered]
+# schema v0.4（YAPL P1）：cluster 行 type 即 controller；host 行 role/runtime 为数组
+# + credentials 数组；第二层 services/<host>.yaml；第三层 entities/{cluster}__{host}__{name}.yaml；
+# 硬件层 hardware/<host>.yaml。credential 只存引用不存密码明文，样例路径为占位符。
+version: 4
+updated_at: 2026-08-23
 environments:
   - {name: local, isolation: relaxed, role: local}
   - {name: test, isolation: relaxed, role: test}
   - {name: dev, isolation: relaxed, role: dev}
   - {name: prod, isolation: strict, role: prod}
 clusters:
-  - {name: k3s-prod, env: prod, description: 生产 k3s 集群（阿里云 2 节点）, owner: your-name}
+  - {name: k3s-prod, env: prod, type: k3s, provenance: terraform, source: discovered, endpoint: "https://203.0.113.10:6443", host_groups: [k3s-node]}
 hosts:
-  - {name: node1, env: prod, cluster: k3s-prod, endpoint: "203.0.113.10", role: control-plane, runtime: k3s, owner: your-name, source: agent, last_verified: 2026-08-08, services_index: hosts/node1.yaml, credential: {type: ssh_key, ref: "~/.vigil/keys/example-key.pem", user: root}}
-  - {name: node2, env: prod, cluster: k3s-prod, endpoint: "203.0.113.11", role: worker, runtime: k3s, owner: your-name, source: agent, last_verified: 2026-08-08, services_index: hosts/node2.yaml, credential: {type: ssh_key, ref: "~/.vigil/keys/example-key.pem", user: root}}
-  - {name: test-host, env: test, cluster: default, runtime: docker, owner: your-name, source: manual, last_verified: 2026-08-06, services_index: hosts/test-host.yaml}
-cross_host:
-  - {name: k3s-prod, type: k8s, env: prod, cluster: k3s-prod, endpoint: "https://203.0.113.10:6443", owner: your-name, source: manual, last_verified: 2026-08-06, detail: entities/k3s-prod__k3s-prod.yaml}
-  - {name: ingress, type: ingress, env: prod, cluster: k3s-prod, owner: your-name, source: manual, last_verified: 2026-08-08, detail: entities/k3s-prod__ingress.yaml}
-key_paths:
-  - [ingress, gateway-svc, order-db]
+  - {name: node1, type: host, env: prod, cluster: k3s-prod, endpoint: "203.0.113.10", role: [control-plane, worker], runtime: [k3s], os: "Ubuntu 22.04", department: core, source: agent, last_verified: 2026-08-23, credentials: [{type: ssh_key, ref: "~/.vigil/keys/example-key.pem", user: root, port: 22}]}
+  - {name: node2, type: host, env: prod, cluster: k3s-prod, endpoint: "203.0.113.11", role: [worker], runtime: [k3s], os: "Ubuntu 22.04", department: core, source: agent, last_verified: 2026-08-23, credentials: [{type: ssh_key, ref: "~/.vigil/keys/example-key.pem", user: root, port: 22}]}
+  - {name: test-host, type: host, env: test, cluster: default, endpoint: "192.168.1.20", role: [docker-host], runtime: [docker], os: "Ubuntu 22.04", source: manual, last_verified: 2026-08-23}

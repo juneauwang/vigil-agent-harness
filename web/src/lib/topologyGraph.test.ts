@@ -10,8 +10,12 @@ import {
   nodeToneClass,
 } from "./topologyGraph";
 
-const svc = (name: string, status = "running"): TopologyService => ({
-  card: { name, status, kind: "service" },
+const svc = (
+  name: string,
+  status = "running",
+  dependsOn: string[] = [],
+): TopologyService => ({
+  card: { name, status, kind: "service", depends_on: dependsOn },
   detail: null,
 });
 
@@ -40,8 +44,8 @@ const VIEW: TopologyView = {
   cross_host: [
     { card: { name: "ingress", type: "ingress", cluster: "prod", status: "running", kind: "cross_host" }, detail: null },
   ],
-  key_paths: [["ingress", "gateway-svc", "order-db"]],
-  key_path_entity_names: ["ingress", "gateway-svc", "order-db"],
+  key_paths: [],
+  key_path_entity_names: [],
   details: {},
 };
 
@@ -61,22 +65,33 @@ describe("拓扑图数据模型（批三十五）", () => {
     expect(gw?.data.hostName).toBe("node1");
   });
 
-  it("连线：cluster→host、host→service、cluster→cross、key_paths 高亮边", () => {
-    const m = buildGraphModel(VIEW);
+  it("连线：cluster→host、host→service、cluster→cross、depends_on 高亮边", () => {
+    // v0.4：key_paths 删除，services 层 depends_on 成琥珀依赖边。
+    const VIEW2: TopologyView = {
+      ...VIEW,
+      hosts: [
+        host("node1", "prod", [svc("gateway-svc", "running", ["order-db"]), svc("order-db", "stopped")]),
+        host("node2", "prod", [svc("kubelet")]),
+        host("laptop", "local", [svc("gitlab")]),
+      ],
+    };
+    const m = buildGraphModel(VIEW2);
     const ids = new Set(m.edges.map((e) => e.id));
     expect(ids.has("cluster-host:prod:node1")).toBe(true);
     expect(ids.has("host-svc:node1:gateway-svc")).toBe(true);
     expect(ids.has("cluster-cross:prod:ingress")).toBe(true);
-    // key_paths：ingress→gateway-svc→order-db 成边且标琥珀
-    const kp = m.edges.filter((e) => e.className === "topo-edge-keypath");
-    expect(kp.map((e) => e.id)).toEqual(["kp:ingress:gateway-svc", "kp:gateway-svc:order-db"]);
-    expect(kp[0].style?.stroke).toBe("#f59e0b");
-    // 链上节点标 keyPath
-    const gw = m.nodes.find((n) => n.data.name === "gateway-svc");
-    const ing = m.nodes.find((n) => n.data.name === "ingress");
-    expect(gw?.data.keyPath).toBe(true);
-    expect(ing?.data.keyPath).toBe(true);
+    // depends_on：gateway-svc → order-db 成边且标琥珀。
+    const dep = m.edges.filter((e) => e.className === "topo-edge-keypath");
+    expect(dep.map((e) => e.id)).toEqual(["dep:gateway-svc:order-db"]);
+    expect(dep[0].style?.stroke).toBe("#f59e0b");
+    // 依赖链上的节点标 keyPath（琥珀高亮），无关节点不标。
+    expect(m.nodes.find((n) => n.data.name === "gateway-svc")?.data.keyPath).toBe(true);
+    expect(m.nodes.find((n) => n.data.name === "order-db")?.data.keyPath).toBe(true);
     expect(m.nodes.find((n) => n.data.name === "kubelet")?.data.keyPath).toBe(false);
+    // 悬空依赖（目标不存在）不画边。
+    const VIEW3: TopologyView = { ...VIEW, hosts: [host("n1", "prod", [svc("a", "running", ["ghost"])])] };
+    const m3 = buildGraphModel(VIEW3);
+    expect(m3.edges.filter((e) => e.className === "topo-edge-keypath")).toHaveLength(0);
   });
 
   it("力导向布局：节点自由散布（非列排表格）、两两不重叠、结果确定", () => {

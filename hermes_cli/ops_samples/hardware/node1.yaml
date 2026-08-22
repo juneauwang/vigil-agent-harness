@@ -1,0 +1,13 @@
+# node1 —— 硬件层：静态规格 + controller 枚举（动态负载/健康不落盘；样例值请核对）。
+host: node1
+updated_at: 2026-08-23
+hardware:
+  source: manual
+  cpu: {model: "Intel Xeon Platinum 8269CY", cores: 4}
+  memory_gb: 8
+  storage: {raid_controller: "", raid_tool: none, raid_level: none, disks: [{mount: /, size_gb: 40, type: ssd}]}
+  gpu: {controller: none, devices: []}
+network:
+  source: manual
+  interfaces: [{name: eth0, ip: 203.0.113.10, primary: true, role: control-plane}]
+  firewall: {controller: none}

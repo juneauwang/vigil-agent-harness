@@ -111,11 +111,11 @@ describe("批次四十五 冗余总览卡片删除（§BC）", () => {
     expect(text).not.toContain("拓扑总览（琥珀点 = 关键链路服务）");
   });
 
-  it("graph/card 模式主图仍完整渲染三层拓扑 + 关键链路高亮", async () => {
+  it("graph/card 模式主图仍完整渲染三层拓扑 + 服务依赖量规", async () => {
     const text = await renderPage(VIEW);
     expect(text).toContain("node1");
     expect(text).toContain("prometheus");
-    // 关键链路量规仍在（主图分区保留完整拓扑）
-    expect(text).toContain("条关键链路");
+    // v0.4：量规显示服务依赖连线数（取代 key_paths 关键链路）
+    expect(text).toContain("条服务依赖连线");
   });
 });
