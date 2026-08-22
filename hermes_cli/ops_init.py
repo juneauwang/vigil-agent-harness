@@ -7,7 +7,7 @@ default profile 数据根——ops-init 保留给老用户/自托管显式重建
 
 Creates the ``ops`` profile, writes the ops config (topo toolset + TOPO
 memory provider + permission matrix), and seeds the sample topology table
-(``topology.yaml`` + ``hosts/`` + ``entities/``, schema v0.3 三层模型：
+(``topology.yaml`` + ``services/`` + ``entities/``, schema v0.4 四层模型：
 第一层总览 + 第二层服务索引 + 第三层详情档案) and sample runbooks
 (``runbooks/``) into the profile's VIGIL_HOME.
 
@@ -26,8 +26,9 @@ Files written (inside the Vigil root, default ``~/.vigil``; override with
 ``VIGIL_HOME`` / ``VIGIL_HOME`` env or ``--root``):
     <root>/profiles/ops/config.yaml
     <root>/profiles/ops/topology.yaml
-    <root>/profiles/ops/hosts/*.yaml
+    <root>/profiles/ops/services/*.yaml
     <root>/profiles/ops/entities/*.yaml      # L3 命名：entities/{cluster}__{host}__{name}.yaml
+    <root>/profiles/ops/hardware/*.yaml      # 硬件层：静态规格 + controller 枚举
     <root>/profiles/ops/runbooks/*.yaml
 
 Idempotent: an existing profile / config.yaml / topology.yaml is left
@@ -221,18 +222,35 @@ def seed_ops_samples(dst_dir: Path, *, force: bool = False, report=None) -> bool
             copied += 1
         _report(f"· 写入 entities/：{copied} 个实体档案 → {entities_dst}")
 
-    hosts_src = _SAMPLE_DIR / "hosts"
-    hosts_dst = dst_dir / "hosts"
-    if hosts_src.is_dir():
-        if not force and hosts_dst.exists() and any(hosts_dst.iterdir()):
-            _report(f"· hosts/ 已存在且非空，跳过（--force 覆盖）：{hosts_dst}")
+    # v0.4：第二层目录 services/（样例旧 hosts/ 兼容保留）。
+    services_src = _SAMPLE_DIR / "services"
+    if not services_src.is_dir():
+        services_src = _SAMPLE_DIR / "hosts"
+    services_dst = dst_dir / "services"
+    if services_src.is_dir():
+        if not force and services_dst.exists() and any(services_dst.iterdir()):
+            _report(f"· services/ 已存在且非空，跳过（--force 覆盖）：{services_dst}")
         else:
-            hosts_dst.mkdir(parents=True, exist_ok=True)
-            copied_hosts = 0
-            for src_file in sorted(hosts_src.glob("*.yaml")):
-                shutil.copy2(src_file, hosts_dst / src_file.name)
-                copied_hosts += 1
-            _report(f"· 写入 hosts/：{copied_hosts} 个服务索引 → {hosts_dst}")
+            services_dst.mkdir(parents=True, exist_ok=True)
+            copied_services = 0
+            for src_file in sorted(services_src.glob("*.yaml")):
+                shutil.copy2(src_file, services_dst / src_file.name)
+                copied_services += 1
+            _report(f"· 写入 services/：{copied_services} 个服务目录 → {services_dst}")
+
+    # 硬件层 hardware/（v0.4 第四层；样例占位，实际数据由 topology discover 产出）。
+    hardware_src = _SAMPLE_DIR / "hardware"
+    hardware_dst = dst_dir / "hardware"
+    if hardware_src.is_dir():
+        if not force and hardware_dst.exists() and any(hardware_dst.iterdir()):
+            _report(f"· hardware/ 已存在且非空，跳过（--force 覆盖）：{hardware_dst}")
+        else:
+            hardware_dst.mkdir(parents=True, exist_ok=True)
+            copied_hardware = 0
+            for src_file in sorted(hardware_src.glob("*.yaml")):
+                shutil.copy2(src_file, hardware_dst / src_file.name)
+                copied_hardware += 1
+            _report(f"· 写入 hardware/：{copied_hardware} 个硬件档案 → {hardware_dst}")
 
     runbooks_src = _SAMPLE_DIR / "runbooks"
     runbooks_dst = dst_dir / "runbooks"
@@ -314,7 +332,7 @@ def run(root: Path, env: str = "test", force: bool = False, no_alias: bool = Fal
 
     print("\n下一步（详见 OPS-VERIFY.md）：")
     print(f"  1. 核对拓扑：{profile_dir / 'topology.yaml'}（第一层）+ "
-          f"{profile_dir / 'hosts'}（第二层服务索引）+ {profile_dir / 'entities'}（第三层详情）")
+          f"{profile_dir / 'services'}（第二层服务目录）+ {profile_dir / 'entities'}（第三层档案）")
     print(f"  2. 核对 runbook：{profile_dir / 'runbooks'}（事故处理 + L4 部署 checklist）")
     print("  3. 起 session：vigil -p ops chat")
     print("  4. 验证 TOPO 段 / topo_query / topo_update / 权限矩阵 / runbook_load")

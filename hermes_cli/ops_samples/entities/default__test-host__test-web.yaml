@@ -1,9 +1,18 @@
 # test-web —— 验证用测试实体（可删除，见 OPS-VERIFY.md §3）。
 name: test-web
-type: service
-env: test
-cluster: default
-attrs:
-  purpose: "权限矩阵与 topo_update 验证用测试实体（可删除）"
-ops:
-  healthcheck: "curl -sf http://127.0.0.1:8080/healthz"   # 端口待核对
+detail: entities/default__test-host__test-web.yaml
+version: ""
+updated_at: 2026-08-23
+checks:
+  - {action: verify, params: {url: "http://127.0.0.1:8080/healthz", expect: {http_status: 200}}}
+snapshot:
+  captured_at: "2026-08-23T00:00:00+00:00"
+  source: manual
+  common: {version: "", config_dir: "", log_dir: "", data_dir: "", mode: single}
+  by_type: {}
+  by_runtime:
+    docker:
+      containers: [{name: test-web, state: running}]
+      port_mapping: {"8080": ""}
+      image: ""
+notes: "权限矩阵与 topo_update 验证用测试实体（可删除）。"

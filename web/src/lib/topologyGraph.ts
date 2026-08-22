@@ -12,9 +12,10 @@ import { statusTone } from "./ops";
 /**
  * 拓扑图数据模型（批三十五）：GET /api/topology → react-flow nodes/edges。
  *
- * 纯函数（前端单测覆盖）：三层结构 集群 → 主机 → 服务 + 跨主机实体；
- * 连线 host→services、cluster→host/cross_host、key_paths 链内相邻实体成
- * 琥珀高亮边；节点上限保护（防超大拓扑拖垮画布）。
+ * 纯函数（前端单测覆盖）：三层结构 集群 → 主机 → 服务 + 跨主机实体（v0.4
+ * 恒空，兼容读取）；连线 host→services、cluster→host/cross_host、services
+ * 层 depends_on 依赖成琥珀高亮边（v0.4 取代 key_paths 关键链路）；节点上限
+ * 保护（防超大拓扑拖垮画布）。
  *
  * 批四十九：布局从"手摆分层列排"（视觉 = 表格/列表）改为 d3-force 力导向
  * （节点自由散布 + 关系连线，视觉 = 网络拓扑）。buildGraphModel 只产出节点/
@@ -335,24 +336,33 @@ export function buildGraphModel(view: TopologyView): TopologyGraphModel {
     return { nodes: [], edges: [], overflow: true };
   }
 
-  // key_paths 链内相邻实体成高亮边（两端都存在于图中才画）。
+  // v0.4：services 层 depends_on 依赖成琥珀高亮边（取代 key_paths 关键链路；
+  // 两端都存在于图中才画，跨主机/缺失目标自动跳过）。依赖链上的节点标 keyPath。
   const byName = new Map<string, string>();
   for (const n of nodes) {
     if (n.data.kind !== "cluster" && !byName.has(n.data.name)) byName.set(n.data.name, n.id);
   }
-  for (const chain of view.key_paths ?? []) {
-    for (let i = 0; i + 1 < chain.length; i += 1) {
-      const a = byName.get(chain[i]);
-      const b = byName.get(chain[i + 1]);
-      if (!a || !b || a === b) continue;
+  const onDep = new Set<string>();
+  for (const n of nodes) {
+    if (n.data.kind !== "service") continue;
+    for (const dep of n.data.card.depends_on ?? []) {
+      const target = byName.get(dep);
+      if (!target || target === n.id) continue;
+      onDep.add(n.id);
+      onDep.add(target);
       edges.push({
-        id: `kp:${chain[i]}:${chain[i + 1]}`,
-        source: a,
-        target: b,
+        id: `dep:${n.data.name}:${dep}`,
+        source: n.id,
+        target,
         type: "default",
         className: "topo-edge-keypath",
         style: { stroke: "#f59e0b", strokeWidth: 2.5, opacity: 1 },
       });
+    }
+  }
+  if (onDep.size > 0) {
+    for (const n of nodes) {
+      if (onDep.has(n.id)) n.data.keyPath = true;
     }
   }
 

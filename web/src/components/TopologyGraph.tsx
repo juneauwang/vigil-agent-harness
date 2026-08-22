@@ -31,7 +31,7 @@ import { cn } from "@/lib/ops";
 /**
  * 可交互拓扑图（批三十五）：react-flow 缩放/平移 + 三层节点 + 状态着色 +
  * 点击节点 → 详情抽屉。数据来自现有 GET /api/topology，零新端点。
- * 主机 = 名称 + 活性点 + 状态；服务 = label + 状态点；琥珀 = 关键链路实体。
+ * 主机 = 名称 + 活性点 + 状态；服务 = label + 状态点；琥珀 = 依赖链路实体（services 层 depends_on）。
  *
  * 批四十九：布局改 d3-force 力导向（网络拓扑形态）；节点可拖（拖后固定，
  * 刷新/切集群回到力导向）；图上方集群标签栏（"全部" + 各集群）切换后节点
@@ -54,7 +54,7 @@ function ClusterNodeView({ data }: NodeProps<TopologyFlowNode>) {
       <span className="truncate">🖥️ 集群 {name}</span>
       <EnvBadge env={card.env} />
       {card.status && <StatusDot status={card.status} />}
-      {keyPath && <span className="text-[10px] text-amber-500">关键链路</span>}
+      {keyPath && <span className="text-[10px] text-amber-500">依赖链路</span>}
     </div>
   );
 }
@@ -93,7 +93,7 @@ function HostNodeView({ data }: NodeProps<TopologyFlowNode>) {
           :{port}
         </div>
       )}
-      {keyPath && <span className="text-[10px] text-amber-500">关键链路</span>}
+      {keyPath && <span className="text-[10px] text-amber-500">依赖链路</span>}
     </div>
   );
 }
@@ -137,7 +137,7 @@ function CrossHostNodeView({ data }: NodeProps<TopologyFlowNode>) {
       <Handle type="source" position={Position.Right} />
       <span className="min-w-0 truncate font-medium text-[var(--vigil-text)]">{name}</span>
       {card.type && <span className="truncate text-[10px] text-[var(--vigil-muted)]">{card.type}</span>}
-      {keyPath && <span className="text-[10px] text-amber-500">关键链路</span>}
+      {keyPath && <span className="text-[10px] text-amber-500">依赖链路</span>}
     </div>
   );
 }

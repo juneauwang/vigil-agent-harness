@@ -87,9 +87,11 @@ def _load_permissions(ops_home: Path) -> dict:
 def test_init_creates_profile_config_and_topology(ops_home):
     assert (ops_home / "config.yaml").is_file()
     assert (ops_home / "topology.yaml").is_file()
-    # v0.2 三层样例：第一层 topology.yaml + 第二层 hosts/ 服务索引 + 第三层 entities/。
-    seeded_hosts = sorted(p.stem for p in (ops_home / "hosts").glob("*.yaml"))
-    assert seeded_hosts == sorted(p.stem for p in (SAMPLE_DIR / "hosts").glob("*.yaml"))
+    # v0.4 四层样例：第一层 topology.yaml + 第二层 services/ + 第三层 entities/ + 硬件层。
+    seeded_services = sorted(p.stem for p in (ops_home / "services").glob("*.yaml"))
+    assert seeded_services == sorted(p.stem for p in (SAMPLE_DIR / "services").glob("*.yaml"))
+    seeded_hw = sorted(p.stem for p in (ops_home / "hardware").glob("*.yaml"))
+    assert seeded_hw == sorted(p.stem for p in (SAMPLE_DIR / "hardware").glob("*.yaml"))
     seeded = sorted(p.stem for p in (ops_home / "entities").glob("*.yaml"))
     assert seeded == SAMPLE_ENTITY_NAMES
     seeded_rb = sorted(p.stem for p in (ops_home / "runbooks").glob("*.yaml"))
@@ -145,8 +147,9 @@ def test_init_idempotent_and_force(tmp_path, entry):
     proc = _run_init(root, "--no-alias", "--force", entry=entry)
     assert proc.returncode == 0
     assert yaml.safe_load(cfg_path.read_text(encoding="utf-8"))["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
-    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 3
-    assert (home / "hosts" / "node1.yaml").is_file()
+    assert yaml.safe_load(topo_path.read_text(encoding="utf-8"))["version"] == 4
+    assert (home / "services" / "node1.yaml").is_file()
+    assert (home / "hardware" / "node1.yaml").is_file()
     # --force 重铺样例但不删除用户自建文件（mine.yaml 保留）。
     assert set(p.stem for p in runbooks_dir.glob("*.yaml")) >= set(SAMPLE_RUNBOOK_NAMES)
     assert (runbooks_dir / "mine.yaml").is_file()
@@ -238,23 +241,25 @@ def test_env_flag_invalid_name_errors_listing_available(tmp_path):
 def test_seeded_profile_renders_topo_and_queries(ops_home):
     block = render_topo_block(ops_home)
     assert block.startswith("## TOPO — 平台拓扑总览")
-    # v0.2：第一层只注入 hosts + cross_host（服务在第二层，不进 system prompt）。
+    # v0.4：第一层只注入 clusters + hosts（服务在第二层，不进 system prompt）。
     assert "node1" in block and "k3s-prod" in block and "test-host" in block
-    assert "ingress → gateway-svc → order-db" in block
     assert "执行任何运维操作前" in block
 
     harbor = json.loads(topo_query(entity="harbor", detail=True))
     assert harbor["name"] == "harbor"
     assert harbor["endpoint"] == "203.0.113.10:30443"
     assert harbor["stale"] is False
-    assert harbor["detail"]["depends_on"] == ["postgres"]
-    assert harbor["detail"]["ops"]["healthcheck"].startswith("curl")
+    # v0.4：depends_on 上移第二层（entity 查询顶层即 L2 行）；checks 结构化档案。
+    assert harbor["depends_on"] == ["postgres"]
+    assert harbor["detail"]["checks"][0]["action"] == "verify"
+    assert harbor["detail"]["checks"][0]["params"]["expect"]["http_status"] == 200
 
     dbs = json.loads(topo_query(entity_type="db", env="prod"))
     assert {e["name"] for e in dbs["entities"]} == {"order-db", "postgres"}
 
     node1 = json.loads(topo_query(host="node1"))
     assert node1["name"] == "node1"
+    assert node1["role"] == ["control-plane", "worker"] and node1["runtime"] == ["k3s"]
     assert {s["name"] for s in node1["services"]} == {"harbor", "argocd", "order-db", "postgres"}
 
 
@@ -284,45 +289,52 @@ def test_sample_topology_stays_valid_and_under_50_lines():
     lines = (SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8").splitlines()
     assert len(lines) < 50, "第一层注入 system prompt，必须保持 <50 行"
     data = yaml.safe_load("\n".join(lines))
-    # v0.3 三层：clusters + hosts + cross_host（第一层）+ hosts/ 服务索引（第二层）
+    # v0.4 四层：clusters（type 即 controller）+ hosts（role/runtime 数组）+ 无旧字段
     # → 扁平实体集 == entities/ 第三层档案集（样例完整性契约）。
-    assert data["version"] == 3
+    assert data["version"] == 4
+    for gone in ("sources", "services_index", "cross_host", "key_paths"):
+        assert gone not in data
     hosts = data["hosts"]
-    cross_host = data["cross_host"]
     assert {h["name"] for h in hosts} == {"node1", "node2", "test-host"}
-    assert {c["name"] for c in cross_host} == {"k3s-prod", "ingress"}
+    for host in hosts:
+        assert host["type"] == "host"
+        assert isinstance(host["role"], list) and isinstance(host["runtime"], list)
+        assert "services_index" not in host
     clusters = data.get("clusters") or []
     assert {c["name"] for c in clusters} == {"k3s-prod"}
+    assert clusters[0]["type"] in ("k8s", "k3s", "kind", "docker", "bare")
+    assert clusters[0]["provenance"] in ("terraform", "ansible", "salt", "manual")
     assert all(c["env"] in ("local", "test", "dev", "prod") for c in clusters)
     assert {e["name"] for e in data["environments"]} == {"local", "test", "dev", "prod"}
-    for host in hosts:
-        assert (SAMPLE_DIR / host["services_index"]).is_file(), \
-            f"services_index 指向缺失: {host['services_index']}"
-    flat = {h["name"] for h in hosts} | {c["name"] for c in cross_host}
-    detail_entities = {c["name"] for c in cross_host}
+    flat = set()
+    detail_entities = set()
     for host in hosts:
         index = yaml.safe_load(
-            (SAMPLE_DIR / host["services_index"]).read_text(encoding="utf-8")
+            (SAMPLE_DIR / "services" / f"{host['name']}.yaml").read_text(encoding="utf-8")
         )
+        assert index["host"] == host["name"]
         flat |= {s["name"] for s in index["services"]}
         detail_entities |= {s["name"] for s in index["services"]}
-        # cluster 三层贯通：hosts 行 cluster == 服务索引头 cluster。
         host_cluster = host.get("cluster") or "default"
-        assert index.get("cluster") == host_cluster
-        # L3 命名：实体文件 = entities/{cluster}__{host}__{name}.yaml。
-        host_profile = SAMPLE_DIR / "entities" / f"{host_cluster}__{host['name']}__{host['name']}.yaml"
-        if host_profile.is_file():
-            detail_entities.add(host["name"])
         for svc in index["services"]:
             assert (SAMPLE_DIR / svc["detail"]).is_file(), f"detail 指向缺失: {svc['detail']}"
-            svc_cluster = svc.get("cluster") or host_cluster
-            assert svc["detail"] == f"entities/{svc_cluster}__{host['name']}__{svc['name']}.yaml", \
+            assert svc["detail"] == f"entities/{host_cluster}__{host['name']}__{svc['name']}.yaml", \
                 f"L3 命名不符合规则: {svc['detail']}"
+            # v0.4 服务行：无 env/cluster 冗余、type 受控枚举、managed_by 在枚举表。
+            assert "env" not in svc and "cluster" not in svc
+            assert svc["type"] in ("db", "cache", "queue", "registry", "monitor",
+                                   "gateway", "search", "object_storage", "app", "unknown")
+            assert svc["managed_by"] in ("docker", "docker_compose", "kubectl", "helm",
+                                         "systemd", "pm2", "supervisord", "bare", "unknown")
+        # 硬件层 hardware/<host>.yaml 存在（静态规格 + controller 枚举）。
+        hw = yaml.safe_load(
+            (SAMPLE_DIR / "hardware" / f"{host['name']}.yaml").read_text(encoding="utf-8")
+        )
+        assert hw["hardware"]["gpu"]["controller"] in (
+            "nvidia-smi", "npu-smi", "cambricon-smi", "rocm-smi", "none")
+        assert hw["network"]["firewall"]["controller"] in (
+            "firewalld", "iptables", "ufw", "nftables", "none")
     # L3 文件名 = {cluster}__{host}__{name}.yaml：与扁平实体集按 name 部分比较。
     sample_names = {stem.rsplit("__", 1)[-1] for stem in SAMPLE_ENTITY_NAMES}
-    assert flat >= sample_names
-    # 第三层档案集 = 有 detail 的实体（服务 + cross_host + 有档案的 host）。
+    assert flat == sample_names
     assert detail_entities == sample_names
-    for ent in cross_host:
-        assert (SAMPLE_DIR / ent["detail"]).is_file(), f"detail 指向缺失: {ent['detail']}"
-    assert data["key_paths"] == [["ingress", "gateway-svc", "order-db"]]

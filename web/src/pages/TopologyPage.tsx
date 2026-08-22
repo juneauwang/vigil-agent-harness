@@ -322,6 +322,27 @@ export default function TopologyPage() {
       .map((name) => ({ name, meta: meta.get(name), hosts: byCluster.get(name)! }));
   }, [view]);
 
+  // v0.4：服务依赖连线数（services 层 depends_on，取代 key_paths 关键链路）。
+  const depCount = useMemo(() => {
+    if (!view) return 0;
+    const names = new Set(view.hosts.flatMap((h) => h.services.map((s) => s.card.name)));
+    const seen = new Set<string>();
+    let n = 0;
+    for (const host of view.hosts) {
+      for (const svc of host.services) {
+        for (const dep of svc.card.depends_on ?? []) {
+          if (dep === svc.card.name || !names.has(dep)) continue;
+          const key = `${svc.card.name}->${dep}`;
+          if (!seen.has(key)) {
+            seen.add(key);
+            n += 1;
+          }
+        }
+      }
+    }
+    return n;
+  }, [view]);
+
   return (
     <div className="flex h-full min-h-0 flex-col">
       {/* 工具条 */}
@@ -407,7 +428,7 @@ export default function TopologyPage() {
             <span>{view.hosts.length} 主机</span>
             <span>{view.hosts.reduce((n, h) => n + h.services.length, 0)} 服务</span>
             <span>{view.cross_host.length} 跨主机实体</span>
-            <span>{view.key_paths.length} 条关键链路</span>
+            <span>{depCount} 条服务依赖连线</span>
           </div>
 
           <div className="vigil-card mb-4 p-3">
@@ -528,35 +549,6 @@ export default function TopologyPage() {
             </>
           )}
 
-          {/* 关键链路（业务请求链路：入口 → 网关 → 服务 → 存储） */}
-          {view.key_paths.length > 0 && (
-            <section className="mt-6">
-              <h2
-                className="mb-1 flex items-center gap-2 text-sm font-semibold"
-                title="业务请求链路：入口 → 网关 → 服务 → 存储（定义在拓扑表 key_paths）"
-              >
-                <Link2 className="size-4 text-[var(--vigil-muted)]" />
-                关键链路（{view.key_paths.length}）
-              </h2>
-              <p className="mb-2.5 text-xs text-[var(--vigil-muted)]">
-                业务请求的主干路径——排障时最先检查这里。
-              </p>
-              <div className="space-y-2">
-                {view.key_paths.map((chain, i) => (
-                  <div key={i} className="flex flex-wrap items-center gap-1.5 text-sm">
-                    {chain.map((name, j) => (
-                      <span key={`${name}-${j}`} className="flex items-center gap-1.5">
-                        {j > 0 && <span className="text-[var(--vigil-muted)]">→</span>}
-                        <span className="rounded border border-amber-500/50 bg-amber-500/5 px-1.5 py-0.5 text-amber-600 dark:text-amber-400">
-                          {name}
-                        </span>
-                      </span>
-                    ))}
-                  </div>
-                ))}
-              </div>
-            </section>
-          )}
         </div>
       ) : null}
 

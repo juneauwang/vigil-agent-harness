@@ -1,12 +1,17 @@
-# order-db —— 订单库（样例值请按实际核对）。
+# order-db —— 第三层实体档案（订单库，k8s StatefulSet）。
 name: order-db
-type: db
-env: prod
-cluster: k3s-prod
-attrs:
-  engine: postgresql
-  # 连接信息/密码不落拓扑文件（见密钥管理；凭据只存引用）
-depends_on: [postgres]
-depended_by: [gateway-svc]
-ops:
-  healthcheck: "pg_isready -h 127.0.0.1"
+detail: entities/k3s-prod__node1__order-db.yaml
+version: ""
+updated_at: 2026-08-23
+checks: []
+snapshot:
+  captured_at: "2026-08-23T00:00:00+00:00"
+  source: manual
+  common: {version: "", config_dir: "", log_dir: "", data_dir: /data/order-db, mode: single}
+  by_type: {backup_dir: /backup/order-db, role: primary}
+  by_runtime:
+    kubectl:
+      namespace: prod
+      deployments: [{name: order-db, replicas: 1, ready: 1}]
+      pvc: [order-db-data]
+notes: "订单业务主库；gateway-svc 依赖（depends_on 见第二层服务行）。"

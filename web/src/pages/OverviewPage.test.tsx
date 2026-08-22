@@ -90,22 +90,23 @@ async function renderPage(view: TopologyView | null) {
 }
 
 describe("批次四十五 Overview 整网连线拓扑（§BC/§BD）", () => {
-  it("渲染整网拓扑 + 关键链路琥珀高亮（带 key_paths）", async () => {
+  it("渲染整网拓扑 + 服务依赖琥珀图例（v0.4 取代 key_paths）", async () => {
     const text = await renderPage(VIEW_WITH_KEYPATH);
     expect(text).toContain("Topology Graph");
     expect(text).toContain("k8s-prod"); // cluster
     expect(text).toContain("node1"); // host
     expect(text).toContain("gateway"); // service
     expect(text).toContain("order-svc"); // service
-    // 关键链路琥珀图例存在
-    expect(text).toContain("关键链路");
+    expect(text).toContain("服务依赖");
+    expect(text).not.toContain("关键链路");
+    expect(text).not.toContain("key_paths");
   });
 
-  it("key_paths 为空 → 仍显示完整层级拓扑 + 空态提示", async () => {
+  it("无依赖 → 仍显示完整层级拓扑（无 key_paths 空态提示）", async () => {
     const text = await renderPage(VIEW_NO_KEYPATH);
     expect(text).toContain("node1");
     expect(text).toContain("gateway");
-    expect(text).toContain("未配置关键链路（key_paths）");
+    expect(text).not.toContain("key_paths");
   });
 
   it("加载失败（无 view）→ 显示错误而非空白", async () => {

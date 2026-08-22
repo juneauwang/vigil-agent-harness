@@ -2939,3 +2939,54 @@
   路由断言。季度体检检查：`chat_api.py` `_model_catalog` 含 custom_providers 来源、
   `_switch_session_agent_model` 传 requested。
 - **状态**：未 commit（与批 50 一并待用户核验提交；开发目录 master）。
+
+### 66. 批次五十二 YAPL P1 数据层——拓扑 schema v0.4 落地（2026-08-23，设计单一事实来源 yapl-design.md §9）
+
+- **为什么**：拓扑 schema v0.3 → v0.4（YAPL v1.0 P1 数据层）：第一层删
+  sources/services_index/cross_host/key_paths、clusters/hosts 行补治理字段
+  （type/provenance/credentials 数组等）；第二层 hosts/ 改名 services/（服务行删
+  env/cluster 冗余、type 枚举化 + managed_by/extra_ports/log_paths/depends_on）；
+  第三层 attrs/ops/status → snapshot 二维分支 + checks（不放 type/env/cluster）；
+  新增硬件层 hardware/<host>.yaml（静态规格 + controller 枚举）。用户拍板：不做
+  v3→v4 迁移（~/.vigil 旧数据直接删除重建）、全部改动在 branch v1.0 一次做完、
+  硬件层数据直接 topology discover 产出。
+- **怎么改**：
+  - `tools/topo_discovery.py`：发现引擎改产 v0.4（host 行 role/runtime 数组 +
+    type=host + os + credentials 数组，无 services_index；服务行 type 按 9.7 判定表
+    归类 + managed_by + extra_ports/log_paths/depends_on；unidentified 端口/无端口
+    systemd 进 pending_review，不入 services）；L3 档案 snapshot（common/by_type/
+    by_runtime）+ checks + detail 路径键（OPS-DELTA #42 命名
+    entities/{cluster}__{host}__{name}.yaml，修复 v0.4 重写时丢 detail 键导致实体
+    文件写偏路径的 bug）；新增硬件层探针（lscpu/meminfo/df/raid/gpu/ip/防火墙，
+    controller 枚举）；写盘 services/<host>.yaml + hardware/<host>.yaml + version 4，
+    剥离 v0.4 删除的顶层字段，合并语义保留治理字段不覆盖。
+  - `tools/topo_schemas.py`（新增）：词表层 schemas.yaml——受控枚举 + unknown 兜底
+    （validate_enum/validate_enum_list/managed_by_command/export_schemas_yaml）；
+    修复 default_schemas 对 schema_version 标量 list() 崩溃；防火墙探测
+    "inactive" 子串误判 active。
+  - `tools/topo_tools.py`：读取端 v0.4（services/ 优先、hosts/ 兼容回退；总览不再
+    含 cross_host/key_paths；detail 合并 snapshot/checks）；topo_update 字段分流
+    （L2 服务行字段 / L3 档案顶层字段 / snapshot.common），无 L2 层实体
+    （v0.1 扁平/cross_host）needs_review 落 L3 顶层防更新丢失；topo_status_sync
+    status 写 L3。
+  - `hermes_cli/subcommands/topo_export.py`：卡片补 managed_by/extra_ports/log_paths/
+    depends_on（前端图连线用）；`hermes_cli/ops_init.py` 样例复制 services/ +
+    hardware/；`plugins/memory/topo/__init__.py` 第一层渲染 v0.4（clusters type 即
+    controller + hosts role/runtime 数组）；`hermes_cli/runtime_state.py` 注释同步。
+  - `hermes_cli/ops_samples/`：样例升级 v0.4（topology.yaml version 4 + services/ +
+    entities/ snapshot 档案 + hardware/；删除 hosts/ 与 cross_host/key_paths 样例）。
+  - `web/`：`topologyGraph.ts` key_paths 琥珀边 → services 层 depends_on 高亮边；
+    `TopologyPage`/`OverviewPage` 移除关键链路展示，量规改"服务依赖连线"；
+    `api.ts` TopologyCard 补 v0.4 服务行字段。
+- **测试**：后端 topo 相关 13 套件 264 过 6 跳（test_topo_discovery 45、
+  test_batch39_topo_sync 14、新增 test_topo_v4 16、test_topo_v2 16、ops_init/
+  memory/first_install 53、topo_export/status/dashboard 58、runbook 系等）；
+  前端 vitest 全量 18 文件 136 过 + `tsc -b --noEmit` ✓。存量无关失败 5 例
+  （approval.py `_record_approval_trajectory` 签名冲突 4 例 + watch_tools 1 例，
+  未触碰的既有问题，不在本批范围）。
+- **核销方式**：测试常驻——test_topo_v4（v0.4 落盘结构/硬件层枚举/snapshot/
+  services/ 路径/unknown 兜底）、test_topo_discovery（services/ 落盘 + 实体命名 +
+  硬件层）、test_batch39（needs_review L2 / status L3 分流）。季度体检检查：
+  `write_discovery` 产 version 4 + services/ + hardware/、`topo_query` 无参总览无
+  cross_host/key_paths、ops_samples 无 hosts/ 目录。
+- **状态**：未 commit（待数据重建与用户核验后提交，branch v1.0）。

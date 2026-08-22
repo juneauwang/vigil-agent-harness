@@ -1,26 +1,25 @@
 """Topology (CMDB) tools for the Ops Agent Harness.
 
-Implements the three-layer topology schema v0.2/v0.3 from
-``ops-agent-harness.md`` §2.2 (OPS-DELTA #6 / #42):
+Implements the four-layer topology schema v0.4 (YAPL P1, yapl-design.md §9)
+from ``ops-agent-harness.md`` §2.2 (OPS-DELTA #6 / #42):
 
-  topology.yaml            — layer 1: environments + clusters + hosts + cross_host + key_paths
-  hosts/<hostname>.yaml    — layer 2: per-host services index (one row per service)
-  entities/<...>.yaml      — layer 3: per-service full profile (loaded on demand)
+  topology.yaml            — layer 1: environments + clusters + hosts（<50 行注入）
+  services/<host>.yaml     — layer 2: per-host service catalog (depends_on)
+  hardware/<host>.yaml     — hardware layer: static specs + controller enums
+  entities/<...>.yaml      — layer 3: per-service profile (snapshot/checks, lazy)
 
-Schema v0.3 (OPS-DELTA #42) adds: ``cluster`` (three layers + top-level
-``clusters:`` overview), fixed env enum ``local/test/dev/prod`` (legacy custom
-names map by tier on read), L3 entity naming ``entities/{cluster}__{host}__{name}.yaml``
-(cross-host name collisions), and ``credential`` references on host rows /
-``ssh`` sections on entities (type/ref/user/port only — no plaintext secrets).
+Schema v0.4 (YAPL P1) changes vs v0.3: 删除顶层 sources/services_index/
+cross_host/key_paths；clusters 行补 type/provenance/source/endpoint/credential/
+tenant/department/host_groups；host 行 role/runtime 改数组 + os/department +
+credentials 数组；第二层目录 hosts/ → services/（服务行删 env/cluster/owner
+冗余，补 managed_by/extra_ports/log_paths/depends_on）；第三层 attrs/ops/status
+→ snapshot（common/by_type/by_runtime）+ checks；新增硬件层。
 
-Read-compat is a hard requirement: v0.1 (flat ``core_entities``), v0.2
-(hosts/cross_host, old ``entities/<name>.yaml`` paths) and v0.3 all load;
-old files are never rewritten.  Writes only produce v0.3.
+Read-compat: v0.1 (flat ``core_entities``), v0.2 (hosts/cross_host), v0.3 and
+v0.4 all load; old files are never rewritten.  Writes only produce v0.4.
 
 Files live under the active Vigil home.  Runtime state (CPU/pods/alerts)
 is deliberately NOT stored here — the table only keeps the desired state.
-
-Data contract (schema v0.2/v0.3, v0.1 compat): see ops-agent-harness.md §2.2.
 """
 
 from __future__ import annotations
@@ -49,27 +48,31 @@ logger = logging.getLogger(__name__)
 
 _TOPO_FILENAME = "topology.yaml"
 _ENTITIES_DIRNAME = "entities"
-_HOSTS_DIRNAME = "hosts"
+_SERVICES_DIRNAME = "services"
+_HOSTS_DIRNAME = "hosts"  # v0.3 兼容回退（读取端 services/ 优先）
+_HARDWARE_DIRNAME = "hardware"
 
 # source=agent writes carry this tag (topo_update data contract).
 _SOURCE_AGENT = "agent"
 # Entities whose last_verified is older than this are reported as stale.
 _STALE_DAYS = 30
-# Known top-level schema fields that topo_update may rewrite directly; every
-# other key lands in the entity's ``attrs`` map.
+# v0.4 顶层可写字段：L2 服务行字段（直接写 services/<host>.yaml 对应行）+
+# L3 档案顶层字段（写实体文件）。其余键 → snapshot/common（标量）或拒绝。
 _TOPLEVEL_UPDATE_FIELDS = frozenset(
-    {"env", "type", "endpoint", "owner", "status", "healthcheck", "depends_on", "depended_by", "needs_review"}
+    {"env", "type", "endpoint", "owner", "status", "healthcheck",
+     "depends_on", "depended_by", "needs_review",
+     "managed_by", "extra_ports", "log_paths", "checks", "version", "notes"}
 )
 
 _DEFAULT_TOPO_SCHEMA = {
     "name": "topo_query",
     "description": (
-        "查询运维拓扑表（平台 CMDB 事实层，三层模型 v0.3）。"
-        "无参返回第一层总览（clusters + hosts + cross_host，紧凑）；host=<name> "
-        "展开该主机的第二层服务索引；entity=<name> 跨层名解析（先服务名再 "
-        "host/cross_host）；type=/env=/cluster= 过滤扁平视图（cluster 缺省 "
-        "显示 default）；detail=True 时按需加载第三层完整档案（依赖关系、健康检查、"
-        "ssh 连接引用等）。host 行的 credential 引用（type/ref/user/port）随行返回，"
+        "查询运维拓扑表（平台 CMDB 事实层，四层模型 v0.4）。"
+        "无参返回第一层总览（environments + clusters + hosts，紧凑）；host=<name> "
+        "展开该主机的第二层服务目录（services/<host>.yaml）；entity=<name> 跨层名解析"
+        "（先服务名再 host）；type=/env=/cluster= 过滤扁平视图（cluster 缺省 "
+        "显示 default）；detail=True 时按需加载第三层档案（snapshot/checks，含"
+        "依赖关系）。host 行的 credentials 数组引用（type/ref/user/port）随行返回，"
         "port 缺省 22，密码明文不落拓扑。"
         "执行任何运维操作前，先用本工具确认目标实体在拓扑表中的身份和环境；"
         "跨环境操作默认拒绝。"
@@ -109,10 +112,11 @@ _DEFAULT_TOPO_SCHEMA = {
 _DEFAULT_TOPO_UPDATE_SCHEMA = {
     "name": "topo_update",
     "description": (
-        "更新拓扑表实体档案（状态/版本/属性）。自动携带 source=agent 与 last_verified=今天；"
-        "修改 PROD 环境实体前需要人工审批确认。"
-        "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认同步；"
-        "手动 topo_update 写 status 仅用于 topo_status_sync 无法确定的状态。"
+        "更新拓扑表实体（v0.4：L2 服务行 + L3 档案）。自动携带 source=agent 与 "
+        "last_verified=今天；修改 PROD 环境实体前需要人工审批确认。"
+        "L2 可写：type/managed_by/endpoint/extra_ports/log_paths/depends_on/needs_review；"
+        "L3 可写：version/notes/checks（verify 检查列表）。"
+        "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认同步。"
     ),
     "parameters": {
         "type": "object",
@@ -124,12 +128,12 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
             "updates": {
                 "type": "object",
                 "description": (
-                    "要写入的字段。env/type/endpoint/owner/status/healthcheck/depends_on/"
-                    "depended_by/needs_review 为顶层字段，其余键写入 attrs。"
-                    "正例：{\"endpoint\": \"1.2.3.4\", \"owner\": \"x\"}；"
-                    "反例：{\"attrs\": {\"endpoint\": \"...\"}}（应直接传 endpoint，"
-                    "attrs 键会被自动展开合并，不需要包这一层）。"
-                    "只接受标量属性值；dict/list 复杂结构会被拒绝（防嵌套污染）。"
+                    "要写入的字段。v0.4 顶层可写：type/managed_by/endpoint/extra_ports/"
+                    "log_paths/depends_on/depended_by/needs_review/version/notes/checks"
+                    "（extra_ports/log_paths/depends_on 传数组，checks 传 "
+                    "[{action: verify, params: {url, expect: {http_status, body_contains}}}]）。"
+                    "其余标量键写入档案 snapshot.common（如 version）。"
+                    "dict/list 复杂结构除上述白名单外会被拒绝（防嵌套污染）。"
                 ),
             },
             "reason": {
@@ -144,7 +148,7 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
 _TOPO_DISCOVER_SCHEMA = {
     "name": "topo_discover",
     "description": (
-        "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU）并返回 schema v0.3 "
+        "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU/硬件层）并返回 schema v0.4 "
         "片段。仅发现、不自动落盘（needs_review=true，dry_run 语义默认开启）；"
         "发现结果只是草案，未经确认不参与权限判定——下一步用 topo_query 查看待审"
         "实体、topo_update 逐条确认（修正名称/类型/endpoint 并置 needs_review=false）"
@@ -326,7 +330,7 @@ def _is_v2_or_v3(topo: Dict[str, Any]) -> bool:
     detection (hosts/cross_host/clusters) so hand-written files without the
     field still load as layered when they use the new layout.
     """
-    if topo.get("version") in (2, 3):
+    if topo.get("version") in (2, 3, 4):
         return True
     if "version" in topo:
         return False
@@ -334,21 +338,25 @@ def _is_v2_or_v3(topo: Dict[str, Any]) -> bool:
 
 
 def _load_host_index(home: Path, host: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Load a host's layer-2 services index (hosts/<name>.yaml by default).
+    """Load a host's layer-2 service catalog (services/<name>.yaml by default).
 
+    v0.4 路径约定 services/<name>.yaml；老数据 hosts/<name>.yaml 兼容回退。
     Honors an explicit ``services_index`` field (containment-checked against
-    VIGIL_HOME via ``_safe_entity_path`` — the new hosts/ directory is
-    covered by the same traversal guard as entities/).
+    VIGIL_HOME via ``_safe_entity_path`` — both directories are covered by the
+    same traversal guard as entities/).
     """
     name = host.get("name") if isinstance(host, dict) else None
     if not name or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
         return None
     index_field = host.get("services_index") if isinstance(host, dict) else None
+    candidates: List[Path] = []
     if index_field:
-        path = _safe_entity_path(home, index_field)
+        candidates.append(_safe_entity_path(home, index_field))
     else:
-        path = (home / _HOSTS_DIRNAME / f"{name}.yaml").resolve()
-    if path is None or not path.is_file():
+        candidates.append((home / _SERVICES_DIRNAME / f"{name}.yaml").resolve())
+        candidates.append((home / _HOSTS_DIRNAME / f"{name}.yaml").resolve())
+    path = next((p for p in candidates if p is not None and p.is_file()), None)
+    if path is None:
         return None
     try:
         data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -432,6 +440,8 @@ def topo_first_layer(topo: Dict[str, Any]) -> Dict[str, Any]:
     platform grows); v0.1 returns the flat core_entities (compat path).
     """
     if _is_v2_or_v3(topo):
+        # v0.4：cross_host/key_paths 已删除（图由 services 层 depends_on 推导）；
+        # v0.2/3 存量数据读取兼容（返回旧字段，消费端按有无处理）。
         return {
             "environments": topo.get("environments") or [],
             "clusters": [e for e in topo.get("clusters") or [] if isinstance(e, dict)],
@@ -611,28 +621,32 @@ def _compact_row(entity: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _overview(topo: Dict[str, Any], home: Optional[Path] = None) -> str:
-    """First-layer overview (compact). v0.1 → core_entities list; v0.2/v0.3 → hosts+cross_host."""
+    """First-layer overview (compact). v0.1 → core_entities; v0.4 → hosts+clusters
+    （cross_host/key_paths 已删除）；v0.2/v0.3 存量数据读取兼容保留旧字段。"""
     first = topo_first_layer(topo)
     if _is_v2_or_v3(topo):
         hosts = [_compact_row(h) for h in first["hosts"]]
         cross = [_compact_row(c) for c in first["cross_host"]]
-        return json.dumps(
-            {
-                "version": int(topo.get("version") or 2),
-                "count": len(hosts) + len(cross) + len(_all_services(topo, home)),
-                "environments": first["environments"],
-                "clusters": first["clusters"],
-                "hosts": hosts,
-                "cross_host": cross,
-                "key_paths": first["key_paths"],
-                "note": (
-                    "第一层总览（系统提示注入层，紧凑）。"
-                    "按 host=<name> 展开第二层服务索引；cluster=<name> 过滤；"
-                    "entity=<name> 跨层解析；detail=True 进第三层详情。"
-                ),
-            },
-            ensure_ascii=False, indent=2,
-        )
+        version = int(topo.get("version") or 2)
+        count = len(hosts) + len(_all_services(topo, home))
+        if version < 4:
+            count += len(cross)
+        payload: Dict[str, Any] = {
+            "version": version,
+            "count": count,
+            "environments": first["environments"],
+            "clusters": first["clusters"],
+            "hosts": hosts,
+            "note": (
+                "第一层总览（系统提示注入层，紧凑）。"
+                "按 host=<name> 展开第二层服务目录；cluster=<name> 过滤；"
+                "entity=<name> 跨层解析；detail=True 进第三层档案。"
+            ),
+        }
+        if version < 4:
+            payload["cross_host"] = cross
+            payload["key_paths"] = first["key_paths"]
+        return json.dumps(payload, ensure_ascii=False, indent=2)
     return json.dumps(
         {
             "version": 1,
@@ -807,6 +821,15 @@ def topo_update(
                 approved=False,
             )
 
+    # v0.4 字段分流：L2 服务行字段 vs L3 档案顶层字段 vs snapshot.common 标量。
+    _L2_UPDATE_FIELDS = frozenset(
+        {"type", "managed_by", "endpoint", "extra_ports", "log_paths",
+         "depends_on", "depended_by", "needs_review"}
+    )
+    _L3_TOPLEVEL_FIELDS = frozenset(
+        {"version", "notes", "checks", "status", "healthcheck", "owner", "env"}
+    )
+
     existing: Dict[str, Any] = {}
     existing_path = next(
         (c for c in _entity_detail_candidates(target_path) if c.is_file()),
@@ -820,6 +843,7 @@ def topo_update(
         except Exception as exc:
             return tool_error(f"实体档案解析失败: {existing_path} ({exc})")
 
+    l2_updates: Dict[str, Any] = {}
     attrs_expanded = False
     for key, value in updates.items():
         if key == "attrs":
@@ -836,23 +860,35 @@ def topo_update(
                 existing["attrs"] = attrs
             attrs.update(value)
             attrs_expanded = True
-        elif key in _TOPLEVEL_UPDATE_FIELDS:
+        elif key in _L2_UPDATE_FIELDS:
+            if isinstance(value, (dict,)):
+                return tool_error(
+                    f"updates['{key}'] 不接受 dict 值（list/标量才合法）。"
+                )
+            l2_updates[key] = value
+            if not (match or {}).get("_host"):
+                # 无 L2 层的实体（v0.1 扁平 core_entities / v0.2+ cross_host）：
+                # L2 字段直接落 L3 档案顶层（唯一存储面），避免更新丢失。
+                existing[key] = value
+        elif key in _L3_TOPLEVEL_FIELDS:
             existing[key] = value
         else:
-            # 非标量值防御：dict/list 等复杂结构不再静默写入 attrs
-            # （depends_on/depended_by 是已定义的顶层列表字段，走上一分支）。
-            # 防 LLM 传嵌套结构继续污染档案。
+            # 其余标量 → snapshot.common（v0.4；version 等 L3 顶层字段走上一分支）。
             if isinstance(value, (dict, list)):
                 return tool_error(
                     f"updates['{key}'] 的值是 {type(value).__name__} 复杂结构，"
                     "topo_update 只接受标量属性（防嵌套结构污染档案）；"
                     "字段键直接传，不需要包 attrs 层。"
                 )
-            attrs = existing.setdefault("attrs", {})
-            if not isinstance(attrs, dict):
-                attrs = {}
-                existing["attrs"] = attrs
-            attrs[key] = value
+            snapshot = existing.setdefault("snapshot", {})
+            if not isinstance(snapshot, dict):
+                snapshot = {}
+                existing["snapshot"] = snapshot
+            common = snapshot.setdefault("common", {})
+            if not isinstance(common, dict):
+                common = {}
+                snapshot["common"] = common
+            common[key] = value
 
     existing["source"] = _SOURCE_AGENT
     existing["last_verified"] = _today()
@@ -868,11 +904,9 @@ def topo_update(
     except Exception as exc:
         return tool_error(f"写入拓扑实体失败: {exc}")
 
-    # 批三十九任务 1：写 L3 详情后同步 L2 hosts 索引对应行（仅服务行有索引行；
-    # 第一层 host/cross_host 行的自身行在 topology.yaml，不属于 L2 索引层）。
-    # 同步字段 = needs_review/source/last_verified/status（与 L3 写的一致），
-    # 索引缺行按 L2 行形态补建——索引层缺行本身就是漂移。写失败不吞掉：记日志
-    # + 返回里带 warning，L3 已写入不受影响。
+    # v0.4 写 L2 同步：服务行字段直接写 services/<host>.yaml 对应行（L2 是服务
+    # 目录的事实来源，type/managed_by/endpoint/depends_on 等只住 L2）。L3 已写
+    # 成功但 L2 写失败 → warning 带进返回，不吞掉。
     l2_synced_host = ""
     l2_warning = ""
     if isinstance(match, dict) and match.get("_host"):
@@ -883,6 +917,8 @@ def topo_update(
             None,
         )
         sync_fields = {k: existing[k] for k in _L2_INDEX_SYNC_FIELDS if k in existing}
+        if l2_updates:
+            sync_fields.update(l2_updates)
         if sync_fields:
             l2_warning = sync_l2_index_row(
                 home,
@@ -907,6 +943,8 @@ def topo_update(
     }
     if attrs_expanded:
         audit["note"] = "updates 含 attrs 键：字段键直接传，不需要包 attrs 层；已自动展开合并。"
+    if l2_updates:
+        audit["l2_fields"] = sorted(l2_updates.keys())
     if l2_synced_host:
         audit["l2_index_synced"] = l2_synced_host
     if l2_warning:
@@ -933,23 +971,25 @@ _DOCKER_STATE_TO_STATUS = {
 
 
 def _docker_managed(entity: Dict[str, Any]) -> bool:
-    """实体是否可做 docker 状态检查（容器实体：attrs.container / type / runtime 标记）。"""
+    """实体是否可做 docker 状态检查（v0.4：managed_by docker/docker_compose，
+    或 snapshot.by_runtime 有 docker* 分支；v0.3 存量 attrs.container 兼容）。"""
+    if str(entity.get("managed_by") or "") in ("docker", "docker_compose"):
+        return True
+    snapshot = entity.get("snapshot") if isinstance(entity.get("snapshot"), dict) else {}
+    by_runtime = snapshot.get("by_runtime") if isinstance(snapshot.get("by_runtime"), dict) else {}
+    if any(str(k) in ("docker", "docker_compose") for k in by_runtime.keys()):
+        return True
     attrs = entity.get("attrs") or {}
-    return bool(
-        attrs.get("container")
-        or entity.get("type") == "docker-container"
-        or attrs.get("runtime") == "docker"
-    )
+    return bool(attrs.get("container") or entity.get("type") == "docker-container"
+                or attrs.get("runtime") == "docker")
 
 
 def _enrich_entity_detail(home: Path, entity: Dict[str, Any]) -> Dict[str, Any]:
-    """合并第三层详情档案到实体行：attrs/status/type 存在 L3（topo_update
-    写 status 的目标文件），L2 索引行只有 name/type/env/detail 引用。
+    """合并第三层档案到实体行：L2 行已有字段优先（不覆盖），L3 只补齐缺失。
 
-    L2 行已有字段优先（不覆盖），detail 档案只补齐缺失的 attrs/status/type/env。
-    ``needs_review`` 例外：审核态以 L3 detail 为权威（批三十九任务 2）——L3 显式
-    携带该字段时直接覆盖 L2 值，配合 topo_update 写同步双管齐下，单边失效也不漂移
-    （旧 L2 行无该字段/值是老数据，用 setdefault 语义兜底保留）。
+    v0.4：snapshot/checks/version/notes 并入返回（前端/查询展示）；
+    ``needs_review`` 以 L3 为权威（批三十九任务 2）；v0.3 存量 attrs/status
+    合并语义保留（读兼容）。
     """
     detail = _load_entity_file(home, entity)
     if not detail:
@@ -958,7 +998,11 @@ def _enrich_entity_detail(home: Path, entity: Dict[str, Any]) -> Dict[str, Any]:
     merged_attrs = dict(entity.get("attrs") or {})
     for k, v in (detail.get("attrs") or {}).items():
         merged_attrs.setdefault(k, v)
-    merged["attrs"] = merged_attrs
+    if merged_attrs:
+        merged["attrs"] = merged_attrs
+    for key in ("snapshot", "checks", "version", "notes"):
+        if detail.get(key) is not None and merged.get(key) is None:
+            merged[key] = detail[key]
     for key in ("status", "type", "env"):
         if detail.get(key) and not merged.get(key):
             merged[key] = detail[key]
@@ -974,17 +1018,35 @@ def _entity_host_name(entity: Dict[str, Any]) -> str:
 
 
 def _container_name_for_entity(entity: Dict[str, Any]) -> str:
-    """实体 → docker 容器名：attrs.container 最权威，其次 compose_service，兜底实体名。"""
+    """实体 → docker 容器名：snapshot.by_runtime 容器名最权威（v0.4），
+    v0.3 存量 attrs.container/compose_service 兼容，兜底实体名。"""
+    snapshot = entity.get("snapshot") if isinstance(entity.get("snapshot"), dict) else {}
+    by_runtime = snapshot.get("by_runtime") if isinstance(snapshot.get("by_runtime"), dict) else {}
+    for key in ("docker", "docker_compose"):
+        block = by_runtime.get(key) if isinstance(by_runtime.get(key), dict) else {}
+        containers = block.get("containers") or block.get("services") or []
+        for c in containers:
+            if isinstance(c, dict) and c.get("name"):
+                return str(c["name"])
     attrs = entity.get("attrs") or {}
     name = attrs.get("container") or attrs.get("compose_service") or entity.get("name")
     return str(name or "").strip()
 
 
 def _declared_status(entity: Dict[str, Any]) -> Optional[str]:
-    """实体声明的期望状态：顶层 status 优先，其次发现快照 attrs.state。"""
+    """实体声明的期望状态：顶层 status 优先，其次 snapshot 运行时容器状态（v0.4），
+    再兜底 v0.3 存量 attrs.state。"""
     status = entity.get("status")
     if status:
         return str(status)
+    snapshot = entity.get("snapshot") if isinstance(entity.get("snapshot"), dict) else {}
+    by_runtime = snapshot.get("by_runtime") if isinstance(snapshot.get("by_runtime"), dict) else {}
+    for key in ("docker", "docker_compose"):
+        block = by_runtime.get(key) if isinstance(by_runtime.get(key), dict) else {}
+        containers = block.get("containers") or block.get("services") or []
+        for c in containers:
+            if isinstance(c, dict) and c.get("state"):
+                return str(c["state"])
     attrs = entity.get("attrs") or {}
     if attrs.get("state"):
         return str(attrs["state"])
@@ -1015,11 +1077,17 @@ def _runner_for_host(topo: Dict[str, Any], host_name: str):
             return _build_local_runner()
     except Exception:
         pass
-    cred = host_row.get("credential") or {}
-    if not isinstance(cred, dict):
-        cred = {}
-    key_path = cred.get("ref") if cred.get("type") == "ssh_key" else None
-    return _build_ssh_runner(host_name, user=str(cred.get("user") or "root"), key_path=key_path)
+    creds = host_row.get("credentials") or host_row.get("credential") or {}
+    if isinstance(creds, dict):
+        creds = [creds]
+    key_path = None
+    user = "root"
+    for cred in creds:
+        if isinstance(cred, dict) and cred.get("type") == "ssh_key":
+            key_path = cred.get("ref")
+            user = str(cred.get("user") or "root")
+            break
+    return _build_ssh_runner(host_name, user=user, key_path=key_path)
 
 
 def _probe_host_container_states(runner, host_name: str):

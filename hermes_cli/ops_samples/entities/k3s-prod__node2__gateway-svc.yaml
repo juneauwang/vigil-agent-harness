@@ -1,11 +1,18 @@
-# gateway-svc —— 订单链路业务网关（样例值请按实际核对）。
+# gateway-svc —— 第三层实体档案（订单链路流量入口）。
 name: gateway-svc
-type: gateway
-env: prod
-cluster: k3s-prod
-attrs:
-  # 端口/副本数待核对
-depends_on: [order-db, argocd]
-depended_by: [ingress]
-ops:
-  healthcheck: "curl -sf http://127.0.0.1:8080/healthz"   # 端口待核对
+detail: entities/k3s-prod__node2__gateway-svc.yaml
+version: ""
+updated_at: 2026-08-23
+checks:
+  - {action: verify, params: {url: "http://127.0.0.1:8080/healthz", expect: {http_status: 200}}}
+snapshot:
+  captured_at: "2026-08-23T00:00:00+00:00"
+  source: manual
+  common: {version: "", config_dir: "", log_dir: "", data_dir: "", mode: single}
+  by_type: {}
+  by_runtime:
+    kubectl:
+      namespace: prod
+      deployments: [{name: gateway-svc, replicas: 1, ready: 1}]
+      pvc: []
+notes: "订单链路入口；依赖 order-db（depends_on 在第二层服务行）。"

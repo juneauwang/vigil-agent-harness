@@ -1,0 +1,8 @@
+# node1 —— 第二层服务目录（v0.4：服务行继承主机 env/cluster，不重复标注）。
+host: node1
+updated_at: 2026-08-23
+services:
+  - {name: harbor, type: registry, managed_by: docker_compose, endpoint: "203.0.113.10:30443", extra_ports: [], log_paths: [], depends_on: [postgres], source: manual, last_verified: 2026-08-06, needs_review: false, detail: entities/k3s-prod__node1__harbor.yaml}
+  - {name: argocd, type: app, managed_by: kubectl, extra_ports: [], log_paths: [], depends_on: [], source: manual, last_verified: 2026-08-06, needs_review: false, detail: entities/k3s-prod__node1__argocd.yaml}
+  - {name: order-db, type: db, managed_by: kubectl, endpoint: "203.0.113.10:5432", extra_ports: [], log_paths: [], depends_on: [], source: manual, last_verified: 2026-08-06, needs_review: false, detail: entities/k3s-prod__node1__order-db.yaml}
+  - {name: postgres, type: db, managed_by: docker_compose, endpoint: "203.0.113.10:5433", extra_ports: [], log_paths: [], depends_on: [], source: manual, last_verified: 2026-08-06, needs_review: false, detail: entities/k3s-prod__node1__postgres.yaml}

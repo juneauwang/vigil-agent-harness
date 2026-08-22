@@ -24,7 +24,7 @@ SAMPLE_DIR = PROJECT_ROOT / "hermes_cli" / "ops_samples"
 def _seed_v2(home: Path) -> None:
     import shutil
     shutil.copy2(SAMPLE_DIR / "topology.yaml", home / "topology.yaml")
-    shutil.copytree(SAMPLE_DIR / "hosts", home / "hosts")
+    shutil.copytree(SAMPLE_DIR / "services", home / "services")
     shutil.copytree(SAMPLE_DIR / "entities", home / "entities")
 
 
@@ -34,7 +34,7 @@ def _seed_v1(home: Path) -> None:
     tmp = home.parent / "_v2src"
     tmp.mkdir(exist_ok=True)
     shutil.copy2(SAMPLE_DIR / "topology.yaml", tmp / "topology.yaml")
-    shutil.copytree(SAMPLE_DIR / "hosts", tmp / "hosts", dirs_exist_ok=True)
+    shutil.copytree(SAMPLE_DIR / "services", tmp / "services", dirs_exist_ok=True)
     shutil.copytree(SAMPLE_DIR / "entities", tmp / "entities", dirs_exist_ok=True)
     v2 = topo_tools.load_topology(tmp)
     flat = topo_tools._all_core_entities(v2, tmp)
@@ -90,12 +90,15 @@ def _load(result: str) -> dict:
 # v0.2 样例解析 / 双版本兼容
 # ---------------------------------------------------------------------------
 
-def test_v3_sample_parses_and_entity_count():
+def test_v4_sample_parses_and_entity_count():
     data = yaml.safe_load((SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8"))
-    assert data["version"] == 3
+    assert data["version"] == 4
     assert {h["name"] for h in data["hosts"]} == {"node1", "node2", "test-host"}
-    assert {c["name"] for c in data["cross_host"]} == {"k3s-prod", "ingress"}
+    # v0.4：cross_host/key_paths/sources 已删除（图由 services 层 depends_on 推导）。
+    for gone in ("cross_host", "key_paths", "sources", "services_index"):
+        assert gone not in data
     assert {c["name"] for c in (data.get("clusters") or [])} == {"k3s-prod"}
+    assert data["clusters"][0]["type"] == "k3s"
     # 样例第一层保持 <50 行（注入 system prompt 的硬约束）。
     lines = (SAMPLE_DIR / "topology.yaml").read_text(encoding="utf-8").splitlines()
     assert len(lines) < 50
@@ -115,10 +118,10 @@ def test_flat_view_equivalent_between_v1_and_v3(tmp_path, monkeypatch):
     assert t1 is not None and t2 is not None
     flat1 = {(e["name"], e.get("env")) for e in topo_tools._all_core_entities(t1)}
     flat2 = {(e["name"], e.get("env")) for e in topo_tools._all_core_entities(t2, v2)}
-    # v0.1 兼容视图与 v0.2 完全等价（同一实体集、同一 name+env 语义）。
+    # v0.1 兼容视图与 v0.4 完全等价（同一实体集、同一 name+env 语义）。
     assert flat1 == flat2
     assert ("harbor", "prod") in flat1 and ("test-web", "test") in flat1
-    assert ("node1", "prod") in flat1 and ("k3s-prod", "prod") in flat1
+    assert ("node1", "prod") in flat1 and ("postgres", "prod") in flat1
 
 
 def test_topology_data_exists_v2(tmp_path, monkeypatch):
@@ -139,19 +142,20 @@ def test_topology_data_exists_v2(tmp_path, monkeypatch):
 # 查询路径
 # ---------------------------------------------------------------------------
 
-def test_topo_query_overview_v3_is_compact_first_layer(topo_home):
+def test_topo_query_overview_v4_is_compact_first_layer(topo_home):
     if (topo_home / "topology.yaml").read_text().startswith("version: 1"):
         pytest.skip("v0.1 无 host 概念")
     result = _load(topo_query(home=topo_home))
-    assert result["version"] == 3
+    assert result["version"] == 4
     assert {h["name"] for h in result["hosts"]} == {"node1", "node2", "test-host"}
-    assert {c["name"] for c in result["cross_host"]} == {"k3s-prod", "ingress"}
+    # v0.4：无 cross_host/key_paths 段。
+    assert "cross_host" not in result and "key_paths" not in result
     # 紧凑行：name/type/env/cluster/endpoint/stale（#30 方案 1 + OPS-DELTA #42
     # cluster；带 credential 的行随行返回引用）。
     row = result["hosts"][0]
     assert {"name", "type", "env", "cluster", "endpoint", "stale"} <= set(row.keys())
     assert row["cluster"] == "k3s-prod"
-    assert result["count"] == 11  # 3 hosts + 2 cross_host + 6 services
+    assert result["count"] == 9  # 3 hosts + 6 services
 
 
 def test_topo_query_overview_v1_compat(topo_home):
@@ -159,11 +163,12 @@ def test_topo_query_overview_v1_compat(topo_home):
         pytest.skip("v0.2 走 hosts 视图")
     result = _load(topo_query(home=topo_home))
     assert result["version"] == 1
-    # v0.1 兼容视图 = 样例完整扁平实体集（11 个，与 v0.2 等价）。
-    assert len(result["core_entities"]) == 11
+    # v0.1 兼容视图 = 样例完整扁平实体集（9 个：3 hosts + 6 services，与 v0.4
+    # 等价；v0.4 集群/硬件不在实体集）。
+    assert len(result["core_entities"]) == 9
     assert {e["name"] for e in result["core_entities"]} == {
-        "harbor", "k3s-prod", "node1", "node2", "test-host", "test-web",
-        "argocd", "gateway-svc", "order-db", "postgres", "ingress",
+        "harbor", "node1", "node2", "test-host", "test-web",
+        "argocd", "gateway-svc", "order-db", "postgres",
     }
 
 
@@ -174,8 +179,8 @@ def test_topo_query_host_filter_expands_services(topo_home):
     assert result["name"] == "node1"
     assert result["env"] == "prod"
     assert {s["name"] for s in result["services"]} == {"harbor", "argocd", "order-db", "postgres"}
-    # 服务行带独立 env（层级是组织方式不是命名空间）。
-    assert all(s["env"] == "prod" for s in result["services"])
+    # v0.4：服务行不冗余 env（继承主机）——env 经 "服务 → host" 链路解析。
+    assert all("env" not in s for s in result["services"])
 
     missing = _load(topo_query(host="nope", home=topo_home))
     assert "error" in missing and "不存在 host" in missing["error"]
@@ -203,10 +208,10 @@ def test_topo_query_cross_layer_entity_resolution(topo_home):
         assert node1["cluster"] == "k3s-prod"
         assert {s["name"] for s in node1["services"]} == {"harbor", "argocd", "order-db", "postgres"}
 
-    # entity=k3s-prod（第一层 cross_host）。
+    # entity=k3s-prod（第一层 cluster，v0.4 不参与实体名解析）→ 不存在。
     if topo_head.startswith(("version: 2", "version: 3")):
         k3s = _load(topo_query(entity="k3s-prod", home=topo_home))
-        assert k3s["name"] == "k3s-prod" and k3s["type"] == "k8s"
+        assert "error" in k3s
 
     missing = _load(topo_query(entity="nope", home=topo_home))
     assert "error" in missing
@@ -216,7 +221,12 @@ def test_topo_query_detail_true_loads_layer3(topo_home):
     result = _load(topo_query(entity="harbor", detail=True, home=topo_home))
     assert result["name"] == "harbor"
     assert result["detail"] is not None
-    assert result["detail"]["attrs"]["version"] == "v2.11"
+    # v0.4：attrs 自由区 → snapshot 二维分支（common/by_type/by_runtime）+ checks。
+    assert result["detail"]["snapshot"]["common"]["version"] == "v2.11"
+    assert result["detail"]["snapshot"]["by_type"] == {"replication_targets": [], "storage_backend": "local"}
+    assert result["detail"]["snapshot"]["by_runtime"]["docker_compose"]["project"] == "harbor"
+    assert result["detail"]["checks"][0]["action"] == "verify"
+    assert "attrs" not in result["detail"] and "ops" not in result["detail"]
 
 
 def test_topo_query_type_env_filter_compact(topo_home):
@@ -264,7 +274,7 @@ def test_ops_target_service_env_resolution_v2(tmp_path, monkeypatch):
     home.mkdir()
     _seed_v2(home)
     # gateway-svc 挂在 node2(prod)；给 gateway-svc 一个 hostname 式 endpoint 便于命中。
-    index = home / "hosts" / "node2.yaml"
+    index = home / "services" / "node2.yaml"
     data = yaml.safe_load(index.read_text(encoding="utf-8"))
     for svc in data["services"]:
         if svc["name"] == "gateway-svc":

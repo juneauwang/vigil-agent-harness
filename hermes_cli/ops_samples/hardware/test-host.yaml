@@ -1,0 +1,13 @@
+# test-host —— 硬件层：静态规格 + controller 枚举（样例值请核对）。
+host: test-host
+updated_at: 2026-08-23
+hardware:
+  source: manual
+  cpu: {model: "AMD Ryzen 7 5800H", cores: 8}
+  memory_gb: 16
+  storage: {raid_controller: "", raid_tool: none, raid_level: none, disks: [{mount: /, size_gb: 512, type: ssd}]}
+  gpu: {controller: none, devices: []}
+network:
+  source: manual
+  interfaces: [{name: eth0, ip: 192.168.1.20, primary: true, role: docker-host}]
+  firewall: {controller: none}
