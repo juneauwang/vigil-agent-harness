@@ -4292,21 +4292,62 @@ async def ui_sessions_list(
     }
 
 
-# ------------------------- 四、Incidents（结构占位） --------------------------
+# ------------------------- 四、Incidents（watch inbox 消费层） --------------------------
 
 
 @app.get("/api/incidents")
 async def get_incidents(limit: int = 50, offset: int = 0):
-    """Incidents 结构占位：Vigil 无监控/告警体系，只定义 schema 不编数据。"""
+    """读 watch inbox 返回告警列表（OPS-DELTA #9 采集层 → dashboard 消费层）。
+
+    inbox 目录不存在/为空 → 空列表 200（不 500）。条目按 alertname|instance
+    去重保留最新一次采集，新的 collected_at 在前；processed 只读展示
+    （标记处理是 watch_digest agent 通道的事，本端点不做）。
+    """
     limit = max(0, min(int(limit), 200))
     offset = max(0, int(offset))
+    incidents: List[Dict[str, Any]] = []
+    try:
+        from tools.watch_collect import _alert_key, _iter_inbox
+
+        seen: set = set()
+        for path in reversed(_iter_inbox()):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            collected_at = str(data.get("collected_at") or "")
+            processed = bool(data.get("processed"))
+            for alert in data.get("alerts") or []:
+                if not isinstance(alert, dict):
+                    continue
+                key = _alert_key(alert)
+                if key in seen:
+                    continue
+                seen.add(key)
+                incidents.append({
+                    "alertname": alert.get("alertname"),
+                    "severity": alert.get("severity"),
+                    "instance": alert.get("instance"),
+                    "startsAt": alert.get("startsAt"),
+                    "state": alert.get("state"),
+                    "collected_at": collected_at,
+                    "processed": processed,
+                    "source": "alertmanager",
+                })
+    except Exception:
+        # 读不到 inbox（权限/坏目录等）按空处理，dashboard 永不因告警页 500
+        incidents = []
+    total = len(incidents)
+    page = incidents[offset:offset + limit]
     return {
-        "incidents": [],
-        "total": 0,
-        "schema_version": 1,
+        "incidents": page,
+        "total": total,
+        "schema_version": 2,
         "limit": limit,
         "offset": offset,
-        "has_more": False,
+        "has_more": offset + len(page) < total,
     }
 
 

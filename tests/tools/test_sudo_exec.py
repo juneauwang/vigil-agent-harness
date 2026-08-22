@@ -128,6 +128,46 @@ class TestRemoteSudoAskpassInjection:
             _run_remote_sudo("host", "ops", 22, "ss -tlnp",
                              {"type": "ssh_key", "ref": "/keys/x.pem"})
 
+    def test_remote_sudo_scp_dest_pure_remote_path(self, tmp_path, monkeypatch):
+        """批五十回归：``_run_remote_sudo`` 传给 ``_scp`` 的 dest 是纯远端路径。
+
+        此前调用方已带 ``user@host:`` 前缀，``_scp_argv_from_ssh`` 又拼一次 →
+        双重前缀 → scp 把整串当字面量路径 → 远端 ``dest open ... No such file``。
+        """
+        cred = _vault_cred(tmp_path, monkeypatch)
+        monkeypatch.setattr(
+            sudo_tool, "_build_ssh_argv",
+            lambda host, **kw: (["ssh", "-p", "22", "ops@host"], {}),
+        )
+        scp_calls = []
+
+        def fake_scp(ssh_argv, ssh_env, local, dest):
+            scp_calls.append((str(local), dest))
+
+        monkeypatch.setattr(sudo_tool, "_scp", fake_scp)
+
+        def fake_run(argv, **kwargs):
+            assert argv and argv[0] == "ssh"
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+
+        monkeypatch.setattr(sudo_tool.subprocess, "run", fake_run)
+        _run_remote_sudo("host", "ops", 22, "ss -tlnp", cred)
+
+        assert len(scp_calls) == 2  # askpass 脚本 + 保险箱文件
+        for local, dest in scp_calls:
+            assert dest.startswith("/tmp/")
+            assert "@" not in dest
+            assert ":" not in dest  # 无 user@host: 前缀 → 纯路径，前缀由 _scp_argv_from_ssh 拼
+        assert "vigil-sudo-askpass-" in scp_calls[0][0]
+        assert scp_calls[1][0].endswith("srv-pass")
+
+    def test_scp_argv_from_ssh_pure_dest_single_prefix(self):
+        """批五十回归：纯路径 dest → scp 目标 = ``user@host:/path``，前缀只出现一次。"""
+        argv = sudo_tool._scp_argv_from_ssh(
+            ["ssh", "-p", "22", "ops@host"], Path("/local/f"), "/tmp/x")
+        assert argv == ["scp", "-P", "22", "/local/f", "ops@host:/tmp/x"]
+        assert sum("ops@host:" in piece for piece in argv) == 1
+
 
 class TestHandlerPermissionMatrix:
     def test_prod_change_approved_then_executes(self, monkeypatch):
