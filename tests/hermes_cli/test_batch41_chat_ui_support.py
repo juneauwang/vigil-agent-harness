@@ -90,7 +90,10 @@ def stub_agent_factory(monkeypatch):
     def _install(**kwargs) -> _StubAgent:
         agent = _StubAgent(**kwargs)
         holder["agent"] = agent
-        monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid, model=None: agent)
+        monkeypatch.setattr(
+            chat_api, "_create_chat_agent",
+            lambda sid, model=None, provider=None: agent,
+        )
         return agent
 
     return _install, holder
@@ -224,6 +227,64 @@ def test_models_endpoint_returns_catalog(client, monkeypatch):
     assert "api_key" not in flat and "token" not in flat
 
 
+def test_models_endpoint_aggregates_configured_llms(client, env_home, monkeypatch):
+    """批五十一：目录聚合 custom_providers / providers / fallback / 默认。"""
+    import hermes_cli.config as hc
+    cfg_path = env_home / "config.yaml"
+    cfg_path.write_text(
+        "model:\n"
+        "  default: anthropic/claude-opus-4.8\n"
+        "  provider: openrouter\n"
+        "custom_providers:\n"
+        "  - name: company-internal\n"
+        "    base_url: https://llm.internal.example/v1\n"
+        "    key_env: COMPANY_LLM_KEY\n"
+        "    model: internal-v2\n"
+        "providers:\n"
+        "  my-proxy:\n"
+        "    base_url: https://proxy.example/v1\n"
+        "    model: proxy-7b\n"
+        "    enabled: true\n"
+        "  my-disabled:\n"
+        "    base_url: https://disabled.example/v1\n"
+        "    model: ghost-model\n"
+        "    enabled: false\n"
+        "fallback_providers:\n"
+        "  - provider: deepseek\n"
+        "    model: deepseek-v4-flash\n",
+        encoding="utf-8",
+    )
+    hc._LOAD_CONFIG_CACHE.clear()
+    monkeypatch.setattr("hermes_cli.auth._auth_file_path", lambda: env_home / "auth.json")
+    (env_home / "auth.json").write_text(
+        json.dumps({"version": 1, "providers": {"nous": {"model": "nous-test-model"}}}),
+        encoding="utf-8",
+    )
+    try:
+        resp = client.get("/api/models")
+        assert resp.status_code == 200
+        body = resp.json()
+        by_provider: dict[str, list[str]] = {}
+        for m in body["models"]:
+            by_provider.setdefault(m.get("provider", ""), []).append(m["id"])
+        # custom_providers → custom:<slug>
+        assert "internal-v2" in by_provider.get("custom:company-internal", [])
+        # providers keyed（enabled 才进）
+        assert "proxy-7b" in by_provider.get("my-proxy", [])
+        assert "ghost-model" not in [m["id"] for m in body["models"]]
+        # fallback 链
+        assert "deepseek-v4-flash" in by_provider.get("deepseek", [])
+        # auth store 已登录 provider
+        assert "nous-test-model" in by_provider.get("nous", [])
+        # 默认仍标 default
+        default_entry = next(m for m in body["models"] if m["id"] == "anthropic/claude-opus-4.8")
+        assert default_entry["default"] is True
+        flat = json.dumps(body)
+        assert "api_key" not in flat and "token" not in flat
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+
 def test_create_session_with_model(client, stub_agent_factory):
     _install, holder = stub_agent_factory
     agent = _install()
@@ -234,10 +295,57 @@ def test_create_session_with_model(client, stub_agent_factory):
     assert chat_api._CHAT_SESSIONS[sid].model == "openai/gpt-5.5"
 
 
+def test_create_session_with_provider(client, stub_agent_factory, monkeypatch, env_home):
+    """批五十一：显式 provider 路由——provider 正确转发到 agent 构造。"""
+    import hermes_cli.config as hc
+    (env_home / "config.yaml").write_text(
+        "model:\n"
+        "  default: anthropic/claude-opus-4.8\n"
+        "  provider: openrouter\n"
+        "custom_providers:\n"
+        "  - name: company-internal\n"
+        "    base_url: https://llm.internal.example/v1\n"
+        "    key_env: COMPANY_LLM_KEY\n"
+        "    model: internal-v2\n",
+        encoding="utf-8",
+    )
+    hc._LOAD_CONFIG_CACHE.clear()
+    captured: dict = {}
+
+    def _fake_create(sid, model=None, provider=None):
+        captured.update(sid=sid, model=model, provider=provider)
+        agent = _StubAgent()
+        return agent
+
+    monkeypatch.setattr(chat_api, "_create_chat_agent", _fake_create)
+    try:
+        resp = client.post(
+            "/api/chat/sessions",
+            json={"model": "internal-v2", "provider": "custom:company-internal"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert captured.get("model") == "internal-v2"
+        assert captured.get("provider") == "custom:company-internal"
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
+
+
 def test_create_session_invalid_model_400(client, stub_agent_factory):
     _install, _ = stub_agent_factory
     _install()
     resp = client.post("/api/chat/sessions", json={"model": "not-in-catalog"})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "invalid_request"
+
+
+def test_create_session_wrong_provider_400(client, stub_agent_factory):
+    """批五十一：model 在目录但 provider 不匹配 → 400。"""
+    _install, _ = stub_agent_factory
+    _install()
+    resp = client.post(
+        "/api/chat/sessions",
+        json={"model": "openai/gpt-5.5", "provider": "custom:company-internal"},
+    )
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "invalid_request"
 
@@ -251,6 +359,44 @@ def test_switch_session_model(client, stub_agent_factory):
     assert resp.json()["model"] == "openai/gpt-5.5"
     assert agent.switch_calls and agent.switch_calls[0][0] == "openai/gpt-5.5"
     assert chat_api._CHAT_SESSIONS[sid].model == "openai/gpt-5.5"
+
+
+def test_switch_session_model_with_provider(client, stub_agent_factory, env_home, monkeypatch):
+    """批五十一：切换带 provider——runtime 解析按 requested 路由。"""
+    import hermes_cli.config as hc
+    (env_home / "config.yaml").write_text(
+        "model:\n"
+        "  default: anthropic/claude-opus-4.8\n"
+        "  provider: openrouter\n"
+        "custom_providers:\n"
+        "  - name: company-internal\n"
+        "    base_url: https://llm.internal.example/v1\n"
+        "    key_env: COMPANY_LLM_KEY\n"
+        "    model: internal-v2\n",
+        encoding="utf-8",
+    )
+    hc._LOAD_CONFIG_CACHE.clear()
+    captured: dict = {}
+
+    def _fake_resolve(**kwargs):
+        captured.update(kwargs)
+        return {"provider": "custom:company-internal", "api_key": "k", "base_url": "https://x/v1"}
+
+    monkeypatch.setattr("hermes_cli.runtime_provider.resolve_runtime_provider", _fake_resolve)
+    _install, holder = stub_agent_factory
+    agent = _install()
+    sid = _new_session(client)
+    try:
+        resp = client.post(
+            f"/api/chat/sessions/{sid}/model",
+            json={"model": "internal-v2", "provider": "custom:company-internal"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert captured.get("requested") == "custom:company-internal"
+        assert captured.get("target_model") == "internal-v2"
+        assert agent.switch_calls and agent.switch_calls[0][0] == "internal-v2"
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
 
 
 def test_switch_session_model_busy_409(client, stub_agent_factory, monkeypatch):

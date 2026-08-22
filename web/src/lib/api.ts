@@ -239,10 +239,25 @@ export interface AuditEventsResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+/** 批五十：/api/incidents 条目（watch inbox 告警，source=alertmanager）。 */
+export interface IncidentItem {
+  alertname?: string;
+  severity?: string;
+  instance?: string;
+  startsAt?: string;
+  state?: string;
+  collected_at?: string;
+  processed?: boolean;
+  source?: string;
+}
+
 export interface IncidentsResponse {
-  incidents?: unknown[];
+  incidents?: IncidentItem[];
   total?: number;
   schema_version?: number;
+  limit?: number;
+  offset?: number;
+  has_more?: boolean;
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
@@ -268,6 +283,8 @@ export interface ChatModelOption {
   tag?: string;
   /** 配置中当前默认模型。 */
   default?: boolean;
+  /** 路由 provider（批五十一：custom:<slug> / provider 名 / 空）；切换时随 model 提交。 */
+  provider?: string;
 }
 
 export interface ChatModelsResponse {
@@ -375,7 +392,7 @@ export const api = {
       { method: "DELETE" },
     ),
 
-  // 批二十八契约：Incidents（结构占位，返回空列表 + schema）
+  // 批五十契约：Incidents（读 watch inbox 返回告警列表，schema_version=2）
   getIncidents: (params?: { limit?: number; offset?: number }) =>
     fetchJSON<IncidentsResponse>(
       `/api/incidents?${new URLSearchParams(cleanParams({ limit: params?.limit, offset: params?.offset }))}`,
@@ -383,18 +400,18 @@ export const api = {
 
   // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
   // approval_pending/done/error）
-  createChatSession: (model?: string) =>
+  createChatSession: (model?: string, provider?: string) =>
     fetchJSON<{ chat_session_id: string; created_at?: string; model?: string }>("/api/chat/sessions", {
       method: "POST",
-      body: JSON.stringify(model ? { model } : {}),
+      body: JSON.stringify(model ? { model, ...(provider ? { provider } : {}) } : {}),
     }),
   /** 批四十一 §8：可选模型目录（静态目录 + 配置默认）。 */
   getModels: () => fetchJSON<ChatModelsResponse>("/api/models"),
   /** 批四十一 §8：切换会话模型（会话级生效，新消息生效）。 */
-  setChatSessionModel: (sessionId: string, model: string) =>
+  setChatSessionModel: (sessionId: string, model: string, provider?: string) =>
     fetchJSON<{ chat_session_id: string; model: string }>(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/model`,
-      { method: "POST", body: JSON.stringify({ model }) },
+      { method: "POST", body: JSON.stringify({ model, ...(provider ? { provider } : {}) }) },
     ),
   listChatSessions: () => fetchJSON<ChatSessionsResponse>("/api/chat/sessions"),
   /** 批三十六：中断当前 turn（对话页"停止"按钮）。会话不忙 → 409 not_busy。 */

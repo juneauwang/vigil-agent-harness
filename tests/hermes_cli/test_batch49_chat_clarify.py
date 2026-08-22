@@ -92,7 +92,7 @@ def stub_agent_factory(monkeypatch):
     def _install(**kwargs) -> _StubAgent:
         agent = _StubAgent(**kwargs)
         holder["agent"] = agent
-        monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid, model=None: agent)
+        monkeypatch.setattr(chat_api, "_create_chat_agent", lambda sid, model=None, provider=None: agent)
         return agent
 
     return _install, holder
