@@ -327,8 +327,11 @@ def _run_remote_sudo(host: str, user: str, port: int, command: str,
     askpass_local = _write_askpass_cat(remote_vault)  # 脚本 cat 远端 vault 路径
     ssh_argv, ssh_env = _build_ssh_argv(host, user=user, port=port, cred=cred)
     try:
-        _scp(ssh_argv, ssh_env, askpass_local, f"{user}@{host}:{remote_script}")
-        _scp(ssh_argv, ssh_env, vault_file, f"{user}@{host}:{remote_vault}")
+        # 批五十：dest 只传纯远端路径——_scp_argv_from_ssh 会拼
+        # ``<user>@<host>:`` 前缀；此前调用方已带前缀 → 双重 user@host →
+        # scp 把整串当字面量路径，远端报 dest open ... No such file。
+        _scp(ssh_argv, ssh_env, askpass_local, remote_script)
+        _scp(ssh_argv, ssh_env, vault_file, remote_vault)
         _ssh_run(ssh_argv, ssh_env,
                  f"chmod 700 {remote_script}; chmod 600 {remote_vault}",
                  timeout=_PROVISION_TIMEOUT_S)

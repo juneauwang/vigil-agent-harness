@@ -220,11 +220,11 @@ def test_sudo_tool_scp_ssh_paths_share_breaker_counter(monkeypatch):
     from pathlib import Path
     # 第 1 次：scp 失败（计数 1）→ 抛 scp 上传失败
     with pytest.raises(RuntimeError, match="scp 上传失败"):
-        sudo_tool._scp(ssh_argv, {}, Path("/local/f"), "ops@host:/tmp/x")
+        sudo_tool._scp(ssh_argv, {}, Path("/local/f"), "/tmp/x")
     assert topodisc._ssh_auth_failures("host", "ops") == 1
     # 第 2 次：scp 失败（计数 2）
     with pytest.raises(RuntimeError, match="scp 上传失败"):
-        sudo_tool._scp(ssh_argv, {}, Path("/local/f"), "ops@host:/tmp/x")
+        sudo_tool._scp(ssh_argv, {}, Path("/local/f"), "/tmp/x")
     assert topodisc._ssh_auth_failures("host", "ops") == 2
     # 第 3 次：ssh 失败（计数 3 → 熔断），错误可操作
     with pytest.raises(RuntimeError, match="认证失败 3/3"):

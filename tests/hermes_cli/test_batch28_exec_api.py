@@ -406,9 +406,11 @@ def test_sessions_contract_shape(client, env_home):
 
 
 def test_incidents_placeholder(client, env_home):
+    # 批五十：/api/incidents 从结构占位（schema 1）升级为 watch inbox 消费层
+    # （schema 2）。空 inbox → 空列表 200，不 500。
     r = client.get("/api/incidents").json()
     assert r == {
-        "incidents": [], "total": 0, "schema_version": 1,
+        "incidents": [], "total": 0, "schema_version": 2,
         "limit": 50, "offset": 0, "has_more": False,
     }
 
