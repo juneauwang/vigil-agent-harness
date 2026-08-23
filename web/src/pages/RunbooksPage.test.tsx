@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter } from "react-router";
@@ -19,6 +19,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
         data: { count: 0, executions: [] },
       } as never),
       runRunbook: vi.fn(),
+      runbookProgressStream: vi.fn(),
     },
   };
 });
@@ -84,6 +85,11 @@ const V1_RUNBOOK: Record<string, unknown> = {
   steps: [{ id: "restart", title: "重启", commands: ["docker restart harbor"] }],
 };
 
+beforeEach(() => {
+  (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+  vi.clearAllMocks();
+});
+
 function render(page: React.ReactElement) {
   const container = document.createElement("div");
   document.body.appendChild(container);
@@ -141,7 +147,7 @@ describe("RunbooksPage", () => {
     expect(text).toContain("schema: v1");
   });
 
-  it("shows v0.2 runbook with 执行 button and runs it（确认 → 结果分步展示）", async () => {
+  it("shows v0.2 runbook with 执行 button and streams live progress（确认 → 实时步骤 → 终态）", async () => {
     vi.mocked(api.getRunbooks).mockResolvedValue({
       ok: true,
       data: { count: 1, runbooks: [{ name: "nginx-config-update", title: "Nginx 配置变更并生效", step_count: 3 }] },
@@ -149,19 +155,15 @@ describe("RunbooksPage", () => {
     vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V2_RUNBOOK } as never);
     vi.mocked(api.runRunbook).mockResolvedValue({
       ok: true,
-      data: {
-        runbook: "nginx-config-update",
-        result: "ok",
-        env: "prod",
-        ts: "2026-08-23T10:00:00+08:00",
-        duration_s: 1.24,
-        steps: [
-          { id: "backup", action: "backup", status: "ok", ok: true },
-          { id: "apply", action: "apply_config", status: "ok", ok: true },
-          { id: "verify", action: "verify", status: "ok", ok: true },
-        ],
-      },
+      data: { exec_id: "exec_run1", runbook: "nginx-config-update", env: "prod", status: "running" },
     } as never);
+    vi.mocked(api.runbookProgressStream).mockImplementation(async (_execId: string, onEvent) => {
+      onEvent({ type: "step_start", step_id: "backup", title: "变更前备份", action: "backup", target: "nginx", status: "running" });
+      onEvent({ type: "step_done", step_id: "backup", title: "变更前备份", action: "backup", target: "nginx", status: "ok" });
+      onEvent({ type: "step_start", step_id: "apply", title: "应用配置变更", action: "apply_config", target: "nginx", status: "running" });
+      onEvent({ type: "step_done", step_id: "apply", title: "应用配置变更", action: "apply_config", target: "nginx", status: "ok" });
+      onEvent({ type: "runbook_done", status: "ok", duration_s: 1.24, step_count: 2 });
+    });
 
     const container = render(<RunbooksPage />);
     await act(async () => {
@@ -183,11 +185,55 @@ describe("RunbooksPage", () => {
     });
 
     expect(api.runRunbook).toHaveBeenCalledWith("nginx-config-update");
+    expect(api.runbookProgressStream).toHaveBeenCalledWith("exec_run1", expect.any(Function), expect.anything());
     const text = container.textContent ?? "";
-    expect(text).toContain("执行结果");
-    expect(text).toContain("成功");
-    expect(text).toContain("backup");
-    expect(text).toContain("apply_config");
+    expect(text).toContain("执行进度");
+    expect(text).toContain("变更前备份");
+    expect(text).toContain("应用配置变更");
+    expect(text).toContain("执行完成");
+    expect(text).toContain("1.2s");
+  });
+
+  it("renders running execution row（运行中徽标 + 展开实时步骤）", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "nginx-config-update", title: "Nginx 配置变更并生效", step_count: 3 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V2_RUNBOOK } as never);
+    vi.mocked(api.getRunbookExecutions).mockResolvedValue({
+      ok: true,
+      data: {
+        count: 1,
+        executions: [],
+        running: [
+          { exec_id: "exec_live1", runbook: "nginx-config-update", env: "prod", started_at: "2026-08-23T10:00:00+08:00" },
+        ],
+      },
+    } as never);
+    vi.mocked(api.runbookProgressStream).mockImplementation(async (_execId: string, onEvent) => {
+      onEvent({ type: "step_start", step_id: "backup", title: "变更前备份", action: "backup", status: "running" });
+    });
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("运行中");
+
+    const liveRow = Array.from(container.querySelectorAll("tr")).find(
+      (tr) => tr.textContent?.includes("nginx-config-update") && tr.textContent?.includes("运行中"),
+    );
+    act(() => liveRow?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.runbookProgressStream).toHaveBeenCalledWith("exec_live1", expect.any(Function), expect.anything());
+    expect(container.textContent).toContain("变更前备份");
   });
 
   it("hides 执行 button for v0.1 runbook", async () => {

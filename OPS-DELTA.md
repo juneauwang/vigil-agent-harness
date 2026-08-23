@@ -3731,3 +3731,79 @@
   get_model_price 零网络、在线拉取失败不阻塞、pricing.yaml 不落密钥、
   show_cost 语义（token 恒显、费用跟随价格可用性）、无汇率换算。
 - **状态**：独立 feat commit（chat 用量面板批次）。
+
+### 80. runbook 长任务进度事件流——执行进度 SSE + 前端实时面板 + 主动播报引导（2026-08-23，YAPL 之后第三个新功能面）
+
+- **背景**：dogfood 复盘（2026-08-23 OS patch session）暴露产品缺陷——2 小时+
+  runbook 执行（window-check → preflight → 单台确认 → 14 步 patch）用户催了约
+  5 次"你没有主动播报"；Vigil 默认"完成时通知"对长任务不够，关键节点必须主动
+  可见。runbook_exec 此前只有 approval_callback（审批回调），无进度事件机制；
+  前端 RunbooksPage 只有执行按钮 + 事后历史列表，无进行中视图。
+- **新增**（机制层 + 行为层，执行记录机制不动）：
+  - `tools/runbook_exec.py`：`execute_runbook(..., exec_id=None,
+    progress_callback=None)`——与 approval_callback 同模式的事件回调
+    （None = 不播报，LLM 工具路径零影响）。事件对象
+    `{type: step_start|step_done|step_failed|rollback_start|rollback_done|runbook_done,
+    exec_id, runbook, version, step_id, title, action, target, status, phase, ts, detail?}`。
+    触发点全覆盖：v0.1 拒绝/校验失败/定时豁免 → runbook_done(blocked/error)；
+    每步 step_start → step_done|step_failed；失败触发回滚 → rollback_start →
+    回滚步骤（phase=rollback）→ rollback_done → runbook_done（status/error/
+    duration_s/step_count）。输出摘要 `_clip(…, 2000)` 截断防爆；回调异常仅记
+    日志不阻断执行。执行工具描述加「长任务主动播报」引导（行为层 LLM 修正）。
+  - `hermes_cli/web_server.py`：`_RUNBOOK_STREAMS` 进程内事件总线（exec_id →
+    buffer/wake/result/done，缓冲上限 500、TTL 600s 淘汰）；
+    `POST /api/runbook/executions` 契约变更——立即返回
+    `{exec_id, runbook, env, started_at, status: "running"}`，后台线程执行
+    （保留 set_hermes_interactive_context/审批卡注册逻辑，审批照常弹卡）；
+    `GET /api/runbook/executions` 加 `data.running`（进行中流列表，UI 显示
+    "运行中" + 可展开实时步骤）；新增
+    `GET /api/runbook/executions/{exec_id}/progress` SSE——先重放缓冲再实时
+    等 wake（晚连客户端从起点看起），runbook_done 后关闭；未知 exec_id →
+    runbook:error 后关闭。消费端断开不阻塞执行（call_soon_threadsafe 唤醒，
+    执行线程从不阻塞）。
+  - 前端：api.ts 新契约类型 + `runbookProgressStream(execId, onEvent, signal)`
+    （fetch+reader SSE 解析，支持 AbortSignal）；RunbooksPage——执行按钮 →
+    立即返回 exec_id → 开 SSE 累积实时步骤（进度面板：状态徽标 成功/失败/
+    运行中/被拦截/已回滚 + 回滚 banner + 终态行）；执行历史"运行中"行可点击
+    展开实时步骤（复用同一 SSE）；卸载时 abort 流（服务端执行不受影响）。
+  - 行为层 skill：`skills/autonomous-ai-agents/hermes-agent/SKILL.md` Hard
+    Invariants 补一条「Long tasks report proactively」——关键节点主动播报，
+    不等用户催（照 skill 现有格式）。
+- **语义边界（实时可见与事后审计分离）**：事件流不落库、不产生审计——实时
+  可见是进行中的可观测性；执行记录照旧 ledger
+  （runtime/runbook_executions.jsonl）/trajectory/audit 事后审计。ledger 记录
+  新增 exec_id 字段（关联执行与进度流）；执行记录机制本身不动。
+- **测试**：后端 `tests/hermes_cli/test_runbook_progress.py` 7 例（成功序列、
+  失败→回滚序列、回调异常不阻断、ledger exec_id、POST 立即返回 + SSE 真实
+  事件、SSE 未知 id、history running）+ `tests/hermes_cli/test_batch59_runbook_exec_api.py`
+  3 例同步新契约（共 8 例）。前端 RunbooksPage.test.tsx 6 例（进度面板步骤流/
+  状态徽标/终态/运行中行展开 + act 环境修复）。vitest 21 文件 158 过、
+  `tsc -b --noEmit` 过、`npm run build` 过。存量回归：runbook_exec/v2/schedule/
+  tools/batch40/batch44/create/vault_refs 179 passed。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv 重启，
+  pid 4138044；VIGIL_DASHBOARD_SESSION_TOKEN=vigil-monitor-test-9131；
+  临时只读 runbook t-progress-test/t-progress-fail 实测后已删）：
+  - 成功路径 SSE：step_start(q1) → step_done(q1, 输出摘要截断 2000)
+    → step_start(q2) → step_done(q2) → runbook_done(ok, duration_s=0.2,
+    step_count=2)；ledger 记录含 exec_id。
+  - 失败回滚路径 SSE：step_start(q1) → step_done(q1) → step_start(q2) →
+    step_failed(q2, "expect 未通过: http_status 期望 200，实际 0") →
+    rollback_start(场景 rb-main) → step_start(rb-q, phase=rollback) →
+    step_done(rb-q, phase=rollback) → rollback_done(ok) → runbook_done(
+    status=rolled_back, rolled_back=true, step_count=3)。
+  - POST 立即返回 {status: "running"}；GET executions 的 data.running 执行中
+    有、完成后清空；未知 exec_id → SSE runbook:error 后关闭；无 token → 401。
+  - 前端：SPA 根页 200 且注入 token；RunbooksPage 分块（RunbooksPage-EtL9OhtR.js）
+    含「执行进度/运行中/实时步骤/已回滚」文案；面板交互由 vitest 6 例覆盖
+    （本环境无浏览器，服务端 serve 验证 + 组件测试）。
+  - 实测发现存量 bug（非本批引入，未修，记录待办）：`runbook_handlers._query`
+    的 has_target 无 pattern 分支返回 `shell: False` 但命令含管道
+    （`ps aux | grep <name> || true`）→ shlex.split 把管道当参数 →
+    ps "garbage option" 失败。batch55/56 引入，本批未碰 handlers。
+  - 实测后清理：临时 runbook 已删；服务保留运行（9131 = 开发目录服务，沿用
+    旧批习惯）。
+- **核销方式**：测试常驻——test_runbook_progress.py 7 + batch59 8 + 前端 6 +
+  存量回归；季度体检：事件触发点全覆盖（校验失败/每步/回滚/终态）、SSE 断连
+  不阻塞执行、输出截断、事件不落库（无审计膨胀）、POST 契约（立即返回 +
+  后台执行 + 审批照常弹卡）。
+- **状态**：独立 feat commit（runbook 长任务进度事件流批次）。

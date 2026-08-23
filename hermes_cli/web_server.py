@@ -3543,14 +3543,58 @@ async def get_ops_runbook_detail(name: str):
     return {"ok": True, "data": data}
 
 
+# runbook 执行进度事件流（OPS-DELTA #80）：进程内事件总线，按 exec_id 索引。
+# 事件不落库（实时可见与事后审计分离——执行记录照旧 trajectory/audit 事后
+# 审计）；客户端断开只影响本流，执行照常完成（publisher 只 set wake event，
+# 永不阻塞执行线程）。缓冲上限防爆（输出摘要引擎侧已截断）。
+_RUNBOOK_STREAMS: Dict[str, Dict[str, Any]] = {}
+_RUNBOOK_STREAMS_LOCK = threading.Lock()
+_RUNBOOK_STREAM_TTL_S = 600.0
+_RUNBOOK_STREAM_BUFFER_MAX = 500
+
+
+def _prune_runbook_streams() -> None:
+    """淘汰超时流（done 或长时间无客户端），防止注册表无限增长。"""
+    now = time.time()
+    with _RUNBOOK_STREAMS_LOCK:
+        stale = [
+            eid for eid, st in _RUNBOOK_STREAMS.items()
+            if now - st.get("started_ts", 0) > _RUNBOOK_STREAM_TTL_S
+        ]
+        for eid in stale:
+            _RUNBOOK_STREAMS.pop(eid, None)
+
+
+def _register_runbook_stream(exec_id: str, *, runbook: str, env: str,
+                             loop) -> Dict[str, Any]:
+    _prune_runbook_streams()
+    st: Dict[str, Any] = {
+        "exec_id": exec_id,
+        "runbook": runbook,
+        "env": env,
+        "started_at": _now_iso_utc(),
+        "started_ts": time.time(),
+        "buffer": [],
+        "done": False,
+        "result": None,
+        "loop": loop,
+        "wake": asyncio.Event(),
+    }
+    with _RUNBOOK_STREAMS_LOCK:
+        _RUNBOOK_STREAMS[exec_id] = st
+    return st
+
+
 @app.get("/api/runbook/executions")
 async def list_runbook_executions(limit: int = 50):
     """YAPL P4 执行历史（只读，事后审计视图）：最近 N 次 runbook 执行记录。
 
     数据源 = ``runtime/runbook_executions.jsonl``（执行器统一落盘，交互/定时
     共用）；stdout/stderr/error 已截断 + 脱敏。runbook/时间/结果/来源/触发
-    上下文/每步状态。不进 PUBLIC_API_PATHS（执行记录含步骤级信息，loopback
-    token / OAuth 门控）。
+    上下文/每步状态。批八十新增 ``data.running``：本进程（web 触发）正在
+    执行中的流（exec_id/runbook/env/started_at）——UI 据此显示"运行中"并可
+    展开实时步骤（复用 /api/runbook/executions/{exec_id}/progress SSE）。
+    不进 PUBLIC_API_PATHS（执行记录含步骤级信息，loopback token / OAuth 门控）。
     """
     from tools.runbook_exec import recent_executions
 
@@ -3558,7 +3602,19 @@ async def list_runbook_executions(limit: int = 50):
         return recent_executions(Path(get_hermes_home()), limit=limit)
 
     rows = await run_in_threadpool(_load)
-    return {"ok": True, "data": {"count": len(rows), "executions": rows}}
+    running = []
+    with _RUNBOOK_STREAMS_LOCK:
+        for st in _RUNBOOK_STREAMS.values():
+            if not st.get("done"):
+                running.append({
+                    "exec_id": st["exec_id"],
+                    "runbook": st.get("runbook"),
+                    "env": st.get("env"),
+                    "started_at": st.get("started_at"),
+                })
+    running.sort(key=lambda r: r.get("started_at") or "", reverse=True)
+    return {"ok": True, "data": {"count": len(rows), "executions": rows,
+                                 "running": running}}
 
 
 @app.post("/api/runbook/executions")
@@ -3569,6 +3625,10 @@ async def create_runbook_execution(payload: Dict[str, Any] = Body(default_factor
     交互路径）：变量替换 → target 解析 → 矩阵审批门（execute 直跑 / approve 或
     {approve: required} → 前端审批卡，web 注册表 + 右下角弹窗，无 allowlist
     绕过）→ handler 生成命令 → 现有执行通道 → expect 检查 → 执行记录。
+
+    批八十：立即返回 ``{exec_id, status: "running"}``（后台线程执行，审批照常
+    弹卡），前端用 exec_id 打开 /api/runbook/executions/{exec_id}/progress
+    SSE 实时看每步；终态经 runbook_done 事件 + 执行历史（ledger）获得。
 
     v0.1 runbook 拒绝（老执行路径照旧，不显示执行按钮）；name 白名单防路径穿越。
     """
@@ -3616,12 +3676,27 @@ async def create_runbook_execution(payload: Dict[str, Any] = Body(default_factor
             ),
         )
 
-    result_box: Dict[str, Any] = {}
+    exec_id = _new_exec_id()
+    loop = asyncio.get_running_loop()
+    stream = _register_runbook_stream(exec_id, runbook=name, env=env, loop=loop)
+
+    def _progress_cb(event: dict) -> None:
+        """进度事件 → 缓冲 + 唤醒 SSE 消费者（从不阻塞执行线程）。"""
+        with _RUNBOOK_STREAMS_LOCK:
+            st = _RUNBOOK_STREAMS.get(exec_id)
+            if st is None:
+                return
+            st["buffer"].append(event)
+            if len(st["buffer"]) > _RUNBOOK_STREAM_BUFFER_MAX:
+                st["buffer"] = st["buffer"][-_RUNBOOK_STREAM_BUFFER_MAX:]
+        try:
+            loop.call_soon_threadsafe(st["wake"].set)
+        except Exception:
+            pass
 
     def _run() -> None:
         tk1 = set_hermes_interactive_context(True)
         try:
-            exec_id = _new_exec_id()
             approval_box: Dict[str, Any] = {}
 
             def _web_cb(display_command: str, description: str, *,
@@ -3643,26 +3718,102 @@ async def create_runbook_execution(payload: Dict[str, Any] = Body(default_factor
                 return wait_web_approval(approval_id) or "timeout"
 
             set_approval_callback(_web_cb)
-            result_box["result"] = execute_runbook(
+            result = execute_runbook(
                 data,
                 env=env,
                 trigger_context=trigger_context,
                 home=home,
+                exec_id=exec_id,
+                progress_callback=_progress_cb,
             )
+            with _RUNBOOK_STREAMS_LOCK:
+                stream["result"] = result
         except Exception as exc:
-            result_box["error"] = f"{type(exc).__name__}: {exc}"
+            err = f"{type(exc).__name__}: {exc}"
+            # 引擎异常兜底：补一个终态事件，SSE 流能正常收尾（不悬挂）。
+            _progress_cb({
+                "type": "runbook_done", "exec_id": exec_id,
+                "runbook": name, "version": "",
+                "ts": _now_iso_utc(),
+                "status": "error", "error": str(err)[:2000],
+            })
+            with _RUNBOOK_STREAMS_LOCK:
+                stream["result"] = {"runbook": name, "result": "error",
+                                    "error": err}
         finally:
             set_approval_callback(None)
             reset_hermes_interactive_context(tk1)
+            with _RUNBOOK_STREAMS_LOCK:
+                stream["done"] = True
 
-    await run_in_threadpool(_run)
-    if result_box.get("error"):
-        return JSONResponse(
-            status_code=500,
-            content=_api_error("execution_failed", str(result_box["error"])),
-        )
-    return {"ok": True, "data": result_box["result"]}
+    threading.Thread(
+        target=_run, daemon=True, name=f"runbook-exec-{exec_id}"
+    ).start()
+    return {
+        "ok": True,
+        "data": {
+            "exec_id": exec_id,
+            "runbook": name,
+            "env": env,
+            "started_at": stream["started_at"],
+            "status": "running",
+        },
+    }
 
+
+@app.get("/api/runbook/executions/{exec_id}/progress")
+async def runbook_progress_stream(exec_id: str):
+    """runbook 执行进度 SSE 流（OPS-DELTA #80）。
+
+    事件经 ``runbook:event`` 推送，data.type ∈ step_start / step_done /
+    step_failed / rollback_start / rollback_done / runbook_done（终态）。
+    先重放已缓冲事件（晚连客户端从起点看到当前），再实时等待新事件；
+    runbook_done 后关闭。exec_id 未知 → ``runbook:error`` 后关闭（照
+    /api/exec/{id}/stream 模式）。事件不落库；客户端断开只影响本流，
+    执行照常完成。
+    """
+    return StreamingResponse(
+        _runbook_progress_generator(exec_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
+
+
+async def _runbook_progress_generator(exec_id: str):
+    with _RUNBOOK_STREAMS_LOCK:
+        st = _RUNBOOK_STREAMS.get(exec_id)
+    if st is None:
+        yield _sse_event("runbook:error", {"message": f"执行不存在: {exec_id}"})
+        return
+    idx = 0
+    wake = st["wake"]
+    while True:
+        with _RUNBOOK_STREAMS_LOCK:
+            buf = list(st["buffer"])
+            done = st["done"]
+            result = st["result"]
+        while idx < len(buf):
+            ev = buf[idx]
+            idx += 1
+            yield _sse_event("runbook:event", ev)
+            if ev.get("type") == "runbook_done":
+                return
+        if done:
+            # 执行已结束但缓冲无终态（异常兜底路径）→ 明确收尾，不悬挂。
+            if not any(e.get("type") == "runbook_done" for e in buf):
+                yield _sse_event("runbook:error", {
+                    "message": "执行异常结束", "result": result,
+                })
+            return
+        wake.clear()
+        try:
+            await asyncio.wait_for(wake.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            continue
 
 @app.get("/api/matrix")
 async def get_ops_matrix(request: Request):

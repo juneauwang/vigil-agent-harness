@@ -191,18 +191,59 @@ export interface RunbookExecution {
   steps?: RunbookStepResult[];
   duration_s?: number;
   operator?: string;
+  /** 批八十：进度流关联 id（web 触发的执行带；SSE 入口）。 */
+  exec_id?: string;
 }
 
 export interface RunbookExecutionsResponse {
   ok: boolean;
   error?: string;
-  data?: { count: number; executions: RunbookExecution[] };
+  data?: {
+    count: number;
+    executions: RunbookExecution[];
+    /** 批八十：本进程正在执行中的流（UI 显示"运行中" + 展开实时步骤）。 */
+    running?: RunbookRunningExec[];
+  };
 }
 
+export interface RunbookRunningExec {
+  exec_id: string;
+  runbook?: string;
+  env?: string;
+  started_at?: string;
+}
+
+/** 批八十：执行启动响应（立即返回 exec_id；进度走 SSE，终态经 runbook_done）。 */
 export interface RunbookRunResponse {
   ok: boolean;
   error?: string;
-  data?: RunbookExecution;
+  data?: {
+    exec_id: string;
+    runbook?: string;
+    env?: string;
+    started_at?: string;
+    status?: string;
+  };
+}
+
+/** 批八十：runbook 执行进度事件（SSE data.type）。 */
+export interface RunbookProgressEvent {
+  type: "step_start" | "step_done" | "step_failed" | "rollback_start" | "rollback_done" | "runbook_done";
+  exec_id?: string;
+  runbook?: string;
+  version?: string;
+  step_id?: string;
+  title?: string;
+  action?: string;
+  target?: string;
+  status?: string;
+  ts?: string;
+  detail?: string;
+  phase?: string;
+  error?: string;
+  rolled_back?: boolean;
+  duration_s?: number;
+  step_count?: number;
 }
 
 /** 操作矩阵（YAPL §11）：matrix/sources 均为 {env: {action: 值}}。 */
@@ -555,6 +596,53 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ name, env, trigger_context: triggerContext }),
     }),
+  /** 批八十：runbook 执行进度 SSE（fetch + reader，可带 token 头；断开由
+   * 调用方 abort，服务端流照常结束）。事件对象经 onEvent 回调（type 为
+   * step_start/step_done/step_failed/rollback_start/rollback_done/
+   * runbook_done）。 */
+  runbookProgressStream: (
+    execId: string,
+    onEvent: (event: RunbookProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    const headers = new Headers({ "Content-Type": "application/json" });
+    const token = typeof window !== "undefined" ? window.__VIGIL_SESSION_TOKEN__ : undefined;
+    if (token) headers.set("X-Vigil-Session-Token", token);
+    return fetch(`${BASE}/api/runbook/executions/${encodeURIComponent(execId)}/progress`, {
+      headers,
+      signal,
+    }).then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw parseErrorBody(text, res.status);
+      }
+      if (!res.body) return;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n\n")) >= 0) {
+          const block = buffer.slice(0, idx);
+          buffer = buffer.slice(idx + 2);
+          let data = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("data:")) data += (data ? "\n" : "") + line.slice(5).trim();
+          }
+          if (data) {
+            try {
+              onEvent(JSON.parse(data) as RunbookProgressEvent);
+            } catch {
+              // 忽略无法解析的帧（保持流不中断）。
+            }
+          }
+        }
+      }
+    });
+  },
   // YAPL P3：操作矩阵（人工安全资产，修改即审计；LLM 只有 matrix_query 只读）
   getMatrix: () => fetchJSON<MatrixResponse>("/api/matrix"),
   setMatrixCell: (env: string, action: string, level: MatrixLevel) =>

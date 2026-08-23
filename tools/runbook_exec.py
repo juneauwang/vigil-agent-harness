@@ -692,7 +692,72 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
                   trigger_ctx: Dict[str, Any],
                   runner: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
                   approve: Callable[[str, str, str], Optional[str]],
-                  where: str) -> Dict[str, Any]:
+                  where: str,
+                  emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+                  phase: str = "runbook") -> Dict[str, Any]:
+    """执行单个步骤并发出进度事件（OPS-DELTA #80）。
+
+    ``emit(type, fields)`` 收到事件字段（step_id/title/action/target/status/
+    detail 等，缺省字段由引擎补）；None = 不播报（LLM 工具路径）。``phase``
+    标记 runbook / rollback，供 UI 区分回滚步骤。
+    """
+    step_id = str(step.get("id") or "")
+    if emit is not None:
+        emit("step_start", {
+            "step_id": step_id,
+            "title": str(step.get("title") or step_id),
+            "action": str(step.get("action") or ""),
+            "target": _step_target_label(step),
+            "status": "running",
+            "phase": phase,
+        })
+    entry = _run_one_step_impl(step, env=env, home=home, step_values=step_values,
+                               trigger_ctx=trigger_ctx, runner=runner,
+                               approve=approve, where=where)
+    if emit is not None:
+        emit("step_done" if entry.get("ok") else "step_failed", {
+            "step_id": step_id,
+            "title": str(step.get("title") or step_id),
+            "action": str(step.get("action") or ""),
+            "target": _step_target_label(step, entry),
+            "status": entry.get("status"),
+            "detail": _clip(
+                entry.get("error") or _step_output_summary(entry), 2000),
+            "phase": phase,
+        })
+    return entry
+
+
+def _step_target_label(step: Dict[str, Any],
+                       entry: Optional[Dict[str, Any]] = None) -> str:
+    """步骤 target 展示：优先已解析实体名（name），否则原始 params.target。"""
+    if entry and isinstance(entry.get("target"), dict) and entry["target"].get("name"):
+        return str(entry["target"].get("name"))
+    params = step.get("params")
+    if isinstance(params, dict) and params.get("target"):
+        return str(params.get("target"))
+    return ""
+
+
+def _step_output_summary(entry: Dict[str, Any]) -> str:
+    """步骤输出摘要（截断防爆）：expect 详情 > 末条命令 stdout。"""
+    expect = entry.get("expect")
+    if isinstance(expect, dict) and expect.get("detail"):
+        return str(expect["detail"])
+    commands = entry.get("commands")
+    if isinstance(commands, list) and commands:
+        last = commands[-1]
+        if isinstance(last, dict) and last.get("stdout"):
+            return str(last["stdout"])
+    return ""
+
+
+def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
+                       step_values: Dict[str, Dict[str, Any]],
+                       trigger_ctx: Dict[str, Any],
+                       runner: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+                       approve: Callable[[str, str, str], Optional[str]],
+                       where: str) -> Dict[str, Any]:
     step_id = str(step.get("id") or "")
     action = str(step.get("action") or "")
     ctx = f"{where}步骤 {step_id!r}"
@@ -784,7 +849,9 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
                            *, env: str, home: Path,
                            step_values: Dict[str, Dict[str, Any]],
                            trigger_ctx: Dict[str, Any],
-                           runner: Callable, approve: Callable) -> Dict[str, Any]:
+                           runner: Callable, approve: Callable,
+                           emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+                           phase: str = "rollback") -> Dict[str, Any]:
     scenarios = data.get("rollback") or []
     scenario = None
     if scenario_name:
@@ -803,7 +870,8 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
     for step in rb_steps:
         res = _run_one_step(step, env=env, home=home, step_values=step_values,
                             trigger_ctx=trigger_ctx, runner=runner, approve=approve,
-                            where=f"rollback[{scenario.get('name')}]")
+                            where=f"rollback[{scenario.get('name')}]",
+                            emit=emit, phase=phase)
         rb_results.append(res)
         if not res.get("ok"):
             return {"ok": False, "results": rb_results,
@@ -824,6 +892,8 @@ def execute_runbook(
     home: Optional[Path] = None,
     runner: Optional[Callable] = None,
     scheduled: bool = False,
+    exec_id: Optional[str] = None,
+    progress_callback: Optional[Callable[[dict], None]] = None,
 ) -> Dict[str, Any]:
     """v0.2 runbook 执行（引擎核心）。
 
@@ -834,6 +904,10 @@ def execute_runbook(
         home: VIGIL_HOME（测试注入）。
         runner: 命令执行器（测试注入 mock；缺省 = 真实通道）。
         scheduled: 定时执行（走资产审批豁免 + 事后审计）。
+        exec_id: 执行 id（进度流/历史关联；None = 无流，如 LLM 工具路径）。
+        progress_callback: 进度事件回调（OPS-DELTA #80）——每步/回滚/终态
+            事件实时回调，不落库（实时可见与事后审计分离）；回调异常只记
+            日志不阻断执行；None = 不播报。
     Returns:
         执行结果 dict（含 steps / result / error / ledger 已落盘）。
     """
@@ -841,22 +915,46 @@ def execute_runbook(
     name = str(data.get("name") or "")
     rb_env = str(env or data.get("env") or "local").strip() or "local"
     scheduled = bool(scheduled)
+    version = str(data.get("version") or "v0.2")
+
+    def _emit(ev_type: str, fields: Optional[Dict[str, Any]] = None) -> None:
+        """构建并回调一个进度事件（带 base 字段；回调失败仅记日志）。"""
+        if progress_callback is None:
+            return
+        ev: Dict[str, Any] = {
+            "type": ev_type,
+            "exec_id": exec_id,
+            "runbook": name,
+            "version": version,
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+        if fields:
+            ev.update(fields)
+        try:
+            progress_callback(ev)
+        except Exception:
+            logger.debug("runbook progress callback failed", exc_info=True)
 
     from tools.runbook_tools import _is_v2_runbook, _validate_runbook
     try:
         if not _is_v2_runbook(data):
+            _emit("runbook_done", {"status": "error",
+                                   "error": f"runbook {name} 是 schema v0.1（commands 写死）——v0.1 走老执行路径"})
             return {"runbook": name, "result": "error",
                     "error": f"runbook {name} 是 schema v0.1（commands 写死）——"
                              "v0.1 走老执行路径（runbook_load + terminal 执行），"
                              "新执行器只处理 v0.2 声明式动作"}
         _validate_runbook(data, name, home)
     except ValueError as exc:
+        _emit("runbook_done", {"status": "blocked",
+                               "error": f"runbook 校验失败，拒绝执行: {exc}"})
         return {"runbook": name, "result": "blocked",
                 "error": f"runbook 校验失败，拒绝执行: {exc}"}
 
     if scheduled:
         exempt_err = _check_scheduled_exemption(data)
         if exempt_err:
+            _emit("runbook_done", {"status": "blocked", "error": exempt_err})
             return {"runbook": name, "result": "blocked", "error": exempt_err}
 
     trigger_ctx: Dict[str, Any] = {
@@ -892,7 +990,7 @@ def execute_runbook(
             continue
         res = _run_one_step(step, env=rb_env, home=home, step_values=step_values,
                             trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
-                            where="runbook ")
+                            where="runbook ", emit=_emit)
         results.append(res)
         if res.get("ok"):
             continue
@@ -907,15 +1005,28 @@ def execute_runbook(
         if on_failure == "continue":
             continue
         if on_failure == "rollback":
+            _emit("rollback_start", {
+                "step_id": str(step.get("id") or ""),
+                "status": "running",
+                "detail": _clip(
+                    f"步骤 {step.get('id')} 失败，触发回滚（场景 {scene or '默认'}）", 2000),
+            })
             rb = _run_rollback_scenario(
                 data, scene, env=rb_env, home=home, step_values=step_values,
-                trigger_ctx=trigger_ctx, runner=_runner, approve=_approve)
+                trigger_ctx=trigger_ctx, runner=_runner, approve=_approve, emit=_emit)
             status = "rolled_back" if rb.get("ok") else "failed"
             if not rb.get("ok"):
                 error = f"{error}；{rb.get('error')}"
             else:
                 error = (f"{error}（已执行 rollback 场景 "
                          f"{scene or '（默认）'} 后终止）")
+            _emit("rollback_done", {
+                "step_id": str(step.get("id") or ""),
+                "status": "ok" if rb.get("ok") else "failed",
+                "detail": _clip(
+                    rb.get("error")
+                    or f"rollback 场景 {scene or '（默认）'} 执行完成", 2000),
+            })
             results.append({"id": "__rollback__", "action": "rollback",
                             "status": status, "ok": rb.get("ok"),
                             "steps": rb.get("results", []),
@@ -924,6 +1035,14 @@ def execute_runbook(
             break
         status = "failed"
         break
+
+    _emit("runbook_done", {
+        "status": status,
+        "error": _clip(error or "", 2000),
+        "rolled_back": rolled_back,
+        "duration_s": round(time.time() - t0, 2),
+        "step_count": len(results),
+    })
 
     entry: Dict[str, Any] = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -941,6 +1060,8 @@ def execute_runbook(
         "duration_s": round(time.time() - t0, 2),
         "operator": getpass.getuser(),
     }
+    if exec_id:
+        entry["exec_id"] = exec_id
     record_execution(home, entry)
     return {
         "runbook": name,
@@ -1004,6 +1125,9 @@ _DEFAULT_EXECUTE_SCHEMA = {
         "rollback 失败强制 stop）。执行前确认 runbook 的 env 与目标实体在拓扑表"
         "（topo_query）。v0.1 runbook（commands 写死）不走本工具——那是老执行"
         "路径。修改矩阵 = 人工操作（vigil matrix CLI / UI），LLM 无 set 路径。"
+        "长任务主动播报：runbook 通常耗时数分钟到数小时——执行中在关键节点"
+        "（每步完成 / expect 检查通过 / 失败回滚）主动向用户播报进度，不等"
+        "用户催促；大步骤完成后简要汇报当前进展与下一步。"
     ),
     "parameters": {
         "type": "object",

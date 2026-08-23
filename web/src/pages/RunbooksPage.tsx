@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
 import {
   BookOpen,
@@ -17,6 +17,8 @@ import { api } from "@/lib/api";
 import type {
   RunbookDetailResponse,
   RunbookExecution,
+  RunbookProgressEvent,
+  RunbookRunningExec,
   RunbookStepResult,
   RunbookSummary,
 } from "@/lib/api";
@@ -414,6 +416,150 @@ function ExecSteps({ steps }: { steps?: RunbookStepResult[] }) {
   );
 }
 
+// ── 批八十：runbook 执行实时进度面板（SSE 事件流渲染）────────────────────
+
+interface ProgressRow {
+  key: string;
+  stepId: string;
+  title: string;
+  action: string;
+  target: string;
+  phase: string;
+  status: string;
+  detail?: string;
+  ts?: string;
+}
+
+function buildProgressRows(events: RunbookProgressEvent[]): {
+  rows: ProgressRow[];
+  banners: RunbookProgressEvent[];
+} {
+  const rows: ProgressRow[] = [];
+  const banners: RunbookProgressEvent[] = [];
+  const index = new Map<string, number>();
+  for (const ev of events) {
+    if (ev.type === "step_start") {
+      const key = `${ev.phase ?? "runbook"}:${ev.step_id ?? ""}`;
+      rows.push({
+        key,
+        stepId: ev.step_id ?? "",
+        title: ev.title ?? ev.step_id ?? "",
+        action: ev.action ?? "",
+        target: ev.target ?? "",
+        phase: ev.phase ?? "runbook",
+        status: "running",
+        ts: ev.ts,
+      });
+      index.set(key, rows.length - 1);
+    } else if (ev.type === "step_done" || ev.type === "step_failed") {
+      const key = `${ev.phase ?? "runbook"}:${ev.step_id ?? ""}`;
+      const i = index.get(key);
+      if (i !== undefined) {
+        rows[i] = {
+          ...rows[i],
+          status: ev.type === "step_done" ? "ok" : "failed",
+          detail: ev.detail,
+          ts: ev.ts,
+        };
+      }
+    } else {
+      banners.push(ev);
+    }
+  }
+  return { rows, banners };
+}
+
+function ProgressStatusBadge({ status }: { status?: string }) {
+  if (status === "ok") {
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-ok)]">成功</span>;
+  }
+  if (status === "failed" || status === "error") {
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-error)]">失败</span>;
+  }
+  if (status === "blocked") {
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-warn)]">被拦截</span>;
+  }
+  if (status === "rolled_back") {
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-warn)]">已回滚</span>;
+  }
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-muted)]">
+      <Loader2 className="size-2.5 animate-spin" /> 运行中
+    </span>
+  );
+}
+
+function RunbookProgressPanel({
+  events,
+  terminal,
+  loading,
+}: {
+  events: RunbookProgressEvent[];
+  terminal?: RunbookProgressEvent | null;
+  loading?: boolean;
+}) {
+  const { rows, banners } = buildProgressRows(events);
+  return (
+    <div data-testid="runbook-progress" className="mt-2 space-y-1.5">
+      {rows.length === 0 && loading ? (
+        <div className="flex items-center gap-2 text-xs text-[var(--vigil-muted)]">
+          <Loader2 className="size-3 animate-spin" /> 等待执行启动…
+        </div>
+      ) : null}
+      {rows.map((r) => (
+        <div key={r.key} className="flex items-start gap-2 text-xs">
+          <ProgressStatusBadge status={r.status} />
+          <div className="min-w-0 flex-1">
+            <div className="font-medium text-[var(--vigil-text)] opacity-90">
+              {r.phase === "rollback" ? "↩ " : ""}
+              {r.title}
+              <span className="ml-1.5 text-[10px] text-[var(--vigil-muted)]">
+                id: {r.stepId}
+                {r.action ? ` · ${r.action}` : ""}
+                {r.target ? ` · target: ${r.target}` : ""}
+              </span>
+            </div>
+            {r.detail ? (
+              <div className="truncate text-[var(--vigil-muted)]" title={r.detail}>{r.detail}</div>
+            ) : null}
+          </div>
+        </div>
+      ))}
+      {banners.map((b, i) => (
+        <div
+          key={`banner-${i}`}
+          className={`rounded border px-2 py-1 text-xs ${
+            b.type === "rollback_start"
+              ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+              : b.type === "rollback_done"
+                ? b.status === "ok"
+                  ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+                  : "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400"
+                : "border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]"
+          }`}
+        >
+          {b.type === "rollback_start" ? "↩ 触发回滚" : b.type === "rollback_done" ? "↩ 回滚完成" : ""}
+          {b.detail ? <span className="ml-1 text-[var(--vigil-muted)]">{b.detail}</span> : null}
+        </div>
+      ))}
+      {terminal ? (
+        <div className="mt-1 flex items-center gap-2 border-t border-[var(--vigil-border)] pt-1.5 text-xs">
+          <ProgressStatusBadge status={terminal.status} />
+          <span className="font-semibold">执行完成</span>
+          {terminal.duration_s !== undefined ? (
+            <span className="text-[var(--vigil-muted)]">{(terminal.duration_s ?? 0).toFixed(1)}s</span>
+          ) : null}
+          {terminal.error ? (
+            <span className="min-w-0 flex-1 truncate text-[var(--vigil-error)]" title={terminal.error}>
+              {terminal.error}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function ExecConfirmModal({
   name,
   running,
@@ -471,13 +617,24 @@ export default function RunbooksPage() {
   const [execResult, setExecResult] = useState<RunbookExecution | null>(null);
   const [execError, setExecError] = useState<string | null>(null);
   const [history, setHistory] = useState<RunbookExecution[]>([]);
+  // 批八十：实时进度（SSE 事件流）+ 历史"运行中"行。
+  const [execEvents, setExecEvents] = useState<RunbookProgressEvent[]>([]);
+  const [execDone, setExecDone] = useState<RunbookProgressEvent | null>(null);
+  const [running, setRunning] = useState<RunbookRunningExec[]>([]);
+  const [runningEvents, setRunningEvents] = useState<Record<string, RunbookProgressEvent[]>>({});
+  const [expandedRunning, setExpandedRunning] = useState<Set<string>>(new Set());
+  const streamAbortRef = useRef<AbortController | null>(null);
+  const runningStreamsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     let alive = true;
     api
       .getRunbookExecutions(20)
       .then((resp) => {
-        if (alive && resp.ok && resp.data) setHistory(resp.data.executions);
+        if (alive && resp.ok && resp.data) {
+          setHistory(resp.data.executions);
+          setRunning(resp.data.running ?? []);
+        }
       })
       .catch(() => {});
     return () => {
@@ -485,11 +642,21 @@ export default function RunbooksPage() {
     };
   }, []);
 
+  // 批八十：卸载时中止进行中的进度流（服务端执行不受影响）。
+  useEffect(() => {
+    return () => {
+      streamAbortRef.current?.abort();
+    };
+  }, []);
+
   const refreshHistory = () => {
     api
       .getRunbookExecutions(20)
       .then((resp) => {
-        if (resp.ok && resp.data) setHistory(resp.data.executions);
+        if (resp.ok && resp.data) {
+          setHistory(resp.data.executions);
+          setRunning(resp.data.running ?? []);
+        }
       })
       .catch(() => {});
   };
@@ -499,20 +666,87 @@ export default function RunbooksPage() {
     setExecRunning(true);
     setExecError(null);
     setExecResult(null);
+    setExecEvents([]);
+    setExecDone(null);
     setExecModal(false);
     api
       .runRunbook(selected)
-      .then((resp: { ok: boolean; error?: string; data?: RunbookExecution }) => {
-        if (resp.ok && resp.data) setExecResult(resp.data);
-        else setExecError(resp.error ?? "执行失败");
+      .then((resp) => {
+        if (!resp.ok || !resp.data?.exec_id) {
+          setExecError(resp.error ?? "执行启动失败");
+          setExecRunning(false);
+          return;
+        }
+        const execId = resp.data.exec_id;
+        const ctrl = new AbortController();
+        streamAbortRef.current = ctrl;
+        void api
+          .runbookProgressStream(
+            execId,
+            (ev) => {
+              if (ev.type === "runbook_done") {
+                setExecDone(ev);
+                setExecRunning(false);
+                setExecResult({
+                  runbook: selected,
+                  result: ev.status,
+                  error: ev.error,
+                  duration_s: ev.duration_s,
+                  ts: ev.ts,
+                });
+                refreshHistory();
+              } else {
+                setExecEvents((prev) => [...prev, ev]);
+              }
+            },
+            ctrl.signal,
+          )
+          .catch((e: unknown) => {
+            setExecError(e instanceof Error ? e.message : String(e));
+            setExecRunning(false);
+          });
       })
       .catch((e: unknown) => {
         setExecError(e instanceof Error ? e.message : String(e));
-      })
-      .finally(() => {
-        setExecRunning(false);
-        refreshHistory();
       });
+  };
+
+  // 批八十：历史"运行中"行展开 → 打开该执行的实时进度流。
+  const startRunningStream = (execId: string) => {
+    if (runningStreamsRef.current.has(execId)) return;
+    runningStreamsRef.current.add(execId);
+    const ctrl = new AbortController();
+    streamAbortRef.current = ctrl;
+    void api
+      .runbookProgressStream(
+        execId,
+        (ev) => {
+          setRunningEvents((prev) => ({
+            ...prev,
+            [execId]: [...(prev[execId] ?? []), ev],
+          }));
+          if (ev.type === "runbook_done") {
+            setExpandedRunning((prev) => {
+              const n = new Set(prev);
+              n.delete(execId);
+              return n;
+            });
+            refreshHistory();
+          }
+        },
+        ctrl.signal,
+      )
+      .catch(() => {});
+  };
+
+  const toggleRunningRow = (execId: string) => {
+    setExpandedRunning((prev) => {
+      const n = new Set(prev);
+      if (n.has(execId)) n.delete(execId);
+      else n.add(execId);
+      return n;
+    });
+    startRunningStream(execId);
   };
 
   useEffect(() => {
@@ -662,6 +896,18 @@ export default function RunbooksPage() {
                 <RunbookDetail data={detail} />
               </div>
 
+              {(execRunning || execDone || execEvents.length > 0) ? (
+                <div className="vigil-card p-5">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="text-xs font-semibold">执行进度</h3>
+                    {execRunning ? (
+                      <span className="text-[10px] text-[var(--vigil-muted)]">实时流 · 关键节点自动播报</span>
+                    ) : null}
+                  </div>
+                  <RunbookProgressPanel events={execEvents} terminal={execDone} loading={execRunning} />
+                </div>
+              ) : null}
+
               {execResult ? (
                 <div className="vigil-card p-5">
                   <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -696,7 +942,7 @@ export default function RunbooksPage() {
                     刷新
                   </button>
                 </div>
-                {history.length > 0 ? (
+                {history.length > 0 || running.length > 0 ? (
                   <table className="vigil-table mt-2">
                     <thead>
                       <tr>
@@ -707,6 +953,41 @@ export default function RunbooksPage() {
                       </tr>
                     </thead>
                     <tbody>
+                      {running.map((r) => (
+                        <Fragment key={r.exec_id}>
+                          <tr
+                            className="cursor-pointer hover:bg-[var(--vigil-muted-bg)]"
+                            onClick={() => toggleRunningRow(r.exec_id)}
+                            title="点击展开实时步骤"
+                          >
+                            <td className="font-mono text-xs">
+                              {String(r.runbook ?? "")}
+                              {expandedRunning.has(r.exec_id) ? (
+                                <ChevronDown className="ml-1 inline size-3 text-[var(--vigil-muted)]" />
+                              ) : (
+                                <ChevronRight className="ml-1 inline size-3 text-[var(--vigil-muted)]" />
+                              )}
+                            </td>
+                            <td className="text-xs text-[var(--vigil-muted)]">{String(r.started_at ?? "")}</td>
+                            <td className="text-xs text-[var(--vigil-muted)]">web</td>
+                            <td className="text-xs">
+                              <span className="inline-flex items-center gap-1 font-semibold text-[var(--vigil-muted)]">
+                                <Loader2 className="size-3 animate-spin" /> 运行中
+                              </span>
+                            </td>
+                          </tr>
+                          {expandedRunning.has(r.exec_id) ? (
+                            <tr>
+                              <td colSpan={4} className="bg-[var(--vigil-muted-bg)]/40">
+                                <RunbookProgressPanel
+                                  events={runningEvents[r.exec_id] ?? []}
+                                  loading={!runningEvents[r.exec_id] || runningEvents[r.exec_id].length === 0}
+                                />
+                              </td>
+                            </tr>
+                          ) : null}
+                        </Fragment>
+                      ))}
                       {history.map((h, i) => (
                         <tr key={`${String(h.runbook ?? "")}-${String(h.ts ?? "")}-${i}`}>
                           <td className="font-mono text-xs">{String(h.runbook ?? "")}</td>

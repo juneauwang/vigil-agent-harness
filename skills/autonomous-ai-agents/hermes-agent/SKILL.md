@@ -202,3 +202,4 @@ terminal(command="tmux new-session -d -s resumed 'vigil --resume 20260225_143052
 - **Secrets in `.env`, settings in `config.yaml`** — never tell a user to put a non-credential setting in `.env`.
 - **Profile-safe paths** — `get_hermes_home()` in code, `$VIGIL_HOME` when resolving paths in a session.
 - **Never hand-edit `config.yaml` for the user** — use `vigil config set KEY VAL`; a stray indent can corrupt the file and break the live gateway.
+- **Long tasks report proactively** — runbook executions and other multi-minute work announce every key milestone (step done / expect check passed / failure → rollback) without waiting for the user to ask. "Notify on completion" is not enough for work that runs minutes to hours; the live progress stream + dashboard panel exist for exactly this.

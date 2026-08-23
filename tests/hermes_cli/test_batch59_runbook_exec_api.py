@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
@@ -123,7 +124,10 @@ def test_executions_history_empty(ehome, client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["data"] == {"count": 0, "executions": []}
+    # 批八十：新增 data.running（本进程执行中流，实时进度入口）
+    assert body["data"]["count"] == 0
+    assert body["data"]["executions"] == []
+    assert body["data"]["running"] == []
 
 
 def test_executions_history_rows(ehome, client):
@@ -188,11 +192,20 @@ def test_exec_post_happy_wiring(ehome, client, monkeypatch):
     calls = {}
 
     def fake_execute(data, *, env="", trigger_context=None, home=None,
-                     runner=None, scheduled=False):
+                     runner=None, scheduled=False, exec_id=None,
+                     progress_callback=None):
         calls["data"] = data
         calls["env"] = env
         calls["scheduled"] = scheduled
         calls["home"] = home
+        calls["exec_id"] = exec_id
+        calls["progress_callback"] = progress_callback
+        if progress_callback is not None:
+            progress_callback({
+                "type": "runbook_done", "exec_id": exec_id, "runbook": data.get("name"),
+                "version": "2", "ts": "2026-08-23T10:00:00+08:00",
+                "status": "ok",
+            })
         return {
             "runbook": data.get("name"), "env": env, "result": "ok",
             "error": None, "rolled_back": False, "duration_s": 0.5,
@@ -204,11 +217,21 @@ def test_exec_post_happy_wiring(ehome, client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["data"]["result"] == "ok"
+    # 批八十：POST 立即返回 exec_id（后台线程执行，SSE 实时进度入口）
+    assert body["data"]["status"] == "running"
+    assert body["data"]["exec_id"].startswith("exec_")
+    assert body["data"]["runbook"] == "t-v2"
+
+    # 后台线程执行 → 轮询等待接线参数（含新进度回调）。
+    deadline = time.time() + 5
+    while "exec_id" not in calls and time.time() < deadline:
+        time.sleep(0.02)
+    assert calls["exec_id"] == body["data"]["exec_id"]
     assert calls["scheduled"] is False
     assert calls["env"] == ""
     assert calls["home"] == ehome
     assert calls["data"]["name"] == "t-v2"
+    assert callable(calls["progress_callback"])
 
 
 def test_exec_post_approval_gate_web(ehome, client, monkeypatch):
@@ -234,13 +257,25 @@ def test_exec_post_approval_gate_web(ehome, client, monkeypatch):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert body["data"]["result"] == "ok"
+    assert body["data"]["status"] == "running"
 
-    page, total = list_web_approvals()
+    deadline = time.time() + 10
+    page, total = [], 0
+    while time.time() < deadline:
+        page, total = list_web_approvals()
+        if total >= 1:
+            break
+        time.sleep(0.05)
     assert total >= 1
     assert any(v.get("source") == "web" for v in page)
 
     from tools.runbook_exec import recent_executions
-    rows = recent_executions(ehome)
+    rows = []
+    while time.time() < deadline:
+        rows = recent_executions(ehome)
+        if rows:
+            break
+        time.sleep(0.05)
     assert rows and rows[0]["runbook"] == "t-v2"
     assert rows[0]["result"] == "ok"
+    assert rows[0]["exec_id"] == body["data"]["exec_id"]
