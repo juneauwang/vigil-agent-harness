@@ -168,6 +168,39 @@ export interface RunbookDetailResponse {
   data?: Record<string, unknown>;
 }
 
+/** 操作矩阵（YAPL §11）：matrix/sources 均为 {env: {action: 值}}。 */
+export type MatrixLevel = "execute" | "approve" | "required";
+
+export interface MatrixData {
+  schema_version?: number;
+  updated_at?: string;
+  source?: string;
+  base_template?: string;
+  matrix: Record<string, Record<string, string>>;
+  sources: Record<string, Record<string, string>>;
+  warnings?: string[];
+  path?: string;
+  /** 动作词表（schemas.yaml actions，行枚举源） */
+  actions?: string[];
+}
+
+export interface MatrixResponse {
+  ok: boolean;
+  error?: string;
+  data?: MatrixData;
+}
+
+export interface MatrixInitSelections {
+  execute: string[];
+  approve: string[];
+}
+
+export interface MatrixInitResponse {
+  ok: boolean;
+  error?: string;
+  data?: MatrixData;
+}
+
 export interface HealthResponse {
   ok: boolean;
   version: string;
@@ -350,6 +383,18 @@ export const api = {
   getRunbooks: () => fetchJSON<RunbookListResponse>("/api/runbooks"),
   getRunbook: (name: string) =>
     fetchJSON<RunbookDetailResponse>(`/api/runbooks/${encodeURIComponent(name)}`),
+  // YAPL P3：操作矩阵（人工安全资产，修改即审计；LLM 只有 matrix_query 只读）
+  getMatrix: () => fetchJSON<MatrixResponse>("/api/matrix"),
+  setMatrixCell: (env: string, action: string, level: MatrixLevel) =>
+    fetchJSON<{ ok: boolean; changed?: boolean; error?: unknown }>(
+      "/api/matrix",
+      { method: "PUT", body: JSON.stringify({ env, action, level }) },
+    ),
+  initMatrix: (template: string, selections?: MatrixInitSelections, force = false) =>
+    fetchJSON<MatrixInitResponse>(
+      "/api/matrix/init",
+      { method: "POST", body: JSON.stringify({ template, selections, force }) },
+    ),
   getHealth: () => fetchJSON<HealthResponse>("/api/health"),
   getStatus: () => fetchJSON<StatusResponse>("/api/status"),
 

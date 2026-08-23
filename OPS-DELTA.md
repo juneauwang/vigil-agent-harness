@@ -3061,3 +3061,83 @@
   返回 4 条含 v0.2；/api/topology 服务行 cluster 已继承（nginx→local、
   kubelet→beijing_aliyun，不再 default）。
 - **状态**：待 commit（branch v1.0，工作区仅本批 + #67 验收记录未提交）。
+
+### 69. 批次五十四 YAPL P3 操作矩阵层——matrix.yaml + 四模板 + CLI/UI 管理 + matrix_query 只读 + 资产审批 + 审计 + 热生效（2026-08-23，设计单一事实来源 yapl-design.md §11）
+
+- **背景**：YAPL v1.0 P3 操作矩阵层（§11.7 定案全量）：权限 = 操作矩阵唯一裁决
+  （runbook 每步执行时查；terminal 直跑 P5 操作分类层后同表）。矩阵独立
+  `~/.vigil/matrix.yaml`（安全资产——独立防误改/备份/diff 清晰），LLM 只有
+  `matrix_query` 只读工具，修改一律人工通道（CLI 四命令 + UI 表格页），修改即
+  审计，热生效（读取路径实时读文件不缓存）。P4 执行器接线矩阵 + 执行豁免 =
+  排期外（本批只做数据模型）。
+- **怎么改**：
+  - `tools/matrix_data.py`（新增，核心数据层）：加载/校验（结构 / 动作枚举 ∈
+    schemas.yaml 23 个 / 档位枚举 execute/approve/{approve: required} / **无
+    deny 语义**——出现 deny/denied/block 等值一律报错 / 漏配默认 approve+warning /
+    其余 dict 形态拒绝）；热生效（load_matrix 每次实时读文件，无缓存；文件缺失 →
+    空矩阵全部默认 approve + warning）；四模板生成（模板 1 单人 local / 模板 2
+    小团队 local·dev·prod / 模板 3 中型 local·uat·dev·prod，逐格核对 §11.3；模板 4
+    三步级联 selections）；每格来源追踪（sources 平行结构：模板名 or manual；
+    CLI/UI 改单格 → 该格 manual + 顶层 source manual；edit 批量按 diff 标记；
+    reset 按 base_template 回退模板）；原子落盘（临时文件 + os.replace，落盘前对
+    **序列化后文档**全量校验）；`matrix edit` 编辑器支持（$EDITOR + 保存时校验，
+    content 注入供测试）。
+  - `tools/matrix_tools.py`（新增）：`matrix_query` 只读 tool（action 必填枚举
+    校验、env 必填、查不到返回默认 approve + 提示漏配；描述明确"修改矩阵 = 人工
+    操作（vigil matrix CLI / UI），LLM 无 set 路径"；实现零写接口）；注册
+    toolset=matrix，check_fn 恒可用（矩阵缺失也查——缺失=默认 approve）。
+  - `toolsets.py` + `hermes_cli/config_defaults.py` + `config_migrations.py` +
+    `tools_config.py`：matrix toolset 定义 + cli 平台默认启用（默认列表
+    hermes-cli/topo/runbook/matrix）。
+  - `hermes_cli/subcommands/matrix.py`（新增）+ `hermes_cli/main.py`：`vigil
+    matrix init [--template 1-4] [--force] / show [--json] / set <action> <env>
+    <level> / edit / reset`；show 之外四命令均过审计（record_event type=matrix_
+    change，session=matrix-cli，meta 含 env/action/old/new/source=cli/operator，
+    meta 存原始档位值不含凭据）。
+  - `tools/approval.py`：新增 `request_asset_approval`——资产审批门（§11.4 双审批
+    层次），复用 `_run_approval_gate`（CLI 交互 / web 注册表 / gateway 回环 /
+    无人在场 fail-closed BLOCK 永不无人落盘）；approvals.mode 决定方式
+    （off 且非强制人工跳过 / smart 且矩阵判全部动作 execute 级自动批准——
+    确定性智能，矩阵即风险裁决不引入 aux LLM / 其余人工门）；**{approve:
+    required} 强制人工覆盖 approvals.mode**（off/smart 也必走人工，且不提供
+    session/永久 allowlist——只 once/deny，同 prod 变更确认门）。
+  - `tools/runbook_tools.py`：v0.2 runbook_create 创建/变更过资产审批门（复用 P2
+    三层校验后、落盘前；矩阵对应 env 任一动作 required → force_manual）；审批
+    通过落盘带预审标记 `approved_at / approved_by / approved_version`（内容哈希，
+    P4 执行豁免数据模型）；审批失败不落盘 + 报错引导；**v0.1 保留原路径**
+    （无资产审批，过渡期注明）。
+  - `hermes_cli/web_server.py`：`GET /api/matrix`（全量 + 来源 + actions + 漏配
+    警告）、`PUT /api/matrix`（单格改 + 审计 source=ui）、`POST /api/matrix/init`
+    （四模板生成 + 模板 4 selections，已存在防误覆盖）；全部 `_require_token`
+    保护，**不进 PUBLIC_API_PATHS**。
+  - `web/`：`MatrixPage.tsx`（行=动作 23、列=env、格=三态下拉 + 每格来源展示 +
+    漏配警告横幅 + 顶部「矩阵是人工安全资产，修改即审计」说明 + 空态四模板引导
+    + 模板 4 三步级联 modal（execute 集 → 剩余选 approve 集 → 其余 required））；
+    `App.tsx` 路由 /matrix + 导航；`api.ts` getMatrix/setMatrixCell/initMatrix。
+- **测试**：新增 tests/tools/test_matrix.py 34 例（加载/校验/无 deny/枚举/漏配/
+    形态/热生效/模板 1·2·3 逐格断言/模板 4 级联/CLI init-show-set-reset-edit/
+    审计事件/matrix_query 只读+缺省/matrix toolset 注册/资产审批通过-拒绝-强制
+    人工-smart-off-fail-closed-v0.1 不受影响/web 端点 401+PUT+init+不进 public
+    paths）；test_runbook_v2 fixture 补 approvals.mode=off（schema 测试绕过资产
+    审批门，审批语义由 test_matrix 专测）；相关 18 套件 350 过（存量基线失败
+    4 例：launchctl 1 + batch28 跨文件污染 3——git stash 到 P2 基线复现，非本批
+    引入）；前端 vitest 20 文件 144 过 + `tsc -b --noEmit` ✓ + `npm run build`
+    ✓（web_dist 已重建，9131 实测用）。
+- **核销方式**：测试常驻——test_matrix（无 deny 拒绝/模板逐格/reset 回退/
+    matrix_query 只读/资产审批两路径 + v0.1 不受影响）。季度体检检查：matrix.yaml
+    sources 平行结构来源追踪、`vigil matrix set` 后该格 manual、runbook v0.2 落盘
+    带 approved_* 三标记、`matrix_query` 对未配置动作返回默认 approve + 提示。
+- **实测**（9131，pid 2661951，新代码重启）：
+  - `vigil matrix init --template 2` → 落盘 source=template2、prod.restart=
+    {approve: required}；`show` 表格 + 每格来源；`set restart prod execute` →
+    该格 sources 变 manual、顶层 source=manual、`show` 标 ·m；
+    `matrix_query(restart, prod)` 返回 execute + 来源 manual；
+    改文件（restart 改回 required）不重启直接 matrix_query 返回 required（热生效）；
+    `vigil trajectory show matrix-cli` 可见 3 条 matrix_change 审计
+    （init/set/reset，meta 含 old/new/source=cli/operator）；
+    dashboard /api/matrix GET 200 + PUT 单格 200（来源 manual + 审计 matrix-ui）；
+  - 资产审批：runbook_create v0.2（prod.restart 高危）→ 审批弹窗只 [o]nce/[d]eny
+    （强制人工）→ 批准落盘带 approved_at/approved_by/approved_version；
+    拒绝 → 不落盘 + 报错引导；approvals.mode=smart + 全 execute 动作 → 自动批准
+    落盘（approved_by=smart(matrix=all-execute)）；v0.1 runbook 创建无审批无标记。
+- **状态**：待 commit（branch v1.0，工作区仅本批改动）；发布基线 vigil-agent-release 未动。

@@ -3931,6 +3931,99 @@ def request_ops_approval(command: str, ops_decision: dict) -> dict:
     )
 
 
+def request_asset_approval(
+    *,
+    asset_type: str,
+    asset_name: str,
+    description: str,
+    env: str = "",
+    force_manual: bool = False,
+    smart_low_risk: bool = False,
+    approval_callback=None,
+) -> dict:
+    """资产审批门（YAPL P3 §11.4 双审批层次之资产审批）：runbook/脚本资产
+    创建/变更时的一次性人工审批。
+
+    复用与 ops/terminal 同一门（``_run_approval_gate``）：CLI 走交互提示、
+    web 经每线程回调落 /api/approvals、gateway 走通知回环；无人在场
+    （cron/batch/裸脚本）fail-closed BLOCK——资产审批永不无人落盘。
+
+    语义（§11.5 两个维度）：
+    - **approvals.mode 决定方式**：
+        - ``off`` 且非强制人工 → 跳过审批（与全系统 mode=off 一致）；
+        - ``smart`` 且非强制人工且 ``smart_low_risk``（矩阵判全部动作为
+          execute 级）→ 自动批准（确定性"智能"：矩阵已是风险裁决，不再
+          重复问人）；
+        - 其余（manual / smart 但存在非 execute 动作）→ 人工门。
+    - **{approve: required} 强制人工**（``force_manual=True``）：高危不
+      smart、覆盖 approvals.mode——即使 mode=off/smart 也必走人工，且
+      不提供 session/永久 allowlist（只 once/deny，同 prod 变更确认门）。
+
+    Args:
+        asset_type: 资产类型（runbook / script / ...）——pattern key 命名空间。
+        asset_name: 资产名（kebab-case）。
+        description: 人看的审批说明（内容摘要/动作清单，不含凭据）。
+        env: 资产目标环境（矩阵查档位用，展示用）。
+        force_manual: 矩阵判定含 {approve: required} 高危动作 → 强制人工。
+        smart_low_risk: 矩阵判定全部动作为 execute 级（smart 自动批准前提）。
+        approval_callback: 同 ``check_dangerous_command`` 回调契约。
+
+    Returns:
+        ``{"approved": bool, "message": str|None, "approved_by": str,
+        "skipped": str|None}``——approved_by 供落盘预审标记（P4 执行豁免）。
+    """
+    import getpass as _getpass
+
+    mode = _get_approval_mode()
+    pattern_key = f"asset_approval:{asset_type}:{env or 'default'}:{asset_name}"
+    display_target = f"<{asset_type} {asset_name}>（资产审批，YAPL §11.4）"
+    if mode == "off" and not force_manual:
+        # 与全系统 approvals.mode=off 语义一致：跳过人工门。强制人工不受
+        # mode=off 影响（高危资产创建永不无人——设计铁律）。
+        return {
+            "approved": True,
+            "message": None,
+            "approved_by": "approvals.mode=off",
+            "skipped": "approvals.mode=off",
+        }
+    if mode == "smart" and not force_manual and smart_low_risk:
+        # 确定性 smart：矩阵已判全部动作为 execute 级（低风险），自动批准。
+        # 不引入 aux LLM——矩阵是权限唯一裁决，execute 级动作执行时本就
+        # 无需审批，创建时同样不需要人工在场。
+        return {
+            "approved": True,
+            "message": None,
+            "approved_by": "smart(matrix=all-execute)",
+            "skipped": "smart_low_risk",
+        }
+
+    allow_permanent = not force_manual
+    allow_session = not force_manual
+    result = _run_approval_gate(
+        pattern_key=pattern_key,
+        description=description,
+        display_target=display_target,
+        approval_callback=approval_callback,
+        allow_permanent=allow_permanent,
+        allow_session=allow_session,
+        cron_deny_message=(
+            f"BLOCKED: {asset_type} 资产 '{asset_name}' 需要人工审批"
+            f"（{description}），但 cron 任务没有用户在场审批——资产创建/变更"
+            "永不无人落盘。请由用户在交互会话中创建，或改用已预审资产。"
+        ),
+        autoapprove_log_prefix=f"{asset_type} 资产审批 '{asset_name}'",
+        fail_closed_when_no_human=True,
+        no_human_block_message=(
+            f"BLOCKED: {asset_type} 资产 '{asset_name}' 需要人工审批"
+            f"（{description}），但当前没有交互用户或 gateway 在场。"
+            "请由用户在交互会话中创建该资产。"
+        ),
+    )
+    approved_by = _getpass.getuser() if result.get("approved") else ""
+    result["approved_by"] = approved_by
+    return result
+
+
 # =========================================================================
 # Combined pre-exec guard (tirith + dangerous command detection)
 # =========================================================================

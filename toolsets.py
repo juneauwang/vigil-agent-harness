@@ -308,6 +308,18 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "matrix": {
+        "description": (
+            "YAPL 操作矩阵（权限唯一裁决，yapl-design.md §11）：matrix_query 查某动作 × "
+            "环境的档位（execute / approve / {approve: required}）+ 每格来源，供 runbook "
+            "执行前自检/汇报。矩阵是人工安全资产：修改走 vigil matrix CLI 或 dashboard "
+            "UI 表格页，LLM 只有只读查询，无 set 路径。恒可用（矩阵缺失时全部动作默认 "
+            "approve 保守）；ops.matrix.enabled: false 可显式关闭。"
+        ),
+        "tools": ["matrix_query"],
+        "includes": [],
+    },
+
     "prom": {
         "description": (
             "Prometheus 监控（只读，OPS-DELTA #10）：prom_query 做 PromQL 查询"
