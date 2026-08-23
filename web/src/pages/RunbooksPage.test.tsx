@@ -14,6 +14,11 @@ vi.mock("@/lib/api", async (importOriginal) => {
       ...actual.api,
       getRunbooks: vi.fn(),
       getRunbook: vi.fn(),
+      getRunbookExecutions: vi.fn().mockResolvedValue({
+        ok: true,
+        data: { count: 0, executions: [] },
+      } as never),
+      runRunbook: vi.fn(),
     },
   };
 });
@@ -134,5 +139,112 @@ describe("RunbooksPage", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("docker restart harbor");
     expect(text).toContain("schema: v1");
+  });
+
+  it("shows v0.2 runbook with 执行 button and runs it（确认 → 结果分步展示）", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "nginx-config-update", title: "Nginx 配置变更并生效", step_count: 3 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V2_RUNBOOK } as never);
+    vi.mocked(api.runRunbook).mockResolvedValue({
+      ok: true,
+      data: {
+        runbook: "nginx-config-update",
+        result: "ok",
+        env: "prod",
+        ts: "2026-08-23T10:00:00+08:00",
+        duration_s: 1.24,
+        steps: [
+          { id: "backup", action: "backup", status: "ok", ok: true },
+          { id: "apply", action: "apply_config", status: "ok", ok: true },
+          { id: "verify", action: "verify", status: "ok", ok: true },
+        ],
+      },
+    } as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const runBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("执行"));
+    expect(runBtn).toBeTruthy();
+    act(() => runBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    const text0 = container.textContent ?? "";
+    expect(text0).toContain("确认执行 nginx-config-update");
+
+    const confirmBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "确认执行");
+    act(() => confirmBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(api.runRunbook).toHaveBeenCalledWith("nginx-config-update");
+    const text = container.textContent ?? "";
+    expect(text).toContain("执行结果");
+    expect(text).toContain("成功");
+    expect(text).toContain("backup");
+    expect(text).toContain("apply_config");
+  });
+
+  it("hides 执行 button for v0.1 runbook", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "harbor-restart", title: "Harbor 服务异常恢复", step_count: 1 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V1_RUNBOOK } as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const runBtn = Array.from(container.querySelectorAll("button")).find((b) => b.textContent?.includes("执行"));
+    expect(runBtn).toBeUndefined();
+  });
+
+  it("renders execution history（runbook/时间/来源/结果）", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "nginx-config-update", title: "Nginx 配置变更并生效", step_count: 3 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V2_RUNBOOK } as never);
+    vi.mocked(api.getRunbookExecutions).mockResolvedValue({
+      ok: true,
+      data: {
+        count: 2,
+        executions: [
+          {
+            runbook: "nginx-config-update",
+            ts: "2026-08-23T10:00:00+08:00",
+            source: "user",
+            result: "ok",
+            env: "prod",
+          },
+          {
+            runbook: "nginx-config-update",
+            ts: "2026-08-23T02:00:00+08:00",
+            source: "schedule",
+            result: "rolled_back",
+            env: "prod",
+          },
+        ],
+      },
+    } as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const text = container.textContent ?? "";
+    expect(text).toContain("执行历史（最近 2 次）");
+    expect(text).toContain("schedule");
+    expect(text).toContain("已回滚");
   });
 });

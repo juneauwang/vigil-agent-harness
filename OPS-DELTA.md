@@ -3296,3 +3296,65 @@
   触发后 `runtime/runbook_executions.jsonl` 记录 source=schedule；cron_gen
   未匹配输入返回引导而非猜测。
 - **状态**：阶段 4 独立 commit（阶段 5 前端/实测随后）。
+
+### 74. 批次五十九 YAPL P4 执行器·阶段 5——前端执行入口 + 执行历史 + 9131 实测收尾（2026-08-23，设计单一事实来源 yapl-design.md §10.2/§11.1）
+
+- **背景**：P4 执行器层阶段 5（收尾）：RunbooksPage v0.2 runbook 加"执行"
+  入口（确认 → 跑 → 每步状态展示）+ 执行历史列表（最近 N 次：runbook/时间/
+  来源/结果）；后端执行/历史端点；9131 实测全链路（交互执行/失败回滚/定时
+  豁免/资产审批）并修掉实测暴露的执行器 bug。v0.1 runbook 不显示执行按钮
+  （老路径照旧）。
+- **怎么改**：
+  - `hermes_cli/web_server.py`：`POST /api/runbook/executions`（body
+    name/env/trigger_context → `execute_runbook(scheduled=False)`；交互上下
+    文 + 每线程 web 审批回调——矩阵 approve/required 步骤落 web 审批注册表 +
+    右下角弹窗，execute 直跑；v0.1 拒绝 400；name 白名单防穿越；不进
+    PUBLIC_API_PATHS）+ `GET /api/runbook/executions`（`recent_executions`
+    只读，事后审计视图）。
+  - `web/src/lib/api.ts`：`runRunbook` / `getRunbookExecutions` + 执行结果/
+    历史类型。
+  - `web/src/pages/RunbooksPage.tsx`：v0.2 详情头"执行"按钮 → 确认弹窗 →
+    POST → 执行结果卡（终态徽标 + 每步状态/命令/回滚块）+ 执行历史表
+    （runbook/时间/来源/结果，可刷新）。
+  - **实测发现并修复（执行器阶段 1/2 埋的 4 个 bug，本批一并收口）**：
+    ① `runbook_exec._local_host_names` 只比对 hostname/DNS 名——本机服务
+    endpoint 是网卡 IP（172.18.120.67，eth0）时误判 remote 走 SSH 报
+    Host key verification failed；改为 ioctl SIOCGIFADDR 枚举全部本地网卡
+    IPv4 + 默认路由兜底（Linux/WSL；其他平台回退 DNS 名）。
+    ② backup handler：dest 父目录不存在时 docker cp 报
+    "invalid output path"——docker 通道先 `mkdir -p <parent>`（shell 形态，
+    无层级 dest 保持纯 argv）。
+    ③ restore handler：docker cp 目录到已存在路径会把 src 塞成 dst 子目录
+    （复原语义错误）——改 `docker cp <src>/. <container>:<dst>/` 内容复原。
+    ④ `resolve_target` 的 compose_service 取实体 `docker_compose.services
+    [].name`（容器名 docker-nginx-1）——compose restart/pull 报 no such
+    service；改为执行时取容器 label `com.docker.compose.service`（nginx），
+    docker 不可用回退存量名。
+- **测试**：后端 `tests/hermes_cli/test_batch59_runbook_exec_api.py` 8 例
+  （历史空/有记录、POST 缺名/坏名/404、v0.1 拒绝且 execute_runbook 不调、
+  接线参数断言、矩阵 required → web 审批注册 → 批准 → 执行记录落盘）；
+  执行器回归补 `test_local_endpoint_matches_interface_ip`（网卡 IP 判 local、
+  非本机判 remote）+ backup/restore 命令形态更新；前端 RunbooksPage 3 例新增
+  （v0.2 执行按钮+确认+结果分步、v0.1 无按钮、历史列表渲染）。vitest 20 文件
+  147 过、tsc -b --noEmit 过、npm run build 过。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv 重启）：
+  - `nginx-config-update` 交互执行：local 档全 execute 直跑（无审批卡）→
+    backup `docker cp docker-nginx-1:/etc/nginx …`（mkdir 修复后父目录自动
+    建）→ 本机 docker-nginx-1 处于 restarting（8/22 起既存崩溃，非本次引入）
+    → apply `docker exec sed` exit 1 → on_failure rollback 触发 → rb-restore
+    ok + rb-reload `docker compose -p docker restart nginx` ok → 终态
+    `rolled_back`（compose_service label 修复前此处报 no such service）。
+  - schedule：预审 runbook（*/2 缩短 cron）`register_runbook_schedule` →
+    cron job `runbook:sched-demo` → `run_job` 触发 → 豁免执行（无审批回调）、
+    ledger source=schedule、trigger_context.schedule.cron/timezone 注入、
+    通知 doc 每步状态；未预审 runbook → `blocked` + 提示先过资产审批。
+  - run_script：`script_asset_create`（tirith allow + 内容审批 + 预审标记
+    落盘）→ 9131 POST 执行 runbook → `bash <资产>` exit 0 stdout
+    demo-asset-ok。
+  - 执行历史 `GET /api/runbook/executions` 返回 6 条（source=user/schedule）。
+  - 实测后清理：临时 runbook ×4、脚本资产 ×1、备份目录、sched-demo cron
+    job 全部移除，存量 runbooks/（4 个）未动。
+- **核销方式**：测试常驻——test_batch59_runbook_exec_api.py + 前端
+  RunbooksPage.test.tsx；季度体检：RunbooksPage v0.2 有执行按钮/历史表、
+  `/api/runbook/executions` 两个端点存在、执行记录 source 区分 user/schedule。
+- **状态**：阶段 5 独立 commit（P4 全 5 阶段收官；OPS-DELTA #70-#74）。

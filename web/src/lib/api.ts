@@ -168,6 +168,43 @@ export interface RunbookDetailResponse {
   data?: Record<string, unknown>;
 }
 
+/** YAPL P4：runbook 执行（交互触发）+ 执行历史（事后审计视图）。 */
+export interface RunbookStepResult {
+  id?: string;
+  action?: string;
+  status?: string;
+  ok?: boolean;
+  error?: string;
+  commands?: Array<{ desc?: string; command?: string }>;
+  steps?: RunbookStepResult[];
+}
+
+export interface RunbookExecution {
+  ts?: string;
+  runbook?: string;
+  env?: string;
+  source?: string;
+  trigger_context?: Record<string, unknown>;
+  result?: string;
+  error?: string;
+  rolled_back?: boolean;
+  steps?: RunbookStepResult[];
+  duration_s?: number;
+  operator?: string;
+}
+
+export interface RunbookExecutionsResponse {
+  ok: boolean;
+  error?: string;
+  data?: { count: number; executions: RunbookExecution[] };
+}
+
+export interface RunbookRunResponse {
+  ok: boolean;
+  error?: string;
+  data?: RunbookExecution;
+}
+
 /** 操作矩阵（YAPL §11）：matrix/sources 均为 {env: {action: 值}}。 */
 export type MatrixLevel = "execute" | "approve" | "required";
 
@@ -383,6 +420,16 @@ export const api = {
   getRunbooks: () => fetchJSON<RunbookListResponse>("/api/runbooks"),
   getRunbook: (name: string) =>
     fetchJSON<RunbookDetailResponse>(`/api/runbooks/${encodeURIComponent(name)}`),
+  // YAPL P4：v0.2 runbook 执行（dashboard 触发，审批门走 web 注册表）+ 历史
+  getRunbookExecutions: (limit = 20) =>
+    fetchJSON<RunbookExecutionsResponse>(
+      `/api/runbook/executions?limit=${encodeURIComponent(String(limit))}`,
+    ),
+  runRunbook: (name: string, env?: string, triggerContext?: Record<string, unknown>) =>
+    fetchJSON<RunbookRunResponse>("/api/runbook/executions", {
+      method: "POST",
+      body: JSON.stringify({ name, env, trigger_context: triggerContext }),
+    }),
   // YAPL P3：操作矩阵（人工安全资产，修改即审计；LLM 只有 matrix_query 只读）
   getMatrix: () => fetchJSON<MatrixResponse>("/api/matrix"),
   setMatrixCell: (env: string, action: string, level: MatrixLevel) =>

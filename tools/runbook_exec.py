@@ -132,10 +132,46 @@ def recent_executions(home: Optional[Path] = None,
 # ---------------------------------------------------------------------------
 
 def _local_host_names() -> set:
+    """本机身份集合：hostname + DNS 名 + 全部本地网卡 IPv4 地址。
+
+    本地/远端判定用——endpoint 命中任一即 local（拓扑里本机服务常以网卡 IP
+    作 endpoint，如 WSL eth0 172.18.x.x；只比对 hostname/DNS 名会误判远端
+    走 SSH）。网卡枚举（SIOCGIFADDR）Linux/WSL 可用；其他平台回退 DNS 名 +
+    默认路由出口 IP。
+    """
     import socket
     names = {socket.gethostname()}
     try:
         names.update(socket.gethostbyname_ex(socket.gethostname())[2])
+    except Exception:
+        pass
+    try:
+        import fcntl
+        import struct
+        for _idx, ifname in socket.if_nameindex():
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                try:
+                    packed = fcntl.ioctl(
+                        s.fileno(), 0x8915,  # SIOCGIFADDR
+                        struct.pack("256s", ifname.encode()[:15]),
+                    )
+                    ip = socket.inet_ntoa(packed[20:24])
+                    if ip and not ip.startswith("127."):
+                        names.add(ip)
+                finally:
+                    s.close()
+            except Exception:
+                continue
+    except Exception:
+        pass
+    try:  # 兜底：默认路由出口 IP（eth0 等）
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            s.connect(("8.8.8.8", 80))
+            names.add(s.getsockname()[0])
+        finally:
+            s.close()
     except Exception:
         pass
     return names
@@ -251,6 +287,23 @@ def resolve_target(home: Path, topo: Dict[str, Any],
         if isinstance(s, dict) and s.get("name"):
             compose_service = str(s["name"])
             break
+    if compose_service and compose_project and container:
+        # docker_compose 的 services[].name 是容器名（docker-nginx-1），compose
+        # 服务名（restart/pull 等 compose 命令用）取容器 label
+        # com.docker.compose.service（nginx）。docker 不可用/查不到 → 回退存量名。
+        try:
+            import subprocess as _sp
+            out = _sp.run(
+                ["docker", "inspect", "-f",
+                 "{{index .Config.Labels \"com.docker.compose.service\"}}",
+                 container],
+                capture_output=True, text=True, timeout=3,
+            )
+            label_svc = out.stdout.strip()
+            if label_svc and label_svc != "<no value>":
+                compose_service = label_svc
+        except Exception:
+            pass
 
     return {
         "name": name,

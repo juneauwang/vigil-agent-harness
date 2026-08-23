@@ -3527,6 +3527,127 @@ async def get_ops_runbook_detail(name: str):
     return {"ok": True, "data": data}
 
 
+@app.get("/api/runbook/executions")
+async def list_runbook_executions(limit: int = 50):
+    """YAPL P4 执行历史（只读，事后审计视图）：最近 N 次 runbook 执行记录。
+
+    数据源 = ``runtime/runbook_executions.jsonl``（执行器统一落盘，交互/定时
+    共用）；stdout/stderr/error 已截断 + 脱敏。runbook/时间/结果/来源/触发
+    上下文/每步状态。不进 PUBLIC_API_PATHS（执行记录含步骤级信息，loopback
+    token / OAuth 门控）。
+    """
+    from tools.runbook_exec import recent_executions
+
+    def _load() -> list:
+        return recent_executions(Path(get_hermes_home()), limit=limit)
+
+    rows = await run_in_threadpool(_load)
+    return {"ok": True, "data": {"count": len(rows), "executions": rows}}
+
+
+@app.post("/api/runbook/executions")
+async def create_runbook_execution(payload: Dict[str, Any] = Body(default_factory=dict)):
+    """YAPL P4 执行 v0.2 runbook（交互，dashboard 触发）。
+
+    body: {name, env?, trigger_context?} → ``execute_runbook``（scheduled=False
+    交互路径）：变量替换 → target 解析 → 矩阵审批门（execute 直跑 / approve 或
+    {approve: required} → 前端审批卡，web 注册表 + 右下角弹窗，无 allowlist
+    绕过）→ handler 生成命令 → 现有执行通道 → expect 检查 → 执行记录。
+
+    v0.1 runbook 拒绝（老执行路径照旧，不显示执行按钮）；name 白名单防路径穿越。
+    """
+    from tools.approval import (
+        register_web_approval,
+        reset_hermes_interactive_context,
+        set_hermes_interactive_context,
+        wait_web_approval,
+    )
+    from tools.runbook_exec import execute_runbook
+    from tools.runbook_tools import _is_v2_runbook, _load_runbook
+    from tools.terminal_tool import set_approval_callback
+
+    name = str((payload or {}).get("name") or "").strip()
+    if not name or not _RUNBOOK_NAME_RE.match(name):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", "name 必填（kebab-case 白名单）"),
+        )
+    env = str((payload or {}).get("env") or "").strip()
+    trigger_context = payload.get("trigger_context")
+    if trigger_context is not None and not isinstance(trigger_context, dict):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", "trigger_context 必须是对象"),
+        )
+    home = Path(get_hermes_home())
+
+    def _load() -> Optional[Dict[str, Any]]:
+        return _load_runbook(home, name)
+
+    data = await run_in_threadpool(_load)
+    if data is None:
+        return JSONResponse(
+            status_code=404,
+            content=_api_error("not_found", f"runbook 不存在: {name}"),
+        )
+    if not _is_v2_runbook(data):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                f"runbook {name} 是 schema v0.1（commands 写死）——v0.1 走老执行"
+                "路径，新执行器只处理 v0.2 声明式动作。",
+            ),
+        )
+
+    result_box: Dict[str, Any] = {}
+
+    def _run() -> None:
+        tk1 = set_hermes_interactive_context(True)
+        try:
+            exec_id = _new_exec_id()
+            approval_box: Dict[str, Any] = {}
+
+            def _web_cb(display_command: str, description: str, *,
+                        allow_permanent: bool = True, allow_session: bool = True,
+                        smart_denied: bool = False) -> str:
+                approval_id = register_web_approval(
+                    command=display_command,
+                    description=description,
+                    env=env,
+                    grade=None,
+                    session_key="runbook",
+                    source="web",
+                    allow_session=allow_session,
+                    allow_permanent=allow_permanent,
+                    exec_id=exec_id,
+                    smart_denied=smart_denied,
+                )
+                approval_box["approval_id"] = approval_id
+                return wait_web_approval(approval_id) or "timeout"
+
+            set_approval_callback(_web_cb)
+            result_box["result"] = execute_runbook(
+                data,
+                env=env,
+                trigger_context=trigger_context,
+                home=home,
+            )
+        except Exception as exc:
+            result_box["error"] = f"{type(exc).__name__}: {exc}"
+        finally:
+            set_approval_callback(None)
+            reset_hermes_interactive_context(tk1)
+
+    await run_in_threadpool(_run)
+    if result_box.get("error"):
+        return JSONResponse(
+            status_code=500,
+            content=_api_error("execution_failed", str(result_box["error"])),
+        )
+    return {"ok": True, "data": result_box["result"]}
+
+
 @app.get("/api/matrix")
 async def get_ops_matrix(request: Request):
     """Ops dashboard: 操作矩阵全量视图（含每格来源 + 漏配默认 approve 警告）。
