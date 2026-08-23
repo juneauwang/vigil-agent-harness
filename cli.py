@@ -5277,7 +5277,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         """
         from hermes_cli import config as _hc_config
         from hermes_cli.config import load_config_readonly
-        from tools.ops_permissions import defined_environments
+        from tools.ops_permissions import all_defined_environments
 
         cfg = load_config_readonly() or {}
         ops = cfg.get("ops") or {}
@@ -5286,7 +5286,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             current = str(permissions.get("env") or "").strip() if isinstance(permissions, dict) else ""
         else:
             current = ""
-        env_defs = defined_environments()
+        env_defs = all_defined_environments()
 
         parts = (cmd_original or "").split()
         name = parts[1].strip().lower() if len(parts) > 1 else ""
