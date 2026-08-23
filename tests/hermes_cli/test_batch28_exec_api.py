@@ -71,6 +71,19 @@ def _cfg(home, env, *, extra="") -> None:
     )
 
 
+def _write_matrix(home, matrix) -> None:
+    """写测试矩阵（YAPL P5：权限判定 = 动作枚举 × 矩阵）。"""
+    (home / "matrix.yaml").write_text(json.dumps({
+        "schema_version": 1,
+        "updated_at": "2026-08-23T00:00:00+08:00",
+        "source": "test",
+        "base_template": "template2",
+        "matrix": matrix,
+        "sources": {env: {act: "test" for act in cells}
+                    for env, cells in matrix.items()},
+    }), encoding="utf-8")
+
+
 def _sse_events(client, url):
     """消费 SSE 流，返回 [(event, data_dict), ...]。"""
     events = []
@@ -172,19 +185,22 @@ def test_approvals_list_filtering_pagination(client, env_home):
 
 def test_exec_benign_executed_and_record(client, env_home):
     _cfg(env_home, "test")
-    r = client.post("/api/exec", json={"command": "echo hello-web", "env": "test"})
+    # YAPL P5：echo 不在规则表 → unknown → 默认 approve；benign 直跑用矩阵
+    # execute 档动作（query × test）。
+    _write_matrix(env_home, {"test": {"query": "execute"}})
+    r = client.post("/api/exec", json={"command": "docker ps", "env": "test"})
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["status"] == "executed"
     assert body["exit_code"] == 0
-    assert "hello-web" in body["output"]
+    assert "CONTAINER" in body["output"]
     exec_id = body["exec_id"]
 
     rec = client.get(f"/api/exec/{exec_id}").json()
     assert rec["exec_id"] == exec_id
     assert rec["status"] == "executed" and rec["exit_code"] == 0
-    assert rec["output"] and "hello-web" in rec["output"]
-    assert rec["command"] == "echo hello-web"
+    assert rec["output"] and "CONTAINER" in rec["output"]
+    assert rec["command"] == "docker ps"
     assert set(rec) == {
         "exec_id", "command", "env", "host", "session_id", "status",
         "exit_code", "output", "executed_at", "duration_ms", "approval_id",
@@ -204,6 +220,7 @@ def test_exec_benign_executed_and_record(client, env_home):
 
 def test_exec_validation_errors(client, env_home):
     _cfg(env_home, "test")
+    _write_matrix(env_home, {"test": {"query": "execute"}})
     assert client.post("/api/exec", json={}).status_code == 400
     r = client.post("/api/exec", json={"command": "ls", "host": "node1"})
     assert r.status_code == 400
@@ -211,21 +228,32 @@ def test_exec_validation_errors(client, env_home):
     r = client.post("/api/exec", json={"command": "ls", "timeout_seconds": "abc"})
     assert r.status_code == 400
     # host 显式本机允许。
-    r = client.post("/api/exec", json={"command": "echo local-ok", "host": "localhost",
+    r = client.post("/api/exec", json={"command": "docker ps", "host": "localhost",
                                        "env": "test"})
     assert r.status_code == 200 and r.json()["status"] == "executed"
 
 
-def test_exec_prod_l3_denied(client, env_home):
+def test_exec_prod_unknown_defaults_approve_then_deny(client, env_home):
+    """YAPL P5：iptables -F 不在规则表 → unknown → 默认 approve（矩阵无 deny）→
+    needs_approval 弹窗；用户 deny → 终态 denied。"""
     _cfg(env_home, "prod")
     r = client.post("/api/exec", json={"command": "iptables -F", "env": "prod"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["status"] == "denied" and body["code"] == "denied"
-    assert body["reason"]
-    assert "exec_id" not in body  # 契约 denied 形状是终态（reason），不带 exec_id
+    assert body["status"] == "needs_approval" and body["pending"] is True
+    exec_id, approval_id = body["exec_id"], body["approval_id"]
 
-    exec_id = next(reversed(list(web_server._EXEC_RECORDS)))
+    entry = next(
+        a for a in client.get("/api/approvals").json()["approvals"]
+        if a["id"] == approval_id
+    )
+    assert entry["action"] == "unknown"
+    assert entry["grade"] is None  # L1-L4 grade 字段退役（OPS-DELTA #75）
+    assert "未能识别命令意图" in entry["description"]
+
+    r = client.post(f"/api/approvals/{approval_id}/deny", json={"reason": "不批"})
+    assert r.status_code == 200
+
     rec = client.get(f"/api/exec/{exec_id}").json()
     assert rec["status"] == "denied" and rec["error"]
 
@@ -233,8 +261,9 @@ def test_exec_prod_l3_denied(client, env_home):
     assert events[0][0] == "exec:error"
 
 
-def test_exec_prod_l2_approval_chain(client, env_home):
-    _cfg(env_home, "prod", extra="    grades:\n      L2:\n        - \"echo approval-gate-test\"\n")
+def test_exec_prod_unknown_approval_chain(client, env_home):
+    """echo（识别不出）→ unknown → 默认 approve → 审批弹窗；批准后执行。"""
+    _cfg(env_home, "prod")
     r = client.post("/api/exec", json={
         "command": "echo approval-gate-test", "env": "prod",
     })
@@ -247,9 +276,10 @@ def test_exec_prod_l2_approval_chain(client, env_home):
     listing = client.get("/api/approvals").json()
     entry = next(a for a in listing["approvals"] if a["id"] == approval_id)
     assert entry["env"] == "prod"
-    assert entry["grade"] == "L2"
+    assert entry["action"] == "unknown"
+    assert entry["grade"] is None  # grade 字段退役（OPS-DELTA #75）
     assert entry["status"] == "pending"
-    # 非变更类 L2 走普通审批门（非 B'），会话/永久作用域可用。
+    # unknown → 普通 approve（非 required），会话/永久作用域可用。
     assert entry["allow_session"] is True and entry["allow_permanent"] is True
 
     rec = client.get(f"/api/exec/{exec_id}").json()
@@ -269,14 +299,18 @@ def test_exec_prod_l2_approval_chain(client, env_home):
     assert rec2["status"] == "executed" and rec2["exit_code"] == 0
 
 
-def test_exec_prod_bprime_yolo_cannot_bypass(client, env_home):
-    """B' 门：prod 未分级命令强制人工确认，yolo 也绕不过。"""
+def test_exec_prod_required_yolo_cannot_bypass(client, env_home):
+    """{approve: required}（prod restart）→ 强制人工，yolo 也绕不过（B' 已退役，
+    required 由矩阵驱动；unknown 命令改为普通 approve）。"""
     from tools.approval import disable_session_yolo, enable_session_yolo
     _cfg(env_home, "prod")
+    _write_matrix(env_home, {
+        "prod": {"query": "execute", "restart": {"approve": "required"}},
+    })
     enable_session_yolo("default")
     try:
         r = client.post("/api/exec", json={
-            "command": "mv /tmp/web_exec_a /tmp/web_exec_b", "env": "prod",
+            "command": "systemctl restart myapp", "env": "prod",
         })
         assert r.status_code == 200, r.text
         assert r.json()["status"] == "needs_approval"
@@ -285,14 +319,15 @@ def test_exec_prod_bprime_yolo_cannot_bypass(client, env_home):
             if a["id"] == r.json()["approval_id"]
         )
         assert entry["status"] == "pending"
-        # B' 门不提供会话/永久作用域——每次都人工确认。
+        assert entry["action"] == "restart"
+        # required 不提供会话/永久作用域——每次都人工确认。
         assert entry["allow_session"] is False and entry["allow_permanent"] is False
     finally:
         disable_session_yolo("default")
 
 
 def test_exec_deny_chain(client, env_home):
-    _cfg(env_home, "prod", extra="    grades:\n      L2:\n        - \"echo deny-gate-test\"\n")
+    _cfg(env_home, "prod")
     r = client.post("/api/exec", json={
         "command": "echo deny-gate-test", "env": "prod",
     })
@@ -424,15 +459,22 @@ def test_credential_zero_leak_all_endpoints(client, env_home):
         'echo "PASSWORD=hunter2"; echo "API_TOKEN=sk-abc123def456"; '
         "echo 'https://admin:s3cret-pw@example.com/x'"
     )
+    # YAPL P5：echo 链全 unknown → 默认 approve → 审批弹窗；批准后执行。
     r = client.post("/api/exec", json={"command": secret_cmd, "env": "test"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["status"] == "executed"
+    assert body["status"] == "needs_approval"
+    approval_id = body["approval_id"]
+    r = client.post(f"/api/approvals/{approval_id}/approve", json={"scope": "once"})
+    assert r.status_code == 200
     exec_id = body["exec_id"]
+
+    events = _sse_events(client, f"/api/exec/{exec_id}/stream")
+    assert events[0][0] == "exec:start"
+    assert any(e == "exec:exit" for e, _ in events)
 
     rec = client.get(f"/api/exec/{exec_id}").json()
     assert rec["status"] == "executed"
-    events = _sse_events(client, f"/api/exec/{exec_id}/stream")
 
     all_text = " ".join([
         json.dumps(body, ensure_ascii=False),
@@ -447,7 +489,7 @@ def test_credential_zero_leak_all_endpoints(client, env_home):
 
 def test_credential_zero_leak_approvals_command(client, env_home):
     """审批条目 command 含疑似凭据先打码再展示。"""
-    _cfg(env_home, "prod", extra="    grades:\n      L2:\n        - \"echo deploy.yaml.*\"\n")
+    _cfg(env_home, "prod")
     r = client.post("/api/exec", json={
         "command": "echo deploy.yaml --token=sk-abc123def456",
         "env": "prod",

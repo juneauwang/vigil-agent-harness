@@ -79,6 +79,11 @@ _DEFAULT_SCHEMAS: Dict[str, Any] = {
         #   remove {target, package, deps?(默认 false)}
         "install", "upgrade", "remove",
     ],
+    # YAPL P5（OPS-DELTA #75）：操作分类层规则表可配置化——schemas.yaml
+    # ``ops.schemas.command_rules``（[{pattern, action, note}]，按序命中、长模式
+    # 先）覆盖 tools/action_classifier.py 内置表；缺省 [] = 用内置表（本键只为
+    # 让配置文件里的 command_rules 进入白名单合并）。
+    "command_rules": [],
     "service_status": ["running", "restarting", "exited", "failed"],
     "raid_tool": ["ssacli", "storcli", "megacli", "mdadm", "perccli", "none"],
     "gpu_controller": ["nvidia-smi", "npu-smi", "cambricon-smi", "rocm-smi", "none"],

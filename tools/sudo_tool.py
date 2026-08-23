@@ -24,7 +24,7 @@
 后台（``&``；``&&`` 顺序连接放行，批次四十七 §BR）、多命令分隔（``;``/``||``）、
 命令替换（``$(…)``/反引号）、内嵌 sudo（防 ``sudo -S <<<`` 形态死灰复燃）。
 
-**权限矩阵联动**：执行前 ``sudo <command>`` 过 ops_permissions 判定——prod 变更类
+**操作矩阵联动**：执行前 ``sudo <command>`` 过操作矩阵判定（classifier → 动作枚举 × env）
 → approve 决策走既有审批门（批次四十七 §BT：CLI 交互提示 / web 审批注册表弹窗 /
 gateway 回环，批准后才执行；无人在场 fail-closed）；deny → 拒绝；只读诊断
 （L1 查询档）直接执行。凭据缺失/认证失败 → 停下来问用户（提供凭据或手动执行），
@@ -402,7 +402,7 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     if ansible_block:
         return tool_error(ansible_block)
 
-    # 权限矩阵联动：``sudo <command>`` 过 ops_permissions（env 档位 + 变更类判定）。
+    # 操作矩阵联动：``sudo <command>`` 过操作矩阵（classifier → 动作 × env；required 强制人工）。
     decision = check_ops_command_permission(f"sudo {command}", target_env=target_env)
     if decision:
         if decision.get("action") == "deny":

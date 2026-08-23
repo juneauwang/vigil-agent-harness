@@ -2452,7 +2452,7 @@ def _new_web_approval_id() -> str:
 
 
 def register_web_approval(*, command, description, env="", grade=None,
-                          session_key="default", source="web",
+                          action=None, session_key="default", source="web",
                           allow_session=True, allow_permanent=True,
                           primary_key=None, pattern_keys=None,
                           exec_id=None, smart_denied=False,
@@ -2476,6 +2476,7 @@ def register_web_approval(*, command, description, env="", grade=None,
         "description": description,
         "env": env or "",
         "grade": grade,
+        "action": action,
         "session_key": session_key,
         "source": source,
         "status": "pending",
@@ -2506,6 +2507,7 @@ def _web_approval_view(entry: dict) -> dict:
         "description": entry["description"],
         "env": entry["env"],
         "grade": entry["grade"],
+        "action": entry["action"],
         "session_key": entry["session_key"],
         "source": entry["source"],
         "status": entry["status"],
@@ -3889,23 +3891,26 @@ def request_ops_approval(command: str, ops_decision: dict) -> dict:
     ``register_web_approval``（/api/approvals 可见、弹窗出现）、gateway 走
     通知回环或 pending 注册表；无人在场（cron/batch/裸脚本）fail-closed BLOCK。
 
-    语义与 terminal 的 ops 审批对齐：普通 approve 用 ``ops_matrix:{grade}:{env}``
-    key（会话/永久 allowlist 生效）；prod 变更确认门（require_confirmation）改用
-    ``ops_confirmation:{grade}:{env}`` key 且不提供 session/永久选项——每次都强制
-    人工确认，任何 allowlist 都不能跳过（同 check_all_command_guards 的
+    语义与 terminal 的 ops 审批对齐（OPS-DELTA #75：审批键从 L1-L4 grade 迁移到
+    动作枚举）：普通 approve 用 ``ops_matrix:{action}:{env}`` key（会话/永久
+    allowlist 生效）；{approve: required} 强制人工确认改用
+    ``ops_confirmation:{action}:{env}`` key 且不提供 session/永久选项——每次都
+    强制人工确认，任何 allowlist 都不能跳过（同 check_all_command_guards 的
     ``_ops_confirmation_required`` 语义）。
     """
-    grade = str(ops_decision.get("grade") or "L2")
+    action_name = str(
+        ops_decision.get("action_name") or ops_decision.get("grade") or "unknown"
+    )
     env = str(ops_decision.get("env") or "").strip().lower()
     require_confirmation = bool(ops_decision.get("require_confirmation"))
     pattern_key = (
-        f"ops_confirmation:{grade}:{env}"
+        f"ops_confirmation:{action_name}:{env}"
         if require_confirmation
-        else f"ops_matrix:{grade}:{env}"
+        else f"ops_matrix:{action_name}:{env}"
     )
     description = str(
         ops_decision.get("description")
-        or f"命令分级 {grade} 在 {env} 环境需要人工审批"
+        or f"操作矩阵 {action_name} 在 {env} 环境需要人工审批"
     )
     allow_permanent = not require_confirmation
     allow_session = not require_confirmation
@@ -3926,7 +3931,7 @@ def request_ops_approval(command: str, ops_decision: dict) -> dict:
         no_human_block_message=(
             f"BLOCKED: 提权命令 '{command}' 需要人工审批（{description}），"
             "但当前没有交互用户或 gateway 在场审批。请手动执行该命令或"
-            "改用只读诊断命令（L1 查询档无需审批）。"
+            "改用矩阵 execute 档的只读查询类命令。"
         ),
     )
 
@@ -4279,13 +4284,14 @@ def check_all_command_guards(command: str, env_type: str,
             "message": ansible_block,
         }
 
-    # Ops harness graded permission matrix (ops-agent-harness.md §3):
-    # command grade × active environment → execute / approve / deny. A matrix
-    # DENY is a hard block — like the user deny rules above, it fires BEFORE
-    # the yolo / mode=off / permanent-allowlist bypasses so no session-level
-    # setting can override it. An APPROVE outcome rides the normal approval
-    # flow (consumed in Phase 2 below); with no human present (cron/batch) it
-    # fails closed, mirroring request_tool_approval.
+    # YAPL P5 操作矩阵（yapl-design.md §11.1，OPS-DELTA #75）:
+    # 命令/意图 → 动作枚举（tools/action_classifier.py，规则优先、识别不出默认
+    # 保守 unknown）→ action × env 查操作矩阵（tools/matrix_data.py，与 runbook
+    # 执行路径同一 matrix.yaml——双矩阵统一）。矩阵无 deny：execute → 直接过；
+    # approve → 走现有审批门（Phase 2 消费）；{approve: required} →
+    # require_confirmation 强制人工（覆盖 yolo / mode=off / 永久 allowlist）。
+    # 无人在场（cron/batch）时 approve 需求 fail-closed，mirroring
+    # request_tool_approval。L1-L4 命令分级退役（判定对象：命令正则 → 动作枚举）。
     # Ops command target resolution (跨环境硬约束 · 命令目标级 env 判定):
     # 先解析命令目标（ssh/scp/sftp 的 user@host、kubectl → k3s-prod），命中拓扑
     # 实体时把目标 env 传入矩阵（test 会话对 prod 实体照样按 prod 判定，跨环境
@@ -4303,23 +4309,8 @@ def check_all_command_guards(command: str, env_type: str,
     except Exception as _ops_exc:
         logger.debug("Ops permission matrix check failed: %s", _ops_exc)
     if ops_decision is not None:
-        if ops_decision["action"] == "deny":
-            logger.warning("Ops matrix deny (%s/%s): %s",
-                           ops_decision["grade"], ops_decision["env"], command[:200])
-            target_note = f" 目标: {target['label']}。" if target else ""
-            return {
-                "approved": False,
-                "ops_matrix": ops_decision,
-                "message": (
-                    f"BLOCKED: {ops_decision['description']} (grade "
-                    f"{ops_decision['grade']}, env {ops_decision['env']})."
-                    f"{target_note} "
-                    "The ops permission matrix denies this command to the "
-                    "agent; only a human operator can run it. Do NOT retry, "
-                    "rephrase, or attempt the same outcome via a different "
-                    "command."
-                ),
-            }
+        # 矩阵无 deny（classifier 不产出 deny，保守 = approve 不是拒绝）；硬底线 /
+        # sudo stdin / 用户 deny / ansible inventory guard 等无条件层都在本检查之前。
         _has_human = (
             _is_interactive_cli()
             or _is_gateway_approval_context()
@@ -4333,8 +4324,8 @@ def check_all_command_guards(command: str, env_type: str,
                 "approved": False,
                 "ops_matrix": ops_decision,
                 "message": (
-                    f"BLOCKED: {ops_decision['description']} (grade "
-                    f"{ops_decision['grade']}, env {ops_decision['env']})"
+                    f"BLOCKED: {ops_decision['description']} (动作 "
+                    f"{ops_decision['action_name']}, env {ops_decision['env']})"
                     f"{target_note} "
                     "but no interactive user or gateway is present to approve it. "
                     "Find an alternative approach or run it manually."
@@ -4507,7 +4498,7 @@ def check_all_command_guards(command: str, env_type: str,
     # dangerous-pattern warnings, so smart approval + gateway/CLI prompting +
     # session/permanent allowlisting all apply unchanged.
     if ops_decision is not None and ops_decision["action"] == "approve":
-        ops_key = f"ops_matrix:{ops_decision['grade']}:{ops_decision['env']}"
+        ops_key = f"ops_matrix:{ops_decision['action_name']}:{ops_decision['env']}"
         ops_desc = ops_decision["description"]
         if target:
             ops_desc = f"{ops_desc} 目标: {target['label']}"

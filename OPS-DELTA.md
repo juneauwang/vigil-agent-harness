@@ -3358,3 +3358,121 @@
   RunbooksPage.test.tsx；季度体检：RunbooksPage v0.2 有执行按钮/历史表、
   `/api/runbook/executions` 两个端点存在、执行记录 source 区分 user/schedule。
 - **状态**：阶段 5 独立 commit（P4 全 5 阶段收官；OPS-DELTA #70-#74）。
+
+### 75. 批次六十 YAPL P5 操作分类层——action classifier（terminal 收口）+ 双矩阵统一 + L1-L4 分级退役（2026-08-23，设计单一事实来源 yapl-design.md §11.1/§11.2/§11.5/§11.6 + §八待办）
+
+- **背景**：YAPL v1.0 最后一块（P5）。P3 操作矩阵（action × env）与 P4 执行器
+  已就位，但 terminal 直跑仍走 L1-L4 命令分级（`_DEFAULT_GRADES` 正则表 →
+  grade × env → execute/approve/deny），与 runbook 路径（同一矩阵）两套语义。
+  P5 收口：terminal 命令先过**操作分类层**（规则表优先的命令/意图 → 动作枚举
+  23 个），再按动作 × env 查**同一 matrix.yaml**（双矩阵统一）；L1-L4 分级
+  退役，判定对象从"命令正则分级"换成"动作枚举"。§八待办（"terminal 检测
+  ansible/ssh/scp 类运维命令 → 提示走受控通道"）一并收口为 classifier 规则。
+- **怎么改**：
+  - `tools/action_classifier.py`（新）：`classify_command(command)` →
+    `{action, rule, note, chain}`。内置规则表（docker/kubectl/systemctl/service/
+    apt/dnf/yum/pip/pm2/helm/ansible/curl/wget/备份恢复族/reboot/shutdown，
+    长模式先：docker compose 先于 docker、kubectl rollout 先于 kubectl）；
+    受控通道规则（ssh/scp/rsync/sftp）在规则表**最前**——ssh 串内嵌
+    systemctl/docker 时受控通道语义优先（action=run_script/transfer_file +
+    note"走 vssh/拓扑凭据受控通道"）。管道不干扰（`docker ps | grep harbor` →
+    主命令 docker ps → query，词面绕过消失）；链式（`&&`/`||`/`;`/换行）拆
+    子命令各自分类、`chain` 携带供矩阵层取保守，`action` 字段静态档位最保守
+    （展示用）；sudo/doas 前缀剥离（`-i`/`-u root`/取值 flag 多剥一个值）；
+    识别不出 → `unknown`（保守，默认 approve 不是 deny）。**不是 LLM 工具**
+    （不注册 model tool；LLM 只该知道 terminal 走同一矩阵）。
+  - `tools/ops_permissions.py` 重写：删 `_DEFAULT_GRADES`/`_GRADE_ORDER`/
+    `_DEFAULT_MATRIX`/`classify_command`(L1-L4)/`_L1_EXCLUSIONS`/
+    `_CHANGE_COMMAND_RE`/`_matrix_row` 与 deny 分支。保留 env 辅助
+    （`defined_environments`/`_map_env_tier`/`_raw_env_definition`/
+    `_LEGACY_ENV_TIER_MAP`/`_active_env`/`_active_role`，cli `/env`、runbook
+    env 校验继续引用）。`check_ops_command_permission(command, target_env)`：
+    classifier → `matrix_data.load_matrix_or_empty()` → `get_level()`；
+    execute → None（直过）、approve → dict（走现有审批门）、required →
+    `require_confirmation=True`（强制人工）；unknown/动作漏配 → 默认 approve
+    （保守）+ warning；链式取矩阵档位最高。decision 字段：
+    `action/action_name/rule/note/env/env_tier/role/level/require_confirmation/
+    description/classification`。
+  - `tools/approval.py` 接线（`check_all_command_guards`）：ops 矩阵段改为
+    classifier → 矩阵语义，**删除 deny 硬拒分支**（矩阵无 deny；无条件层
+    hardline/sudo stdin/user deny/ansible guard 仍在矩阵之前，顺序不动）；
+    无人在场 keep fail-closed，消息改 `action_name`。审批键迁移：
+    `ops_matrix:{grade}:{env}` → `ops_matrix:{action_name}:{env}`（
+    `ops_confirmation:` 同）；`request_ops_approval`（sudo 路径）同迁，仍兼容
+    读 `grade` 字段 fallback（老调用方无 `action_name` 时不断）。`_ops_confirmation_required`
+    复用机制不变：required 强制人工，覆盖 yolo/mode/allowlist。
+  - 探测点 grade 退役：`hermes_cli/chat_api.py` `_probe_ops_grade` →
+    `_probe_ops_action`（`action_name`）；`hermes_cli/web_server.py`
+    `grade_box["grade"]` → `grade_box["action"]`（/api/exec + approval_callback
+    注册 `action=`）。`tools/sudo_tool.py` docstring/注释更新（逻辑不变；
+    `decision.get("action") == "deny"` 分支保留为死代码兼容，矩阵不再产 deny）。
+  - 审批注册表：`register_web_approval` 新增 `action=None` 参数（entry 落
+    `"action"`，`grade` 字段保留兼容）；`_web_approval_view`/`list_web_approvals`
+    透传 `action`（/api/approvals 可见，前端弹窗可展示动作枚举）。
+  - 规则表可配置化：`schemas.yaml` `ops.schemas.command_rules`（
+    `[{pattern, action, note}]`，按序命中、长模式先）覆盖内置表；
+    `tools/topo_schemas.py` `_DEFAULT_SCHEMAS` 加 `"command_rules": []` 白名单
+    键；按 schemas.yaml mtime 缓存、配置改动热生效。
+- **退役语义（行为变化点）**：
+  - L1-L4 命令分级（`_DEFAULT_GRADES` 正则表/graded 判定/deny 档）不再驱动
+    terminal 审批；terminal 直跑只有"动作 × 矩阵"概念。
+  - B'（批次十七：未分级命令 prod 档默认审批 + `_CHANGE_COMMAND_RE` 变更类
+    确认门）退役——`_CHANGE_COMMAND_RE` 不再驱动审批；prod 变更确认由矩阵
+    required 档驱动（template2：prod restart/start/stop/… =
+    `{approve: required}`）。
+  - unknown → 默认 approve 走审批门（矩阵无 deny，保守 = approve 不是拒绝）。
+    矩阵未配置动作/env（含 test env）→ get_level 默认 approve。**行为变化**：
+    原来 test env 直接执行的未分级命令（如 `echo`/`ls`）现在也走审批门——
+    batch28 的 echo/ls 用例按新语义改为 needs_approval 后批准/或改用矩阵
+    execute 档命令（`docker ps` + test query=execute）。
+  - 审批键迁移：`ops_matrix:{grade}:{env}` → `ops_matrix:{action_name}:{env}`。
+    永久 allowlist/审计历史里按 grade 键存的记录不迁移（旧键失效即重新审批，
+    保守方向，可接受）；`request_ops_approval` 读 `grade` fallback 保证存量
+    调用不崩。
+  - classifier 不接触凭据；审批键不含敏感信息（动作枚举 + env 名）。
+- **测试**：test_action_classifier.py 87（规则表大全/管道不干扰/链式保守/
+  unknown 兜底/受控通道优先/配置规则覆盖）+ test_terminal_matrix.py 14
+  （execute 直过/管道/approve smart+人工门/required 强制人工覆盖 smart+yolo/
+  unknown 默认 approve/无条件层 4 个/链式保守/terminal vs runbook 一致性）+
+  test_ops_permissions.py 23 + test_ops_permissions_guard.py 18（target 跨
+  环境，断言动作键 `ops_matrix:run_script:prod`）+ test_ops_confirmation_gate.py
+  45（prod required 确认门 + 规则表外 unknown 默认 approve）+ 
+  test_change_command_coverage.py 3（classifier 覆盖变更命令族）+
+  test_ops_init.py 25（模板矩阵写盘；unknown→approve 语义）+
+  test_batch28_exec_api.py 16（三态/凭据零泄露/审批 action 字段）。回归：
+  runbook_exec/matrix/runbook_v2/runbook_tools/sudo_exec/ops_target/cron 586
+  passed（1 个无关 coroutine warning）；test_env_command.py 剩 3 个既有失败
+  （`bare_metal_prod` 映射 prod 的 env 名单展示，git worktree 验证 base
+  batch59 同样失败，非本批引入）。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv
+  重启，pid 3024768）：
+  - `docker ps` env=local → 分类 query → executed exit 0（无审批卡）。注：
+    /api/exec 的 env 参数为展示字段（P4 既有语义），矩阵按会话 env（config
+    `ops.permissions.env`=test，test 未配矩阵 → 漏配 approve）→ smart 模式
+    自动放行；manual 模式行为由 batch28 测试覆盖。
+  - `docker ps | grep harbor` env=local → 主命令分类 query（词面绕过消失）
+    → executed exit 0，stdout 命中 harbor-log 行。
+  - `docker restart harbor-core` env=local → restart → executed exit 0。
+  - `ssh root@39.106.217.32 uptime`（target 命中 prod 主机）→ 分类 run_script
+    （规则 ssh.controlled，note"ssh 类走 vssh/拓扑凭据受控通道"）→
+    run_script × prod = `{approve: required}` → `needs_approval` 弹窗
+    （审批条目 action=run_script、grade=null、allow_session/permanent=false、
+    description 含"强制人工确认（run_script × prod = {approve: required}）
+    …受控通道…目标: 39.106.217.32 (prod)"）→ 批准 once → SSE 执行 → 记录
+    executed（本机无 ssh key，连接被拒 exit 255——是执行结果，不是审批拦截）。
+  - unknown：`mv /tmp/p5-live-test-a /tmp/p5-live-test-b` → unknown → 默认
+    approve → smart 自动放行 executed exit 1（源文件不存在；manual 模式弹窗
+    由 batch28 `test_exec_prod_unknown_defaults_approve_then_deny` 等覆盖）。
+  - 一致性（同一矩阵两路径）：runbook 直查 `matrix_data.get_level` vs
+    terminal `classifier → check_ops_command_permission`——ssh→prod
+    run_script required=required、docker ps→local query execute=execute、
+    docker restart→local restart execute=execute、docker restart→prod
+    restart required=required、mv→local unknown approve=approve，档位全一致。
+  - 实测后清理：无落盘产物（mv 未创建文件；审批/执行记录在进程内存，随服务
+    重启消失）；`docker restart harbor-core` 为任务书指定的本机容器操作。
+- **核销方式**：测试常驻——test_action_classifier.py + test_terminal_matrix.py
+  + test_ops_permissions*.py + test_batch28_exec_api.py；季度体检：
+  terminal 直跑与 runbook 执行共用同一 matrix.yaml（classifier → 矩阵）、
+  `ops_matrix:{action}:{env}` 审批键、未知命令默认 approve 弹窗、
+  `ssh root@prod-host …` 命中 prod 档 required 弹窗。
+- **状态**：P5 独立 commit（YAPL v1.0 收官；OPS-DELTA #75）。

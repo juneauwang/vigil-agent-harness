@@ -1,32 +1,30 @@
-"""批次十七 §AA 风险点 1 — _CHANGE_COMMAND_RE 变更类清单覆盖测试。
+"""YAPL P5（OPS-DELTA #75）— 变更命令覆盖契约（替代批次十七 _CHANGE_COMMAND_RE）。
 
-prod 变更确认门依赖 ``_CHANGE_COMMAND_RE`` 识别"变更类命令"（服务重启/容器重建/
-配置下发）——**漏识别的变更命令会退回普通审批 → yolo 放行**（prod 变更无确认执行）。
-本套件把变更清单逐条钉住：每条都必须命中正则 + 在 prod 档返回 require_confirmation=True；
-非变更命令不命中、prod 查询档照常 execute。若某条不命中 = 变更清单漏项 = 真实风险。
+prod 变更确认门依赖操作分类层识别"变更类命令"（服务重启/容器重建/配置下发）——
+漏识别的变更命令会退回 unknown → 普通 approve（smart 可自动放行，不强制人工）。
+本套件把变更命令族逐条钉住：每条都必须被 classifier 归到 prod 矩阵 required 档
+的动作（restart/deploy/scale/decommission/remove/stop/upgrade 等）→ prod 判定
+require_confirmation=True。识别不出的命令族（kubectl edit/drain/cordon）按设计
+落到 unknown → 默认 approve（保守，非强制）——这是规则表边界，登记在案。
 """
 
 from __future__ import annotations
 
+import yaml
+
 import pytest
 
 import hermes_cli.config as hc
-from tools.ops_permissions import (
-    _CHANGE_COMMAND_RE,
-    check_ops_command_permission,
-    classify_command,
-)
+from tools.action_classifier import classify_command
+from tools.ops_permissions import check_ops_command_permission
 
-# 变更清单（宁可多列不漏列——漏列的代价是 prod 变更无确认执行）。
+# 变更命令族（每一条都必须命中规则表 → prod 矩阵 required）。
 _CHANGE_SAMPLES = [
     "ansible-playbook site.yml",
     "kubectl apply -f deploy.yaml",
     "kubectl delete pod web-1",
-    "kubectl edit deployment nginx",
     "kubectl scale deploy web --replicas=5",
     "kubectl rollout restart deploy/web",
-    "kubectl drain node1",
-    "kubectl cordon node2",
     "docker compose up -d",
     "docker compose restart web",
     "docker compose rm -f",
@@ -41,15 +39,29 @@ _CHANGE_SAMPLES = [
     "helm uninstall release",
 ]
 
-# 非变更反向样本：不得命中正则，prod 查询档照常 execute（decision None）。
+# 查询类反向样本：classifier 归 query/fetch_log → prod execute（decision None）。
 _NON_CHANGE_SAMPLES = [
-    "ls -la",
-    "cat /etc/hosts",
     "kubectl get pods",
     "docker ps",
     "systemctl status nginx",
-    "helm list",
 ]
+
+# 变更但规则表外 → unknown → 默认 approve（保守，非强制确认门）。
+_UNKNOWN_SAMPLES = [
+    "kubectl edit deployment nginx",
+    "kubectl drain node1",
+    "kubectl cordon node2",
+]
+
+MATRIX = {
+    "prod": {
+        "query": "execute", "fetch_log": "execute", "verify": "execute",
+        "restart": {"approve": "required"}, "deploy": {"approve": "required"},
+        "scale": {"approve": "required"}, "decommission": {"approve": "required"},
+        "remove": {"approve": "required"}, "stop": {"approve": "required"},
+        "upgrade": {"approve": "required"}, "rollback": {"approve": "required"},
+    },
+}
 
 
 @pytest.fixture
@@ -58,51 +70,46 @@ def prod_env(tmp_path, monkeypatch):
         "ops:\n  permissions:\n    enabled: true\n    env: prod\n    role: operator\n",
         encoding="utf-8",
     )
+    (tmp_path / "matrix.yaml").write_text(yaml.safe_dump({
+        "schema_version": 1,
+        "updated_at": "2026-08-23T00:00:00+08:00",
+        "source": "test",
+        "base_template": "template2",
+        "matrix": MATRIX,
+        "sources": {"prod": {act: "test" for act in MATRIX["prod"]}},
+    }, allow_unicode=True, sort_keys=False), encoding="utf-8")
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     hc._LOAD_CONFIG_CACHE.clear()
     yield
     hc._LOAD_CONFIG_CACHE.clear()
 
 
-def test_change_samples_all_match_regex_and_require_confirmation(prod_env):
-    """变更清单每一条：正则命中 + prod 档 require_confirmation=True。"""
-    missing = []
+def test_change_samples_all_land_in_prod_required(prod_env):
+    """变更清单每一条：classifier 归动作 + prod 矩阵 required（强制人工确认门）。"""
     for cmd in _CHANGE_SAMPLES:
-        if not _CHANGE_COMMAND_RE.search(cmd):
-            missing.append(cmd)
-            continue
+        classification = classify_command(cmd)
+        assert classification["action"] != "unknown", cmd
         decision = check_ops_command_permission(cmd, target_env="prod")
         assert decision is not None, cmd
+        assert decision["level"] == "required", cmd
         assert decision["require_confirmation"] is True, cmd
-    assert missing == [], f"变更清单漏项（未命中 _CHANGE_COMMAND_RE）: {missing}"
+        assert decision["action_name"] == classification["action"], cmd
 
 
-def test_change_samples_cover_positive_and_deny_classes(prod_env):
-    """变更清单里既有 approve 类（L2）也有 deny 类（L3/L4）——都强制确认门。"""
-    for cmd in _CHANGE_SAMPLES:
-        decision = check_ops_command_permission(cmd, target_env="prod")
-        assert decision is not None and decision["require_confirmation"] is True, cmd
-        assert decision["action"] in ("approve", "deny"), cmd
-
-
-def test_non_change_samples_not_matched_and_execute(prod_env):
-    """非变更命令不命中正则；已分级查询（L1）prod 照常 execute（decision None）。
-
-    ``helm list`` 是未分级查询（grade=None，不在 L1 模式内）——它不命中变更正则
-    （不是变更类），但 B' 对 prod 未分级命令默认进确认门（预期行为，见报告
-    "已知风险：B' 噪音面"——helm/k8s 等未分级查询命令在 prod 会开始要审批）。
-    """
+def test_non_change_samples_query_execute(prod_env):
+    """查询类命令 → query/fetch_log → prod execute → decision None。"""
     for cmd in _NON_CHANGE_SAMPLES:
-        assert not _CHANGE_COMMAND_RE.search(cmd), cmd
-        if classify_command(cmd) == "L1":
-            assert check_ops_command_permission(cmd, target_env="prod") is None, cmd
-        else:
-            # 未分级 + prod → B' 确认门（不是变更正则误伤，是 B' 预期）
-            decision = check_ops_command_permission(cmd, target_env="prod")
-            assert decision is not None and decision["require_confirmation"] is True, cmd
+        classification = classify_command(cmd)
+        assert classification["action"] in ("query", "fetch_log"), cmd
+        assert check_ops_command_permission(cmd, target_env="prod") is None, cmd
 
 
-def test_change_regex_is_case_insensitive():
-    assert _CHANGE_COMMAND_RE.search("KUBECTL APPLY -f x.yaml")
-    assert _CHANGE_COMMAND_RE.search("Systemctl Restart nginx")
-    assert _CHANGE_COMMAND_RE.search("Docker Compose Up -d")
+def test_unknown_change_samples_default_approve(prod_env):
+    """规则表外的变更命令（kubectl edit/drain/cordon）→ unknown → 默认 approve
+    （保守走审批门，非 required；OPS-DELTA #75 规则表边界登记）。"""
+    for cmd in _UNKNOWN_SAMPLES:
+        assert classify_command(cmd)["action"] == "unknown", cmd
+        decision = check_ops_command_permission(cmd, target_env="prod")
+        assert decision is not None, cmd
+        assert decision["action_name"] == "unknown", cmd
+        assert decision["require_confirmation"] is False, cmd
