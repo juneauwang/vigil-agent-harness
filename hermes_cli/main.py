@@ -6044,12 +6044,17 @@ def _desktop_packaged_executable(desktop_dir: Path) -> Optional[Path]:
     """Return the current platform's unpacked Electron app executable."""
     release_dir = desktop_dir / "release"
     if sys.platform == "darwin":
-        candidates = list(release_dir.glob("mac*/Vigil.app/Contents/MacOS/Vigil"))
+        # apps/desktop/package.json still builds productName "Hermes" while the
+        # launcher references the renamed "Vigil" bundle — accept both so a
+        # locally-built app is never "not found" after a successful pack.
+        candidates = []
+        for bundle in ("Hermes.app", "Vigil.app"):
+            candidates += list(release_dir.glob(f"mac*/{bundle}/Contents/MacOS/*"))
     elif sys.platform == "win32":
         candidates = [
-            release_dir / "win-unpacked" / "Vigil.exe",
-            release_dir / "win-ia32-unpacked" / "Vigil.exe",
-            release_dir / "win-arm64-unpacked" / "Vigil.exe",
+            *[release_dir / f"{d}" / name
+              for d in ("win-unpacked", "win-ia32-unpacked", "win-arm64-unpacked")
+              for name in ("Hermes.exe", "Vigil.exe")],
         ]
     else:
         candidates = [

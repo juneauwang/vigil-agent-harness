@@ -56,7 +56,7 @@ _GATEWAY_LIFECYCLE_PATTERN = re.compile(
     # `start` is intentionally excluded: starting a gateway from inside a
     # gateway is benign (a no-op or "already running" error), and a
     # legitimate cron job might start a sibling profile's gateway.
-    r"(?:(?:vigil|vigil)\s+gateway\s+(?:restart|stop))"
+    r"(?:(?:hermes|vigil)\s+gateway\s+(?:restart|stop))"
     # Branch B: launchctl ops on a hermes-gateway label. macOS launchd
     # labels look like `ai.hermes.gateway` / `hermes-gateway`. Requiring the
     # gateway identifier prevents blocking unrelated vigil services (e.g.
@@ -69,13 +69,13 @@ _GATEWAY_LIFECYCLE_PATTERN = re.compile(
     # loop instead (#62891) — same foot-gun, indirect shape. Neutral-label
     # submissions that dodge this text anchor are caught separately by
     # `contains_launchctl_submit_command` (execution-aware, label-independent).
-    r"|(?:launchctl\s+(?:kickstart|unload|load|stop|restart|submit|bootstrap)\b[^\n]*\bhermes[.\-]?gateway)"
+    r"|(?:launchctl\s+(?:kickstart|unload|load|stop|restart|submit|bootstrap)\b[^\n]*(?:hermes|vigil)[.\-]?gateway)"
     # Branch C: systemctl ops on a hermes-gateway unit.
-    r"|(?:systemctl\s+(?:-\S+\s+)*(?:restart|stop|start)\b[^\n]*\bhermes[.\-]?gateway)"
+    r"|(?:systemctl\s+(?:-\S+\s+)*(?:restart|stop|start)\b[^\n]*(?:hermes|vigil)[.\-]?gateway)"
     # Branch D: pkill / kill targeting the vigil gateway process. Both
     # token orders because real reproductions show both.
-    r"|(?:p?kill\b[^\n]*\bhermes\b[^\n]*\bgateway)"
-    r"|(?:p?kill\b[^\n]*\bgateway\b[^\n]*\bhermes)"
+    r"|(?:p?kill\b[^\n]*\b(?:hermes|vigil)\b[^\n]*\bgateway)"
+    r"|(?:p?kill\b[^\n]*\bgateway\b[^\n]*\b(?:hermes|vigil))"
 )
 
 

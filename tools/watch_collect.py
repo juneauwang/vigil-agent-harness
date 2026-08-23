@@ -72,7 +72,11 @@ def _ops_config() -> Dict[str, Any]:
 
 
 def watch_enabled() -> bool:
-    """值守采集开关：``ops.watch.enabled: false`` → 关闭（硬约束 3）；缺省开。"""
+    """值守采集开关：``ops.watch.enabled`` 显式 false → 关闭（硬约束 3）。
+
+    DEFAULT_CONFIG 合并后缺省即 ``false``（后台采集默认不跑，用户显式开启
+    才启用），与 watch_tools.check_watch_requirements 的门控一致。
+    """
     ops = _ops_config()
     return ops.get("watch", {}).get("enabled") is not False
 

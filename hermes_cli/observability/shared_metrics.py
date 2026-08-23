@@ -27,7 +27,13 @@ from .shared_metrics_contract import (
 
 _PACKAGE_SCHEMA_VERSION = "hermes.shared_metrics.v2"
 _STORE_SCHEMA_VERSION = "2"
-_BUSY_TIMEOUT_MS = 250
+# Counter writes can arrive from concurrent agent threads (and, in
+# multi-process deployments, sibling workers) on a busy host. 250ms was
+# tight enough to flake as `sqlite3.OperationalError: database is locked`
+# under load — the schema/upgrade path already waits up to 5s, so the
+# write path gets the same bound. Telemetry must never drop a counter
+# because a lock wait exceeded an overly optimistic timeout.
+_BUSY_TIMEOUT_MS = 5_000
 _SCHEMA_BUSY_TIMEOUT_MS = 5_000
 _LOCAL_HISTORY_RETENTION_DAYS = 30
 _ACTIVE_INSTALL_STATE_KEY = "client_active_recorded_at"

@@ -267,7 +267,7 @@ console.log = (...args) => {
 // half-open ("zombie") one. `space.get` is purely local in shared/dedicated
 // mode (no chat is created or messaged); only the message read hits the wire.
 const PROBE_SPACE_ID = process.env.PHOTON_PROBE_SPACE_ID || "any;-;+10000000000";
-const PROBE_MSG_PREFIX = "hermes-liveness-probe-";
+const PROBE_MSG_PREFIX = "vigil-liveness-probe-";
 
 if (!projectId || !projectSecret || !sharedToken) {
   console.error(
@@ -969,7 +969,7 @@ function isHttpUrl(value) {
 }
 
 const server = http.createServer(async (req, res) => {
-  if (!tokenOk(req.headers["x-hermes-sidecar-token"])) {
+  if (!tokenOk(req.headers["x-vigil-sidecar-token"])) {
     return unauthorized(res);
   }
   // Long-lived inbound NDJSON stream.

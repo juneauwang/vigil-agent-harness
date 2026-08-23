@@ -28,6 +28,7 @@ import asyncio
 import concurrent.futures
 import dataclasses
 import faulthandler
+import hashlib
 import inspect
 import json
 import logging
@@ -22539,10 +22540,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
             path = resolve_config_path()
             try:
+                # WSL/ext4 timestamps are coarse (ms granularity), so two
+                # writes inside one tick are indistinguishable by mtime alone
+                # — fold size + a content digest into the key so ANY config
+                # edit (same-size edits included) busts the memo. honcho.json
+                # is tiny, so the read is negligible next to the JSON parse.
                 mtime_ns = path.stat().st_mtime_ns
+                content_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             except OSError:
                 mtime_ns = None
-            memo_key = (str(path), mtime_ns)
+                content_digest = None
+            memo_key = (str(path), mtime_ns, content_digest)
             cached = cls._HONCHO_CACHE_BUSTING_MEMO.get(memo_key)
             if cached is not None:
                 return dict(cached)

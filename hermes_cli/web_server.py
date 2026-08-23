@@ -1098,6 +1098,12 @@ _CATEGORY_MERGE: Dict[str, str] = {
     # `telemetry.shared_metrics.enabled` is the only schema-surfaced telemetry
     # field — fold it into security alongside the other privacy-posture toggles.
     "telemetry": "security",
+    # `platform_toolsets.cli` is the only schema-surfaced platform_toolsets
+    # field (the other platforms' toolset lists are populated from the
+    # platform configs, not DEFAULT_CONFIG) — fold it into the agent tab
+    # alongside the other tooling toggles rather than spawning a one-field
+    # orphan category.
+    "platform_toolsets": "agent",
 }
 
 # Display order for tabs — unlisted categories sort alphabetically after these.

@@ -210,17 +210,19 @@ _VIGIL_MODEL_WARNING = (
     "(Claude, GPT, Gemini, DeepSeek, etc.)."
 )
 
-# Match only the real Nous Research Vigil 3 / Vigil 4 chat families.
-# The previous substring check (`"vigil" in name.lower()`) false-positived on
-# unrelated local Modelfiles like ``hermes-brain:qwen3-14b-ctx16k`` that just
-# happen to carry "vigil" in their tag but are fully tool-capable.
+# Match only the real Nous Research Hermes 3 / Hermes 4 chat families.
+# (The product is Vigil, but the model family Nous ships is Hermes — a
+# substring check on the product name would match nothing and one on
+# "hermes" alone false-positived on unrelated local Modelfiles like
+# ``hermes-brain:qwen3-14b-ctx16k`` that just happen to carry "hermes" in
+# their tag but are fully tool-capable.)
 #
 # Positive examples the regex must match:
 #   NousResearch/Hermes-3-Llama-3.1-70B, hermes-4-405b, openrouter/hermes3:70b
 # Negative examples it must NOT match:
 #   hermes-brain:qwen3-14b-ctx16k, qwen3:14b, claude-opus-4-6
-_NOUS_VIGIL_NON_AGENTIC_RE = re.compile(
-    r"(?:^|[/:])vigil[-_ ]?[34](?:[-_.:]|$)",
+_NOUS_HERMES_NON_AGENTIC_RE = re.compile(
+    r"(?:^|[/:])hermes[-_ ]?[34](?:[-_.:]|$)",
     re.IGNORECASE,
 )
 
@@ -279,7 +281,7 @@ def is_nous_hermes_non_agentic(model_name: str) -> bool:
     """
     if not model_name:
         return False
-    return bool(_NOUS_VIGIL_NON_AGENTIC_RE.search(model_name))
+    return bool(_NOUS_HERMES_NON_AGENTIC_RE.search(model_name))
 
 
 def _check_hermes_model_warning(model_name: str) -> str:
