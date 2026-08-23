@@ -412,6 +412,71 @@ export interface ChatHistoryResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+// ── UI 监控（OPS-DELTA #78）：健康 / PromQL 查询 / 活跃告警 ──────────────
+
+export interface MonitoringHealthService {
+  name: string;
+  host?: string;
+  cluster?: string;
+  type?: string;
+  managed_by?: string;
+  env?: string;
+  endpoint?: string | null;
+  status: "up" | "down" | "unknown";
+  latency_ms?: number | null;
+  checked_at?: string;
+  ports?: Array<{
+    port?: number | null;
+    proto?: string;
+    status: string;
+    latency_ms?: number;
+  }>;
+}
+
+export interface MonitoringHealthResponse {
+  ok?: boolean;
+  data?: {
+    checked_at?: string;
+    cached?: boolean;
+    summary?: { up: number; down: number; unknown: number };
+    services?: MonitoringHealthService[];
+  };
+}
+
+export interface MonitoringSeries {
+  name: string;
+  labels: Record<string, string>;
+  points: Array<[number, number | null]>;
+  summary: { min?: number; max?: number; last?: number };
+  point_count: number;
+}
+
+export interface MonitoringQueryResponse {
+  ok?: boolean;
+  data?: {
+    kind: string;
+    query: string;
+    duration: string;
+    step: string;
+    series: MonitoringSeries[];
+    truncated?: boolean;
+  };
+}
+
+export interface MonitoringAlert {
+  alertname: string;
+  severity: string;
+  instance?: string;
+  labels?: Record<string, string>;
+  startsAt?: string;
+  state?: string;
+}
+
+export interface MonitoringAlertsResponse {
+  ok?: boolean;
+  data?: { alerts: MonitoringAlert[]; count: number };
+}
+
 // ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -494,6 +559,19 @@ export const api = {
     fetchJSON<IncidentsResponse>(
       `/api/incidents?${new URLSearchParams(cleanParams({ limit: params?.limit, offset: params?.offset }))}`,
     ),
+  // UI 监控 API（OPS-DELTA #78）：健康 / PromQL 查询 / 活跃告警
+  getMonitoringHealth: (refresh = false) =>
+    fetchJSON<MonitoringHealthResponse>(
+      `/api/monitoring/health${refresh ? "?refresh=1" : ""}`,
+    ),
+  queryMonitoring: (promql: string, duration?: string, step?: string) =>
+    fetchJSON<MonitoringQueryResponse>(
+      `/api/monitoring/query?${new URLSearchParams(
+        cleanParams({ promql, duration, step }),
+      )}`,
+    ),
+  getMonitoringAlerts: () =>
+    fetchJSON<MonitoringAlertsResponse>("/api/monitoring/alerts"),
 
   // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
   // approval_pending/done/error）

@@ -3846,6 +3846,107 @@ async def put_ops_matrix(payload: Dict[str, Any] = Body(default_factory=dict),
 
 
 # ---------------------------------------------------------------------------
+# UI 监控 API（OPS-DELTA #78）：健康 / PromQL 查询 / 活跃告警
+# ---------------------------------------------------------------------------
+# 定位：通用监控展示层——Prometheus 协议为底座但不绑死 Prometheus；服务健康
+# 不依赖 Prometheus（拓扑数据即可探测，开箱即用）。数据源复用 ops.prometheus
+# 配置段（零新配置）；未配置 → 503 + 明确提示，健康探测照常。健康是动态状态，
+# 按需探测、不落盘、不写拓扑、不产生审计。全部端点不进 PUBLIC_API_PATHS，
+# 与 /api/matrix 同机制：loopback 前缀放行、公网绑定走 OAuth/会话 token
+# （_require_token 兜底）。探测/查询全部走线程池，不阻塞事件循环。
+
+
+@app.get("/api/monitoring/health")
+async def get_monitoring_health(request: Request, refresh: bool = False):
+    """拓扑服务健康（只读动态状态；30s 短缓存，refresh=1 强制重探）。
+
+    遍历拓扑服务（P1 数据层 services/），对 endpoint（+ extra_ports）探测：
+    HTTP 类 → GET 200-399 = up；端口类 → TCP 通 = up；无 endpoint/需认证 →
+    unknown（不误报）。不落盘、不写拓扑、不产生审计。
+    """
+    _require_token(request)
+    from hermes_cli.monitoring import probe_services_health
+
+    try:
+        data = await run_in_threadpool(probe_services_health, None, bool(refresh))
+    except Exception as exc:
+        _log.exception("monitoring health failed")
+        return JSONResponse(
+            status_code=500, content=_api_error("health_failed", str(exc))
+        )
+    return {"ok": True, "data": data}
+
+
+@app.get("/api/monitoring/query")
+async def get_monitoring_query(request: Request, promql: str = "",
+                               duration: str = "", step: str = ""):
+    """PromQL range 查询（结构化 series + 时间点，前端 sparkline 用）。
+
+    ops.prometheus.endpoint 未配置 → 503 + 提示；promql 必填、duration/step
+    默认 30m/60s、非法参数 400；上游超时/错误 → 502 + 上游原始信息（不吞）。
+    """
+    _require_token(request)
+    from hermes_cli.monitoring import (
+        MonitoringBadRequest,
+        MonitoringUnavailable,
+        MonitoringUpstreamError,
+        query_prometheus,
+    )
+
+    try:
+        data = await run_in_threadpool(query_prometheus, promql, duration, step)
+    except MonitoringBadRequest as exc:
+        return JSONResponse(status_code=400, content=_api_error("bad_request", str(exc)))
+    except MonitoringUnavailable as exc:
+        return JSONResponse(
+            status_code=503, content=_api_error("prometheus_unavailable", str(exc))
+        )
+    except MonitoringUpstreamError as exc:
+        return JSONResponse(
+            status_code=502, content=_api_error("prometheus_upstream_error", str(exc))
+        )
+    except Exception as exc:
+        _log.exception("monitoring query failed")
+        return JSONResponse(
+            status_code=500, content=_api_error("query_failed", str(exc))
+        )
+    return {"ok": True, "data": data}
+
+
+@app.get("/api/monitoring/alerts")
+async def get_monitoring_alerts(request: Request):
+    """Alertmanager /api/v2/alerts 活跃告警实时快照（只读）。
+
+    ops.prometheus.alertmanager 未配置 → 503 + 提示；无活跃告警 → 空列表 200
+    （不 500）。与 /api/incidents（watch 采集的告警流，OPS-DELTA #78 注明语义
+    边界：Incidents = 采集归档；monitoring/alerts = 实时快照）并存。
+    """
+    _require_token(request)
+    from hermes_cli.monitoring import (
+        MonitoringUnavailable,
+        MonitoringUpstreamError,
+        fetch_active_alerts,
+    )
+
+    try:
+        data = await run_in_threadpool(fetch_active_alerts)
+    except MonitoringUnavailable as exc:
+        return JSONResponse(
+            status_code=503, content=_api_error("alertmanager_unavailable", str(exc))
+        )
+    except MonitoringUpstreamError as exc:
+        return JSONResponse(
+            status_code=502, content=_api_error("alertmanager_upstream_error", str(exc))
+        )
+    except Exception as exc:
+        _log.exception("monitoring alerts failed")
+        return JSONResponse(
+            status_code=500, content=_api_error("alerts_failed", str(exc))
+        )
+    return {"ok": True, "data": data}
+
+
+# ---------------------------------------------------------------------------
 # UI 壳第二批：执行/审批/审计 API（OPS-DELTA #47，契约见 vigil-exec-api-draft.md）
 # ---------------------------------------------------------------------------
 # 安全前提：本批全部端点都不进 PUBLIC_API_PATHS（public_paths.py 只保留第一批
