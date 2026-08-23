@@ -3968,3 +3968,69 @@
   端口、L3 services 状态列表、helm 关联规则（匹配/单独记录）、managed_by 保持
   kubectl、治理字段不覆盖、阿里云补跑。
 - **状态**：独立 feat commit（拓扑发现粒度规范化批次）。
+
+### 83. dify 实体改名 + 命名规则冲突条款 + runbook target 修正（2026-08-23，batch67 收尾小批次）
+
+- **背景**：batch67 聚合命名把本机 dify 项目（/home/wpwang/dify/docker，compose
+  项目名 docker）命名为 **docker**——与 docker 平台名混淆，LLM 视角歧义（"操作
+  docker 实体还是 docker 运行时？"）。用户拍板粒度维持「项目一条」并补命名规则
+  冲突条款；`nginx-config-update`（v0.2 样例）target: nginx 因聚合后实体名
+  docker 而 resolve 失败（batch67 已列报告）。
+- **数据操作（任务 1）**：`services/LAPTOP-T2JA2ERE.yaml` gateway 行 name
+  docker → dify（detail 引用同步）；实体档案
+  `entities/local__laptop-t2ja2ere__docker.yaml` → 改名
+  `local__laptop-t2ja2ere__dify.yaml`（内容 name/detail 同步，compose_project
+  docker 事实值不动）。冲突检查：entities/ 无 dify 残留、services 行名唯一、
+  matrix/权限无实体名绑定、全目录无旧文件名引用。备份
+  ~/notes/backups/vigil-dify-rename-20260823/。
+- **runbook（任务 2）**：`runbooks/nginx-config-update.yaml` steps 与 rollback
+  的 target: nginx → dify（5 处，只改 target 值；expect 的 target: http 与 url
+  不动；handler 按容器 label com.docker.compose.service 执行 nginx，语义不变）。
+- **命名规则冲突条款（任务 3，代码 + 测试）**：`tools/topo_discovery.py` 聚合
+  命名补条款——compose 项目名 ∈ 平台/运行时保留词（docker/k8s/kubernetes/helm/
+  compose/containerd/podman/systemd/systemctl/kubectl/kubelet/runtime）→ 强制用
+  业务主 service 名（不依赖同名 service；主 service = 第一个有 published 端口的
+  service，无则按剥环境后缀逻辑的业务名）；主 service 名也无业务语义（api/web/
+  worker/plugin_daemon 等泛化组件名单）→ 保留项目名并注明人工核对。dify 实测
+  归入兜底（主 service plugin_daemon 泛化 → 项目名 docker）——本批已人工改名
+  dify，重扫时 merge 语义保留手动行（新增 docker 行需人工清理，OPS-DELTA 注明）。
+  新增测试 3 例：保留词项目 → 用业务主 service（docker 项目内 registry → 实体
+  registry，project 事实值不动）；保留词项目主 service 泛化（api/web）→ 项目名；
+  非保留词项目 → 原规则不变（回归）。
+- **顺手修（9131 实测暴露）**：`tools/runbook_exec.py` `_is_local_endpoint`
+  只比较完整 endpoint 字符串——本机服务行 endpoint 带端口（LAPTOP-T2JA2ERE:5003）
+  永不匹配本机身份 → 误判远端，SSH 回环报 Host key verification failed。修复：
+  endpoint 剥 `:port`（含 IPv6 方括号）后再比对本机 hostname/网卡 IP。测试 +3
+  断言（带端口本机 endpoint 判 local / 远端带端口判 remote）。
+- **阿里云补跑（任务 4，可选）**：凭据 ~/.ssh/aliyun_nopass.pem 可用，3 台全部
+  补跑（备份后删旧文件重建，备份
+  ~/notes/backups/vigil-aliyun-rebuild-20260823/）。结果：39.106.217.32 /
+  39.107.92.54 → kubelet（systemd，无端口），8.140.60.44 → hbrclient（阿里云
+  备份客户端）；无运行容器（compose 聚合 N/A）；kubectl 探测权限不足（无 sudo
+  密码，非阻塞）；hardware/ 3 台补齐；治理字段（owner）保留。
+- **测试**：test_topo_discovery +3 例（命名冲突条款）；test_runbook_exec +3 断言
+  （endpoint 带端口本地判定）。回归：topo 全套 + runbook_exec/lock/coverage +
+  batch33/topo_slash/credential/ssh/sudo 16 套件 **257 passed / 6 skipped**。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv 重启，
+  pid 338126 → 修复后重启；VIGIL_DASHBOARD_SESSION_TOKEN=vigil-monitor-test-9131）：
+  - `/api/topology`：LAPTOP 46 服务，**dify 在列**（type gateway、endpoint
+    LAPTOP:5003、managed_by docker_compose、detail name=dify），**无 docker 实体
+    残留**；dify detail 正常加载（by_runtime.docker_compose，无 404）。
+  - **nginx-config-update 实际执行**（exec_20260823_0001/0002，走 9131 POST +
+    SSE）：`resolve_target("dify")` 通过（type service、remote=False、container
+    docker-nginx-1、compose_project docker、compose_service nginx——本地通道，
+    SSH 误判修复验证）；步骤真实执行：backup 步 `mkdir -p /backup/nginx/config
+    && docker cp docker-nginx-1:/var/lib/dify /backup/nginx/config/latest`——
+    第一次因 SSH 误判远端失败（exit 255 Host key verification failed，修复后消
+    失）；主机侧准备 /backup 目录（sudo，root 目录样例 runbook 假设）后重跑，
+    backup 步 docker cp 报 `/var/lib/dify` 在 nginx 容器不存在（样例 runbook
+    未给 src、实体 config_dir/data_dir 未登记，兜底路径随实体名变为
+    /var/lib/dify；nginx 容器处于 Restarting 崩溃循环）→ runbook_done failed
+    （on_failure: stop，回滚未触发）。**如实记录**：resolve 通过 + 本地执行链路
+    验证完成；崩溃循环预期下的 verify→回滚链路未走到（首步 backup 即失败，样例
+    runbook 源路径问题，不在本批改 runbook 范围内）。ledger 三条执行记录齐全。
+- **核销方式**：测试常驻——test_topo_discovery 命名冲突条款 3 例 + runbook_exec
+  endpoint 判定回归；季度体检：保留词项目命名（业务主 service/泛化兜底）、dify
+  重扫 merge 语义（手动行保留）、endpoint 带端口本地判定、阿里云 kubectl 权限
+  补跑（sudo 就绪后）。
+- **状态**：独立 feat commit（dify 改名 + 命名规则冲突条款批次）。

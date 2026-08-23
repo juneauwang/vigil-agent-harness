@@ -374,8 +374,13 @@ class TestExecutionEngine:
         assert svc.get("remote") is False
         # 拓扑 endpoint = 172.18.120.67（本机 eth0，非 DNS 名）→ 必须判 local。
         assert _is_local_endpoint(svc.get("endpoint"), svc.get("host")) is True
+        # endpoint 带端口（本机服务行 LAPTOP-T2JA2ERE:5003 形态）→ 剥端口判
+        # local，不误走 SSH 回环（OPS-DELTA #83 实测修复）。
+        assert _is_local_endpoint("LAPTOP-T2JA2ERE:5003", "LAPTOP-T2JA2ERE") is True
+        assert _is_local_endpoint("172.18.120.67:5003", svc.get("host")) is True
         # 非本机地址 → remote。
         assert _is_local_endpoint("10.203.0.9", svc.get("host")) is False
+        assert _is_local_endpoint("10.203.0.9:5003", svc.get("host")) is False
 
     def test_approval_execute_level_passes(self, mhome):
         res = execute_runbook(_rb(), home=mhome, runner=_ok_runner())

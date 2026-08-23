@@ -992,6 +992,23 @@ def _by_type_block(service_type: str) -> Dict[str, Any]:
 
 _COMPOSE_ENV_SUFFIXES = ("-local", "-dev", "-prod", "-test", "-staging", "-uat")
 
+# 平台/运行时保留词（OPS-DELTA #83 冲突条款）：compose 项目名 ∈ 此集合 →
+# 实体名强制用业务主 service 名，避免与平台名/运行时名混淆（"操作 docker 实体
+# 还是 docker 运行时？"）。
+_COMPOSE_RESERVED_NAMES = frozenset({
+    "docker", "k8s", "kubernetes", "helm", "compose", "containerd",
+    "podman", "systemd", "systemctl", "kubectl", "kubelet", "runtime",
+})
+
+# 泛化组件名（无业务语义）：保留词项目回退时视为非业务主 service → 项目名兜底
+# （OPS-DELTA #83 注明人工核对）。
+_COMPOSE_GENERIC_SERVICE_NAMES = frozenset({
+    "api", "web", "app", "worker", "worker_beat", "api_websocket",
+    "frontend", "backend", "proxy", "sandbox", "ssrf_proxy",
+    "plugin_daemon", "log", "core", "portal", "jobservice", "init",
+    "cron", "certbot",
+})
+
 
 def _compose_same_name_service(project: str, svc_names: List[str]) -> Optional[str]:
     """与项目同名的 compose service 名（9.3 命名规则，OPS-DELTA #82）。
@@ -1011,6 +1028,40 @@ def _compose_same_name_service(project: str, svc_names: List[str]) -> Optional[s
     return None
 
 
+def _compose_entity_service_name(
+    project: str,
+    containers: List[Dict[str, Any]],
+    svc_names: List[str],
+    k8s_svc_names: set,
+) -> str:
+    """compose 项目 → 实体名（9.3 命名规则 + 平台保留词冲突条款）。
+
+    常规（OPS-DELTA #82）：与项目同名 service 优先（剥环境后缀也算，项目
+    harbor-local 内有 service harbor → 'harbor'）；与 k8s 服务同名退让项目名；
+    无则项目名。
+    冲突条款（OPS-DELTA #83）：项目名 ∈ 平台/运行时保留词（docker/k8s/helm…）
+    → 强制业务主 service 名（不依赖同名 service 是否存在；主 service = 第一个
+    有 published 端口的 service，无则按剥后缀逻辑的业务名）；主 service 名也
+    无业务语义（api/web 等泛化组件）→ 保留项目名（人工核对）。
+    """
+    if project in _COMPOSE_RESERVED_NAMES:
+        for c in containers:
+            if _parse_published_ports(c.get("ports") or ""):
+                main = c.get("compose_service") or c.get("name") or ""
+                if (main and main not in k8s_svc_names
+                        and main not in _COMPOSE_GENERIC_SERVICE_NAMES):
+                    return main
+        same = _compose_same_name_service(project, svc_names)
+        if (same and same not in k8s_svc_names
+                and same not in _COMPOSE_GENERIC_SERVICE_NAMES):
+            return same
+        return project
+    same = _compose_same_name_service(project, svc_names)
+    if same and same not in k8s_svc_names:
+        return same
+    return project
+
+
 def _service_from_compose_project(
     project: str,
     containers: List[Dict[str, Any]],
@@ -1022,22 +1073,18 @@ def _service_from_compose_project(
 ) -> Dict[str, Any]:
     """compose 项目 → 一条 v0.4 服务行（9.3：docker compose = 项目一条）。
 
-    命名规则（OPS-DELTA #82）：默认取与项目同名的 compose service 名（项目
-    harbor-local 内有 service harbor → name: harbor）；无同名 service → 用项目名；
-    与 k8s 服务同名时退让项目名（k8s 服务行已实现不改，同机 compose + k8s 双跑
-    场景保持 k8s 服务名）。type 按 9.7 判定表对项目主 service（同名 service，
-    无则首个容器）归类；endpoint 取项目内有 published 端口的容器主端口（第一
-    个，无 → null）；extra_ports 其他 published 端口（去重）；容器细节进第三层
-    档案 by_runtime.docker_compose.services（状态列表——快照记状态不记配置）。
+    命名规则（OPS-DELTA #82/#83）：与项目同名 service 优先 / 剥环境后缀 /
+    k8s 同名退让 / 无则项目名；项目名 ∈ 平台保留词 → 强制业务主 service 名。
+    type 按 9.7 判定表对项目主 service（同名 service，无则首个容器）归类；
+    endpoint 取项目内有 published 端口的容器主端口（第一个，无 → null）；
+    extra_ports 其他 published 端口（去重）；容器细节进第三层档案
+    by_runtime.docker_compose.services（状态列表——快照记状态不记配置）。
     """
     svc_names = [c.get("compose_service") or "" for c in containers]
-    same_name_svc = _compose_same_name_service(project, svc_names)
-    if same_name_svc and same_name_svc not in k8s_svc_names:
-        name = _sanitize_name(same_name_svc)
-    else:
-        name = _sanitize_name(project)
-    if same_name_svc:
-        main = containers[svc_names.index(same_name_svc)]
+    chosen = _compose_entity_service_name(project, containers, svc_names, k8s_svc_names)
+    name = _sanitize_name(chosen)
+    if chosen in svc_names:
+        main = containers[svc_names.index(chosen)]
     else:
         main = containers[0]
     service_type = _classify_service_type(

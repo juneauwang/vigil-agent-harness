@@ -185,6 +185,17 @@ def _is_local_endpoint(endpoint: Any, host_name: str) -> bool:
         return True
     if e in _local_host_names():
         return True
+    # endpoint 带端口（host:port，如 LAPTOP-T2JA2ERE:5003）→ 剥端口再比对本机
+    # 身份（OPS-DELTA #83 实测：本机服务行 endpoint 带端口被误判远端，SSH 回环
+    # 报 Host key verification failed）。IPv6 方括号形态一并剥。
+    host_part = e.rsplit(":", 1)[0] if e.rsplit(":", 1)[-1].isdigit() else e
+    host_part = host_part.strip("[]")
+    if host_part in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if host_part == host_name:
+        return True
+    if host_part in _local_host_names():
+        return True
     return False
 
 

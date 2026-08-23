@@ -372,6 +372,46 @@ def test_compose_no_same_name_service_falls_back_project_name():
     assert d["details"]["dify"]["snapshot"]["by_runtime"]["docker_compose"]["workdir"] == ""
 
 
+COMPOSE_PS_RESERVED = """\
+{"Command":"","ID":"r1","Image":"nginx:1.25","Labels":"com.docker.compose.project=docker,com.docker.compose.service=nginx","Names":"docker-nginx-1","Ports":"","State":"running"}
+{"Command":"","ID":"r2","Image":"registry:2","Labels":"com.docker.compose.project=docker,com.docker.compose.service=registry","Names":"docker-registry-1","Ports":"0.0.0.0:5000->5000/tcp","State":"running"}
+"""
+
+COMPOSE_PS_RESERVED_GENERIC = """\
+{"Command":"","ID":"g1","Image":"langgenius/dify-api:1.14","Labels":"com.docker.compose.project=compose,com.docker.compose.service=api","Names":"compose-api-1","Ports":"0.0.0.0:8080->8080/tcp","State":"running"}
+{"Command":"","ID":"g2","Image":"nginx:latest","Labels":"com.docker.compose.project=compose,com.docker.compose.service=web","Names":"compose-web-1","Ports":"","State":"running"}
+"""
+
+
+def test_compose_reserved_project_name_uses_business_service():
+    """冲突条款：项目名 ∈ 平台保留词（docker）→ 强制用业务主 service 名。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": COMPOSE_PS_RESERVED}))
+    names = {s["name"]: s for s in d["services"]}
+    assert set(names) == {"registry"}                        # 不是 docker
+    assert names["registry"]["type"] == "registry"
+    assert names["registry"]["managed_by"] == "docker_compose"
+    assert names["registry"]["endpoint"] == "10.0.0.9:5000"
+    assert d["details"]["registry"]["snapshot"]["by_runtime"]["docker_compose"][
+        "project"] == "docker"                                # 事实值不动
+
+
+def test_compose_reserved_project_generic_main_keeps_project_name():
+    """冲突条款兜底：主 service 名也无业务语义（api/web）→ 保留项目名。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": COMPOSE_PS_RESERVED_GENERIC}))
+    names = {s["name"]: s for s in d["services"]}
+    assert set(names) == {"compose"}
+
+
+def test_compose_non_reserved_project_name_rule_unchanged():
+    """回归：非保留词项目名 → 原命名规则不变（项目名兜底）。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": COMPOSE_PS_NO_PORT}))
+    names = {s["name"]: s for s in d["services"]}
+    assert set(names) == {"dify"}                             # 非保留词 → 项目名
+
+
 def test_compose_name_yields_to_k8s_same_name():
     """命名规则：compose 同名 service 与 k8s 服务重名 → compose 退让项目名。"""
     d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
