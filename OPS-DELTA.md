@@ -4034,3 +4034,117 @@
   重扫 merge 语义（手动行保留）、endpoint 带端口本地判定、阿里云 kubectl 权限
   补跑（sudo 就绪后）。
 - **状态**：独立 feat commit（dify 改名 + 命名规则冲突条款批次）。
+
+### 84. 环境类测试失败排查批次（2026-08-23，batch69 全量回归收敛）
+
+- **背景**：batch68 后全量回归（scripts/run_tests.sh 逐文件隔离）失败面过大，
+  任务书要求重跑拿当前基线 → 逐类归因（A 平台 / B 测试设计 / C 依赖 / D 真
+  bug）→ 修完收敛 → 每例剩余失败有可解释理由。开发在 branch v1.0
+  （vigil-agent），发布基线 vigil-agent-release 不动。
+- **基线**（重跑后）：98 文件 / 212 失败 + 1 超时
+  （`test_model_switch_custom_providers.py` 600s，真实网络轮询
+  curated/ollama 模型列表）+ 1 收集错误（`test_mcp_sse_transport.py`
+  patch 目标缺失 = anthropic SDK 缺装）。完整失败清单存
+  /tmp/failing_files.txt（本批报告附件）。
+- **A 类（平台特定 skip，1 文件）**：`test_dashboard_profiles_nav_label.py`
+  本 fork web 前端无 `web/src/i18n/`（上游测试面残留）——skipif 精确检测
+  该目录存在性，理由注释写明"本 fork 前端无 i18n 面"，CI 有该目录时照跑。
+- **B 类（测试设计修复 / 品牌对齐 / mock 补齐，~56 文件）**：
+  - 品牌改名对齐（.hermes → .vigil 路径、hermes → vigil 命令/昵称/文案、
+    `-p <profile> gateway start` 命令串）：test_context_references /
+    test_file_safety_container_mirror / test_credential_files / test_file_sync /
+    test_ssh_bulk_upload / test_image_generation_artifacts /
+    test_vercel_sandbox_environment / test_google_workspace_credential_files /
+    test_grounded_citations_skill / test_feishu_bot_admission / test_irc_adapter /
+    test_matrix_mention / test_slack / test_telegram_mention_boundaries /
+    test_config / test_projects_db / test_termux_all_extra_compat /
+    test_packaging_build_guard / test_toolset_validation / test_codex_runtime_switch /
+    test_update_stale_dashboard / test_web_server_messaging_profiles /
+    test_hermes_home_profile_warning / test_skin_vigil_root / test_setup_reconfigure /
+    test_setup_openclaw_migration / test_batch40_migrate_platform_toolsets（matrix
+    并入 cli toolset 契约）/ test_ops_first_install / test_verify_console_scripts /
+    test_stage2_hook_symlink_chown（镜像内用户仍为 hermes，chown 断言改回
+    hermes:hermes）等。
+  - 环境/mock 补齐：test_vision_routing_31179（`_module_isolation` fixture 只恢复
+    sys.modules 不恢复父包属性导致模块分裂 + 能力未知时保守放行）、
+    test_relay_shared_metrics_runtime（fake_run_conversation 签名 7→8）、
+    test_model_switch_custom_providers（mock 网络模型列表，428s→9.4s 全绿）、
+    test_watch_collect / test_watch_tools（缺省随 DEFAULT_CONFIG 合并为 false）、
+    test_web_providers / test_web_tools_config（无凭据兜底 ddgs，OPS-DELTA #48）、
+    test_web_approval_registry（契约键补 action，batch60 迁移）、
+    test_approval_choices_filter（fixture 补 matrix.yaml，断言改强制人工确认）、
+    test_terminal_password_prompt（mock 独立 ansible inventory 安全层）、
+    test_file_read_guards（`_make_safe_tempdir` 不再落仓库根触发 install-code
+    写保护）、test_voice_mode / test_voice_wsl_pipewire（mock powershell/ffmpeg
+    可用性，WSL2 实机有）、test_mcp_serve（utime 显式 +1s，WSL 粗粒度 mtime）、
+    test_hermes_state_readonly_preflight（WAL sidecar 显式创建）、
+    test_tui_gateway/test_protocol（skin 目录经 VIGIL_HOME 解析）。
+  - **本批新增关键修复**：`test_save_conversation_location.py` 原
+    `startswith("cli")` 的 sys.modules 清扫把整个 `hermes_cli` 包 + 全部子模块
+    逐出且不恢复——`"hermes_cli".startswith("cli")` 为真——造成模块身份分裂
+    （旧模块持有旧 hermes_constants 的 contextvar，新模块持有新 contextvar，
+    `set_hermes_home_override` 对旧 get_hermes_home 不可见；profiles 根
+    monkeypatch 落在错误副本上）。单进程批跑（非逐文件隔离）时级联炸 6 例：
+    `test_relay_shared_metrics_consent[True-False]`、web_server
+    builder-mcp 档案路径、messaging profiles scoped read/write x3 + port
+    binding guard。修复：只逐出 `cli`/`hermes_constants` 两个真实重载目标并在
+    teardown 精确恢复 sys.modules，根因消除（本文件 2 测试自身也继续全绿）。
+  - `test_run_agent.py` `_BarrierDB` 补 `flush_token_counts` 空实现——线程内
+    `_persist_session` 收尾调用缺方法导致 PytestUnhandledThreadExceptionWarning。
+  - canonical 全量回归首跑暴露的 3 例补充修复：
+    `test_otlp_exporter.py`（clean-hermes 改名 commit 把 span 名/attr 前缀改
+    vigil 但测试未同步——补齐断言；该文件此前因 opentelemetry 未装被
+    importorskip，随 C 类装依赖后首次真正执行）、
+    `test_termux_api_detection.py`（环境探测未钉死——WSL 开发 shell 有
+    PULSE_SERVER 时可用、hermetic env -i 下不可用，结果随宿主环境翻转；
+    按 voice 批次惯例 mock is_container/PULSE_SERVER/powershell 回退钉住
+    Termux:API 分支语义）、
+    `test_relay_shared_metrics.py` 并发写 flake（见 D 类）、
+    `test_transcription_tools.py`（0.1s idle timeout 撞并行跑 interpreter
+    启动耗时——放宽为 1.0s idle / 8×0.2s 心跳，语义"idle 短于总时长且心跳
+    不断"不变）。
+- **C 类（依赖安装，环境层面无代码改动）**：装 anthropic 0.87.0 / mcp 1.28.1 /
+  daytona 0.155.0 / modal 1.3.4 / hindsight-client 0.6.1 / parallel-web 0.4.2 /
+  defusedxml 0.7.1 / setuptools 83.0.0，对应外部依赖缺失用例（nous_portal /
+  mcp sse / modal / daytona / hindsight / parallel provider 等）转绿；`ddgs`
+  不装（测试全部走 mock）。`test_mcp_sse_transport.py` 收集错误随 anthropic
+  SDK 安装消失。
+- **D 类（真 bug，修 11 文件）**：
+  - `cron/lifecycle_guard.py`：gateway 生命周期正则各分支只认 `vigil` 不认
+    `hermes` 命令名（launchctl label / systemctl unit / pkill），launchctl
+    submit 分支已双名但 kickstart/unload 等漏 → 双名匹配。
+  - `gateway/run.py`：honcho config memo 键只 (path, mtime_ns)——WSL/ext4
+    粗粒度 mtime 下同 tick 两次写入同尺寸文件缓存不失效 → 键加内容 sha256。
+  - `hermes_cli/main.py`：桌面打包可执行文件解析只认 Vigil.app/Vigil.exe，
+    apps/desktop package.json productName 仍为 Hermes → mac/win 双名候选。
+  - `hermes_cli/model_switch.py`：Nous 家族识别修正（外部 Hermes 模型不误标
+    Vigil）。
+  - `hermes_cli/providers.py`：xAI provider label。
+  - `hermes_cli/web_server.py`：`_CATEGORY_MERGE` 补 `platform_toolsets` →
+    agent（该分类仅 cli 一个 schema 字段，消除单字段孤儿 tab）。
+  - `plugins/platforms/photon/sidecar/index.mjs`：鉴权 header
+    `x-hermes-sidecar-token` → `x-vigil-sidecar-token`（adapter/README 早已
+    Vigil 名，服务端漏改）；liveness probe 前缀同步 vigil。
+  - `tools/credential_files.py`：容器挂载路径硬编码 `/root/.hermes` →
+    `_default_container_base()`。
+  - `locales/en.yaml`：update 播报 "Starting Hermes update" → Vigil。
+  - `tools/watch_collect.py` / `tools/watch_tools.py`：docstring 订正"缺省 =
+    DEFAULT_CONFIG 合并后 false"（行为未改，文档与实现对齐）。
+  - `hermes_cli/observability/shared_metrics.py`：写路径 busy timeout
+    250ms → 5s（与 schema 路径一致）——并发计数器写入在忙机/并行回归跑下
+    可超 250ms 锁等待，报 `database is locked` 丢计数（canonical 全量跑 1/2
+    概率暴露）；新增回归测试 `test_counter_write_waits_out_busy_lock_instead_of_failing`
+    （持锁 0.3s，写方 5s 内必须等出而非报错）。
+  - D 类大项清单（未在本批硬改，单独报告）：YAPL 核心 2 文件——
+    `tests/scripts/test_footgun_subprocess_encoding.py`（footgun 规则在
+    tools/runbook_exec.py / sudo_tool.py / topo_discovery.py 命中新匹配）、
+    `tests/tools/test_subprocess_stdin_guard.py`（subprocess stdin= 检查同样
+    命中 YAPL 子进程扫描面）——按硬约束不碰 YAPL 核心，单独报告留人工决定。
+- **收敛验证**：
+  - 96 文件失败集（基线 98 剔除 YAPL 2）单进程批跑：2089 passed / 24 skipped /
+    0 failed（316.66s，--tb=short，见 pytest 输出附件）；24 skipped 均为精确
+    带理由 skip。
+  - canonical `scripts/run_tests.sh` 逐文件隔离全量回归（env -i hermetic）
+    收敛结果见本批交付报告：除 YAPL 2 文件（单独报告）外 0 失败。
+- **状态**：独立 commit 分组（fix(tests) 主体 + fix(core) 生产代码 + README
+  Windows 安装指引）。

@@ -148,6 +148,9 @@ python3 -m venv .venv && .venv/bin/pip install -e .
 .venv/bin/vigil -p ops
 ```
 
+**Windows 用户**：原生 Windows 支持安装脚本 `scripts/install.ps1`（PowerShell
+ 一键装依赖并把 `vigil` 加入 PATH）。WSL2 内可直接用上面的 Linux 路径。
+
 ## 常见问题
 
 **国内镜像装不到？**
