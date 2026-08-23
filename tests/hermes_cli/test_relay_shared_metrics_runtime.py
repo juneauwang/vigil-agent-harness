@@ -1002,6 +1002,7 @@ def test_core_task_instrumentation_preserves_prompt_history_and_tool_schema(
         conversation_history,
         task_id,
         stream_callback,
+        tool_callback,
         persist_user_message,
         **kwargs,
     ):
@@ -1010,6 +1011,7 @@ def test_core_task_instrumentation_preserves_prompt_history_and_tool_schema(
             system_message,
             task_id,
             stream_callback,
+            tool_callback,
             persist_user_message,
             kwargs,
         )

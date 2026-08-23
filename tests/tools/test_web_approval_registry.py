@@ -22,7 +22,7 @@ from tools.approval import (
 )
 
 _CONTRACT_KEYS = {
-    "id", "command", "description", "env", "grade", "session_key", "source",
+    "id", "command", "description", "env", "grade", "action", "session_key", "source",
     "status", "scope", "created_at", "timeout_at",
     "allow_session", "allow_permanent",
 }
@@ -53,7 +53,7 @@ def _register(**kw) -> str:
 
 
 def test_register_view_exposes_only_contract_fields():
-    aid = _register()
+    aid = _register(action="restart")
     view = get_web_approval(aid)
     assert view is not None
     assert set(view) == _CONTRACT_KEYS
@@ -61,6 +61,8 @@ def test_register_view_exposes_only_contract_fields():
     assert view["command"] == "kubectl delete pod x"
     assert view["description"] == "prod 变更确认门（B'）"
     assert view["env"] == "prod" and view["grade"] == "L3"
+    # OPS-DELTA #75：审批键从 grade 迁移到动作枚举，action 随 view 暴露。
+    assert view["action"] == "restart"
     assert view["session_key"] == "sess_1" and view["source"] == "web"
     assert view["status"] == "pending" and view["scope"] is None
     assert view["created_at"].endswith("Z") and view["timeout_at"].endswith("Z")

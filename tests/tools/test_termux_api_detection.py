@@ -166,6 +166,18 @@ class TestDetectAudioEnvironmentTermuxFallback:
         monkeypatch.delenv("SSH_CLIENT", raising=False)
         monkeypatch.delenv("SSH_TTY", raising=False)
         monkeypatch.delenv("SSH_CONNECTION", raising=False)
+        # Pin the host-environment probes so the Termux:API branch under
+        # test is what decides availability — not the developer's ambient
+        # container/WSL/audio-forwarding state (PULSE_SERVER is set on WSL
+        # dev shells but absent under the hermetic env -i CI runner, which
+        # flipped this test between pass and fail without any code change).
+        monkeypatch.delenv("PULSE_SERVER", raising=False)
+        monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
+        monkeypatch.setattr("hermes_constants.is_container", lambda: False)
+        monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
+        monkeypatch.setattr(
+            "tools.voice_mode._wsl_powershell_tts_available", lambda: True
+        )
 
         # No sounddevice — we go down the Termux:API branch.
         monkeypatch.setattr(

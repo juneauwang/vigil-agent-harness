@@ -147,6 +147,16 @@ class TestProdGateScenarioFlags:
             "    role: prod\n",
             encoding="utf-8",
         )
+        # P5 操作矩阵（OPS-DELTA #75）把 L1-L4 分级换成 action × env 矩阵：
+        # 确认门场景必须由矩阵显式配出 {approve: required}，空矩阵下 restart ×
+        # prod 只是普通 approve（session/permanent 保持开启）。
+        (tmp_path / "matrix.yaml").write_text(
+            "schema_version: 1\n"
+            "matrix:\n"
+            "  prod:\n"
+            "    restart: {approve: required}\n",
+            encoding="utf-8",
+        )
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         hc._LOAD_CONFIG_CACHE.clear()
         mod._YOLO_MODE_FROZEN = False
@@ -173,8 +183,8 @@ class TestProdGateScenarioFlags:
         )
 
         assert result["approved"] is False
-        # 确认门确实触发（描述带变更确认门文案），且回调收到了 False/False。
-        assert "变更确认门" in result.get("description", "")
+        # 确认门确实触发（描述带矩阵强制人工确认文案），且回调收到了 False/False。
+        assert "强制人工确认" in result.get("description", "")
         # 确认门场景：session/always 都无效 → 两个作用域都必须关闭。
         assert captured.get("allow_permanent") is False
         assert captured.get("allow_session") is False

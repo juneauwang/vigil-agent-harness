@@ -679,7 +679,10 @@ def test_profile_scoped_agent_build_starts_mcp_discovery_in_profile_home(
     server._sessions[sid] = session
     try:
         server._start_agent_build(sid, session)
-        assert built.wait(timeout=2)
+        # The build thread does only mocked work, but on a loaded parallel
+        # CI runner (32 workers) it can take >2s to get scheduled — wait
+        # generously; a real regression still fails at the assert below.
+        assert built.wait(timeout=10)
     finally:
         server._sessions.pop(sid, None)
 

@@ -55,7 +55,9 @@ def test_chown_helper_repairs_real_directories(stage2_text: str, tmp_path: Path)
 
     assert proc.returncode == 0, proc.stderr
     assert log_path.read_text().splitlines() == [
-        f"-R vigil:vigil {target}",
+        # The Docker image still creates the `hermes` user (main-wrapper.sh
+        # drops to it via s6-setuidgid), so stage2 chowns to hermes:hermes.
+        f"-R hermes:hermes {target}",
     ]
 
 

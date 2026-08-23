@@ -65,7 +65,7 @@ def test_required_frontmatter_fields(frontmatter: dict) -> None:
     assert frontmatter["name"] == "grounded-citations"
     for field in ("version", "author", "license", "platforms"):
         assert frontmatter.get(field), f"missing frontmatter field: {field}"
-    assert frontmatter["metadata"]["hermes"]["category"] == "research"
+    assert frontmatter["metadata"]["vigil"]["category"] == "research"
 
 
 def test_skill_body_has_modern_sections() -> None:

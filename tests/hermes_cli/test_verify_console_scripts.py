@@ -41,7 +41,7 @@ def fake_scripts_dir(tmp_path):
 
 class TestVerifyConsoleScriptsInstalled:
     def test_no_action_when_all_shims_present(self, temp_pyproject, fake_scripts_dir):
-        for name in ("hermes", "hermes-agent", "hermes-acp"):
+        for name in ("vigil", "hermes-agent", "hermes-acp"):
             (fake_scripts_dir / f"{name}.exe").write_bytes(b"fake")
 
         with patch("hermes_cli.main._is_windows", return_value=True), \
@@ -64,5 +64,5 @@ class TestVerifyConsoleScriptsInstalled:
         with patch("hermes_cli.main._is_windows", return_value=True):
             names = {path.name for path in main_mod._hermes_exe_shims(fake_scripts_dir)}
 
-        assert {"hermes.exe", "hermes-agent.exe", "hermes-acp.exe"} <= names
+        assert {"vigil.exe", "hermes-agent.exe", "hermes-acp.exe"} <= names
         assert "hermes-gateway.exe" in names

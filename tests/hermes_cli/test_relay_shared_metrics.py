@@ -1438,6 +1438,49 @@ def test_concurrent_model_call_updates_are_transactional(tmp_path):
     assert restarted.counter_snapshot()[0]["value"] == 20
 
 
+def test_counter_write_waits_out_busy_lock_instead_of_failing(tmp_path):
+    """A concurrently held write lock must be waited out, not fail with
+    'database is locked' (batch69 flake: the write-path busy timeout was
+    250ms, tight enough to trip under load; the schema path already used
+    5s and the write path now shares that bound)."""
+    database_path = tmp_path / "metrics.sqlite3"
+    outbox_directory = tmp_path / "outbox"
+    SharedMetricsStore(database_path, outbox_directory)
+
+    lock_held = threading.Event()
+    holder_done = threading.Event()
+
+    def hold_write_lock() -> None:
+        connection = sqlite3.connect(database_path, timeout=0.1)
+        try:
+            while not lock_held.is_set():
+                try:
+                    connection.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError:
+                    time.sleep(0.01)
+                    continue
+                break
+            lock_held.set()
+            # Hold the write lock well past the old 250ms timeout so a
+            # regression fails, but release it well inside the 5s bound.
+            time.sleep(0.3)
+        finally:
+            connection.rollback()
+            connection.close()
+            holder_done.set()
+
+    holder = threading.Thread(target=hold_write_lock)
+    holder.start()
+    assert lock_held.wait(timeout=5)
+    # The store's busy timeout (5s) must absorb the ~0.3s hold.
+    store = SharedMetricsStore(database_path, outbox_directory)
+    store.record_model_call(_dimensions(), _resource())
+    assert store.counter_snapshot()[0]["value"] == 1
+    assert holder_done.wait(timeout=10)
+    holder.join(timeout=10)
+    assert not holder.is_alive()
+
+
 def test_cross_process_model_call_updates_are_transactional(tmp_path):
     database_path = tmp_path / "metrics.sqlite3"
     outbox_directory = tmp_path / "outbox"

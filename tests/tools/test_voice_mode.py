@@ -207,6 +207,11 @@ class TestDetectAudioEnvironment:
         monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
         monkeypatch.setattr("tools.voice_mode._import_audio",
                             lambda: (MagicMock(), MagicMock()))
+        # 本测试要验证"无转发 → 硬拦"。真实 WSL2 开发机上 powershell.exe/ffmpeg
+        # 常在 PATH，TTS 回退可用会降级为 notice 不拦——显式关掉回退以钉住
+        # 无转发即拦截的语义。
+        monkeypatch.setattr("tools.voice_mode._wsl_powershell_tts_available",
+                            lambda: False)
 
         proc_version = tmp_path / "proc_version"
         proc_version.write_text("Linux 5.15.0-microsoft-standard-WSL2")

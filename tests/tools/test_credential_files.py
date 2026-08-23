@@ -43,7 +43,7 @@ class TestRegisterCredentialFiles:
         mounts = get_credential_file_mounts()
         assert len(mounts) == 1
         assert mounts[0]["host_path"] == str(hermes_home / "token.json")
-        assert mounts[0]["container_path"] == "/root/.hermes/token.json"
+        assert mounts[0]["container_path"] == "/root/.vigil/token.json"
 
 
     def test_path_takes_precedence_over_name(self, tmp_path):
@@ -75,7 +75,7 @@ class TestSkillsDirectoryMount:
 
         assert len(mounts) >= 1
         assert mounts[0]["host_path"] == str(skills_dir)
-        assert mounts[0]["container_path"] == "/root/.hermes/skills"
+        assert mounts[0]["container_path"] == "/root/.vigil/skills"
 
 
     def test_custom_container_base(self, tmp_path):
@@ -85,7 +85,7 @@ class TestSkillsDirectoryMount:
         with patch.dict(os.environ, {"VIGIL_HOME": str(hermes_home)}):
             mounts = get_skills_directory_mount(container_base="/home/user/.vigil")
 
-        assert mounts[0]["container_path"] == "/home/user/.hermes/skills"
+        assert mounts[0]["container_path"] == "/home/user/.vigil/skills"
 
     def test_symlinks_are_sanitized(self, tmp_path):
         """Symlinks in skills dir should be excluded from the mount."""
@@ -142,8 +142,8 @@ class TestIterSkillsFiles:
             files = iter_skills_files()
 
         paths = {f["container_path"] for f in files}
-        assert "/root/.hermes/skills/cat/myskill/SKILL.md" in paths
-        assert "/root/.hermes/skills/cat/myskill/scripts/run.sh" in paths
+        assert "/root/.vigil/skills/cat/myskill/SKILL.md" in paths
+        assert "/root/.vigil/skills/cat/myskill/scripts/run.sh" in paths
         # Symlink should be excluded
         assert not any("evil" in f["container_path"] for f in files)
 
@@ -321,9 +321,9 @@ class TestCacheDirectoryMounts:
 
         mounts = get_cache_directory_mounts()
         paths = {m["container_path"] for m in mounts}
-        assert "/root/.hermes/cache/documents" in paths
-        assert "/root/.hermes/cache/audio" in paths
-        assert "/root/.hermes/cache/videos" in paths
+        assert "/root/.vigil/cache/documents" in paths
+        assert "/root/.vigil/cache/audio" in paths
+        assert "/root/.vigil/cache/videos" in paths
 
 
     def test_legacy_dir_names_resolved(self, tmp_path, monkeypatch):
@@ -351,8 +351,8 @@ class TestCacheDirectoryMounts:
         assert str(hermes_home / "image_cache") in host_paths
         # Container paths always use the new layout
         container_paths = {m["container_path"] for m in mounts}
-        assert "/root/.hermes/cache/documents" in container_paths
-        assert "/root/.hermes/cache/images" in container_paths
+        assert "/root/.vigil/cache/documents" in container_paths
+        assert "/root/.vigil/cache/images" in container_paths
 
     def test_empty_hermes_home(self, tmp_path, monkeypatch):
         """No cache dirs → empty list."""
@@ -375,8 +375,8 @@ class TestCacheDirectoryMounts:
 
         mounts = get_cache_directory_mounts()
         by_container = {m["container_path"]: m["host_path"] for m in mounts}
-        assert "/root/.hermes/images" in by_container
-        assert by_container["/root/.hermes/images"] == str(hermes_home / "images")
+        assert "/root/.vigil/images" in by_container
+        assert by_container["/root/.vigil/images"] == str(hermes_home / "images")
 
     def test_images_upload_file_maps_into_container(self, tmp_path, monkeypatch):
         """A concrete upload under ``images/`` maps to its container path.
@@ -392,7 +392,7 @@ class TestCacheDirectoryMounts:
 
         assert (
             map_cache_path_to_container(str(upload))
-            == "/root/.hermes/images/upload_20260722_181019_1.png"
+            == "/root/.vigil/images/upload_20260722_181019_1.png"
         )
 
 
@@ -408,7 +408,7 @@ class TestMapCachePathToContainer:
 
         assert (
             map_cache_path_to_container(host_path)
-            == "/root/.hermes/cache/images/generated.png"
+            == "/root/.vigil/cache/images/generated.png"
         )
 
 
@@ -519,7 +519,7 @@ class TestMasterCredentialStoresAreNeverMountable:
             assert register_credential_file("google_token.json") is True
             mounts = get_credential_file_mounts()
         assert [m["container_path"] for m in mounts] == [
-            "/root/.hermes/google_token.json"
+            "/root/.vigil/google_token.json"
         ]
 
     def test_refused_entry_does_not_block_the_rest_of_the_batch(self, tmp_path):
@@ -529,8 +529,8 @@ class TestMasterCredentialStoresAreNeverMountable:
             mounts = get_credential_file_mounts()
 
         paths = [m["container_path"] for m in mounts]
-        assert "/root/.hermes/google_token.json" in paths
-        assert "/root/.hermes/.env" not in paths
+        assert "/root/.vigil/google_token.json" in paths
+        assert "/root/.vigil/.env" not in paths
         assert ".env" in missing, "a refused store is reported back to the skill"
 
     def test_traversal_guard_still_applies(self, tmp_path):

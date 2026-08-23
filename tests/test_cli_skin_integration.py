@@ -31,24 +31,25 @@ def _make_cli_stub():
 
 class TestCliSkinPromptIntegration:
 
-    def test_ares_prompt_fragments_use_skin_symbol(self):
+    def test_vigil_prompt_fragments_use_skin_symbol(self):
         cli = _make_cli_stub()
 
-        set_active_skin("ares")
-        assert cli._get_tui_prompt_fragments() == [("class:prompt", "⚔ ")]
+        with patch("hermes_cli.banner._load_banner_state", return_value=None):
+            set_active_skin("vigil")
+            assert cli._get_tui_prompt_fragments() == [("class:prompt", "◉ Vigil > ")]
 
     def test_secret_prompt_fragments_preserve_secret_state(self):
         cli = _make_cli_stub()
         cli._secret_state = {"response_queue": object()}
 
-        set_active_skin("ares")
-        assert cli._get_tui_prompt_fragments() == [("class:sudo-prompt", "🔑 ⚔ ")]
+        set_active_skin("vigil")
+        assert cli._get_tui_prompt_fragments() == [("class:sudo-prompt", "🔑 > ")]
 
 
     def test_build_tui_style_dict_uses_skin_overrides(self):
         cli = _make_cli_stub()
 
-        set_active_skin("ares")
+        set_active_skin("vigil")
         skin = get_active_skin()
         style_dict = cli._build_tui_style_dict()
 
@@ -63,7 +64,7 @@ class TestCliSkinPromptIntegration:
     def test_apply_tui_skin_style_updates_running_app(self):
         cli = _make_cli_stub()
 
-        set_active_skin("ares")
+        set_active_skin("vigil")
         assert cli._apply_tui_skin_style() is True
         assert cli._app.style is not None
         cli._invalidate.assert_called_once_with(min_interval=0.0)
@@ -72,28 +73,28 @@ class TestCliSkinPromptIntegration:
         cli = _make_cli_stub()
 
         with patch("cli.save_config_value", return_value=True):
-            cli._handle_skin_command("/skin ares")
+            cli._handle_skin_command("/skin vigil")
 
         output = capsys.readouterr().out
-        assert "Skin set to: ares (saved)" in output
+        assert "Skin set to: vigil (saved)" in output
         assert "Prompt + TUI colors updated." in output
         assert cli._app.style is not None
 
 
 class TestCompactBannerSkinIntegration:
 
-    def test_poseidon_compact_banner_uses_skin_branding_instead_of_nous_hermes(self):
-        set_active_skin("poseidon")
+    def test_vigil_compact_banner_uses_skin_branding_instead_of_nous_hermes(self):
+        set_active_skin("vigil")
 
         with patch("cli.shutil.get_terminal_size", return_value=SimpleNamespace(columns=90)), \
              patch.dict(_build_compact_banner.__globals__, {"format_banner_version_label": lambda: "Vigil v0.1.0 (test)"}):
             banner = _build_compact_banner()
 
-        assert "Poseidon Agent" in banner
+        assert "Vigil" in banner
         assert "NOUS HERMES" not in banner
 
-    def test_poseidon_compact_banner_uses_skin_colors(self):
-        set_active_skin("poseidon")
+    def test_vigil_compact_banner_uses_skin_colors(self):
+        set_active_skin("vigil")
         skin = get_active_skin()
 
         with patch("cli.shutil.get_terminal_size", return_value=SimpleNamespace(columns=90)), \
@@ -110,4 +111,3 @@ class TestAnsiRichTextHelper:
     def test_preserves_literal_brackets(self):
         text = _rich_text_from_ansi("[notatag] literal")
         assert text.plain == "[notatag] literal"
-

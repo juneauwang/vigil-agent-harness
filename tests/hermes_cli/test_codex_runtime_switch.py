@@ -23,7 +23,7 @@ class TestParseArgs:
         ("off", "auto"),
         ("codex", "codex_app_server"),
         ("default", "auto"),
-        ("hermes", "auto"),
+        ("vigil", "auto"),
         ("ENABLE", "codex_app_server"),  # case-insensitive
         ("DiSaBlE", "auto"),
     ])
@@ -168,5 +168,4 @@ class TestApply:
         assert r.new_value == "codex_app_server"
         assert "MCP migration skipped" in r.message
         assert "disk full" in r.message
-
 

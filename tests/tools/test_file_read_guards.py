@@ -55,8 +55,14 @@ def _make_fake_ops(content="hello\n", total_lines=1, file_size=6):
 
 
 def _make_safe_tempdir(prefix: str) -> str:
-    """Create a temp dir outside macOS system-sensitive /private/var paths."""
-    return tempfile.mkdtemp(prefix=prefix, dir=os.getcwd())
+    """Create a temp dir in the system temp location.
+
+    file_tools' sensitive-path prefixes already whitelist macOS
+    /private/var/folders (the realpath of $TMPDIR), so a plain mkdtemp is
+    safe; creating the dir under os.getcwd() instead would place it inside
+    the repo source tree and trip the OPS-DELTA #15 install-code write guard.
+    """
+    return tempfile.mkdtemp(prefix=prefix)
 
 
 # ---------------------------------------------------------------------------

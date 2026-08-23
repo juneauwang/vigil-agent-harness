@@ -29,6 +29,15 @@ def _disable_live_custom_provider_model_probe(monkeypatch):
     monkeypatch.setattr(
         "hermes_cli.models.provider_model_ids", lambda *_a, **_kw: []
     )
+    # list_authenticated_providers 还会为 nous 拉远程 model-catalog manifest、
+    # 为 ollama-cloud 探测 models.dev——都是真实网络调用，慢环境下每次
+    # 数十秒（全量回归 600s 超时的来源）。本文件不测这两个内建行，一律 mock。
+    monkeypatch.setattr(
+        "hermes_cli.models.get_curated_nous_model_ids", lambda *a, **kw: []
+    )
+    monkeypatch.setattr(
+        "hermes_cli.models.fetch_ollama_cloud_models", lambda *a, **kw: []
+    )
 
 
 def test_list_authenticated_providers_includes_custom_providers(monkeypatch):

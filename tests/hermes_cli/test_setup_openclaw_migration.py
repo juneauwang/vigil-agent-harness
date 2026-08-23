@@ -310,7 +310,10 @@ class TestSetupWizardSkipsConfiguredSections:
             patch.object(setup_mod, "is_interactive_stdin", return_value=True),
             patch("hermes_cli.auth.get_active_provider", return_value=None),
             patch("builtins.input", return_value=""),
-            patch.object(setup_mod, "prompt_choice", return_value=1),
+            # 首次安装向导的 prompt_choice 是 [Full setup, Blank Slate]：
+            # 0 = Full setup（本测试要走的 migration-skip 流程）；1 会进
+            # Blank Slate 分支直接返回，setup_model_provider 断言失效。
+            patch.object(setup_mod, "prompt_choice", return_value=0),
             # Migration succeeds and flips the env_side flag
             patch.object(
                 setup_mod, "_offer_openclaw_migration",

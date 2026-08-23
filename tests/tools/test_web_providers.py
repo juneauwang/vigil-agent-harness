@@ -191,8 +191,11 @@ class TestUnconfiguredErrorEnvelopeParity:
             monkeypatch.delenv(k, raising=False)
 
     def test_unconfigured_search_emits_top_level_error(self, monkeypatch):
-        """``web_search_tool`` with no creds returns ``{"error": "Error searching web: ..."}``
-        — matching main's ``tool_error()`` envelope, not a per-result shape.
+        """``web_search_tool`` with no creds returns a top-level ``error`` key.
+
+        OPS-DELTA #48 把无 key 时的最终兜底从 firecrawl 换成免费的 ddgs；本机
+        ddgs 未安装时无 creds 搜索应报告缺失包（仍走顶层 error 信封，不是
+        per-result 结构）。
         """
         from tools import web_tools
 
@@ -200,14 +203,11 @@ class TestUnconfiguredErrorEnvelopeParity:
         # Reset firecrawl client cache so the unconfigured state is re-evaluated
         monkeypatch.setattr(web_tools, "_firecrawl_client", None, raising=False)
         monkeypatch.setattr(web_tools, "_firecrawl_client_config", None, raising=False)
-        monkeypatch.setattr(web_tools, "_ddgs_package_importable", lambda: False)
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {})
 
         result = json.loads(web_tools.web_search_tool("hello world", limit=3))
         assert "error" in result, f"expected top-level 'error' key, got {result}"
-        # ``Error searching web:`` prefix comes from web_tools' top-level except handler
-        assert "Error searching web:" in result["error"]
-        assert "FIRECRAWL_API_KEY" in result["error"]
+        assert "ddgs package is not installed" in result["error"]
         # No per-result burying
         assert "results" not in result
 
@@ -469,4 +469,3 @@ class TestDisabledPluginDiagnostic:
             assert "No web search provider configured" not in err
         finally:
             restore()
-

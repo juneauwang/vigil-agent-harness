@@ -316,13 +316,18 @@ class TestBlockingApprovalE2E:
     @pytest.mark.parametrize(
         "approval_config",
         [
-            {"mode": "manual", "timeout": 0},
-            {"mode": "manual", "timeout": 0, "gateway_timeout": 300},
+            {"mode": "manual", "timeout": 0, "timeout_policy": "deny"},
+            {"mode": "manual", "timeout": 0, "timeout_policy": "deny", "gateway_timeout": 300},
         ],
         ids=["shared-timeout-only", "shared-timeout-is-canonical"],
     )
     def test_blocking_approval_uses_canonical_timeout(self, approval_config, monkeypatch):
-        """Gateway waits use approvals.timeout, without a second timeout knob."""
+        """Gateway waits use approvals.timeout, without a second timeout knob.
+
+        ``timeout_policy`` must be pinned to "deny" here: the default "wait"
+        policy treats ``timeout <= 0`` as an unlimited wait (never expires),
+        so it cannot exercise the canonical-timeout expiry path.
+        """
         from tools import approval as approval_module
         from tools.approval import (
             check_all_command_guards,

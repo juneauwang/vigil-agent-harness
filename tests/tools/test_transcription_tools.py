@@ -1191,9 +1191,9 @@ class TestRunCommandSttIdleTimeout:
         script.write_text(
             "\n".join([
                 "import sys, time",
-                "for idx in range(4):",
+                "for idx in range(8):",
                 "    print(f'tick {idx}', file=sys.stderr, flush=True)",
-                "    time.sleep(0.04)",
+                "    time.sleep(0.2)",
                 "print('done', flush=True)",
             ]),
             encoding="utf-8",
@@ -1201,11 +1201,15 @@ class TestRunCommandSttIdleTimeout:
 
         result = _run_command_stt(
             self._shell_command(sys.executable, "-u", str(script)),
-            timeout=0.1,
+            # Idle timeout still well under the ~1.6s total runtime, but with
+            # enough headroom that a loaded parallel CI runner's interpreter
+            # startup (which can exceed 0.1s) can't trip it before the first
+            # progress tick lands.
+            timeout=1.0,
         )
 
         assert result.returncode == 0
-        assert "tick 3" in result.stderr
+        assert "tick 7" in result.stderr
         assert "done" in result.stdout
 
     def test_silent_stall_still_times_out(self, tmp_path):

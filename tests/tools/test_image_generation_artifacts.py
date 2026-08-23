@@ -35,7 +35,7 @@ def test_postprocess_adds_agent_visible_image_for_active_ssh_env(monkeypatch, tm
     assert result["image"] == str(image_path)
     assert result["host_image"] == str(image_path)
     assert result["agent_visible_image"] == (
-        "/home/remotesshuser/.hermes/cache/images/xai_grok-imagine-image_test.jpg"
+        "/home/remotesshuser/.vigil/cache/images/xai_grok-imagine-image_test.jpg"
     )
     assert sync_calls == [True]
 
@@ -59,7 +59,7 @@ def test_concurrent_image_results_preserve_shared_remote_sync_state(monkeypatch,
         return [
             (
                 str(path),
-                f"/home/remote/.hermes/cache/images/{path.name}",
+                f"/home/remote/.vigil/cache/images/{path.name}",
             )
             for path in sorted(image_dir.iterdir())
         ]
@@ -108,8 +108,8 @@ def test_concurrent_image_results_preserve_shared_remote_sync_state(monkeypatch,
         second_future.result(timeout=3.0)
 
     assert set(sync_manager._synced_files) == {
-        "/home/remote/.hermes/cache/images/first.png",
-        "/home/remote/.hermes/cache/images/second.png",
+        "/home/remote/.vigil/cache/images/first.png",
+        "/home/remote/.vigil/cache/images/second.png",
     }
 
 
@@ -146,4 +146,4 @@ def test_handle_image_generate_postprocesses_plugin_result(monkeypatch, tmp_path
     )
 
     assert seen_task_ids == ["plugin-task"]
-    assert result["agent_visible_image"] == "/home/remote/.hermes/cache/images/plugin.png"
+    assert result["agent_visible_image"] == "/home/remote/.vigil/cache/images/plugin.png"

@@ -31,7 +31,7 @@ class TestDoctorPlatformHints:
         hint = doctor._sqlite_upgrade_hint()
 
         assert "docker pull juneauwang/vigil-agent-harness:latest" in hint
-        assert "recreate all Vigil containers" in hint
+        assert "recreate all containers" in hint
         assert "vigil update" not in hint
 
     def test_sqlite_upgrade_hint_keeps_git_runtime_repair(self):
@@ -194,6 +194,10 @@ def test_doctor_reports_vercel_backend_diagnostics(monkeypatch, tmp_path):
     monkeypatch.delenv("VERCEL_PROJECT_ID", raising=False)
     monkeypatch.setenv("VERCEL_TEAM_ID", "team")
     monkeypatch.setattr(doctor_mod.importlib.util, "find_spec", lambda name: object() if name == "vercel" else None)
+    # WSL can be misdetected as a container (is_container() True), which would
+    # reset TERMINAL_ENV to local and skip the vercel diagnostics section.
+    import hermes_constants
+    monkeypatch.setattr(hermes_constants, "is_container", lambda: False)
 
     fake_model_tools = types.SimpleNamespace(
         check_tool_availability=lambda *a, **kw: ([], []),

@@ -19,7 +19,7 @@ class TestClassifyContainerMirrorTarget:
         from agent.file_safety import classify_container_mirror_target
 
         result = classify_container_mirror_target(
-            "/root/.hermes/profiles/group1/SOUL.md",
+            "/root/.vigil/profiles/group1/SOUL.md",
             mirror_prefix="/root/.vigil",
         )
         assert result is not None
@@ -34,7 +34,7 @@ class TestClassifyContainerMirrorTarget:
         from agent.file_safety import classify_container_mirror_target
 
         result = classify_container_mirror_target(
-            f"/root/.hermes/{inner}",
+            f"/root/.vigil/{inner}",
             mirror_prefix="/root/.vigil",
         )
         assert result is not None
@@ -47,7 +47,7 @@ class TestGetContainerMirrorWarning:
         from agent.file_safety import get_container_mirror_warning
 
         warn = get_container_mirror_warning(
-            "/root/.hermes/profiles/group1/SOUL.md",
+            "/root/.vigil/profiles/group1/SOUL.md",
             mirror_prefix="/root/.vigil",
         )
         assert warn is not None
@@ -62,7 +62,7 @@ class TestOrthogonality:
         """No sandboxes/ segment — shape guard passes, context guard blocks."""
         from agent.file_safety import classify_container_mirror_target
 
-        path = "/root/.hermes/profiles/group1/SOUL.md"
+        path = "/root/.vigil/profiles/group1/SOUL.md"
 
         assert classify_container_mirror_target(path) is None  # no context
         assert classify_container_mirror_target(path, mirror_prefix="/root/.vigil") is not None
@@ -81,7 +81,7 @@ class TestFileToolIntegration:
         )
 
         warning = file_tools._check_cross_profile_path(
-            "/root/.hermes/profiles/group1/SOUL.md",
+            "/root/.vigil/profiles/group1/SOUL.md",
             task_id="new-task",
         )
 

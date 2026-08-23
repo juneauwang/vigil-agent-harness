@@ -1,16 +1,10 @@
-"""Tests for get_hermes_home() profile-mode fallback warning.
+"""Tests for get_hermes_home() profile-mode resolution.
 
-Regression test for https://github.com/juneauwang/vigil-agent-harness
-
-When VIGIL_HOME is unset but an active_profile file indicates a non-default
-profile is active, get_hermes_home() should:
-  1. STILL return ~/.vigil (raising would brick 30+ module-level callers)
-  2. Emit a loud one-shot warning to stderr so operators can diagnose
-     cross-profile data contamination after the fact.
-
-The warning goes to stderr directly (not through logging) because this
-function is called at module-import time from 30+ sites, often before the
-logging subsystem has been configured.
+The legacy "VIGIL_HOME fallback" profile warning was removed in batch 11
+(OPS-DELTA #43/#44 — Hermes compat deleted, data-root fallbacks dropped).
+get_hermes_home() is now purely override → VIGIL_HOME → platform default:
+an active_profile file has no effect on the resolved root, and there is
+no warning to emit.
 """
 
 from pathlib import Path
@@ -40,29 +34,22 @@ class TestGetHermesHomeProfileWarning:
         assert "VIGIL_HOME fallback" not in capsys.readouterr().err
 
 
-    def test_named_profile_unset_home_warns_once(
+    def test_named_profile_unset_home_resolves_silently(
         self, fresh_constants, tmp_path, capsys
     ):
-        """active_profile=coder + VIGIL_HOME unset → warn loudly, still return fallback."""
+        """active_profile=coder + VIGIL_HOME unset → plain ~/.vigil, silent."""
         hermes_dir = tmp_path / ".vigil"
         hermes_dir.mkdir()
         (hermes_dir / "active_profile").write_text("coder\n")
 
         result = fresh_constants.get_hermes_home()
 
-        # 1. Still returns the fallback — no import-time crash
+        # Returns the platform default — no import-time crash.
         assert result == tmp_path / ".vigil"
-        # 2. Stderr got the warning exactly once
+        # No legacy fallback warning is emitted.
         err = capsys.readouterr().err
-        assert err.count("VIGIL_HOME fallback") == 1
-        assert "'coder'" in err
-        assert "#18594" in err
-
-        # 3. One-shot: second and third calls don't re-warn
-        fresh_constants.get_hermes_home()
-        fresh_constants.get_hermes_home()
-        err2 = capsys.readouterr().err
-        assert "VIGIL_HOME fallback" not in err2
+        assert "VIGIL_HOME fallback" not in err
+        assert "'coder'" not in err
 
     def test_hermes_home_set_suppresses_warning(
         self, fresh_constants, tmp_path, capsys, monkeypatch

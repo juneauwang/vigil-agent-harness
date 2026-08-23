@@ -27,7 +27,7 @@ def _is_valid(name):
 
 def test_38798_corruption_warns_and_suggests_correct_name():
     # The exact reported shape: cli holds 'vigil' instead of 'hermes-cli'.
-    warnings = validate_platform_toolsets({"cli": ["hermes"]}, _is_valid)
+    warnings = validate_platform_toolsets({"cli": ["vigil"]}, _is_valid)
     unknown = [w for w in warnings if "unknown toolset 'vigil'" in w]
     assert len(unknown) == 1
     # Actionable: points at the valid name the entry should have been.
@@ -44,7 +44,6 @@ def test_mixed_valid_and_invalid_flags_only_the_invalid():
     assert len(warnings) == 1
     assert "platform 'discord'" in warnings[0]
     assert "unknown toolset 'bogus'" in warnings[0]
-
 
 
 

@@ -85,6 +85,22 @@ def _module_isolation():
     yield
     _drop_reload_targets()
     sys.modules.update(saved)
+    # Re-point parent-package attributes.  During the test the fresh imports
+    # replaced e.g. ``hermes_cli.config`` (the attribute on the ``hermes_cli``
+    # package) with the dropped module; restoring only sys.modules leaves the
+    # attribute pointing at a half-alive module while sys.modules holds the
+    # original — a split identity where ``import hermes_cli.config as c`` and
+    # ``from hermes_cli.config import x`` resolve different objects.  That
+    # silently breaks call-time imports in later tests (observed: plugins/
+    # memory/hindsight post_setup patching the wrong save_config after this
+    # file ran).
+    for _name, _mod in saved.items():
+        _parts = _name.split(".")
+        if len(_parts) < 2:
+            continue
+        _parent = sys.modules.get(".".join(_parts[:-1]))
+        if _parent is not None and getattr(_parent, _parts[-1], None) is not _mod:
+            setattr(_parent, _parts[-1], _mod)
 
 
 def _fresh_modules():
@@ -176,8 +192,21 @@ class TestTextOnlyMainSkippedForVision:
 model:
   provider: deepseek
   default: deepseek-v4-pro
-""")
+        """)
         monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        # fresh VIGIL_HOME 没有 models.dev 磁盘缓存，本机网络又拉不到注册表
+        # → 能力查询返回 None → 保守放行（历史行为），deepseek 文本模型就
+        # 不会被跳过。钉住能力数据：deepseek 明确无 vision，断言跳过逻辑。
+        from agent.models_dev import ModelCapabilities
+        monkeypatch.setattr(
+            "agent.models_dev.get_model_capabilities",
+            lambda provider, model: ModelCapabilities(
+                supports_tools=True,
+                supports_vision=False,
+                supports_reasoning=True,
+                model_family="deepseek-thinking",
+            ),
+        )
         _fresh_modules()
 
         from agent.auxiliary_client import resolve_vision_provider_client

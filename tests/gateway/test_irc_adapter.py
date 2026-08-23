@@ -119,7 +119,7 @@ class TestIRCAdapterMessageParsing:
             },
         )
         a = IRCAdapter(cfg)
-        a._current_nick = "hermes"
+        a._current_nick = "vigil"
         a._registered = True
         return a
 
@@ -192,7 +192,7 @@ class TestIRCAdapterMessageParsing:
             },
         )
         adapter = IRCAdapter(cfg)
-        adapter._current_nick = "hermes"
+        adapter._current_nick = "vigil"
         adapter._registered = True
         dispatched = []
 

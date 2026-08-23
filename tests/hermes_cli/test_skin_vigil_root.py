@@ -19,12 +19,11 @@ def _clean_data_root_env(tmp_path, monkeypatch):
 
 
 def test_skin_dir_ignores_hermes_home_leftover(tmp_path, monkeypatch):
-    fake_hermes = tmp_path / "hermes_legacy"
+    """旧 ~/.hermes 残留（上游旧数据根名）不影响 skin：目录固定 ~/.vigil/skins。"""
+    fake_hermes = tmp_path / "home" / ".hermes"
     fake_skins = fake_hermes / "skins"
     fake_skins.mkdir(parents=True)
     (fake_skins / "leftover.yaml").write_text("name: leftover\n", encoding="utf-8")
-
-    monkeypatch.setenv("VIGIL_HOME", str(fake_hermes))
 
     assert skin_cmd._skins_dir() == tmp_path / "home" / ".vigil" / "skins"
 
@@ -41,8 +40,8 @@ def test_skin_dir_follows_explicit_vigil_home(tmp_path, monkeypatch):
 
 
 def test_legacy_data_root_no_warning_no_impact(tmp_path, monkeypatch, capsys):
-    """旧 ~/.vigil（含 profiles/ops）→ 无告警、无影响，skin 仍读 ~/.vigil。"""
-    legacy = tmp_path / "home" / ".vigil"
+    """旧 ~/.hermes（含 profiles/ops 特征）→ 无告警、无影响，skin 仍读 ~/.vigil。"""
+    legacy = tmp_path / "home" / ".hermes"
     (legacy / "profiles" / "ops").mkdir(parents=True)
     (legacy / "skins").mkdir()
     (legacy / "skins" / "old.yaml").write_text("name: old\n", encoding="utf-8")
@@ -52,6 +51,7 @@ def test_legacy_data_root_no_warning_no_impact(tmp_path, monkeypatch, capsys):
 
     err = capsys.readouterr().err
     assert "检测到旧 Vigil 数据根" not in err
+    assert "检测到旧 Hermes 数据根" not in err
 
     names = [s["name"] for s in skin_engine.list_skins()]
     assert "old" not in names

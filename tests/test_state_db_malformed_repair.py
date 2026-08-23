@@ -357,7 +357,10 @@ def test_repair_rebuilds_stale_btree_indexes(tmp_path):
     # The real detector must see the real corruption...
     reason = hermes_state._db_opens_cleanly(db_path)
     assert reason is not None
-    assert "wrong # of entries in index idx_messages_session" in reason
+    # SQLite wording for a stale B-tree changed across versions: older builds
+    # say "wrong # of entries in index X", 3.45.x says "row N missing from
+    # index X". Both name the index — assert on the stable part.
+    assert "idx_messages_session" in reason
 
     # ...and the real repair ladder must fix it via REINDEX.
     report = repair_state_db_schema(db_path)
@@ -393,5 +396,4 @@ def test_repair_stale_btree_index_preserves_rows(tmp_path):
         assert msgs[0]["content"] == "hello world 0"
     finally:
         db.close()
-
 

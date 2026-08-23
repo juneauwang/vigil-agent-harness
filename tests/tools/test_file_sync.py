@@ -328,7 +328,7 @@ class TestSyncBackSecurity:
             lambda: [
                 {
                     "host_path": str(credential),
-                    "container_path": "/root/.hermes/credentials/token.json",
+                    "container_path": "/root/.vigil/credentials/token.json",
                 }
             ],
         )
@@ -349,8 +349,8 @@ class TestSyncBackSecurity:
         def bulk_download(dest: Path) -> None:
             with tarfile.open(dest, "w") as tar:
                 for name, data in {
-                    "root/.hermes/credentials/token.json": b"remote-token",
-                    "root/.hermes/skills/skill.py": b"remote-skill",
+                    "root/.vigil/credentials/token.json": b"remote-token",
+                    "root/.vigil/skills/skill.py": b"remote-skill",
                 }.items():
                     info = tarfile.TarInfo(name)
                     info.size = len(data)

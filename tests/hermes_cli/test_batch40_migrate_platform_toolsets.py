@@ -50,14 +50,14 @@ class TestUnionMigration:
         })
         results = hc.migrate_config(interactive=False, quiet=True)
         raw = _raw(tmp_path)
-        assert raw["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
+        assert raw["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook", "matrix"]
         assert raw["_config_version"] == 34
         assert any("platform_toolsets.cli" in c and "topo" in c for c in results["config_added"])
 
     def test_already_contains_defaults_no_diff(self, tmp_path):
         _write(tmp_path, {
             "_config_version": 33,
-            "platform_toolsets": {"cli": ["hermes-cli", "topo", "runbook"]},
+            "platform_toolsets": {"cli": ["hermes-cli", "topo", "runbook", "matrix"]},
         })
         results = hc.migrate_config(interactive=False, quiet=True)
         assert not any("platform_toolsets.cli" in c for c in results["config_added"])
@@ -70,7 +70,7 @@ class TestUnionMigration:
         hc.migrate_config(interactive=False, quiet=True)
         raw = _raw(tmp_path)
         cli = raw["platform_toolsets"]["cli"]
-        assert set(cli) == {"hermes-cli", "clarify", "topo", "runbook"}
+        assert set(cli) == {"hermes-cli", "clarify", "topo", "runbook", "matrix"}
 
     def test_no_platform_toolsets_untouched(self, tmp_path):
         _write(tmp_path, {"_config_version": 33, "model": {"default": "gpt-4o"}})
@@ -87,7 +87,7 @@ class TestUnionMigration:
         })
         hc.migrate_config(interactive=False, quiet=True)
         raw = _raw(tmp_path)
-        assert raw["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
+        assert raw["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook", "matrix"]
         # 不产生 defaults dump：schema 默认顶键不落盘
         for default_key in ("tts", "compression", "security", "whatsapp", "bedrock"):
             assert default_key not in raw
@@ -120,5 +120,5 @@ class TestKanbanExpansionIntent:
         results = {"env_added": [], "config_added": [], "warnings": []}
         run_migrations(33, results, quiet=True)
         raw = _raw(tmp_path)
-        assert raw["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
+        assert raw["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook", "matrix"]
         assert any("topo" in c for c in results["config_added"])

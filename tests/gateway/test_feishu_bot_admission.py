@@ -350,7 +350,7 @@ def test_hydrate_bot_identity_populates_self_ids_from_bot_v3_info(monkeypatch):
     assert captured["uri"] == "/open-apis/bot/v3/info"
     assert str(captured["http_method"]).endswith("GET")
     assert adapter._bot_open_id == "ou_hydrated"
-    assert adapter._bot_name == "Hermes"
+    assert adapter._bot_name == "Vigil"
     # /bot/v3/info doesn't surface user_id, so _bot_user_id stays empty.
     assert adapter._bot_user_id == ""
 

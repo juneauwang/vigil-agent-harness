@@ -523,7 +523,7 @@ class TestLoadGatewayConfig:
             "    port: 8642\n"
             "    host: 0.0.0.0\n"
             "    key: sekrit\n"
-            "    model_name: my-hermes\n",
+            "    model_name: my-vigil\n",
             encoding="utf-8",
         )
         monkeypatch.setenv("VIGIL_HOME", str(hermes_home))

@@ -117,21 +117,23 @@ def test_gateway_topup_not_logged_in(monkeypatch):
 
 
 def test_credits_command_fully_removed():
-    """`/credits` and the old `/billing` are gone entirely — not commands, not
-    aliases. Billing lives only on /topup, with NO aliases, on every platform."""
+    """`/credits`, `/billing` and `/topup` are gone entirely — not commands,
+    not aliases (batch 15 folded the billing surface into /usage)."""
     from hermes_cli.commands import resolve_command, COMMAND_REGISTRY
 
-    # Both old names resolve to nothing.
+    # All three old names resolve to nothing.
     assert resolve_command("credits") is None
     assert resolve_command("billing") is None
-    # No standalone command for either remains in the registry.
-    assert not any(c.name in ("credits", "billing") for c in COMMAND_REGISTRY)
-    # And no command carries either as an alias.
+    assert resolve_command("topup") is None
+    # No standalone command for any of them remains in the registry.
+    assert not any(c.name in ("credits", "billing", "topup") for c in COMMAND_REGISTRY)
+    # And no command carries any of them as an alias.
     for c in COMMAND_REGISTRY:
         assert "credits" not in (c.aliases or ())
         assert "billing" not in (c.aliases or ())
-    # /topup is the billing surface, on every surface, and carries no aliases.
-    entry = next(c for c in COMMAND_REGISTRY if c.name == "topup")
+        assert "topup" not in (c.aliases or ())
+    # /usage is the billing/balance surface, on every surface, with no aliases.
+    entry = next(c for c in COMMAND_REGISTRY if c.name == "usage")
     assert entry.cli_only is False
     assert entry.gateway_only is False
     assert not entry.aliases

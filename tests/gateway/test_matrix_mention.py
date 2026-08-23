@@ -24,7 +24,7 @@ def _make_adapter(tmp_path=None):
         token="syt_test_token",
         extra={
             "homeserver": "https://matrix.example.org",
-            "user_id": "@hermes:example.org",
+            "user_id": "@vigil:example.org",
         },
     )
     adapter = MatrixAdapter(config)
@@ -88,14 +88,14 @@ class TestIsBotMentioned:
         self.adapter = _make_adapter()
 
     def test_full_user_id_in_body(self):
-        assert self.adapter._is_bot_mentioned("hey @hermes:example.org help")
+        assert self.adapter._is_bot_mentioned("hey @vigil:example.org help")
 
     def test_localpart_in_body(self):
         assert self.adapter._is_bot_mentioned("vigil can you help?")
 
 
     def test_matrix_pill_in_formatted_body(self):
-        html = '<a href="https://matrix.to/#/@hermes:example.org">Hermes</a> help'
+        html = '<a href="https://matrix.to/#/@vigil:example.org">Hermes</a> help'
         assert self.adapter._is_bot_mentioned("Vigil help", html)
 
 
@@ -106,7 +106,7 @@ class TestIsBotMentioned:
         """m.mentions.user_ids alone is sufficient — no body text needed."""
         assert self.adapter._is_bot_mentioned(
             "please reply",  # no @vigil anywhere in body
-            mention_user_ids=["@hermes:example.org"],
+            mention_user_ids=["@vigil:example.org"],
         )
 
 
@@ -115,7 +115,7 @@ class TestStripMention:
         self.adapter = _make_adapter()
 
     def test_strip_full_user_id(self):
-        result = self.adapter._strip_mention("@hermes:example.org help me")
+        result = self.adapter._strip_mention("@vigil:example.org help me")
         assert result == "help me"
 
     def test_localpart_preserved(self):
@@ -170,7 +170,7 @@ async def test_require_mention_default_processes_mentioned(monkeypatch):
     monkeypatch.setenv("MATRIX_AUTO_THREAD", "false")
 
     adapter = _make_adapter()
-    event = _make_event("@hermes:example.org help me")
+    event = _make_event("@vigil:example.org help me")
 
     await adapter._on_room_message(event)
     adapter.handle_message.assert_awaited_once()
@@ -192,7 +192,7 @@ async def test_require_mention_m_mentions_user_ids(monkeypatch):
     # Body has NO mention, but m.mentions.user_ids includes the bot.
     event = _make_event(
         "please reply",
-        mention_user_ids=["@hermes:example.org"],
+        mention_user_ids=["@vigil:example.org"],
     )
 
     await adapter._on_room_message(event)
@@ -225,7 +225,7 @@ async def test_dm_strips_full_mxid(monkeypatch):
 
     adapter = _make_adapter()
     _set_dm(adapter)
-    event = _make_event("@hermes:example.org help me")
+    event = _make_event("@vigil:example.org help me")
 
     await adapter._on_room_message(event)
     adapter.handle_message.assert_awaited_once()
@@ -241,7 +241,7 @@ async def test_bare_mention_passes_empty_string(monkeypatch):
     monkeypatch.setenv("MATRIX_AUTO_THREAD", "false")
 
     adapter = _make_adapter()
-    event = _make_event("@hermes:example.org")
+    event = _make_event("@vigil:example.org")
 
     await adapter._on_room_message(event)
     adapter.handle_message.assert_awaited_once()
@@ -318,7 +318,7 @@ async def test_dm_mention_thread_creates_thread(monkeypatch):
 
     adapter = _make_adapter()
     _set_dm(adapter)
-    event = _make_event("@hermes:example.org help me", event_id="$dm1")
+    event = _make_event("@vigil:example.org help me", event_id="$dm1")
 
     with patch.object(adapter._threads, "_save"):
         await adapter._on_room_message(event)

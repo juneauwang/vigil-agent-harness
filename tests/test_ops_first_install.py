@@ -63,7 +63,7 @@ class TestDefaultConfigOps:
         assert perms["role"] == "test"
 
     def test_default_platform_toolsets_cli_has_topo_runbook(self):
-        assert DEFAULT_CONFIG["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
+        assert DEFAULT_CONFIG["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook", "matrix"]
 
     def test_default_tool_search_off(self):
         assert DEFAULT_CONFIG["tools"]["tool_search"]["enabled"] == "off"
@@ -81,7 +81,7 @@ class TestDefaultConfigOps:
         cfg = hc.load_config()
         assert cfg["ops"]["permissions"]["env"] == "test"
         assert cfg["ops"]["permissions"]["role"] == "test"
-        assert cfg["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
+        assert cfg["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook", "matrix"]
         assert cfg["tools"]["tool_search"]["enabled"] == "off"
 
     def test_user_config_missing_ops_merges_defaults_without_error(self, tmp_path, monkeypatch):
@@ -92,7 +92,7 @@ class TestDefaultConfigOps:
         cfg = hc.load_config()
         assert cfg["model"] == "deepseek-v3"
         assert cfg["ops"]["permissions"]["env"] == "test"
-        assert cfg["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook"]
+        assert cfg["platform_toolsets"]["cli"] == ["hermes-cli", "topo", "runbook", "matrix"]
 
 
 class TestFirstRunSeeding:

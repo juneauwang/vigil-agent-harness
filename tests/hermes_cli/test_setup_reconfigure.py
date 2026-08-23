@@ -169,8 +169,11 @@ class TestFreshInstall:
         with ExitStack() as stack:
             m = _enter_fresh_install_patches(
                 stack,
-                prompt=("hermes_cli.setup.prompt_choice", {"return_value": 0}),
-                first="hermes_cli.setup._run_first_time_quick_setup",
+                # Blank Slate (option 1) — the first-time path that hands off
+                # to _run_blank_slate_setup. Option 0 would run the full
+                # interactive sections, which this test doesn't mock.
+                prompt=("hermes_cli.setup.prompt_choice", {"return_value": 1}),
+                first="hermes_cli.setup._run_blank_slate_setup",
             )
             from hermes_cli.setup import run_setup_wizard
             run_setup_wizard(args)
@@ -198,5 +201,3 @@ class TestArgparse:
             pass
         assert captured["args"].reconfigure is True
         assert captured["args"].quick is False
-
-

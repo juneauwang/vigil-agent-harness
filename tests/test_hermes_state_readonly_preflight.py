@@ -52,24 +52,21 @@ def _make_db(path: Path) -> None:
 
 
 def _make_wal_db(path: Path) -> None:
-    """Create a WAL-mode DB with committed-but-uncheckpointed frames."""
+    """Create a WAL-mode DB with a surviving ``-wal`` sidecar.
+
+    SQLite's close-time auto-checkpoint removes the ``-wal`` once the last
+    connection closes — behavior varies by version (3.45.1 checkpoints even
+    with a read-only holder connection open), so the sidecar is created
+    explicitly rather than relying on close ordering. The preflight under
+    test only checks sidecar existence + writability, not WAL contents.
+    """
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("CREATE TABLE t (x)")
-    conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-    # Keep a READ-ONLY second connection open so neither close can
-    # checkpoint: the writer skips checkpoint-on-close because another
-    # connection exists, and the ro holder cannot checkpoint at all.
-    # The committed row therefore lives only in the -wal file.
-    holder = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    holder.execute("SELECT 1").fetchone()
-    conn.execute("INSERT INTO t VALUES (42)")
+    conn.execute("INSERT INTO t VALUES (1)")
     conn.commit()
     conn.close()
-    holder.close()
-    assert path.with_name(path.name + "-wal").is_file(), (
-        "fixture precondition: -wal sidecar must survive with pending frames"
-    )
+    path.with_name(path.name + "-wal").touch()
 
 
 class TestRepairScope:

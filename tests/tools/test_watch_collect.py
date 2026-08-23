@@ -27,8 +27,9 @@ def watch_home(tmp_path, monkeypatch):
         ops = {}
         if prom is not None:
             ops["prometheus"] = prom
-        if watch is not None:
-            ops["watch"] = watch
+        # DEFAULT_CONFIG 的 ops.watch.enabled 默认 false（load_config_readonly
+        # 会合并默认值）——测试默认显式开采集；禁用用例传 {"enabled": False} 覆盖。
+        ops["watch"] = {"enabled": True, **(watch or {})}
         (home / "config.yaml").write_text(
             yaml.safe_dump({"ops": ops}, allow_unicode=True, sort_keys=False),
             encoding="utf-8",

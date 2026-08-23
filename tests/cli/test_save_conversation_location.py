@@ -25,11 +25,37 @@ def hermes_home(tmp_path, monkeypatch):
     home.mkdir()
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     monkeypatch.setenv("VIGIL_HOME", str(home))
-    # Clear any cached hermes_home computation
-    import hermes_constants
-    if hasattr(hermes_constants, "_hermes_home_cache"):
-        hermes_constants._hermes_home_cache = None
     return home
+
+
+@pytest.fixture
+def fresh_cli_module(hermes_home):
+    """Re-import the top-level ``cli`` module against the fixture's VIGIL_HOME,
+    then restore sys.modules exactly so the eviction cannot split module
+    identity for later tests.
+
+    Only ``cli`` and ``hermes_constants`` are reloaded. The previous broad
+    ``startswith("cli")`` filter also evicted the entire ``hermes_cli`` package
+    (``"hermes_cli".startswith("cli")`` is True) plus every submodule from
+    sys.modules without restoring them — earlier-imported modules (e.g.
+    ``hermes_cli.web_server``, ``hermes_cli.observability.relay_shared_metrics``)
+    still held the original module objects while later imports resolved the
+    fresh package, so per-test monkeypatches (profiles root, config caches)
+    landed on the wrong copy and profile-scoped reads/writes silently fell back
+    to the root install.
+    """
+    saved = {
+        name: sys.modules[name]
+        for name in ("cli", "hermes_constants")
+        if name in sys.modules
+    }
+    try:
+        for name in saved:
+            sys.modules.pop(name, None)
+        import cli  # noqa: F401  (module under test)
+        yield cli
+    finally:
+        sys.modules.update(saved)
 
 
 def _make_stub_cli(history):
@@ -42,19 +68,16 @@ def _make_stub_cli(history):
     )
 
 
-def test_save_conversation_writes_under_hermes_home(hermes_home, tmp_path, monkeypatch, capsys):
+def test_save_conversation_writes_under_hermes_home(
+    hermes_home, fresh_cli_module, tmp_path, monkeypatch, capsys
+):
     """Snapshot must land under ~/.vigil/sessions/saved/, not CWD."""
     # Change CWD to a different directory to prove the file does NOT go there.
     work = tmp_path / "somewhere-else"
     work.mkdir()
     monkeypatch.chdir(work)
 
-    # Import fresh to pick up the VIGIL_HOME fixture
-    for mod in [m for m in sys.modules if m.startswith("cli") or m == "hermes_constants"]:
-        sys.modules.pop(mod, None)
-
-    import cli  # noqa: F401  (module under test)
-
+    cli = fresh_cli_module
     stub = _make_stub_cli([
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
@@ -64,13 +87,13 @@ def test_save_conversation_writes_under_hermes_home(hermes_home, tmp_path, monke
     cli.HermesCLI.save_conversation(stub)
 
     # File must NOT be in CWD
-    cwd_leak = list(work.glob("hermes_conversation_*.json"))
+    cwd_leak = list(work.glob("vigil_conversation_*.json"))
     assert not cwd_leak, f"snapshot leaked to CWD: {cwd_leak}"
 
     # File MUST be under ~/.vigil/sessions/saved/
     saved_dir = hermes_home / "sessions" / "saved"
     assert saved_dir.is_dir(), "expected saved/ subdirectory to be created"
-    files = list(saved_dir.glob("hermes_conversation_*.json"))
+    files = list(saved_dir.glob("vigil_conversation_*.json"))
     assert len(files) == 1, files
 
     payload = json.loads(files[0].read_text())
@@ -87,11 +110,8 @@ def test_save_conversation_writes_under_hermes_home(hermes_home, tmp_path, monke
     assert "vigil --resume 20260101_120000_abc123" in out, out
 
 
-def test_save_conversation_empty_history_does_nothing(hermes_home, capsys):
-    for mod in [m for m in sys.modules if m.startswith("cli") or m == "hermes_constants"]:
-        sys.modules.pop(mod, None)
-    import cli
-
+def test_save_conversation_empty_history_does_nothing(hermes_home, fresh_cli_module, capsys):
+    cli = fresh_cli_module
     stub = _make_stub_cli([])
     cli.HermesCLI.save_conversation(stub)
 

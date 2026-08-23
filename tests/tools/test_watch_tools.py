@@ -125,9 +125,14 @@ class TestCheckWatchRequirements:
         write({"watch": {"enabled": False}})
         assert check_watch_requirements() is False
 
-    def test_absent_enables(self, watch_home):
+    def test_default_and_explicit_enable(self, watch_home):
+        """显式 true → 开启；缺省 → 随 DEFAULT_CONFIG 默认关闭。
+
+        load_config_readonly 会把 DEFAULT_CONFIG 的 ops.watch.enabled: false
+        合并进来（后台采集默认不跑，用户显式开启才启用）。
+        """
         _, write = watch_home
         write({"watch": {"enabled": True}})
         assert check_watch_requirements() is True
         write({})
-        assert check_watch_requirements() is True
+        assert check_watch_requirements() is False

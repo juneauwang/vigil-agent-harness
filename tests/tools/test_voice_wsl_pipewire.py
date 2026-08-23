@@ -28,6 +28,10 @@ def _base(monkeypatch):
     monkeypatch.delenv("PIPEWIRE_REMOTE", raising=False)
     monkeypatch.setattr("hermes_constants.is_container", lambda: False)
     monkeypatch.setattr("tools.voice_mode._pulse_socket_reachable", lambda: False)
+    # 无转发用例要验证硬拦；真实 WSL2 开发机上 powershell.exe/ffmpeg 常在
+    # PATH，TTS 回退可用会把硬拦降级为 notice——显式关掉回退。
+    monkeypatch.setattr("tools.voice_mode._wsl_powershell_tts_available",
+                        lambda: False)
     sd = MagicMock(); sd.query_devices.return_value = [{"name": "dev"}]
     monkeypatch.setattr("tools.voice_mode._import_audio", lambda: (sd, MagicMock()))
 

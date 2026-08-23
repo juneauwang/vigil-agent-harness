@@ -105,6 +105,13 @@ def test_ansible_bk_prompt_converts_to_clarify_error(isolated_home, monkeypatch)
     monkeypatch.setattr(tt, "_get_env_config", lambda: _make_env_config())
     monkeypatch.setattr(tt, "_start_cleanup_thread", lambda: None)
     monkeypatch.setattr(tt, "_create_environment", lambda **kw: fake_env)
+    # YAPL P2（OPS-DELTA #68）的 ansible -i inventory 硬拦（fail-closed）在
+    # 密码提示转换之前触发，属于独立安全层（见 test_ansible_inventory.py）。
+    # 这里 mock 放行，只验证本测试关心的 BECOME password → clarify 转换。
+    monkeypatch.setattr(
+        "tools.ansible_inventory_guard.check_ansible_inventory_guard",
+        lambda command, home=None: None,
+    )
 
     result = json.loads(terminal_tool(
         "ansible-playbook -i hosts -bK play.yml", task_id="t-pw-1"))

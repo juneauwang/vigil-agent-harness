@@ -357,22 +357,22 @@ class TestManualBackendRespawn:
 
         with patch.object(live.subprocess, "Popen", _FakePopen):
             failed = live._respawn_dashboard_processes([
-                ["hermes", "dashboard", "--port", "8300"],
-                ["hermes", "serve", "--host", "0.0.0.0"],
+                ["vigil", "dashboard", "--port", "8300"],
+                ["vigil", "serve", "--host", "0.0.0.0"],
             ])
 
         assert failed == []
-        assert spawned[0] == ["hermes", "dashboard", "--port", "8300", "--no-open"]
-        assert spawned[1] == ["hermes", "serve", "--host", "0.0.0.0"]
+        assert spawned[0] == ["vigil", "dashboard", "--port", "8300", "--no-open"]
+        assert spawned[1] == ["vigil", "serve", "--host", "0.0.0.0"]
 
     def test_respawn_failure_returned(self, tmp_path, monkeypatch, capsys):
         live = self._live()
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
 
         with patch.object(live.subprocess, "Popen", side_effect=OSError("no such file")):
-            failed = live._respawn_dashboard_processes([["hermes", "serve"]])
+            failed = live._respawn_dashboard_processes([["vigil", "serve"]])
 
-        assert failed == [["hermes", "serve"]]
+        assert failed == [["vigil", "serve"]]
         out = capsys.readouterr().out
         assert "✗ failed to restart" in out
 
@@ -419,7 +419,7 @@ class TestCmdlineCapture:
              patch("subprocess.run", side_effect=fake_run):
             argv = live._dashboard_cmdline_for_pid(888)
 
-        assert argv == ["hermes", "serve", "--port", "8300"]
+        assert argv == ["vigil", "serve", "--port", "8300"]
 
     def test_returns_none_on_windows(self, monkeypatch):
         live = self._live()

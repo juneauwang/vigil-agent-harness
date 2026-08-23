@@ -31,18 +31,19 @@ def _make_cli_stub():
 
 class TestCliSkinPromptIntegration:
 
-    def test_ares_prompt_fragments_use_skin_symbol(self):
+    def test_vigil_prompt_fragments_use_skin_symbol(self):
         cli = _make_cli_stub()
 
-        set_active_skin("ares")
-        assert cli._get_tui_prompt_fragments() == [("class:prompt", "⚔ ")]
+        with patch("hermes_cli.banner._load_banner_state", return_value=None):
+            set_active_skin("vigil")
+            assert cli._get_tui_prompt_fragments() == [("class:prompt", "◉ Vigil > ")]
 
     def test_secret_prompt_fragments_preserve_secret_state(self):
         cli = _make_cli_stub()
         cli._secret_state = {"response_queue": object()}
 
-        set_active_skin("ares")
-        assert cli._get_tui_prompt_fragments() == [("class:sudo-prompt", "🔑 ⚔ ")]
+        set_active_skin("vigil")
+        assert cli._get_tui_prompt_fragments() == [("class:sudo-prompt", "🔑 > ")]
 
 
     def test_narrow_terminals_compact_voice_recording_prompt_fragments(self):
@@ -71,10 +72,10 @@ class TestCliSkinPromptIntegration:
         cli = _make_cli_stub()
 
         with patch("cli.save_config_value", return_value=True):
-            cli._handle_skin_command("/skin ares")
+            cli._handle_skin_command("/skin vigil")
 
         output = capsys.readouterr().out
-        assert "Skin set to: ares (saved)" in output
+        assert "Skin set to: vigil (saved)" in output
         assert "Prompt + TUI colors updated." in output
         assert cli._app.style is not None
 
