@@ -97,6 +97,61 @@ describe("yamlPreview", () => {
     expect(out).toContain('title: "a: b"');
     expect(out).toContain("note: [已过滤]");
   });
+  it("serializes v0.2 runbook structures（action/params/changes/expect/双形态 triggers）", () => {
+    const out = yamlPreview({
+      name: "nginx-config-update",
+      version: 2,
+      kind: "maintenance",
+      on_failure: { rollback: "rollback-main" },
+      triggers: ["harbor healthcheck failed", { alertname: "HarborHealthcheckDown", severity: "critical" }],
+      steps: [
+        {
+          id: "backup",
+          title: "变更前备份",
+          action: "backup",
+          params: { target: "nginx", dest: "{{ steps.backup.params.dest }}" },
+        },
+        {
+          id: "apply",
+          action: "apply_config",
+          params: {
+            target: "nginx",
+            changes: [
+              { key: "http.server_tokens", value: "off" },
+              { key: "worker_processes", value: "4" },
+            ],
+          },
+          expect: { target: "http", url: "http://127.0.0.1/healthz", http_status: 200 },
+        },
+      ],
+    });
+    expect(out).toContain("version: 2");
+    expect(out).toContain("kind: maintenance");
+    expect(out).toContain("on_failure:");
+    expect(out).toContain("rollback: rollback-main");
+    expect(out).toContain("action: backup");
+    expect(out).toContain('dest: "{{ steps.backup.params.dest }}"');
+    expect(out).toContain("action: apply_config");
+    expect(out).toContain("changes:");
+    expect(out).toContain("- key: http.server_tokens");
+    expect(out).toContain("value: off");
+    expect(out).toContain("- key: worker_processes");
+    expect(out).toContain("http_status: 200");
+    expect(out).toContain("- alertname: HarborHealthcheckDown");
+    expect(out).toContain("severity: critical");
+  });
+  it("serializes rollback 场景数组与 schedule", () => {
+    const out = yamlPreview({
+      schedule: { cron: "0 2 * * 3", timezone: "Asia/Shanghai" },
+      rollback: [
+        { name: "rollback-main", steps: [{ id: "rb", action: "restore", params: { target: "nginx" } }] },
+      ],
+    });
+    expect(out).toContain('cron: "0 2 * * 3"');
+    expect(out).toContain("timezone: Asia/Shanghai");
+    expect(out).toContain("- name: rollback-main");
+    expect(out).toContain("action: restore");
+  });
 });
 
 describe("formatUptime", () => {

@@ -135,7 +135,7 @@ export function yamlPreview(value: unknown, indent = 0): string {
             const keyPad = i === 0 ? `${pad}- ` : `${pad}  `;
             if (isObj) {
               lines.push(`${keyPad}${k}:`);
-              lines.push(yamlPreview(val, indent + (i === 0 ? 1 : 2)));
+              lines.push(yamlPreview(val, indent + 2));
             } else {
               lines.push(`${keyPad}${k}: ${yamlScalar(val)}`);
             }
