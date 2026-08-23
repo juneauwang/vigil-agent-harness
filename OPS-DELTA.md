@@ -3659,3 +3659,75 @@
   存量回归；季度体检：health 三态（无 endpoint 不误报 down）、30s 缓存、
   query/alerts 未配置 503 提示、无新配置项（零新配置）。
 - **状态**：独立 feat commit（UI 监控 API 批次）。
+
+### 79. chat 用量面板——token 显示 + LLM 价格三级来源（2026-08-23，YAPL 之后第二个新功能面）
+
+- **背景**：sessions 表已记录每会话 input_tokens/output_tokens（/api/analytics/usage
+  按天/按模型聚合），config 有 display.show_cost 开关——但 chat UI 没有任何
+  token/费用展示。本批补齐：ChatPage token 按钮 + 用量面板（当前会话实时
+  token + 今天/近 30 天历史累计 + 费用），费用走独立 ~/.vigil/pricing.yaml
+  三级来源。不碰 YAPL 核心 / 监控 API / 拓扑 / runbooks。
+- **新增**（零侵入面，未改既有功能语义）：
+  - `tools/pricing.py`（新文件，非工具模块——无 registry.register，不被工具
+    发现）：`~/.vigil/pricing.yaml` 加载/校验（schema_version/updated_at/
+    prices，currency 限 usd|cny，非法条目跳过）、三级查找
+    `get_model_price(model)`（manual > online > builtin）、费用计算
+    `estimate_cost`、OpenRouter `/models` 公开拉取 `fetch_openrouter_prices`
+    （无需 key；只覆盖 online 条目、manual 永不被覆盖；临时文件 + os.replace
+    原子写）、入口 `try_refresh_pricing_online`（未配置不拉取，失败不抛不阻塞）。
+  - **builtin 兜底语义**：优先复用 `agent/usage_pricing` 官方快照（provider 从
+    入参或 config model.provider 解析；OpenRouter/Nous 等 official_models_api
+    路由跳过——get_model_price 永不做网络），再按模型名精确扫快照，最后落
+    内置估算表（任务书给定 deepseek-v4-flash 0.28/0.42 USD，标注"估算值，
+    以实际账单为准"；实际 deepseek-v4-flash 走官方快照 0.14/0.28，与
+    sessions 行内 estimated_cost_usd 同源一致）。
+  - `GET /api/chat/usage?session_id=`（chat_api.py，照现有 chat 端点模式——
+    不进 PUBLIC_API_PATHS、无显式 _require_token，dashboard 鉴权兜底；与
+    /api/chat/sessions 一致）：token 直接读 sessions 行（update_token_counts
+    每 API 调用增量写、get_session 读到的即实时 totals，无需聚合 messages）；
+    活会话优先注册表会话级模型（切换模型后行内 model 仍是首个计费模型，
+    COALESCE 语义）；费用按三级价格，价格不可用 cost: null（不瞎算）。
+  - config_defaults.py ops 段加 `pricing.openrouter.base_url`（空 = 零网络
+    依赖）；web_server lifespan 启动后台线程触发一次在线拉取（不配置/失败均
+    不阻塞主流程）。
+  - 前端：api.ts `getChatUsage` / `getUsageAnalytics`（历史累计复用现有
+    /api/analytics/usage，无新聚合端点）+ 类型；ChatPage header 加「用量」
+    按钮 + 面板（当前会话 input/output/总计 + 费用约 $/¥ + 来源标签 手动价/
+    在线拉取/内置估算；今天/近 30 天历史累计；无会话空态；会话切换重拉、
+    打开拉一次）。
+- **语义注明（config display.show_cost）**：show_cost 只控制 CLI 状态栏费用
+  显示（默认 off），**不控制 token 显示**——chat 用量面板 token 恒显，费用
+  跟随价格可用性（三级价格命中才显，未命中只显 token 不瞎算）。
+- **测试**：后端 `tests/tools/test_pricing.py` 9 例（manual>online>builtin
+  优先级、currency 校验跳过、deepseek 官方快照 0.14/0.28、快照清空后估算表
+  0.28/0.42 兜底、费用计算、在线拉取成功写缓存+manual 保留、拉取失败不阻塞、
+  未配置不拉取）+ `tests/hermes_cli/test_chat_usage.py` 5 例（真实 temp
+  VIGIL_HOME + SessionDB 建行：实时 token+费用 0.002156、未知模型 cost null、
+  404、注册表会话级模型优先、manual 覆盖生效）。前端 ChatPage.test.tsx +4 例
+  （面板渲染 token+费用+来源标签/价格不可用只显 token/无会话空态/切会话重拉）。
+  vitest 21 文件 157 过、`tsc -b --noEmit` 过、`npm run build` 过。存量回归：
+  chat 套件 53 过（1 例存量失败 `test_approval_callback_registers_web_approval_and_waits`
+  ——基线即失败，OPS-DELTA #75 grade 退役后断言未同步，非本批引入）、
+  usage/analytics/session 套件 25+28 过。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv 重启，
+  pid 4097708；VIGIL_DASHBOARD_SESSION_TOKEN=vigil-monitor-test-9131）：
+  - `GET /api/chat/usage?session_id=chat_dc02911b`：真实 token
+    input=15248 / output=76 / total=15324；deepseek-v4-flash 内置价
+    （官方快照 0.14/0.28）→ cost=0.002156（≈ $0.00 两位显示，源值同
+    sessions 行 estimated_cost_usd=0.00216496 一致）；price_source=builtin、
+    pricing_version=deepseek-pricing-2026-07。
+  - 手动覆盖：写 ~/.vigil/pricing.yaml（deepseek-v4-flash manual 0.10/0.20）
+    → cost=0.00154、price_source=manual；删除后还原 cost=0.002156/builtin
+    （manual > builtin 优先级实测生效）。
+  - 无 token → 401；未知会话 → 404 error envelope。
+  - 前端：SPA 根页 200 且注入 session token；`/assets/ChatPage-BQnKHr4Y.js`
+    200 且含「创建会话后显示用量」「价格不可用，仅显示 token」分块；面板
+    交互（按钮/三块/费用/空态/切换重拉）由 vitest 4 例覆盖（本环境无浏览器，
+    服务端 serve 验证 + 组件测试）。
+  - 实测后清理：pricing.yaml 已还原删除；服务保留运行（9131 = 开发目录服务，
+    沿用旧批习惯）。
+- **核销方式**：测试常驻——test_pricing.py 9 + test_chat_usage.py 5 +
+  ChatPage 4 + 存量回归；季度体检：三级优先级（manual>online>builtin）、
+  get_model_price 零网络、在线拉取失败不阻塞、pricing.yaml 不落密钥、
+  show_cost 语义（token 恒显、费用跟随价格可用性）、无汇率换算。
+- **状态**：独立 feat commit（chat 用量面板批次）。

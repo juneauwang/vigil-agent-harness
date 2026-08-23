@@ -1057,6 +1057,56 @@ async def list_chat_sessions():
     return {"sessions": sessions, "total": len(sessions)}
 
 
+@router.get("/api/chat/usage")
+async def chat_usage(session_id: str):
+    """当前会话实时 token + 费用（OPS-DELTA #79，批六十四）。
+
+    token 直接读 sessions 行——update_token_counts 每 API 调用增量写
+    （非只结束写入，交接批次已确认），get_session() 读到的即实时 totals，
+    无需聚合 messages。费用按模型三级价格（pricing.yaml manual > online >
+    内置兜底，tools/pricing.get_model_price）；价格不可用 → cost: null
+    （UI 只显 token 不瞎算费用）。历史累计前端复用 /api/analytics/usage。
+
+    保护照现有 chat 端点模式（不进 PUBLIC_API_PATHS，dashboard 鉴权兜底），
+    无显式 _require_token——与 /api/chat/sessions 一致。
+    """
+    from hermes_cli.web_server import _open_session_db_for_profile
+    from tools.pricing import estimate_cost, get_model_price
+
+    db = _open_session_db_for_profile(None, read_only=True)
+    try:
+        row = db.get_session(session_id)
+    finally:
+        db.close()
+    if row is None:
+        return JSONResponse(
+            status_code=404,
+            content={"error": {"code": "not_found", "message": f"会话不存在: {session_id}"}},
+        )
+    with _CHAT_LOCK:
+        live = _CHAT_SESSIONS.get(session_id)
+        # 活会话优先用注册表的会话级模型（切换模型后行内 model 仍是首个
+        # 计费模型，COALESCE 语义）；无注册表条目回退行内持久化模型。
+        model = (live.model if live is not None else "") or (row.get("model") or "")
+    input_tokens = int(row.get("input_tokens") or 0)
+    output_tokens = int(row.get("output_tokens") or 0)
+    price = get_model_price(model) if model else None
+    cost = estimate_cost(input_tokens, output_tokens, price) if price else None
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "model": model,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+        "checked_at": _now_iso_utc(),
+        "cost": cost,
+        "cost_currency": price["currency"] if price else None,
+        "price_source": price["source"] if price else None,
+        "price": price,
+    }
+
+
 @router.get("/api/chat/sessions/{chat_session_id}/messages")
 async def chat_session_messages(chat_session_id: str):
     """拉取会话历史消息（结构化，供前端切回/切页恢复现场）。

@@ -20,6 +20,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
       answerChatClarify: vi.fn(),
       interruptChatSession: vi.fn(),
       setChatSessionModel: vi.fn(),
+      getChatUsage: vi.fn(),
+      getUsageAnalytics: vi.fn(),
     },
   };
 });
@@ -50,6 +52,8 @@ const apiMock = api as unknown as {
   answerChatClarify: ReturnType<typeof vi.fn>;
   interruptChatSession: ReturnType<typeof vi.fn>;
   setChatSessionModel: ReturnType<typeof vi.fn>;
+  getChatUsage: ReturnType<typeof vi.fn>;
+  getUsageAnalytics: ReturnType<typeof vi.fn>;
 };
 
 if (typeof globalThis.HTMLElement !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
@@ -98,6 +102,23 @@ async function mountWith(
     chat_session_id: "A",
     model,
   }));
+  apiMock.getChatUsage.mockResolvedValue({
+    ok: true,
+    session_id: "A",
+    model: "deepseek-v4-flash",
+    input_tokens: 15248,
+    output_tokens: 76,
+    total_tokens: 15324,
+    cost: 0.002156,
+    cost_currency: "usd",
+    price_source: "builtin",
+    price: { input_per_1m: 0.14, output_per_1m: 0.28, currency: "usd", source: "builtin" },
+  });
+  apiMock.getUsageAnalytics.mockResolvedValue({
+    daily: [{ day: "2026-08-23", input_tokens: 5000, output_tokens: 100, cache_read_tokens: 0, reasoning_tokens: 0, estimated_cost: 0.01, actual_cost: 0, sessions: 1, api_calls: 1 }],
+    totals: { total_input: 10000, total_output: 200, total_cache_read: 0, total_reasoning: 0, total_estimated_cost: 0.03, total_actual_cost: 0, total_sessions: 2, total_api_calls: 3 },
+    period_days: 30,
+  });
   await act(async () => {
     root.render(<ChatPage />);
   });
@@ -114,6 +135,16 @@ function switchTo(select: HTMLSelectElement, value: string) {
   act(() => {
     select.value = value;
     select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+async function openUsagePanel() {
+  const btn = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("用量"))!;
+  await act(async () => {
+    btn.click();
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
   });
 }
 
@@ -521,5 +552,84 @@ describe("批四十二 §BH 全局弹窗批准 → 对话内审批卡同步", ()
     });
     expect(container.textContent).toContain("已拒绝");
     expect(container.textContent).not.toContain("等待审批");
+  });
+});
+
+describe("批六十四 chat 用量面板", () => {
+  it("打开面板 → 拉当前会话实时 token + 历史累计，显示 token 与费用", async () => {
+    await mountWith([SESSION_A]);
+    expect(container.querySelector('[data-testid="usage-panel"]')).toBeNull();
+    await openUsagePanel();
+    const panel = container.querySelector('[data-testid="usage-panel"]')!;
+    expect(apiMock.getChatUsage).toHaveBeenCalledWith("A");
+    expect(apiMock.getUsageAnalytics).toHaveBeenCalledWith(30);
+    // 当前会话：模型 + token + 费用（内置估算标签）
+    expect(panel.textContent).toContain("当前会话");
+    expect(panel.textContent).toContain("deepseek-v4-flash");
+    expect(panel.textContent).toContain("15,248");
+    expect(panel.textContent).toContain("76");
+    expect(panel.textContent).toContain("15,324");
+    expect(panel.textContent).toContain("约 $0.00");
+    expect(panel.textContent).toContain("内置估算");
+    // 今天 / 近 30 天（历史累计，含全部会话）
+    expect(panel.textContent).toContain("今天");
+    expect(panel.textContent).toContain("5,000");
+    expect(panel.textContent).toContain("近 30 天");
+    expect(panel.textContent).toContain("10,000");
+    expect(panel.textContent).toContain("约 $0.03");
+  });
+
+  it("价格不可用 → 只显 token，不显费用（不瞎算）", async () => {
+    await mountWith([SESSION_A]);
+    apiMock.getChatUsage.mockResolvedValue({
+      ok: true,
+      session_id: "A",
+      model: "unknown-model",
+      input_tokens: 500,
+      output_tokens: 100,
+      total_tokens: 600,
+      cost: null,
+      cost_currency: null,
+      price_source: null,
+      price: null,
+    });
+    await openUsagePanel();
+    const panel = container.querySelector('[data-testid="usage-panel"]')!;
+    expect(panel.textContent).toContain("价格不可用，仅显示 token");
+    expect(panel.textContent).toContain("500");
+    expect(panel.textContent).toContain("600");
+    // 当前会话卡片内无费用行（今天/近 30 天来自 analytics 记录的
+    // estimated_cost，属历史累计，不受当前会话价格影响）。
+    const currentCard = panel.querySelector(".grid > div")!;
+    expect(currentCard.textContent).not.toContain("约 $");
+  });
+
+  it("无会话（创建失败，activeId 空）→ 空态提示", async () => {
+    apiMock.getModels.mockResolvedValue(MODELS);
+    apiMock.listChatSessions.mockResolvedValue({ sessions: [], total: 0 });
+    apiMock.createChatSession.mockRejectedValue(new Error("backend down"));
+    apiMock.getUsageAnalytics.mockResolvedValue({ daily: [], totals: {}, period_days: 30 });
+    await act(async () => {
+      root.render(<ChatPage />);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await openUsagePanel();
+    const panel = container.querySelector('[data-testid="usage-panel"]')!;
+    expect(panel.textContent).toContain("创建会话后显示用量");
+    expect(apiMock.getChatUsage).not.toHaveBeenCalled();
+  });
+
+  it("切换会话 → 按新会话重拉 usage", async () => {
+    await mountWith([SESSION_A, SESSION_B]);
+    await openUsagePanel();
+    expect(apiMock.getChatUsage).toHaveBeenCalledWith("A");
+    apiMock.getChatUsage.mockClear();
+    switchTo(sessionSelect(), "B");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(apiMock.getChatUsage).toHaveBeenCalledWith("B");
   });
 });

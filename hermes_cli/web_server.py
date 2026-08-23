@@ -266,6 +266,22 @@ async def _lifespan(app: "FastAPI"):
     # sweeping stale sessions on schedule, independent of list requests.
     auto_archive_task = asyncio.create_task(_auto_archive_ticker_loop())
 
+    # LLM 价格在线拉取（OPS-DELTA #79）：配置 ops.pricing.openrouter.base_url
+    # 后启动后台线程拉取一次（OpenRouter /models 公开、无需 key），写
+    # ~/.vigil/pricing.yaml（source: online）；未配置/失败均不阻塞主流程
+    # （零网络依赖底线，get_model_price 永不做网络）。
+    try:
+        from tools.pricing import try_refresh_pricing_online
+
+        threading.Thread(
+            target=try_refresh_pricing_online,
+            kwargs={"force": False},
+            daemon=True,
+            name="pricing-online-refresh",
+        ).start()
+    except Exception:
+        pass
+
     try:
         yield
     finally:

@@ -17,9 +17,10 @@ import {
   Brain,
   HelpCircle,
   ListOrdered,
+  Coins,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { ChatModelOption, ChatSessionSummary } from "@/lib/api";
+import type { ChatModelOption, ChatSessionSummary, ChatUsageResponse, UsageAnalyticsResponse } from "@/lib/api";
 import {
   approvalIsTimedOut,
   applyChatEvent,
@@ -683,6 +684,130 @@ async function verifyBusyCleared(
   }
 }
 
+// ── 批六十四：token 用量面板（当前会话实时 + 历史累计 + 费用）─────────────
+
+const USAGE_SOURCE_LABEL: Record<string, string> = {
+  manual: "手动价",
+  online: "在线拉取",
+  builtin: "内置估算",
+};
+
+function formatTokens(n: number | null | undefined): string {
+  const v = Number(n ?? 0);
+  return Number.isFinite(v) ? v.toLocaleString() : "0";
+}
+
+function formatCost(cost: number | null | undefined, currency: string | null | undefined): string | null {
+  const v = Number(cost);
+  if (cost === null || cost === undefined || !Number.isFinite(v)) return null;
+  const symbol = currency === "cny" ? "¥" : "$";
+  return `约 ${symbol}${v.toFixed(2)}`;
+}
+
+function localTodayKey(): string {
+  const d = new Date();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+function UsagePanel({
+  activeId,
+  usage,
+  usageLoading,
+  usageError,
+  analytics,
+  analyticsLoading,
+}: {
+  activeId: string | null;
+  usage: ChatUsageResponse | null;
+  usageLoading: boolean;
+  usageError: string | null;
+  analytics: UsageAnalyticsResponse | null;
+  analyticsLoading: boolean;
+}) {
+  const daily = analytics?.daily ?? [];
+  const todayRow = daily.find((r) => r.day === localTodayKey()) ?? daily[daily.length - 1];
+  const totals = analytics?.totals;
+  const price = usage?.price ?? null;
+  const costText = price ? formatCost(usage?.cost ?? null, usage?.cost_currency ?? null) : null;
+  const sourceLabel = price ? USAGE_SOURCE_LABEL[price.source] ?? price.source : null;
+
+  const row = (label: string, value: string, cost?: string | null) => (
+    <div className="flex items-center justify-between gap-2">
+      <span className="text-[var(--vigil-muted)]">{label}</span>
+      <span className="font-mono text-[var(--vigil-text)]">{value}{cost ? `（${cost}）` : null}</span>
+    </div>
+  );
+
+  return (
+    <div data-testid="usage-panel" className="mb-3 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-3 text-xs">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <Coins className="size-3.5 text-[var(--vigil-muted)]" />
+        <span className="font-semibold">用量</span>
+        <span className="text-[var(--vigil-muted)]">
+          当前会话 token 实时读会话记录；今天/近 30 天含全部会话（CLI / 网关 / chat）。
+        </span>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="space-y-1 rounded border border-[var(--vigil-border)] p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium">当前会话</span>
+            {usageLoading && <Loader2 className="size-3 animate-spin text-[var(--vigil-muted)]" />}
+          </div>
+          {!activeId ? (
+            <div className="text-[var(--vigil-muted)]">创建会话后显示用量</div>
+          ) : usageError ? (
+            <div className="text-red-600 dark:text-red-400">{usageError}</div>
+          ) : usage ? (
+            <>
+              {row("模型", usage.model || "—")}
+              {row("输入", formatTokens(usage.input_tokens))}
+              {row("输出", formatTokens(usage.output_tokens))}
+              {row("总计", formatTokens(usage.total_tokens))}
+              {costText ? (
+                <div className="flex items-center justify-between gap-2 pt-1">
+                  <span className="text-[var(--vigil-muted)]">费用</span>
+                  <span className="font-mono text-[var(--vigil-ok)]">
+                    {costText}
+                    {sourceLabel ? <span className="ml-1 text-[10px] text-[var(--vigil-muted)]">（{sourceLabel}）</span> : null}
+                  </span>
+                </div>
+              ) : (
+                <div className="pt-1 text-[10px] text-[var(--vigil-muted)]">价格不可用，仅显示 token</div>
+              )}
+            </>
+          ) : (
+            <div className="text-[var(--vigil-muted)]">加载中…</div>
+          )}
+        </div>
+
+        <div className="space-y-1 rounded border border-[var(--vigil-border)] p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium">今天</span>
+            {analyticsLoading && <Loader2 className="size-3 animate-spin text-[var(--vigil-muted)]" />}
+          </div>
+          {row("输入", formatTokens(todayRow?.input_tokens))}
+          {row("输出", formatTokens(todayRow?.output_tokens))}
+          {row("总计", formatTokens((todayRow?.input_tokens ?? 0) + (todayRow?.output_tokens ?? 0)))}
+          {row("费用", "—", formatCost(todayRow?.estimated_cost ?? null, "usd"))}
+        </div>
+
+        <div className="space-y-1 rounded border border-[var(--vigil-border)] p-2">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-medium">近 30 天</span>
+            {analyticsLoading && <Loader2 className="size-3 animate-spin text-[var(--vigil-muted)]" />}
+          </div>
+          {row("输入", formatTokens(totals?.total_input))}
+          {row("输出", formatTokens(totals?.total_output))}
+          {row("总计", formatTokens((totals?.total_input ?? 0) + (totals?.total_output ?? 0)))}
+          {row("费用", "—", formatCost(totals?.total_estimated_cost ?? null, "usd"))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -701,6 +826,13 @@ export default function ChatPage() {
   // 批四十一 §8：可选模型目录 + 每会话选择。
   const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([]);
   const [modelSelections, setModelSelections] = useState<Record<string, string>>({});
+  // 批六十四：token 用量面板（打开时拉一次；会话切换时重拉）。
+  const [usageOpen, setUsageOpen] = useState(false);
+  const [usageData, setUsageData] = useState<ChatUsageResponse | null>(null);
+  const [usageLoading, setUsageLoading] = useState(false);
+  const [usageError, setUsageError] = useState<string | null>(null);
+  const [analytics, setAnalytics] = useState<UsageAnalyticsResponse | null>(null);
+  const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const abortRefs = useRef<Record<string, AbortController>>({});
   const loadedRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -868,6 +1000,56 @@ export default function ChatPage() {
     }, 2000);
     return () => window.clearInterval(timer);
   }, [activeId, activeBusy, trackSessions]);
+
+  // 批六十四：用量面板打开 → 拉当前会话实时 token（会话切换时重拉）+ 历史
+  // 累计（全局，打开拉一次即可）。关闭时清空，避免残留旧会话数据。
+  useEffect(() => {
+    if (!usageOpen) return;
+    let alive = true;
+    setUsageLoading(true);
+    setUsageError(null);
+    if (activeId) {
+      api
+        .getChatUsage(activeId)
+        .then((resp) => {
+          if (!alive) return;
+          if (resp.error) setUsageError(`[${resp.error.code}] ${resp.error.message}`);
+          else setUsageData(resp);
+        })
+        .catch((e: unknown) => {
+          if (!alive) return;
+          setUsageData(null);
+          setUsageError(e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e));
+        })
+        .finally(() => {
+          if (alive) setUsageLoading(false);
+        });
+    } else {
+      setUsageData(null);
+      setUsageLoading(false);
+    }
+    return () => {
+      alive = false;
+    };
+  }, [usageOpen, activeId]);
+
+  useEffect(() => {
+    if (!usageOpen) return;
+    let alive = true;
+    setAnalyticsLoading(true);
+    api
+      .getUsageAnalytics(30)
+      .then((resp) => {
+        if (alive && !resp.error) setAnalytics(resp);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (alive) setAnalyticsLoading(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [usageOpen]);
 
   // 新内容自动滚底。
   useEffect(() => {
@@ -1097,6 +1279,17 @@ export default function ChatPage() {
           </select>
           <button
             type="button"
+            onClick={() => setUsageOpen((v) => !v)}
+            title="会话 token 用量（当前会话实时 + 今天/近 30 天累计）"
+            aria-pressed={usageOpen}
+            className={`vigil-btn h-8 whitespace-nowrap border border-[var(--vigil-border)] text-xs ${
+              usageOpen ? "bg-[var(--vigil-border)]/25" : ""
+            }`}
+          >
+            <Coins className="size-3.5" /> 用量
+          </button>
+          <button
+            type="button"
             onClick={() => void createSession(modelSelections[activeId ?? ""] ?? undefined)}
             disabled={busyAction}
             className="vigil-btn h-8 whitespace-nowrap border border-[var(--vigil-border)] text-xs"
@@ -1105,6 +1298,17 @@ export default function ChatPage() {
           </button>
         </div>
       </div>
+
+      {usageOpen && (
+        <UsagePanel
+          activeId={activeId}
+          usage={usageData}
+          usageLoading={usageLoading}
+          usageError={usageError}
+          analytics={analytics}
+          analyticsLoading={analyticsLoading}
+        />
+      )}
 
       {error && (
         <div className="mb-2 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">

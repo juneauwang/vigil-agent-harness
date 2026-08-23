@@ -412,6 +412,66 @@ export interface ChatHistoryResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+// ── 批六十四契约：chat 用量（当前会话实时 token + 价格三级来源费用）──
+
+export interface ChatUsagePrice {
+  input_per_1m: number;
+  output_per_1m: number;
+  /** usd | cny（不跨币种换算，显示原币种符号 $ / ¥）。 */
+  currency: string;
+  /** manual（手动覆盖）| online（在线拉取）| builtin（内置兜底）。 */
+  source: string;
+  fetched_at?: string | null;
+  pricing_version?: string | null;
+}
+
+export interface ChatUsageResponse {
+  ok?: boolean;
+  session_id: string;
+  model?: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  checked_at?: string;
+  /** 价格可用时按三级价格估算；不可用为 null（UI 只显 token 不瞎算费用）。 */
+  cost?: number | null;
+  cost_currency?: string | null;
+  price_source?: string | null;
+  price?: ChatUsagePrice | null;
+  error?: { code?: string; message?: string };
+}
+
+/** 历史累计（复用 /api/analytics/usage：daily 按天 + totals 区间汇总）。 */
+export interface UsageAnalyticsDaily {
+  day: string;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  reasoning_tokens: number;
+  estimated_cost: number;
+  actual_cost: number;
+  sessions: number;
+  api_calls: number;
+}
+
+export interface UsageAnalyticsTotals {
+  total_input: number;
+  total_output: number;
+  total_cache_read: number;
+  total_reasoning: number;
+  total_estimated_cost: number;
+  total_actual_cost: number;
+  total_sessions: number;
+  total_api_calls: number;
+}
+
+export interface UsageAnalyticsResponse {
+  daily?: UsageAnalyticsDaily[];
+  totals?: UsageAnalyticsTotals;
+  period_days?: number;
+  error?: { code?: string; message?: string };
+}
+
 // ── UI 监控（OPS-DELTA #78）：健康 / PromQL 查询 / 活跃告警 ──────────────
 
 export interface MonitoringHealthService {
@@ -657,6 +717,12 @@ export const api = {
       }
     });
   },
+  /** 批六十四：当前会话实时 token + 费用（价格三级来源，不可用 cost null）。 */
+  getChatUsage: (sessionId: string) =>
+    fetchJSON<ChatUsageResponse>(`/api/chat/usage?${new URLSearchParams({ session_id: sessionId })}`),
+  /** 批六十四：历史累计（今天取 daily 末行；近 30 天取 totals）。 */
+  getUsageAnalytics: (days = 30) =>
+    fetchJSON<UsageAnalyticsResponse>(`/api/analytics/usage?${new URLSearchParams({ days: String(days) })}`),
 };
 
 function cleanParams(p: Record<string, string | number | undefined>): Record<string, string> {

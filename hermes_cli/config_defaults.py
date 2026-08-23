@@ -2439,6 +2439,14 @@ DEFAULT_CONFIG = {
             "alertmanager": "",   # 如 http://127.0.0.1:9093；空 = alert_query 不可用
             "vault_path": "",     # 可选：本机保险箱 JSON 凭据条目（{"user": ..., "pass": ...}）
         },
+        # 在线 LLM 价格拉取（OPS-DELTA #79）：OpenRouter /models 列表公开、
+        # 无需 key；配置 base_url 后 web 启动后台线程拉取一次，写
+        # ~/.vigil/pricing.yaml（source: online）。空 = 不拉取（零网络依赖）。
+        "pricing": {
+            "openrouter": {
+                "base_url": "",
+            },
+        },
         "watch": {
             "enabled": False,     # 值守采集（vigil watch install 常驻服务）：显式 true + alertmanager 配置后才采集
         },
