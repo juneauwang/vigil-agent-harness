@@ -877,7 +877,10 @@ def execute_runbook(
         "runbook": name,
         "env": rb_env,
         "source": trigger_ctx.get("source"),
-        "trigger_context": {k: str(v) for k, v in trigger_ctx.items()},
+        "trigger_context": {
+            k: (v if isinstance(v, (dict, list)) else str(v))
+            for k, v in trigger_ctx.items()
+        },
         "result": status,
         "error": _clip(error or "", 4000),
         "rolled_back": rolled_back,
@@ -979,17 +982,15 @@ def _execute_handler(args: Dict[str, Any], **kwargs) -> str:
     )
 
 
-def _register() -> None:
-    from tools.runbook_tools import check_runbook_requirements
-    registry.register(
-        name="runbook_execute",
-        toolset="runbook",
-        schema=_DEFAULT_EXECUTE_SCHEMA,
-        handler=_execute_handler,
-        check_fn=check_runbook_requirements,
-        emoji="▶️",
-        max_result_size_chars=30_000,
-    )
-
-
-_register()
+# 顶层 registry.register（工具发现机制只认模块顶层调用——_register() 包装会被
+# AST 扫描跳过，导致 CLI 运行时工具不加载；YAPL P1-3 曾踩此坑）。
+from tools.runbook_tools import check_runbook_requirements
+registry.register(
+    name="runbook_execute",
+    toolset="runbook",
+    schema=_DEFAULT_EXECUTE_SCHEMA,
+    handler=_execute_handler,
+    check_fn=check_runbook_requirements,
+    emoji="▶️",
+    max_result_size_chars=30_000,
+)

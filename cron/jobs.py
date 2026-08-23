@@ -1261,6 +1261,7 @@ def create_job(
     workdir: Optional[str] = None,
     no_agent: bool = False,
     attach_to_session: Optional[bool] = None,
+    runbook: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -1305,6 +1306,9 @@ def create_job(
                 and deliver its stdout directly. Empty stdout = silent (no
                 delivery). Requires ``script`` to be set. Ideal for classic
                 watchdogs and periodic alerts that don't need LLM reasoning.
+        runbook: YAPL P4 runbook 定时执行——当设置时，job 是确定性 runbook
+                tick（无 LLM）：``run_job`` 走 ``runbook_exec`` 分支（资产审批
+                豁免 + 事后审计 + 通知）。与 ``no_agent`` 互斥；prompt 可为空。
 
     Returns:
         The created job dict
@@ -1337,6 +1341,14 @@ def create_job(
     normalized_workdir = _normalize_workdir(workdir)
     normalized_no_agent = bool(no_agent)
     normalized_attach = attach_to_session if isinstance(attach_to_session, bool) else None
+    normalized_runbook = str(runbook).strip() if isinstance(runbook, str) else None
+    normalized_runbook = normalized_runbook or None
+    if normalized_runbook and not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", normalized_runbook):
+        raise ValueError(
+            f"Invalid runbook reference {normalized_runbook!r} — kebab-case only"
+        )
+    if normalized_runbook and normalized_no_agent:
+        raise ValueError("runbook jobs cannot also set no_agent=True")
 
     # no_agent jobs are meaningless without a script — the script IS the job.
     # Surface this as a clear ValueError at create time so bad configs never
@@ -1365,7 +1377,7 @@ def create_job(
     from cron.lifecycle_guard import check_gateway_lifecycle
     check_gateway_lifecycle(prompt_text, normalized_script)
 
-    label_source = (prompt_text or (normalized_skills[0] if normalized_skills else None) or (normalized_script if normalized_no_agent else None)) or "cron job"
+    label_source = (prompt_text or (normalized_skills[0] if normalized_skills else None) or (normalized_script if normalized_no_agent else None) or (f"runbook:{normalized_runbook}" if normalized_runbook else None)) or "cron job"
 
     provider_snapshot, model_snapshot = _compute_provider_model_snapshots(
         provider=normalized_provider,
@@ -1404,6 +1416,7 @@ def create_job(
         "base_url": normalized_base_url,
         "script": normalized_script,
         "no_agent": normalized_no_agent,
+        "runbook": normalized_runbook,
         "context_from": context_from,
         "schedule": parsed_schedule,
         "schedule_display": parsed_schedule.get("display", schedule),
