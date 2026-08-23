@@ -3601,7 +3601,10 @@ async def list_runbook_executions(limit: int = 50):
     def _load() -> list:
         return recent_executions(Path(get_hermes_home()), limit=limit)
 
+    from tools.runbook_lock import list_locks as _list_runbook_locks
+
     rows = await run_in_threadpool(_load)
+    locks = await run_in_threadpool(_list_runbook_locks)
     running = []
     with _RUNBOOK_STREAMS_LOCK:
         for st in _RUNBOOK_STREAMS.values():
@@ -3613,8 +3616,10 @@ async def list_runbook_executions(limit: int = 50):
                     "started_at": st.get("started_at"),
                 })
     running.sort(key=lambda r: r.get("started_at") or "", reverse=True)
+    # 批八十一：data.locks = 执行级并发锁快照（同名 runbook / 同目标禁止并发
+    # 下发）——覆盖 web/定时/LLM 全部入口；UI 据此显示「锁定中」。
     return {"ok": True, "data": {"count": len(rows), "executions": rows,
-                                 "running": running}}
+                                 "running": running, "locks": locks}}
 
 
 @app.post("/api/runbook/executions")
@@ -3674,6 +3679,19 @@ async def create_runbook_execution(payload: Dict[str, Any] = Body(default_factor
                 f"runbook {name} 是 schema v0.1（commands 写死）——v0.1 走老执行"
                 "路径，新执行器只处理 v0.2 声明式动作。",
             ),
+        )
+
+    # 批八十一：执行级并发锁预检——同名 runbook / 同目标正在执行 → 409 快速
+    # 拒绝（引擎入口仍做权威检查兜底，竞态下 SSE 收 blocked 终态，不悬挂）。
+    from tools.runbook_exec import _runbook_targets as _rb_targets
+    from tools.runbook_lock import peek_conflict as _peek_runbook_conflict
+
+    conflict = await run_in_threadpool(
+        _peek_runbook_conflict, runbook=name, targets=_rb_targets(data))
+    if conflict:
+        return JSONResponse(
+            status_code=409,
+            content=_api_error("locked", conflict),
         )
 
     exec_id = _new_exec_id()
@@ -3814,6 +3832,28 @@ async def _runbook_progress_generator(exec_id: str):
             await asyncio.wait_for(wake.wait(), timeout=1.0)
         except asyncio.TimeoutError:
             continue
+
+@app.get("/api/runbook/coverage")
+async def runbook_coverage():
+    """runbook 覆盖率（OPS-DELTA #81，设计 §7/§八）。
+
+    只读聚合（矩阵/runbook/审计事件均不写）：
+    - ``high_risk``：确定性覆盖率——matrix.yaml ``{approve: required}`` 高危
+      动作集（任一 env 命中 required）− runbooks（v0.1+v0.2）步骤动作集 =
+      未覆盖风险操作；card 显示「未覆盖高危 X」+ 覆盖率。
+    - ``usage``：近 30 天 trajectory/audit 事件命令 → P5 classifier 归类 →
+      动作使用频率表 + 覆盖对比 + 缺口（高频未覆盖 top 5）。classifier 归类
+      失败（unknown）不计入；空矩阵/空 runbook/无审计 → 空态（覆盖率 0%，
+      不崩）。不进 PUBLIC_API_PATHS（与 runbook 执行记录同门控）。
+    """
+    from tools.runbook_coverage import coverage_snapshot
+
+    def _load() -> dict:
+        return coverage_snapshot(Path(get_hermes_home()))
+
+    data = await run_in_threadpool(_load)
+    return {"ok": True, "data": data}
+
 
 @app.get("/api/matrix")
 async def get_ops_matrix(request: Request):

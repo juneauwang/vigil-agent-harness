@@ -493,6 +493,7 @@ def _query(params: Dict[str, Any], target: Dict[str, Any], name: str,
            mb: str) -> CommandSpec:
     pattern = str(params.get("pattern") or "").strip()
     has_target = bool(target)
+    base_shell = False
     if has_target and mb == "docker" or has_target and mb == "docker_compose":
         container = _container_for(target)
         base = (f"docker ps --filter name={_q(container)} "
@@ -504,16 +505,20 @@ def _query(params: Dict[str, Any], target: Dict[str, Any], name: str,
     elif has_target and mb == "pm2":
         base = f"pm2 describe {_q(name)}"
     elif has_target:
+        # 含管道 + || true 的确定性聚合 → 必须 shell 执行（bash -c），否则
+        # shlex.split 把管道当参数（ps aux | grep → garbage option）。
         base = f"ps aux | grep {_q(name)} || true"
+        base_shell = True
     elif pattern:
         base = "ps aux"
+        base_shell = True
     else:
         return {"cmd": "uname -a; uptime; df -h /", "shell": True, "sudo": False,
                 "desc": "主机基础查询（内核/负载/磁盘）"}
     if pattern:
         return {"cmd": f"{base} | grep {_q(pattern)} || true", "shell": True,
                 "sudo": False, "desc": f"{base} | grep {pattern}"}
-    return {"cmd": base, "shell": False, "sudo": False, "desc": base}
+    return {"cmd": base, "shell": base_shell, "sudo": False, "desc": base}
 
 
 def _fetch_log(params: Dict[str, Any], target: Dict[str, Any], name: str,
@@ -662,7 +667,7 @@ def generate_expect_check(expect: Dict[str, Any],
         pat = str(expect.get("pattern") or expect.get("object") or "")
         if not pat:
             raise UnsupportedCommand("expect.target=process 需要 pattern/object")
-        checks.append({"cmd": f"pgrep -af {_q(pat)} || true", "shell": False,
+        checks.append({"cmd": f"pgrep -af {_q(pat)} || true", "shell": True,
                        "sudo": False, "desc": f"pgrep -af {pat}"})
         return checks
     if channel == "port":
@@ -671,7 +676,7 @@ def generate_expect_check(expect: Dict[str, Any],
             raise UnsupportedCommand("expect.target=port 需要 port")
         host = str(expect.get("host") or "127.0.0.1")
         checks.append({"cmd": f"bash -c 'exec 3<>/dev/tcp/{host}/{port}' "
-                              f"2>/dev/null || exit 1", "shell": False,
+                              f"2>/dev/null || exit 1", "shell": True,
                        "sudo": False, "desc": f"tcp 探测 {host}:{port}"})
         return checks
     raise UnsupportedCommand(

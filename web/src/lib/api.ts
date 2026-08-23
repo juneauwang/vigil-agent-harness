@@ -203,7 +203,19 @@ export interface RunbookExecutionsResponse {
     executions: RunbookExecution[];
     /** 批八十：本进程正在执行中的流（UI 显示"运行中" + 展开实时步骤）。 */
     running?: RunbookRunningExec[];
+    /** 批八十一：执行级并发锁快照（同名 runbook / 同目标禁止并发下发）。 */
+    locks?: RunbookLock[];
   };
+}
+
+/** 批八十一：执行级并发锁（引擎入口注册；覆盖 web/定时/LLM 全部入口）。 */
+export interface RunbookLock {
+  exec_id: string;
+  runbook?: string;
+  version?: string;
+  env?: string;
+  targets?: string[];
+  started_at?: string;
 }
 
 export interface RunbookRunningExec {
@@ -244,6 +256,41 @@ export interface RunbookProgressEvent {
   rolled_back?: boolean;
   duration_s?: number;
   step_count?: number;
+}
+
+/** 批八十一：runbook 覆盖率载荷（/api/runbook/coverage）。 */
+export interface RunbookCoverageResponse {
+  ok: boolean;
+  error?: string;
+  data?: {
+    generated_at?: string;
+    high_risk: {
+      high_risk?: string[];
+      total: number;
+      covered: number;
+      uncovered: string[];
+      coverage_pct: number;
+    };
+    usage: {
+      window_days: number;
+      audit_events_scanned: number;
+      actions: {
+        action: string;
+        use_count: number;
+        covered: boolean;
+        runbooks: string[];
+      }[];
+      total_unique: number;
+      covered_unique: number;
+      coverage_pct: number;
+      gaps: {
+        action: string;
+        use_count: number;
+        covered: boolean;
+        runbooks: string[];
+      }[];
+    };
+  };
 }
 
 /** 操作矩阵（YAPL §11）：matrix/sources 均为 {env: {action: 值}}。 */
@@ -643,6 +690,8 @@ export const api = {
       }
     });
   },
+  /** 批八十一：runbook 覆盖率（确定性高危覆盖率 + 审计动作使用率）。 */
+  getRunbookCoverage: () => fetchJSON<RunbookCoverageResponse>("/api/runbook/coverage"),
   // YAPL P3：操作矩阵（人工安全资产，修改即审计；LLM 只有 matrix_query 只读）
   getMatrix: () => fetchJSON<MatrixResponse>("/api/matrix"),
   setMatrixCell: (env: string, action: string, level: MatrixLevel) =>

@@ -8,6 +8,7 @@ import {
   FileText,
   ListChecks,
   Loader2,
+  Lock,
   Play,
   Terminal,
   TriangleAlert,
@@ -15,8 +16,10 @@ import {
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type {
+  RunbookCoverageResponse,
   RunbookDetailResponse,
   RunbookExecution,
+  RunbookLock,
   RunbookProgressEvent,
   RunbookRunningExec,
   RunbookStepResult,
@@ -621,6 +624,9 @@ export default function RunbooksPage() {
   const [execEvents, setExecEvents] = useState<RunbookProgressEvent[]>([]);
   const [execDone, setExecDone] = useState<RunbookProgressEvent | null>(null);
   const [running, setRunning] = useState<RunbookRunningExec[]>([]);
+  // 批八十一：执行级并发锁快照（同名 runbook / 同目标禁止并发下发）。
+  const [locks, setLocks] = useState<RunbookLock[]>([]);
+  const [coverage, setCoverage] = useState<RunbookCoverageResponse["data"] | null>(null);
   const [runningEvents, setRunningEvents] = useState<Record<string, RunbookProgressEvent[]>>({});
   const [expandedRunning, setExpandedRunning] = useState<Set<string>>(new Set());
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -634,13 +640,23 @@ export default function RunbooksPage() {
         if (alive && resp.ok && resp.data) {
           setHistory(resp.data.executions);
           setRunning(resp.data.running ?? []);
+          setLocks(resp.data.locks ?? []);
         }
+      })
+      .catch(() => {});
+    api
+      .getRunbookCoverage()
+      .then((resp) => {
+        if (alive && resp.ok && resp.data) setCoverage(resp.data);
       })
       .catch(() => {});
     return () => {
       alive = false;
     };
   }, []);
+
+  // 批八十一：无实时流（定时/后台/LLM）的锁定中执行 → 仅显示锁定徽标，不可展开。
+  const lockOnly = locks.filter((l) => !running.some((r) => r.exec_id === l.exec_id));
 
   // 批八十：卸载时中止进行中的进度流（服务端执行不受影响）。
   useEffect(() => {
@@ -656,6 +672,7 @@ export default function RunbooksPage() {
         if (resp.ok && resp.data) {
           setHistory(resp.data.executions);
           setRunning(resp.data.running ?? []);
+          setLocks(resp.data.locks ?? []);
         }
       })
       .catch(() => {});
@@ -942,7 +959,7 @@ export default function RunbooksPage() {
                     刷新
                   </button>
                 </div>
-                {history.length > 0 || running.length > 0 ? (
+                {history.length > 0 || running.length > 0 || lockOnly.length > 0 ? (
                   <table className="vigil-table mt-2">
                     <thead>
                       <tr>
@@ -973,6 +990,9 @@ export default function RunbooksPage() {
                             <td className="text-xs">
                               <span className="inline-flex items-center gap-1 font-semibold text-[var(--vigil-muted)]">
                                 <Loader2 className="size-3 animate-spin" /> 运行中
+                                <span className="ml-1 inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1 py-px text-[10px] font-medium text-[var(--vigil-muted)]">
+                                  <Lock className="size-2.5 text-[var(--vigil-warning)]" /> 锁定中
+                                </span>
                               </span>
                             </td>
                           </tr>
@@ -987,6 +1007,19 @@ export default function RunbooksPage() {
                             </tr>
                           ) : null}
                         </Fragment>
+                      ))}
+                      {lockOnly.map((lk) => (
+                        <tr key={`lock-${lk.exec_id}`} className="opacity-90">
+                          <td className="font-mono text-xs">{String(lk.runbook ?? "")}</td>
+                          <td className="text-xs text-[var(--vigil-muted)]">{String(lk.started_at ?? "")}</td>
+                          <td className="text-xs text-[var(--vigil-muted)]">定时/后台</td>
+                          <td className="text-xs">
+                            <span className="inline-flex items-center gap-1 font-semibold text-[var(--vigil-muted)]">
+                              <Lock className="size-3 text-[var(--vigil-warning)]" /> 锁定中
+                              <span className="font-normal text-[10px]">（无实时流）</span>
+                            </span>
+                          </td>
+                        </tr>
                       ))}
                       {history.map((h, i) => (
                         <tr key={`${String(h.runbook ?? "")}-${String(h.ts ?? "")}-${i}`}>
@@ -1009,6 +1042,69 @@ export default function RunbooksPage() {
             </div>
           ) : null}
         </div>
+      </div>
+
+      {/* 批八十一：Runbook 覆盖率（审计动作使用率 × runbook 覆盖，只读统计） */}
+      <div className="vigil-card p-5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold">Runbook 覆盖率</h3>
+          <span className="text-[10px] text-[var(--vigil-muted)]">
+            {coverage ? `近 ${coverage.usage.window_days} 天审计动作 × runbook 覆盖 · 只读统计` : "加载中…"}
+          </span>
+        </div>
+        {coverage ? (
+          coverage.usage.total_unique === 0 ? (
+            <p className="mt-3 text-xs text-[var(--vigil-muted)]">
+              暂无审计数据——terminal / runbook 执行过命令后，这里统计动作使用频率与 runbook
+              覆盖缺口（classifier 识别不出的动作不计入）。
+            </p>
+          ) : (
+            <>
+              <div className="mt-3 flex flex-wrap gap-4 text-xs text-[var(--vigil-muted)]">
+                <span>动作 {coverage.usage.total_unique}</span>
+                <span>已覆盖 {coverage.usage.covered_unique}</span>
+                <span>覆盖率 {coverage.usage.coverage_pct}%</span>
+                <span>扫描审计事件 {coverage.usage.audit_events_scanned}</span>
+              </div>
+              <table className="vigil-table mt-3">
+                <thead>
+                  <tr>
+                    <th>动作</th>
+                    <th className="text-right">使用次数</th>
+                    <th>覆盖</th>
+                    <th>runbooks</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {coverage.usage.actions.map((a) => (
+                    <tr key={a.action}>
+                      <td className="font-mono text-xs">{a.action}</td>
+                      <td className="text-right text-xs">{a.use_count}</td>
+                      <td className="text-xs">
+                        {a.covered ? (
+                          <span className="font-medium text-emerald-600 dark:text-emerald-400">已覆盖</span>
+                        ) : (
+                          <span className="font-medium text-amber-600 dark:text-amber-400">未覆盖</span>
+                        )}
+                      </td>
+                      <td className="text-xs text-[var(--vigil-muted)]">
+                        {a.runbooks.length > 0 ? a.runbooks.join(", ") : "-"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {coverage.usage.gaps.length > 0 ? (
+                <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+                  <span className="font-semibold">高频未覆盖，建议沉淀 runbook：</span>
+                  {coverage.usage.gaps.map((g) => `${g.action}（${g.use_count} 次）`).join("、")}
+                </div>
+              ) : null}
+            </>
+          )
+        ) : (
+          <p className="mt-3 text-xs text-[var(--vigil-muted)]">覆盖率加载中…</p>
+        )}
       </div>
 
       {execModal && (

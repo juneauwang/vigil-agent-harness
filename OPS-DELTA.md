@@ -3807,3 +3807,87 @@
   不阻塞执行、输出截断、事件不落库（无审计膨胀）、POST 契约（立即返回 +
   后台执行 + 审批照常弹卡）。
 - **状态**：独立 feat commit（runbook 长任务进度事件流批次）。
+
+### 81. Runbook 执行锁 + 覆盖率仪表盘——并发下发防护 + 高危动作覆盖缺口（2026-08-23，YAPL 之后第四个新功能面）
+
+- **背景**：batch80 进度流落地后暴露两个缺口——1) runbook 无并发防护，同名或
+  targets 重叠的 runbook 可被 web/定时/LLM 多路同时下发，长任务（2h+）场景可能
+  双写同一目标；2) 执行覆盖无仪表盘，矩阵里 `approve: required` 的高危动作是否
+  被 runbook 覆盖、近 30 天实际使用与缺口无人可见。本批补齐执行锁 + 覆盖率只读
+  仪表盘，执行记录/审计机制不动。
+- **新增**（机制层 + 展示层）：
+  - `tools/runbook_lock.py`（新文件）：进程级注册表（exec_id → runbook/version/
+    targets/started_at/env），`try_acquire`/`release`/`peek_conflict`（只读探测，
+    不注册）/`list_locks`/`_prune`（TTL 6h 惰性过期）。冲突判定：**同名 runbook
+    或 target 集合重叠** → 拒绝 + 明确错误「runbook X 正在执行中（exec_id，自
+    started_at）——锁定中，禁止并发下发（锁 TTL 6h）」；同一 exec_id 重入不判
+    冲突。
+  - `tools/runbook_exec.py`：引擎入口 `execute_runbook` 包 `_execute_locked()`
+    （原执行体缩进 4 空格），锁在入口 `try_acquire`（权威检查，覆盖 web/定时/
+    LLM 全部路径），冲突 → `runbook_done(blocked)` + 返回 blocked，`finally:
+    release`；新增 `_runbook_targets(data)` 收集 runbook+回滚步骤的
+    params.target。
+  - `hermes_cli/web_server.py`：`GET /api/runbook/executions` 返回
+    `data.locks`（list_locks 快照，UI 据此显示「锁定中」）；`POST
+    /api/runbook/executions` 预检 `peek_conflict` → 409 `{code:"locked"}`（引擎
+    入口兜底，竞态下 SSE 收 blocked 终态，不悬挂）。
+  - `tools/runbook_coverage.py`（新文件，纯只读）：`high_risk_snapshot`——
+    matrix.yaml 任一 env `{approve: required}` 的高危动作集 − runbooks 步骤动作
+    集 = 未覆盖风险；`usage_snapshot`——近 30 天 trajectory/audit 事件
+    （tool_call/approval/terminal）action 字段 → P5 classifier 归类 → 频率表 +
+    covered + 缺口 top 5。`GET /api/runbook/coverage` 返回
+    `{generated_at, high_risk, usage}`（不进 PUBLIC_API_PATHS，与 runbook 执行
+    记录同门控，不加 token）。
+  - 前端：api.ts `RunbookLock`/`RunbookCoverageResponse` + `getRunbookCoverage()`；
+    OverviewPage 5 卡（Nodes/Services/Runbooks/Incidents/未覆盖风险——Incidents
+    接 `getIncidents({limit:1}).total` 真实计数，修复硬编码 0；未覆盖风险卡
+    violet 色调，sub「高危 N 已覆盖 M（覆盖率 P%）」，点击跳 /runbooks）；
+    RunbooksPage 运行中行「锁定中」可见徽标 + lockOnly 行（无实时流的定时/后台
+    锁显示「锁定中（无实时流）」不展开）+「Runbook 覆盖率」区块（动作×使用
+    次数×覆盖状态×runbooks + 缺口「建议沉淀 runbook」+ 空态「暂无审计数据」
+    引导）。
+- **语义边界**：锁是**进程内存级**（单进程，web/定时/LLM 同进程互斥），跨进程
+  锁不在本批范围；覆盖率纯只读——不落库、不产生审计、不写矩阵/classifier；
+  unknown 动作不计入（classifier 归类失败不污染）；窗口 30 天；
+  coverage_pct 四舍五入；空矩阵/空 runbook/无审计 → 空态（覆盖率 0%，不崩）。
+- **顺手修**（2 项，均小改动）：
+  - `tests/hermes_cli/test_batch31_chat_api.py`：`ev["grade"]` 断言 → `action`
+    字段断言（grade 已退役，OPS-DELTA #75 存量断言失同步，本批顺手对齐）。
+  - `tools/runbook_handlers.py`：`_query` has_target 无 pattern 分支 base 加
+    `base_shell=True`（`ps aux | grep ... || true` 含管道必须 shell 执行，否则
+    shlex.split 拆碎报 garbage option——batch55/56 引入、batch80 实测发现的存量
+    bug）；expect process（`pgrep -af ... || true`）与 port（`2>/dev/null ||
+    exit 1`）分支同步 `shell:True`，`base_shell=False` 初始化防 UnboundLocalError；
+    全文件 AST 扫描确认无残留 `shell:False` + 操作符命令。
+- **测试**：新增 `tests/tools/test_runbook_lock.py` 6 例（acquire/release、同名
+  冲突、target 重叠、同 exec_id 重入、peek 只读、TTL 过期释放）、
+  `tests/tools/test_runbook_coverage.py` 5 例（v1+v2 动作收集、高危快照、空矩阵
+  不崩、usage 统计+缺口、无审计数据）、`tests/tools/test_runbook_exec.py` +6
+  （TestPipelineShellRegression 4 + TestExecutionLock 2 引擎入口锁集成）、
+  `tests/hermes_cli/test_runbook_progress.py` +4（POST 409、locks 快照、coverage
+  端点 2 例）。关键：三处测试加锁注册表清理 fixture（进程级锁残留会污染跨文件
+  断言）。后端 runbook 全套 + batch31 + batch59 + lock + coverage 220 passed；
+  matrix/classifier/terminal_matrix 135 passed；chat_usage/pricing 14 passed。
+  前端 vitest 21 文件 163 passed、`tsc -b --noEmit` 过、`npm run build` 过
+  （web_dist 是 gitignore 产物，不入库，部署时生成）。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv 重启，
+  pid 已更新为最新代码；VIGIL_DASHBOARD_SESSION_TOKEN=vigil-monitor-test-9131；
+  临时只读 runbook t-lock-test 实测后已删）：
+  - 锁冲突：POST1 → `exec_20260823_0001 running`；POST2 → 409
+    `{code:"locked", message:"runbook t-lock-test 正在执行中（exec_id=
+    exec_20260823_0001...）锁定中"}`；GET executions 的 locks 快照显示该锁；
+    执行完成后 `locks: []`，ledger 记录 `t-lock-test ok exec_20260823_0001`。
+  - 覆盖率：high_risk total=15（prod `approve: required` 真实数据）、covered=4、
+    coverage_pct=27、uncovered=[decommission, deploy, install, reboot, remove,
+    rollback, scale, shutdown, start, stop, upgrade]；usage 30 天扫描 315 事件：
+    query 35（covered）、run_script 8、install 6（未覆盖，缺口）、restart 6。
+  - Incidents：`GET /api/incidents?limit=1` total=0（本机 .vigil watch inbox 无
+    告警数据，正常；前端已接真实计数而非硬编码 0）。
+  - 前端：SPA 分块 OverviewPage-BUSa-NWg.js 含「未覆盖风险/覆盖率/高危」、
+    RunbooksPage-BXdN-Cd5.js 含「锁定中/建议沉淀 runbook/暂无审计数据/覆盖率」。
+- **核销方式**：测试常驻——test_runbook_lock.py 6 + test_runbook_coverage.py 5
+  + runbook_exec/progress 回归；季度体检：锁 TTL 6h 惰性过期、冲突判定（同名/
+  targets 重叠/同 exec_id 重入）、引擎入口权威检查覆盖全部路径、覆盖率只读
+  （无审计写入）、unknown 不计入、30 天窗口、coverage_pct 舍入、_query 管道
+  shell 修复不回归。
+- **状态**：独立 feat commit（runbook 执行锁 + 覆盖率仪表盘批次）。

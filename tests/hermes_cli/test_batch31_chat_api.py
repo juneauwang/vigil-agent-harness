@@ -246,7 +246,9 @@ def test_approval_callback_registers_web_approval_and_waits(monkeypatch):
         assert kind == "event"
         assert ev["type"] == "chat:approval_pending"
         assert isinstance(ev["env"], str)
-        assert ev["grade"] is None or isinstance(ev["grade"], str)
+        # OPS-DELTA #75 grade 退役 → 审批键形态为 action（action_name）；
+        # 断言同步（P5 后的审批注册表字段）。
+        assert "action" in ev and (ev["action"] is None or isinstance(ev["action"], str))
         # redact：凭据不进审批展示
         assert "hunter2sec" not in ev["command"]
         av = get_web_approval(ev["approval_id"])

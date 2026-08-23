@@ -20,6 +20,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       } as never),
       runRunbook: vi.fn(),
       runbookProgressStream: vi.fn(),
+      getRunbookCoverage: vi.fn(),
     },
   };
 });
@@ -88,6 +89,13 @@ const V1_RUNBOOK: Record<string, unknown> = {
 beforeEach(() => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
+  vi.mocked(api.getRunbookCoverage).mockResolvedValue({
+    ok: true,
+    data: {
+      high_risk: { total: 0, covered: 0, uncovered: [], coverage_pct: 0 },
+      usage: { window_days: 30, audit_events_scanned: 0, actions: [], total_unique: 0, covered_unique: 0, coverage_pct: 0, gaps: [] },
+    },
+  } as never);
 });
 
 function render(page: React.ReactElement) {
@@ -222,6 +230,7 @@ describe("RunbooksPage", () => {
 
     const text = container.textContent ?? "";
     expect(text).toContain("运行中");
+    expect(text).toContain("锁定中");
 
     const liveRow = Array.from(container.querySelectorAll("tr")).find(
       (tr) => tr.textContent?.includes("nginx-config-update") && tr.textContent?.includes("运行中"),
@@ -292,5 +301,94 @@ describe("RunbooksPage", () => {
     expect(text).toContain("执行历史（最近 2 次）");
     expect(text).toContain("schedule");
     expect(text).toContain("已回滚");
+  });
+});
+
+
+describe("批次八十一 RunbooksPage 锁定 + 覆盖率", () => {
+  it("无实时流的锁定中执行（定时/后台）显示锁定徽标，不展开", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "nginx-config-update", title: "Nginx 配置变更并生效", step_count: 3 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V2_RUNBOOK } as never);
+    vi.mocked(api.getRunbookExecutions).mockResolvedValue({
+      ok: true,
+      data: {
+        count: 0,
+        executions: [],
+        running: [],
+        locks: [
+          { exec_id: "exec_sched1", runbook: "nginx-config-update", env: "prod", started_at: "2026-08-23T10:00:00+08:00" },
+        ],
+      },
+    } as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const text = container.textContent ?? "";
+    expect(text).toContain("锁定中");
+    expect(text).toContain("定时/后台");
+    expect(api.runbookProgressStream).not.toHaveBeenCalled();
+  });
+
+  it("覆盖率区块渲染动作频率 + 覆盖状态 + 缺口", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "nginx-config-update", title: "Nginx 配置变更并生效", step_count: 3 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V2_RUNBOOK } as never);
+    vi.mocked(api.getRunbookCoverage).mockResolvedValue({
+      ok: true,
+      data: {
+        high_risk: { total: 2, covered: 1, uncovered: ["reboot"], coverage_pct: 50 },
+        usage: {
+          window_days: 30,
+          audit_events_scanned: 42,
+          actions: [
+            { action: "restart", use_count: 20, covered: true, runbooks: ["harbor-restart"] },
+            { action: "reboot", use_count: 5, covered: false, runbooks: [] },
+          ],
+          total_unique: 2,
+          covered_unique: 1,
+          coverage_pct: 50,
+          gaps: [{ action: "reboot", use_count: 5, covered: false, runbooks: [] }],
+        },
+      },
+    } as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const text = container.textContent ?? "";
+    expect(text).toContain("Runbook 覆盖率");
+    expect(text).toContain("动作 2");
+    expect(text).toContain("覆盖率 50%");
+    expect(text).toContain("restart");
+    expect(text).toContain("reboot");
+    expect(text).toContain("已覆盖");
+    expect(text).toContain("未覆盖");
+    expect(text).toContain("建议沉淀 runbook");
+    expect(text).toContain("reboot（5 次）");
+  });
+
+  it("覆盖率空态（无审计数据）引导不崩", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 0, runbooks: [] },
+    } as never);
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const text = container.textContent ?? "";
+    expect(text).toContain("Runbook 覆盖率");
+    expect(text).toContain("暂无审计数据");
   });
 });

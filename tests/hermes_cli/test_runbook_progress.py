@@ -125,11 +125,17 @@ def client():
         from starlette.testclient import TestClient
     except ImportError:
         pytest.skip("fastapi/starlette not installed")
+    from tools.runbook_lock import _lock as _rl_lock
+    from tools.runbook_lock import _registry as _rl_registry
     with TestClient(web_server.app) as test_client:
         test_client.headers[web_server._SESSION_HEADER_NAME] = web_server._SESSION_TOKEN
         web_server._RUNBOOK_STREAMS.clear()
+        with _rl_lock:
+            _rl_registry.clear()
         yield test_client
     web_server._RUNBOOK_STREAMS.clear()
+    with _rl_lock:
+        _rl_registry.clear()
 
 
 def _ok_runner():
@@ -347,3 +353,108 @@ def test_history_running_list_while_in_flight(ehome, client, monkeypatch):
         time.sleep(0.05)
     assert rows and rows[0]["exec_id"] == exec_id
     assert rows[0]["result"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# 批八十一：执行级并发锁（POST 409 + data.locks）+ /api/runbook/coverage
+# ---------------------------------------------------------------------------
+
+def test_post_conflict_same_runbook_409(ehome, client, monkeypatch):
+    block = threading.Event()
+
+    def _blocking_run(home, target, spec):
+        block.wait(timeout=15)
+        return {"exit_code": 0, "stdout": "200", "stderr": ""}
+
+    monkeypatch.setattr("tools.runbook_exec._run_spec", _blocking_run)
+    data = _post_run(client, "t-ok")
+    exec_id = data["exec_id"]
+
+    # 执行中 → 同 runbook 再发 → 409 + 锁定提示
+    resp = client.post("/api/runbook/executions", json={"name": "t-ok"})
+    assert resp.status_code == 409
+    body = resp.json()
+    assert body["error"]["code"] == "locked"
+    assert "锁定中" in body["error"]["message"]
+    assert exec_id in body["error"]["message"]
+
+    block.set()
+    # 结束后释放 → 可再次执行
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        if client.get("/api/runbook/executions").json()["data"]["locks"] == []:
+            break
+        time.sleep(0.05)
+    assert client.get("/api/runbook/executions").json()["data"]["locks"] == []
+
+
+def test_executions_returns_locks_while_in_flight(ehome, client, monkeypatch):
+    block = threading.Event()
+
+    def _blocking_run(home, target, spec):
+        block.wait(timeout=15)
+        return {"exit_code": 0, "stdout": "200", "stderr": ""}
+
+    monkeypatch.setattr("tools.runbook_exec._run_spec", _blocking_run)
+    data = _post_run(client, "t-ok")
+    exec_id = data["exec_id"]
+
+    body = client.get("/api/runbook/executions").json()
+    lock_ids = [l["exec_id"] for l in body["data"]["locks"]]
+    assert exec_id in lock_ids
+    lock = next(l for l in body["data"]["locks"] if l["exec_id"] == exec_id)
+    assert lock["runbook"] == "t-ok"
+    assert lock["started_at"]
+    block.set()
+    _sse_events(client, exec_id)
+
+
+def test_coverage_endpoint_shape_and_empty(ehome, client):
+    resp = client.get("/api/runbook/coverage")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert set(data.keys()) == {"generated_at", "high_risk", "usage"}
+    hr = data["high_risk"]
+    assert set(hr.keys()) == {"high_risk", "total", "covered", "uncovered",
+                              "coverage_pct"}
+    assert hr["total"] == 0  # template1 无 required → 空态
+    assert hr["coverage_pct"] == 0
+    usage = data["usage"]
+    assert usage["actions"] == []
+    assert usage["total_unique"] == 0
+    assert usage["coverage_pct"] == 0
+
+
+def test_coverage_endpoint_real_required_actions(ehome, client, monkeypatch):
+    # 矩阵加 required 高危 + 轨迹事件 → 非空覆盖率
+    from tools.matrix_data import MATRIX_FILENAME
+    (ehome / MATRIX_FILENAME).write_text("""
+schema_version: 1
+matrix:
+  prod:
+    reboot:
+      approve: required
+    restart:
+      approve: required
+    query: execute
+""", encoding="utf-8")
+    (ehome / "trajectory").mkdir(parents=True)
+    import json as _json
+    import time as _time
+    (ehome / "trajectory" / "t.jsonl").write_text(_json.dumps({
+        "type": "tool_call", "action": "systemctl restart nginx",
+        "ts": _time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }, ensure_ascii=False) + "\n" + _json.dumps({
+        "type": "tool_call", "action": "reboot",
+        "ts": _time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }, ensure_ascii=False) + "\n", encoding="utf-8")
+
+    data = client.get("/api/runbook/coverage").json()["data"]
+    hr = data["high_risk"]
+    assert hr["total"] == 2
+    # ehome runbook 只有 query 动作 → reboot/restart 均未覆盖
+    assert hr["covered"] == 0
+    assert hr["uncovered"] == ["reboot", "restart"]
+    usage = data["usage"]
+    counts = {a["action"]: a["use_count"] for a in usage["actions"]}
+    assert counts == {"restart": 1, "reboot": 1}

@@ -519,3 +519,137 @@ class TestScheduledExemption:
     def test_check_exemption_direct(self, mhome):
         assert _check_scheduled_exemption(_rb()) is not None
         assert _check_scheduled_exemption(self._preapproved(_rb())) is None
+
+
+class TestPipelineShellRegression:
+    """批八十一：shell:False + 管道/操作符 隐患回归（ps aux | grep → garbage option）。"""
+
+    def test_query_has_target_no_pattern_shell_true(self):
+        from tools.runbook_handlers import generate_commands
+        t = {**_nginx_target(), "managed_by": ""}
+        specs = generate_commands("query", {"target": "nginx"}, t)
+        assert len(specs) == 1
+        spec = specs[0]
+        assert "ps aux | grep nginx" in spec["cmd"]
+        assert spec["shell"] is True  # 管道 + || 必须 bash -c，不再 shlex.split
+
+    def test_query_has_target_no_pattern_runs_via_bash(self, mhome):
+        # 真实执行路径：shlex.split 拆碎管道曾报 garbage option，shell=True 后正常
+        from tools.runbook_exec import _exec_local, _run_spec
+        from tools.runbook_handlers import generate_commands
+        t = {**_nginx_target(), "managed_by": "", "remote": False}
+        spec = generate_commands("query", {"target": "nginx"}, t)[0]
+        res = _run_spec(mhome, t, spec)
+        assert res.get("exit_code") == 0, res.get("stderr")
+
+    def test_expect_process_and_port_shell_true(self):
+        from tools.runbook_handlers import generate_expect_check
+        t = {**_nginx_target(), "managed_by": ""}
+        p = generate_expect_check({"target": "process", "pattern": "nginx"}, t)[0]
+        assert p["shell"] is True
+        port = generate_expect_check({"target": "port", "port": "80"}, t)[0]
+        assert port["shell"] is True
+        assert "|| exit 1" in port["cmd"]
+
+    def test_no_remaining_cmd_pipeline_with_shell_false(self):
+        import ast
+        import re
+        from pathlib import Path
+        src = Path("tools/runbook_handlers.py").read_text(encoding="utf-8")
+        tree = ast.parse(src)
+        hazards = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Dict):
+                pairs = {}
+                for k, v in zip(node.keys, node.values):
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str):
+                        pairs[k.value] = v
+                cmd = pairs.get("cmd")
+                sh = pairs.get("shell")
+                if (isinstance(cmd, ast.Constant) and isinstance(cmd.value, str)
+                        and isinstance(sh, ast.Constant) and sh.value is False
+                        and re.search(r"\|\||&&|[;>]|\|", cmd.value)):
+                    hazards.append(cmd.value[:80])
+        assert hazards == [], f"shell:False 命令含操作符: {hazards}"
+
+
+class TestExecutionLock:
+    """批八十一：执行级并发锁集成（引擎入口）——同名/同目标冲突拒绝 + 释放。"""
+
+    @pytest.fixture(autouse=True)
+    def _clean_locks(self):
+        from tools.runbook_lock import _lock as _rl_lock
+        from tools.runbook_lock import _registry as _rl_registry
+        with _rl_lock:
+            _rl_registry.clear()
+        yield
+        with _rl_lock:
+            _rl_registry.clear()
+
+    def test_same_runbook_conflict_blocked(self, mhome):
+        import threading
+        import time
+        from tools.runbook_exec import execute_runbook
+        from tools.runbook_lock import list_locks, release
+
+        release("exec_lock_a")
+        events: list = []
+
+        def slow_runner(spec, target):
+            time.sleep(0.8)
+            return {"exit_code": 0, "stdout": "200", "stderr": ""}
+
+        out: dict = {}
+
+        def run_a():
+            out["a"] = execute_runbook(
+                _rb(), home=mhome, runner=slow_runner,
+                exec_id="exec_lock_a", progress_callback=events.append)
+
+        t = threading.Thread(target=run_a)
+        t.start()
+        time.sleep(0.2)
+        out["b"] = execute_runbook(_rb(), home=mhome, runner=_ok_runner(),
+                                   exec_id="exec_lock_b",
+                                   progress_callback=events.append)
+        t.join(timeout=5)
+        assert out["b"]["result"] == "blocked"
+        assert "锁定中" in out["b"]["error"]
+        assert out["a"]["result"] == "ok"
+        assert list_locks() == []  # 结束后释放
+        done_b = [e for e in events
+                  if e.get("type") == "runbook_done" and e.get("exec_id") == "exec_lock_b"]
+        assert done_b and done_b[0]["status"] == "blocked"  # 冲突方 SSE 收 blocked 终态
+
+    def test_target_overlap_conflict(self, mhome):
+        from tools.runbook_exec import execute_runbook, _runbook_targets
+        from tools.runbook_lock import release
+
+        release("exec_lock_t1")
+        rb_a = _rb()
+        rb_b = _rb(name="other")
+        assert _runbook_targets(rb_a) and _runbook_targets(rb_b)
+        # rb_a 与 rb_b 都含 target nginx → 重叠
+        import threading, time
+
+        def slow_runner(spec, target):
+            time.sleep(0.6)
+            return {"exit_code": 0, "stdout": "200", "stderr": ""}
+
+        out = {}
+
+        def run_a():
+            out["a"] = execute_runbook(rb_a, home=mhome, runner=slow_runner,
+                                       exec_id="exec_lock_t1")
+
+        t = threading.Thread(target=run_a)
+        t.start()
+        time.sleep(0.15)
+        out["b"] = execute_runbook(rb_b, home=mhome, runner=_ok_runner(),
+                                   exec_id="exec_lock_t2")
+        t.join(timeout=5)
+        assert out["b"]["result"] == "blocked"
+        assert "目标与进行中执行重叠" in out["b"]["error"]
+        assert out["a"]["result"] == "ok"
+        release("exec_lock_t1")
+        release("exec_lock_t2")

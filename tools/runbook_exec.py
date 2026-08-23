@@ -25,7 +25,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from tools.runbook_handlers import (
     UnsupportedCommand,
@@ -728,6 +728,25 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
     return entry
 
 
+def _runbook_targets(data: Dict[str, Any]) -> Set[str]:
+    """执行锁用的 target 集合：runbook 步骤 + 回滚场景步骤的 params.target 原始名。"""
+    targets: Set[str] = set()
+
+    def _collect(steps: Any) -> None:
+        for step in steps or []:
+            if not isinstance(step, dict):
+                continue
+            params = step.get("params")
+            if isinstance(params, dict) and params.get("target"):
+                targets.add(str(params["target"]))
+
+    _collect(data.get("steps"))
+    for rb in data.get("rollback") or []:
+        if isinstance(rb, dict):
+            _collect(rb.get("steps"))
+    return targets
+
+
 def _step_target_label(step: Dict[str, Any],
                        entry: Optional[Dict[str, Any]] = None) -> str:
     """步骤 target 展示：优先已解析实体名（name），否则原始 params.target。"""
@@ -935,146 +954,169 @@ def execute_runbook(
         except Exception:
             logger.debug("runbook progress callback failed", exc_info=True)
 
-    from tools.runbook_tools import _is_v2_runbook, _validate_runbook
-    try:
-        if not _is_v2_runbook(data):
-            _emit("runbook_done", {"status": "error",
-                                   "error": f"runbook {name} 是 schema v0.1（commands 写死）——v0.1 走老执行路径"})
-            return {"runbook": name, "result": "error",
-                    "error": f"runbook {name} 是 schema v0.1（commands 写死）——"
-                             "v0.1 走老执行路径（runbook_load + terminal 执行），"
-                             "新执行器只处理 v0.2 声明式动作"}
-        _validate_runbook(data, name, home)
-    except ValueError as exc:
-        _emit("runbook_done", {"status": "blocked",
-                               "error": f"runbook 校验失败，拒绝执行: {exc}"})
-        return {"runbook": name, "result": "blocked",
-                "error": f"runbook 校验失败，拒绝执行: {exc}"}
+    # OPS-DELTA #81 执行级并发锁：同名 runbook / 同目标禁止并发下发。
+    # 注册表 + 冲突判定 + 过期兜底在 tools/runbook_lock.py（web POST 预检
+    # 409 之外，引擎入口是权威检查——web/定时/LLM 共用同一入口）。
+    from tools.runbook_lock import release as _lock_release
+    from tools.runbook_lock import try_acquire as _lock_try_acquire
 
-    if scheduled:
-        exempt_err = _check_scheduled_exemption(data)
-        if exempt_err:
-            _emit("runbook_done", {"status": "blocked", "error": exempt_err})
-            return {"runbook": name, "result": "blocked", "error": exempt_err}
+    lock_id = exec_id or f"lock_{name}_{int(time.time() * 1000)}"
+    conflict = _lock_try_acquire(
+        runbook=name, version=version, exec_id=lock_id,
+        targets=_runbook_targets(data), env=rb_env,
+    )
+    if conflict:
+        _emit("runbook_done", {"status": "blocked", "error": conflict})
+        return {
+            "runbook": name, "env": rb_env, "result": "blocked",
+            "error": conflict, "steps": [], "duration_s": 0.0,
+            "ledger": str(ledger_path(home)),
+        }
 
-    trigger_ctx: Dict[str, Any] = {
-        "source": "schedule" if scheduled else "user",
-        "triggered_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-    }
-    if isinstance(trigger_context, dict):
-        for k, v in trigger_context.items():
-            if k not in trigger_ctx:
-                trigger_ctx[str(k)] = v
-
-    def _runner(spec: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
-        if runner is not None:
-            return runner(spec, target)
-        return _run_spec(home, target, spec)
-
-    def _approve(step_env: str, action: str, desc: str) -> Optional[str]:
-        if scheduled:
-            return None  # 定时豁免：已预审 runbook 跳过逐次审批（§11.4）
-        return _step_approval(home, step_env, action, desc)
-
-    step_values: Dict[str, Dict[str, Any]] = {}
-    steps = data.get("steps") or []
-    results: List[Dict[str, Any]] = []
-    status = "ok"
-    error: Optional[str] = None
-    rolled_back = False
-    t0 = time.time()
-    default_on_failure = str(data.get("on_failure") or "stop")
-
-    for step in steps:
-        if not isinstance(step, dict):
-            continue
-        res = _run_one_step(step, env=rb_env, home=home, step_values=step_values,
-                            trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
-                            where="runbook ", emit=_emit)
-        results.append(res)
-        if res.get("ok"):
-            continue
-        error = res.get("error") or f"步骤 {res.get('id')} 失败"
+    def _execute_locked() -> Dict[str, Any]:
+        from tools.runbook_tools import _is_v2_runbook, _validate_runbook
         try:
-            on_failure, scene = _resolve_on_failure(
-                step.get("on_failure"), default_on_failure)
+            if not _is_v2_runbook(data):
+                _emit("runbook_done", {"status": "error",
+                                       "error": f"runbook {name} 是 schema v0.1（commands 写死）——v0.1 走老执行路径"})
+                return {"runbook": name, "result": "error",
+                        "error": f"runbook {name} 是 schema v0.1（commands 写死）——"
+                                 "v0.1 走老执行路径（runbook_load + terminal 执行），"
+                                 "新执行器只处理 v0.2 声明式动作"}
+            _validate_runbook(data, name, home)
         except ValueError as exc:
+            _emit("runbook_done", {"status": "blocked",
+                                   "error": f"runbook 校验失败，拒绝执行: {exc}"})
+            return {"runbook": name, "result": "blocked",
+                    "error": f"runbook 校验失败，拒绝执行: {exc}"}
+
+        if scheduled:
+            exempt_err = _check_scheduled_exemption(data)
+            if exempt_err:
+                _emit("runbook_done", {"status": "blocked", "error": exempt_err})
+                return {"runbook": name, "result": "blocked", "error": exempt_err}
+
+        trigger_ctx: Dict[str, Any] = {
+            "source": "schedule" if scheduled else "user",
+            "triggered_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+        if isinstance(trigger_context, dict):
+            for k, v in trigger_context.items():
+                if k not in trigger_ctx:
+                    trigger_ctx[str(k)] = v
+
+        def _runner(spec: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
+            if runner is not None:
+                return runner(spec, target)
+            return _run_spec(home, target, spec)
+
+        def _approve(step_env: str, action: str, desc: str) -> Optional[str]:
+            if scheduled:
+                return None  # 定时豁免：已预审 runbook 跳过逐次审批（§11.4）
+            return _step_approval(home, step_env, action, desc)
+
+        step_values: Dict[str, Dict[str, Any]] = {}
+        steps = data.get("steps") or []
+        results: List[Dict[str, Any]] = []
+        status = "ok"
+        error: Optional[str] = None
+        rolled_back = False
+        t0 = time.time()
+        default_on_failure = str(data.get("on_failure") or "stop")
+
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            res = _run_one_step(step, env=rb_env, home=home, step_values=step_values,
+                                trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
+                                where="runbook ", emit=_emit)
+            results.append(res)
+            if res.get("ok"):
+                continue
+            error = res.get("error") or f"步骤 {res.get('id')} 失败"
+            try:
+                on_failure, scene = _resolve_on_failure(
+                    step.get("on_failure"), default_on_failure)
+            except ValueError as exc:
+                status = "failed"
+                error = str(exc)
+                break
+            if on_failure == "continue":
+                continue
+            if on_failure == "rollback":
+                _emit("rollback_start", {
+                    "step_id": str(step.get("id") or ""),
+                    "status": "running",
+                    "detail": _clip(
+                        f"步骤 {step.get('id')} 失败，触发回滚（场景 {scene or '默认'}）", 2000),
+                })
+                rb = _run_rollback_scenario(
+                    data, scene, env=rb_env, home=home, step_values=step_values,
+                    trigger_ctx=trigger_ctx, runner=_runner, approve=_approve, emit=_emit)
+                status = "rolled_back" if rb.get("ok") else "failed"
+                if not rb.get("ok"):
+                    error = f"{error}；{rb.get('error')}"
+                else:
+                    error = (f"{error}（已执行 rollback 场景 "
+                             f"{scene or '（默认）'} 后终止）")
+                _emit("rollback_done", {
+                    "step_id": str(step.get("id") or ""),
+                    "status": "ok" if rb.get("ok") else "failed",
+                    "detail": _clip(
+                        rb.get("error")
+                        or f"rollback 场景 {scene or '（默认）'} 执行完成", 2000),
+                })
+                results.append({"id": "__rollback__", "action": "rollback",
+                                "status": status, "ok": rb.get("ok"),
+                                "steps": rb.get("results", []),
+                                "error": rb.get("error")})
+                rolled_back = True
+                break
             status = "failed"
-            error = str(exc)
             break
-        if on_failure == "continue":
-            continue
-        if on_failure == "rollback":
-            _emit("rollback_start", {
-                "step_id": str(step.get("id") or ""),
-                "status": "running",
-                "detail": _clip(
-                    f"步骤 {step.get('id')} 失败，触发回滚（场景 {scene or '默认'}）", 2000),
-            })
-            rb = _run_rollback_scenario(
-                data, scene, env=rb_env, home=home, step_values=step_values,
-                trigger_ctx=trigger_ctx, runner=_runner, approve=_approve, emit=_emit)
-            status = "rolled_back" if rb.get("ok") else "failed"
-            if not rb.get("ok"):
-                error = f"{error}；{rb.get('error')}"
-            else:
-                error = (f"{error}（已执行 rollback 场景 "
-                         f"{scene or '（默认）'} 后终止）")
-            _emit("rollback_done", {
-                "step_id": str(step.get("id") or ""),
-                "status": "ok" if rb.get("ok") else "failed",
-                "detail": _clip(
-                    rb.get("error")
-                    or f"rollback 场景 {scene or '（默认）'} 执行完成", 2000),
-            })
-            results.append({"id": "__rollback__", "action": "rollback",
-                            "status": status, "ok": rb.get("ok"),
-                            "steps": rb.get("results", []),
-                            "error": rb.get("error")})
-            rolled_back = True
-            break
-        status = "failed"
-        break
 
-    _emit("runbook_done", {
-        "status": status,
-        "error": _clip(error or "", 2000),
-        "rolled_back": rolled_back,
-        "duration_s": round(time.time() - t0, 2),
-        "step_count": len(results),
-    })
+        _emit("runbook_done", {
+            "status": status,
+            "error": _clip(error or "", 2000),
+            "rolled_back": rolled_back,
+            "duration_s": round(time.time() - t0, 2),
+            "step_count": len(results),
+        })
 
-    entry: Dict[str, Any] = {
-        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-        "runbook": name,
-        "env": rb_env,
-        "source": trigger_ctx.get("source"),
-        "trigger_context": {
-            k: (v if isinstance(v, (dict, list)) else str(v))
-            for k, v in trigger_ctx.items()
-        },
-        "result": status,
-        "error": _clip(error or "", 4000),
-        "rolled_back": rolled_back,
-        "steps": results,
-        "duration_s": round(time.time() - t0, 2),
-        "operator": getpass.getuser(),
-    }
-    if exec_id:
-        entry["exec_id"] = exec_id
-    record_execution(home, entry)
-    return {
-        "runbook": name,
-        "env": rb_env,
-        "result": status,
-        "error": error,
-        "rolled_back": rolled_back,
-        "steps": results,
-        "duration_s": entry["duration_s"],
-        "ledger": str(ledger_path(home)),
-    }
+        entry: Dict[str, Any] = {
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "runbook": name,
+            "env": rb_env,
+            "source": trigger_ctx.get("source"),
+            "trigger_context": {
+                k: (v if isinstance(v, (dict, list)) else str(v))
+                for k, v in trigger_ctx.items()
+            },
+            "result": status,
+            "error": _clip(error or "", 4000),
+            "rolled_back": rolled_back,
+            "steps": results,
+            "duration_s": round(time.time() - t0, 2),
+            "operator": getpass.getuser(),
+        }
+        if exec_id:
+            entry["exec_id"] = exec_id
+        record_execution(home, entry)
+        return {
+            "runbook": name,
+            "env": rb_env,
+            "result": status,
+            "error": error,
+            "rolled_back": rolled_back,
+            "steps": results,
+            "duration_s": entry["duration_s"],
+            "ledger": str(ledger_path(home)),
+        }
 
-
+    try:
+        return _execute_locked()
+    finally:
+        _lock_release(lock_id)
 # ---------------------------------------------------------------------------
 # 工具入口
 # ---------------------------------------------------------------------------

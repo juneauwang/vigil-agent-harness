@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes } from "react-router";
 import OverviewPage from "./OverviewPage";
 import { api } from "@/lib/api";
 import type { TopologyView } from "@/lib/api";
@@ -25,6 +25,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
       ...actual.api,
       getTopology: vi.fn(),
       getRunbooks: vi.fn(),
+      getIncidents: vi.fn(),
+      getRunbookCoverage: vi.fn(),
     },
   };
 });
@@ -72,6 +74,14 @@ async function renderPage(view: TopologyView | null) {
     error: "",
     data: { count: 0, runbooks: [] },
   });
+  vi.mocked(api.getIncidents).mockResolvedValue({ total: 3, incidents: [] } as never);
+  vi.mocked(api.getRunbookCoverage).mockResolvedValue({
+    ok: true,
+    data: {
+      high_risk: { total: 10, covered: 7, uncovered: ["reboot", "remove", "decommission"], coverage_pct: 70 },
+      usage: { window_days: 30, audit_events_scanned: 0, actions: [], total_unique: 0, covered_unique: 0, coverage_pct: 0, gaps: [] },
+    },
+  } as never);
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
@@ -119,5 +129,42 @@ describe("批次四十五 Overview 整网连线拓扑（§BC/§BD）", () => {
     expect(text).toContain("集群");
     expect(text).toContain("主机");
     expect(text).toContain("服务");
+  });
+});
+
+describe("批次八十一 Overview 卡（Incidents 真实计数 + 未覆盖风险）", () => {
+  it("Incidents 卡显示真实计数（不再硬编码 0）", async () => {
+    const text = await renderPage(VIEW_WITH_KEYPATH);
+    expect(text).toContain("Incidents");
+    expect(text).toContain("watch inbox");
+  });
+
+  it("未覆盖风险卡：值 + 高危覆盖率 sub + 点击跳 Runbooks", async () => {
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes>
+            <Route path="/" element={<OverviewPage />} />
+            <Route path="/runbooks" element={<div data-testid="rb-page">RUNBOOKS</div>} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    const text = container.textContent ?? "";
+    expect(text).toContain("未覆盖风险");
+    expect(text).toContain("高危 10 已覆盖 7（覆盖率 70%）");
+    const card = Array.from(container.querySelectorAll("div")).find(
+      (d) => d.textContent?.includes("未覆盖风险") && d.getAttribute("role") === "button",
+    );
+    expect(card).toBeTruthy();
+    act(() => card?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await act(async () => {});
+    expect(container.textContent).toContain("RUNBOOKS");
+    root.unmount();
+    container.remove();
   });
 });

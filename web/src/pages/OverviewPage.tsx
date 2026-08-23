@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
 import { ArrowRight, Boxes, ListChecks, Server, TriangleAlert, X } from "lucide-react";
 import { api } from "@/lib/api";
-import type { RunbookSummary, TopologyView } from "@/lib/api";
+import type { RunbookCoverageResponse, RunbookSummary, TopologyView } from "@/lib/api";
 import TopologyGraph from "@/components/TopologyGraph";
 import DetailDrawer from "@/components/DetailDrawer";
 import { EmptyState } from "@/components/EmptyState";
@@ -16,21 +16,30 @@ function MetricCard({
   label,
   value,
   sub,
+  onClick,
 }: {
-  tone: "sky" | "emerald" | "amber" | "rose";
+  tone: "sky" | "emerald" | "amber" | "rose" | "violet";
   icon: React.ReactNode;
   label: string;
   value: React.ReactNode;
   sub?: React.ReactNode;
+  onClick?: () => void;
 }) {
   const tones: Record<string, string> = {
     sky: "bg-sky-100 text-sky-600 dark:bg-sky-500/15 dark:text-sky-400",
     emerald: "bg-emerald-100 text-emerald-600 dark:bg-emerald-500/15 dark:text-emerald-400",
     amber: "bg-amber-100 text-amber-600 dark:bg-amber-500/15 dark:text-amber-400",
     rose: "bg-rose-100 text-rose-600 dark:bg-rose-500/15 dark:text-rose-400",
+    violet: "bg-violet-100 text-violet-600 dark:bg-violet-500/15 dark:text-violet-400",
   };
   return (
-    <div className="vigil-card flex items-center gap-3 p-4">
+    <div
+      className={cn("vigil-card flex items-center gap-3 p-4", onClick && "cursor-pointer hover:border-[var(--vigil-primary)]/60")}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") onClick(); } : undefined}
+    >
       <div className={cn("flex size-9 shrink-0 items-center justify-center rounded-md", tones[tone])}>
         {icon}
       </div>
@@ -114,18 +123,24 @@ export default function OverviewPage() {
   const [queueOpen, setQueueOpen] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
+  const [incidentCount, setIncidentCount] = useState<number | null>(null);
+  const [coverage, setCoverage] = useState<RunbookCoverageResponse["data"] | null>(null);
 
   useEffect(() => {
     let alive = true;
     Promise.all([
       api.getTopology().catch(() => null),
       api.getRunbooks().catch(() => null),
+      api.getIncidents({ limit: 1 }).catch(() => null),
+      api.getRunbookCoverage().catch(() => null),
     ])
-      .then(([topo, rbs]) => {
+      .then(([topo, rbs, inc, cov]) => {
         if (!alive) return;
         if (topo && topo.ok && topo.data) setView(topo.data);
         else if (topo && !topo.ok) setError(topo.error ?? "拓扑加载失败");
         if (rbs && rbs.ok && rbs.data) setRunbooks(rbs.data.runbooks);
+        if (inc) setIncidentCount(typeof inc.total === "number" ? inc.total : (inc.incidents?.length ?? 0));
+        if (cov && cov.ok && cov.data) setCoverage(cov.data);
       })
       .catch((e: unknown) => {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -154,12 +169,20 @@ export default function OverviewPage() {
         </div>
       )}
 
-      {/* 4 指标卡行 */}
-      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+      {/* 5 指标卡行：Nodes / Services / Runbooks / Incidents（真实计数）/ 未覆盖风险 */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <MetricCard tone="sky" icon={<Boxes className="size-4" />} label="Nodes" value={stats.nodes} sub={view ? `clusters ${view.clusters.length}` : undefined} />
         <MetricCard tone="emerald" icon={<Server className="size-4" />} label="Services" value={stats.services} />
         <MetricCard tone="amber" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub="剧本库" />
-        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={0} sub="告警接入后显示" />
+        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={incidentCount ?? 0} sub={incidentCount === null ? "告警接入后显示" : "watch inbox"} />
+        <MetricCard
+          tone="violet"
+          icon={<TriangleAlert className="size-4" />}
+          label="未覆盖风险"
+          value={coverage ? coverage.high_risk.uncovered.length : 0}
+          sub={coverage ? `高危 ${coverage.high_risk.total} 已覆盖 ${coverage.high_risk.covered}（覆盖率 ${coverage.high_risk.coverage_pct}%）` : "矩阵 required 高危 − runbook 覆盖"}
+          onClick={() => navigate("/runbooks")}
+        />
       </div>
 
       {/* 中：Topology Graph 通栏 + Runbook Queue 抽屉 */}
