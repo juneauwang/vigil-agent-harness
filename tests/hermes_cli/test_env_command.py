@@ -100,9 +100,10 @@ def test_env_switch_updates_config_active_env_and_banner(env_home):
     assert _active_env() == "bare_metal_prod"
     # banner ENV badge 数据源随切换更新
     assert banner._load_banner_state()["env"] == "bare_metal_prod"
-    # 权限矩阵按自定义 env 名判定（role=prod → prod 档：L3 硬拒绝）
-    assert check_ops_command_permission("rm -rf /var/log")["action"] == "deny"
-    assert check_ops_command_permission("rm -rf /var/log")["env"] == "bare_metal_prod"
+    # 操作矩阵按自定义 env 名判定（YAPL P5：unknown 动作 → 默认 approve 保守）
+    decision = check_ops_command_permission("rm -rf /var/log")
+    assert decision is not None and decision["action"] == "approve"
+    assert decision["env"] == "bare_metal_prod"
 
 
 def test_env_switch_back_to_builtin_name(env_home):
@@ -120,7 +121,9 @@ def test_env_unknown_env_errors_and_keeps_current(env_home):
     assert "未定义环境" in out
     assert "bare_metal_prod" in out  # 报错列出可用项
     assert _active_env() == "test"
-    assert check_ops_command_permission("rm -rf /var/log") is None  # test 档 L3 执行
+    # test 档：unknown 动作 → 默认 approve（矩阵语义，非 deny）
+    decision = check_ops_command_permission("rm -rf /var/log")
+    assert decision is not None and decision["action"] == "approve"
 
 
 def test_env_switch_persists_across_cache_clear(env_home):

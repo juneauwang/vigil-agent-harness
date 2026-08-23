@@ -4057,7 +4057,7 @@ def _web_exec_guard_callback_factory(exec_id: str, env: str, session_id: str,
             command=display_command,
             description=description,
             env=env,
-            grade=grade_box.get("grade"),
+            action=grade_box.get("action"),
             session_key=session_id,
             source="web",
             allow_session=allow_session,
@@ -4077,7 +4077,7 @@ def _web_exec_guard_callback_factory(exec_id: str, env: str, session_id: str,
 
 @app.post("/api/exec")
 async def create_exec(payload: Dict[str, Any] = Body(default_factory=dict)):
-    """执行命令：权限矩阵（classify_command × env × B' prod 门）→ 三态。
+    """执行命令：操作矩阵（动作枚举 × env，L1-L4 分级已退役）→ 三态。
 
     executed（本机直接跑，输出截断 100KB）/ needs_approval（回 approval_id，
     前端弹审批卡，通过后开 SSE 流）/ denied（回 reason）。host 缺省本机；
@@ -4121,9 +4121,9 @@ async def create_exec(payload: Dict[str, Any] = Body(default_factory=dict)):
         from tools.ops_permissions import check_ops_command_permission as _check_ops
         _ops = _check_ops(command)
         if _ops and _ops.get("action") == "approve":
-            grade_box["grade"] = _ops.get("grade")
+            grade_box["action"] = _ops.get("action_name")
     except Exception:
-        _log.debug("web exec grade probe failed", exc_info=True)
+        _log.debug("web exec action probe failed", exc_info=True)
 
     try:
         cwd = get_session_cwd(session_id) or ""

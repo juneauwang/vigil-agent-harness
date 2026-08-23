@@ -69,11 +69,33 @@ def ops_home(tmp_path, monkeypatch, request):
     home = root / "profiles" / "ops"
     assert home.is_dir()
     monkeypatch.setenv("VIGIL_HOME", str(home))
+    _write_test_matrix(home)
     hc._LOAD_CONFIG_CACHE.clear()
     try:
         yield home
     finally:
         hc._LOAD_CONFIG_CACHE.clear()
+
+
+def _write_test_matrix(home: Path) -> None:
+    """写测试矩阵：template2 + test 行（restart/query 等 execute）——P5 后
+    权限判定 = 动作枚举 × 矩阵；空矩阵默认全 approve 保守。"""
+    from tools import matrix_data as _md
+    doc = _md.template_matrix("template2")
+    matrix = doc["matrix"]
+    matrix["test"] = {
+        "query": "execute", "fetch_log": "execute", "verify": "execute",
+        "restart": "execute", "start": "execute", "stop": "execute",
+        "reload": "execute", "deploy": "execute", "run_script": "execute",
+    }
+    _md.write_matrix({
+        "schema_version": 1,
+        "source": "template2",
+        "base_template": "template2",
+        "matrix": matrix,
+        "sources": {env: {act: "template2" for act in cells}
+                    for env, cells in matrix.items()},
+    }, home)
 
 
 def _load_permissions(ops_home: Path) -> dict:
@@ -207,9 +229,12 @@ def test_env_flag_custom_env_maps_to_tier(tmp_path, monkeypatch):
     prod = next(d for d in env_defs if d["name"] == "prod")
     assert prod["role"] == "prod" and prod["isolation"] == "strict"
 
-    # 权限矩阵按映射后的档位判定（bare_metal_prod → prod 档）。
-    assert check_ops_command_permission("rm -rf /var/log")["action"] == "deny"
-    assert check_ops_command_permission("systemctl restart myapp")["action"] == "approve"
+    # 操作矩阵按映射后的档位判定（YAPL P5：unknown → 默认 approve；restart →
+    # prod 矩阵 required）。home 无 matrix.yaml → 空矩阵默认 approve 保守。
+    decision = check_ops_command_permission("rm -rf /var/log")
+    assert decision is not None and decision["action"] == "approve"
+    decision = check_ops_command_permission("systemctl restart myapp")
+    assert decision is not None and decision["action"] == "approve"
 
 
 def test_env_flag_legacy_uat_maps_prod_tier(tmp_path, monkeypatch):
@@ -222,11 +247,12 @@ def test_env_flag_legacy_uat_maps_prod_tier(tmp_path, monkeypatch):
     monkeypatch.setenv("VIGIL_HOME", str(home))
     perms = _load_permissions(home)
     assert perms["env"] == "prod" and perms["role"] == "prod"
-    # 权限判定 = prod 档语义（L3 deny / L2 approve / 变更确认门）。
-    deny = check_ops_command_permission("rm -rf /var/log")
-    assert deny["action"] == "deny" and deny["env_tier"] == "prod"
+    # 权限判定 = prod 档语义（YAPL P5：unknown → 默认 approve；restart → 矩阵
+    # 判定，env_tier 映射 prod）。
+    unknown = check_ops_command_permission("rm -rf /var/log")
+    assert unknown is not None and unknown["action"] == "approve" and unknown["env_tier"] == "prod"
     approve = check_ops_command_permission("systemctl restart myapp")
-    assert approve["action"] == "approve" and approve["env_tier"] == "prod"
+    assert approve is not None and approve["action"] == "approve" and approve["env_tier"] == "prod"
 
 
 def test_env_flag_invalid_name_errors_listing_available(tmp_path):

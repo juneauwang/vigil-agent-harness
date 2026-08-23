@@ -1,161 +1,61 @@
-"""Ops Agent Harness — 命令分级权限矩阵（L2/L3 层）。
+"""Ops Agent Harness — 操作矩阵权限判定（YAPL P5 收口，OPS-DELTA #75）。
 
-执行层分级 gate（ops-agent-harness.md §3）：把终端命令分级为 L1-L4，
-再按当前环境（ops.environments 已定义列表）查矩阵 → 执行 / 审批 / 拒绝。
+L1-L4 命令分级**退役**（yapl-design.md §11.5）：判定对象从"命令正则分级"
+换成"动作枚举 × 操作矩阵"——terminal 直跑的命令先过操作分类层
+（tools/action_classifier.py）归成动作枚举（schemas.yaml actions 23 个），
+再按动作 × env 查操作矩阵（tools/matrix_data.py，与 runbook 执行路径同一
+matrix.yaml——双矩阵统一）。本模块保留被其他模块引用的环境辅助函数：
 
-- ``deny`` 是硬拒绝：不依赖 agent 自觉，任何会话级 bypass（yolo / mode=off /
-  永久 allowlist）都不能绕过（由 tools/approval.py 放在 yolo 检查之前调用）。
-- ``approve`` 表示需要审批：复用现有 dangerous-command 审批流程。
-- 命令不在任何等级 → 返回 None，交回原有检查（等效执行）。
+- ``defined_environments`` / ``_map_env_tier`` / ``_raw_env_definition`` /
+  ``_LEGACY_ENV_TIER_MAP``：/env 命令（cli.py）、runbook env 校验
+  （tools/runbook_tools.py）与矩阵 env 名解析继续使用；老自定义名
+  （uat/staging/...）按档位映射的兼容语义不变（更严不更松）。
+- ``check_ops_command_permission``：统一入口（approval.py terminal 审批链 /
+  sudo_tool / chat_api / web_server 探测共用），内部走 classifier → 矩阵。
 
-环境枚举固定为 local/test/dev/prod 四值（OPS-DELTA #42）。老自定义名
-（uat/staging/bare_metal_prod/...）读取时按档位映射、不报错：uat→prod 档、
-staging→dev 档、其余按环境定义 isolation（strict→prod、relaxed→dev）或名字
-推导——映射只打一次警告，权限语义不放松（uat→prod 只会更严不会更松）。
-config 的 ``ops.environments`` 是 /env 的权威名单（老自定义名映射为档位），
-拓扑 topology.yaml 的 environments 段不一致时以 config 为准。
-
-矩阵默认启用（OPS-DELTA #1）：``ops.permissions.enabled`` 缺省视为 true（显式
-``false`` 仍可关闭，向后兼容），env 缺省读 config 的 ``ops.permissions.env``——
-未配置 env（非 ops profile）时矩阵惰性返回 None（交回原有检查），不改变既有
-判定；一旦 env 就位（ops-init 默认 test 或 /env 切换）即按矩阵判定。fail-closed
-取向不变：DENY 是硬拒绝，任何会话级 bypass 都不能绕过。
+矩阵语义（§11.2 设计铁律）：
+- 矩阵无 deny：classifier 不产出 deny，保守 = approve（走审批门）不是拒绝；
+  硬底线 / sudo stdin / 用户 deny / ansible inventory guard 等无条件层由
+  approval.py 在本函数之前执行（顺序不动）。
+- execute → 返回 None（交回原有检查，直接执行）；approve → 返回
+  {"action": "approve", ...} 走现有审批门（approvals.mode smart/manual）；
+  {approve: required} → require_confirmation=True 强制人工（覆盖 mode）。
+- 动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
+- 动作漏配（矩阵没配该 action×env）→ get_level 默认 approve（保守）。
 
 配置（config.yaml，ops 块）:
     ops:
-      environments:            # 可选：环境定义列表（不写则用内置四值 local/test/dev/prod）
+      environments:            # 可选：环境定义列表（/env 名单，老名按档位映射）
         - {name: test, isolation: relaxed, role: test}
-        - {name: bare_metal_prod, isolation: strict, role: prod}   # 老自定义名 → 映射 prod 档
+        - {name: bare_metal_prod, isolation: strict, role: prod}
       permissions:
         enabled: true          # 缺省默认启用（OPS-DELTA #1）；显式 false 才关闭
-        env: test              # 当前操作环境（/env 切换，四值 local/test/dev/prod；老名按档位映射）
-        role: test             # 会话角色（默认同 env，审计展示用）
-        grades:                # 可选：覆盖内置分级正则（不写则用内置表）
-          L1: [...]
-          L2: [...]
-          L3: [...]
-          L4: [...]
-        matrix:                # 可选：按 env 名覆盖内置矩阵（不写则用内置矩阵）
-          test: {L1: execute, L2: execute, L3: execute, L4: execute}
-          prod: {L1: execute, L2: approve, L3: deny, L4: deny}
+        env: test              # 当前操作环境（/env 切换；矩阵按 env 名精确查，
+                               #   未配置时按档位映射名 uat→prod 兜底）
+
+矩阵内容（matrix.yaml）由 P3 操作矩阵层管理（``vigil matrix`` CLI/UI），
+本模块只读判定，不写矩阵。
 """
 
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
-# 等级按严重度从高到低匹配（L4 先查，命中即止）。
-_GRADE_ORDER = ("L4", "L3", "L2", "L1")
+# 环境四值枚举 + 老自定义名档位映射（OPS-DELTA #42，保留供 /env 与矩阵 env 解析）。
+_ENV_TIERS: tuple = ("local", "test", "dev", "prod")
+_LEGACY_ENV_TIER_MAP: Dict[str, str] = {"uat": "prod", "staging": "dev"}
+# 每个 legacy 名只警告一次（读取兼容：警告不阻断，老数据必须可读）。
+_WARNED_ENVS: set = set()
 
-# 内置分级（regex，大小写不敏感）。L1 额外要求：无 shell 操作符、无重定向、
-# 无 find -delete/-exec/-ok、无 curl 写操作 —— 保证"查询级"名副其实。
-_DEFAULT_GRADES: Dict[str, List[str]] = {
-    "L4": [
-        # 删 namespace / 删库 / 格式化（致命）
-        r"\bkubectl\s+(?:delete|scale\s+--replicas=0)\s+(?:namespace|ns)\b",
-        r"\bkubectl\s+delete\s+--all\b",
-        r"\b(?:DROP|DELETE)\s+(?:DATABASE|SCHEMA)\b",
-        r"\bmkfs(?:\.|\s|$)",
-        r"\bformat\s+(?:[a-z]:|[a-z]\d\b|/dev/)",
-        r"\bdd\s+.*\bof=/dev/",
-    ],
-    "L3": [
-        # 危险：rm -rf / iptables / 重启 DB / 改配置
-        r"\brm\s+(-[^\s]*\s+)*-[^\s]*r",
-        r"\brm\s+--recursive\b",
-        r"\b(?:iptables|ip6tables|nft)\b",
-        r"\bsystemctl\s+(?:restart|stop|disable|mask)\s+(?:mysql|mariadb|postgres(?:ql)?|redis|mongo(?:db)?)\b",
-        r"\bservice\s+(?:mysql|mariadb|postgres(?:ql)?|redis|mongo(?:db)?)\s+(?:restart|stop)\b",
-        r"\bkubectl\s+(?:apply|edit|delete|patch|rollout\s+undo)\b",
-        r"\bsed\s+-i\b",
-        r"\bchmod\s+(-[^\s]*\s+)*(?:777|666)\b",
-        r"\breboot\b|\bshutdown\b|\binit\s+[06]\b",
-        r"\bhelm\s+(?:upgrade|install|rollback|delete|uninstall)\b",
-        r"\bdocker\s+(?:rmi|volume\s+rm|system\s+prune|network\s+rm)\b",
-    ],
-    "L2": [
-        # 常规：重启自研服务 / 装包 / 滚动发布
-        r"\bsystemctl\s+(?:restart|start|stop|reload|enable)\b",
-        r"\bservice\s+(?:restart|start|stop|reload)\b",
-        r"\b(?:pip|pip3)\s+install\b",
-        r"\b(?:apt|apt-get|yum|dnf)\s+(?:install|remove|purge|upgrade|update)\b",
-        r"\bnpm\s+(?:install|ci|uninstall|run\s+deploy)\b",
-        r"\bdocker\s+compose\s+(?:up|restart|down)\b",
-        r"\bdocker\s+(?:start|restart|stop|build|push)\b",
-        r"\bkubectl\s+rollout\s+restart\b",
-        r"\bkubectl\s+set\s+image\b",
-        r"\bkubectl\s+drain\b",
-        r"\bhelm\s+upgrade\b",
-        r"\bgit\s+push\b",
-        r"\bgit\s+merge\b|\bgit\s+rebase\b|\bgit\s+reset\b",
-        r"\bscp\b|\brsync\b",
-    ],
-    "L1": [
-        r"^\s*(?:ls|df|du|pwd|whoami|id|uname|uptime|free|ps|top|htop|date|hostname|stat)\b",
-        r"^\s*(?:cat|head|tail|grep|find|which|type|file|tree)\b",
-        r"^\s*(?:netstat|ss|ip\s+a|ifconfig|route)\b",
-        r"^\s*(?:systemctl\s+status|journalctl|service\s+\S+\s+status)\b",
-        r"^\s*(?:docker\s+(?:ps|logs|images|inspect|stats)|kubectl\s+(?:get|describe|logs|top))\b",
-        r"^\s*(?:curl|wget)\b",
-        r"^\s*(?:echo|printf)\b",
-    ],
-}
-
-# 内置矩阵：等级 × 档位 → execute / approve / deny（ops-agent-harness.md §3）。
-# 四值枚举 local/test/dev/prod（OPS-DELTA #42）：local/test/dev relaxed 全放行，
-# prod strict（L2 审批 / L3、L4 拒绝）。老 uat 行已删除——legacy uat 经档位
-# 映射到 prod 行（更严不更松），不再有独立的 uat 档。
-_DEFAULT_MATRIX: Dict[str, Dict[str, str]] = {
-    "local": {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
-    "test":  {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
-    "dev":   {"L1": "execute", "L2": "execute", "L3": "execute", "L4": "execute"},
-    "prod":  {"L1": "execute", "L2": "approve", "L3": "deny", "L4": "deny"},
-}
-
-# 内置环境定义（config 未写 ops.environments 时的兜底，与 _CONFIG_TPL 生成一致）。
-# isolation 语义沿用 topology/ops-agent-harness.md：strict = 跨环境操作需审批，
-# relaxed = 自用放行；矩阵行为由档位决定，isolation 为声明性展示字段。
 _DEFAULT_ENVIRONMENTS: List[Dict[str, str]] = [
     {"name": "local", "isolation": "relaxed", "role": "local"},
     {"name": "test", "isolation": "relaxed", "role": "test"},
     {"name": "dev", "isolation": "relaxed", "role": "dev"},
     {"name": "prod", "isolation": "strict", "role": "prod"},
 ]
-
-# 环境四值枚举 + 老自定义名档位映射（OPS-DELTA #42）。
-_ENV_TIERS: tuple = ("local", "test", "dev", "prod")
-_LEGACY_ENV_TIER_MAP: Dict[str, str] = {"uat": "prod", "staging": "dev"}
-# 每个 legacy 名只警告一次（读取兼容：警告不阻断，老数据必须可读）。
-_WARNED_ENVS: set = set()
-
-# L1 例外：出现这些片段就不能算纯查询。
-_L1_EXCLUSIONS = [
-    r"[;&|]",
-    r">>?",
-    r"find\s+.*\s-(?:delete|exec|execdir|ok)\b",
-    r"curl\b[^\n]*\s-(?:X|d|data|F|form|upload-file)\b",
-    r"wget\b[^\n]*\s-(?:O|post-data)\b",
-    r"\becho\b.*\s>\s*[/~.]",
-]
-_L1_EXCLUSIONS_COMPILED = [re.compile(p, re.IGNORECASE) for p in _L1_EXCLUSIONS]
-
-# 变更类命令清单（OPS-DELTA #32 prod 变更强制确认门）：服务重启 / 容器重建 /
-# 配置下发类。env=prod 时命中即 require_confirmation（approve 决策强制走人工
-# 确认门）；非 prod 档不触发（现状不变）。宁可多列——漏列的代价是 prod 变更
-# 无确认执行，多列的代价只是 prod 变更命令多一次人工确认。
-_CHANGE_COMMAND_RE = re.compile(
-    r"\bansible-playbook\b"
-    r"|\bkubectl\s+(?:apply|delete|edit|scale|rollout|drain|cordon)\b"
-    r"|\bdocker\s+compose\s+(?:up|restart|rm|down)\b"
-    r"|\bdocker\s+(?:restart|rm|stop)\b"
-    r"|\bsystemctl\s+(?:restart|stop)\b"
-    r"|\bhelm\s+(?:upgrade|install|uninstall)\b",
-    re.IGNORECASE,
-)
 
 
 def _load_config() -> Dict[str, Any]:
@@ -180,7 +80,7 @@ def _load_ops_config() -> Dict[str, Any]:
 def defined_environments(ops_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """已定义环境列表：四值档位 local/test/dev/prod（OPS-DELTA #42）。
 
-    这是 /env 命令与权限矩阵共用的权威名单：config ops.environments 里的
+    这是 /env 命令与权限判定共用的权威名单：config ops.environments 里的
     老自定义名（uat/staging/...）读取时按档位映射（打一次警告，不阻断），
     映射后的档位为准——权限语义不放松（uat→prod 只会更严）。config 未定义
     时回退内置四值。
@@ -264,85 +164,6 @@ def _map_env_tier(env: str, ops_config: Optional[Dict[str, Any]] = None) -> str:
     return mapped
 
 
-def _env_definition(env: str, ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """按名（大小写不敏感）查已定义环境；未定义返回 None。"""
-    for env_def in defined_environments(ops_config):
-        if str(env_def.get("name") or "").strip().lower() == env:
-            return env_def
-    return None
-
-
-def _env_role(env: str, ops_config: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """环境定义的 role（决定矩阵行为落点）；未定义或无 role 返回 None。"""
-    env_def = _env_definition(env, ops_config)
-    if env_def is None:
-        return None
-    return str(env_def.get("role") or "").strip().lower() or None
-
-
-def _matrix_row(config: Dict[str, Any], env: str,
-                ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, str]]:
-    """env 名 → 有效矩阵行（深拷贝，返回 None 表示未声明 → 交回原有检查）。
-
-    查表顺序（四值枚举，矩阵行为由档位决定）：
-      1. 用户 ``matrix`` 按 env 名覆盖（在默认行基础上合并，行为同旧版 setdefault+update）；
-      2. 已定义环境：按定义的 role 落点（bare_metal_prod → role prod → prod 行）；
-      3. 老自定义名（uat/staging/...）按档位映射（_map_env_tier，打一次警告；
-         uat→prod 档，权限只会更严不会更松）；
-      4. 内置名兜底（兼容旧矩阵）。
-    """
-    user_matrix = config.get("matrix") or {}
-    if isinstance(user_matrix.get(env), dict):
-        row = dict(_DEFAULT_MATRIX.get(env, {}))
-        row.update(user_matrix[env])
-        return row or None
-    role = _env_role(env, ops_config)
-    if role:
-        row = dict(_DEFAULT_MATRIX.get(role, {}))
-        if row:
-            return row
-    # 老自定义名（uat/staging/...）→ 档位映射（打一次警告；uat→prod 更严不更松）。
-    tier = _map_env_tier(env, ops_config)
-    row = dict(_DEFAULT_MATRIX.get(tier, {}))
-    if row:
-        return row
-    return dict(_DEFAULT_MATRIX.get(env, {})) or None
-
-
-def _compile_grades(grade_patterns: Dict[str, List[str]]) -> Dict[str, List[re.Pattern]]:
-    compiled: Dict[str, List[re.Pattern]] = {}
-    for grade, patterns in grade_patterns.items():
-        if grade not in _GRADE_ORDER:
-            continue
-        compiled[grade] = []
-        for p in patterns:
-            try:
-                compiled[grade].append(re.compile(p, re.IGNORECASE))
-            except re.error as exc:
-                logger.warning("ops_permissions: bad pattern for %s (%r): %s", grade, p, exc)
-    return compiled
-
-
-def classify_command(command: str) -> Optional[str]:
-    """Return the highest-severity grade (L4..L1) a command matches, or None."""
-    config = _load_config()
-    raw_grades = config.get("grades") or {}
-    grade_patterns = {g: raw_grades.get(g) or _DEFAULT_GRADES[g] for g in _GRADE_ORDER}
-    compiled = _compile_grades(grade_patterns)
-
-    lowered = command.lower()
-    for grade in _GRADE_ORDER:
-        patterns = compiled.get(grade) or []
-        for pattern in patterns:
-            if pattern.search(lowered):
-                if grade == "L1" and any(
-                    excl.search(lowered) for excl in _L1_EXCLUSIONS_COMPILED
-                ):
-                    continue  # 带操作符/重定向/破坏性选项 → 不是纯查询，继续往高等级查
-                return grade
-    return None
-
-
 def _active_env() -> str:
     config = _load_config()
     return str(config.get("env") or "").strip().lower()
@@ -353,50 +174,80 @@ def _active_role() -> str:
     return str(config.get("role") or _active_env() or "").strip().lower()
 
 
-def _is_prod_env(env: str, ops_config: Optional[Dict[str, Any]] = None) -> bool:
-    """env 是否按 prod 档处理（决定 require_confirmation 门）。
+def _matrix_env_for(env: str, matrix_data: Dict[str, Any]) -> str:
+    """矩阵 env 名解析：精确名优先；未配置 → 档位映射名（uat→prod、staging→dev、
+    老自定义名按 isolation/role 推导——更严不更松）；仍无 → 原样返回（get_level
+    默认 approve 保守）。"""
+    matrix = matrix_data.get("matrix") or {}
+    if env in matrix:
+        return env
+    try:
+        tier = _map_env_tier(env)
+    except Exception:
+        return env
+    if tier in matrix:
+        return tier
+    return env
 
-    与环境定义里的 role 对齐（bare_metal_prod → role prod → prod 档）；
-    未定义/老自定义名按档位映射（uat → prod 档，权限语义不放松）。
-    """
-    role = _env_role(env, ops_config)
-    if role:
-        return role == "prod"
-    return _map_env_tier(env, ops_config) == "prod"
+
+def _matrix_description(command: str, action_name: str, level: str, env: str,
+                        primary: Dict[str, Any],
+                        classification: Dict[str, Any]) -> str:
+    """审批展示文案：动作 × env 档位 / unknown 保守提示 / 链式取保守说明。"""
+    from tools import matrix_data as _md
+    chain = classification.get("chain") or None
+    if action_name == "unknown":
+        desc = (
+            f"⚠ 未能识别命令意图（unknown）：{command} 不在操作分类规则表内，"
+            "矩阵漏配 → 按保守审批处理（默认 approve 走审批门）；"
+            "可在 OPS-DELTA 登记新规则。"
+        )
+    elif level == _md.LEVEL_REQUIRED:
+        desc = (
+            f"⚠ 操作矩阵强制人工确认（{action_name} × {env} = "
+            "{approve: required}，覆盖 approvals.mode）"
+        )
+    else:
+        desc = f"操作矩阵 {action_name} × {env} 判定为需要审批（approve）"
+    rule = str(primary.get("rule") or "").strip()
+    if rule:
+        desc = f"{desc}（规则 {rule}）"
+    note = str(primary.get("note") or "").strip()
+    if note and action_name != "unknown":
+        desc = f"{desc}；{note}"
+    if chain and len(chain) > 1:
+        joined = " / ".join(
+            f"{c.get('action')}({c.get('rule') or '?'})" for c in chain
+        )
+        desc = f"{desc}（链式命令取保守：{joined}）"
+    return desc
 
 
 def check_ops_command_permission(command: str, target_env: Optional[str] = None) -> Optional[Dict[str, Any]]:
-    """Grade a terminal command and apply the environment matrix.
+    """操作矩阵判定（YAPL P5：classifier → 动作枚举 × env 矩阵，OPS-DELTA #75）。
 
-    ``target_env`` overrides the session env（目标级 env 判定）: approval.py
-    先做命令目标解析（tools/ops_target.py），命中拓扑实体时传入该实体的 env；
-    为 None 或未命中时用会话 env（现状不变）。目标 env 未在矩阵声明时同样返回
-    None（交回原有检查），避免对未知环境误判。
+    L1-L4 命令分级退役：判定对象从"命令正则分级"换成"动作枚举 × 操作矩阵"
+    （tools/action_classifier.py + tools/matrix_data.py，与 runbook 执行路径
+    同一 matrix.yaml——双矩阵统一）。矩阵无 deny：classifier 不产出 deny，
+    保守 = approve（走审批门）不是拒绝；硬底线 / sudo stdin / 用户 deny /
+    ansible inventory guard 等无条件层由 approval.py 在本函数之前执行。
 
-    OPS-DELTA #32：decision 增加 ``require_confirmation`` 字段——变更类命令
-    （服务重启/容器重建/配置下发，见 ``_CHANGE_COMMAND_RE``）在 env 按 prod 档
-    判定（含映射的 uat）时默认 true，approval.py 对 approve+require_confirmation
-    强制走人工确认门（yolo / smart-approval / 永久 allowlist 都不能绕过）。
-    L3/L4 的 deny 仍硬拒，优先级不变（deny > require_confirmation）；未分级的
-    变更类命令在 prod 档合成审批级判定（否则 ansible-playbook 这类未列入分级
-    的命令会漏网）。
+    档位语义：
+      execute → 返回 None（交回原有检查，直接执行）；
+      approve → 返回 {"action": "approve", ...} 走现有审批门（smart/manual）；
+      {approve: required} → require_confirmation=True 强制人工（覆盖 mode）。
+    动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
 
-    OPS-DELTA 批次十七（B'）：prod 档**未分级命令**（grade=None，不在 L1-L4
-    任何模式内，如 ``mv 单文件`` / ``cp`` / ``tar`` / 自定义脚本）默认
-    approve + require_confirmation=True（强制人工确认门，同 #32 变更门通道，
-    yolo 也绕不过）——堵"批量危险操作拆成单条无害命令全绕过"（2026-08-13
-    k3s-prod 改名事故：mv 跨 20+ 文件全部放行）。L1 查询命令匹配 L1 模式
-    （grade 非 None）不受影响，prod 仍 execute；L3/L4 deny 优先级不变；
-    非 prod 档（local/test/dev）未分级命令维持现状放行。
+    Args:
+        command: 原始命令串（sudo/doas 前缀由 classifier 剥离）。
+        target_env: 命令目标级 env（ops_target 解析，跨环境硬约束）；None →
+            会话 env（config ops.permissions.env）。
 
     Returns:
-      None                         — gate disabled / env unknown / grade execute
-      {"action": "approve", ...}   — 该命令按矩阵需要审批
-      {"action": "deny", ...}      — 该命令按矩阵被硬拒绝
-
-    Only plain strings are graded; multi-command shell scripts are left to the
-    existing dangerous-command detection (their first token rarely matches a
-    grade pattern, and they may hide anything).
+        None  — gate disabled / env 未配置 / 矩阵档位 execute（交回原有检查）。
+        dict  — {"action": "approve", "action_name", "rule", "note", "env",
+                 "env_tier", "role", "level", "require_confirmation",
+                 "description", "classification"}。
     """
     if not isinstance(command, str) or not command.strip():
         return None
@@ -406,73 +257,50 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
 
     env = (target_env or _active_env()).strip().lower()
     if not env:
-        # 无会话 env 且无目标级 env → 矩阵无可判定环境（等价于 _matrix_row("")
-        # 返回 None），提前返回：非 ops profile 的热路径零额外开销。
+        # 无会话 env 且无目标级 env → 矩阵无可判定环境，交回原检查（热路径零额外开销）。
         return None
 
-    grade = classify_command(command)
-    was_ungraded = grade is None
-    ops_config = _load_ops_config()
-    row = _matrix_row(config, env, ops_config) if grade is not None else None
+    from tools.action_classifier import classify_command
+    from tools import matrix_data as _md
 
-    env_tier = _map_env_tier(env, ops_config)
-    is_prod = _is_prod_env(env, ops_config)
-    is_change_cmd = bool(_CHANGE_COMMAND_RE.search(command))
-    require_confirmation = bool(is_prod and is_change_cmd)
+    classification = classify_command(command)
+    candidates = classification.get("chain") or [classification]
 
-    if grade is not None and row is not None:
-        action = row.get(grade, "execute")
-        if action == "execute":
-            # 未命中审批/拒绝档：除非是 prod 变更类（强制确认门），否则交回
-            # 原有检查（现状）。
-            if not require_confirmation:
-                return None
-            action = "approve"
-    else:
-        # 未分级（grade=None）或未声明环境：
-        # B'（OPS-DELTA 批次十七）：prod 档未分级命令默认 approve + 强制人工
-        # 确认门——堵"批量危险操作拆成单条 mv/cp/tar 绕过"（2026-08-13
-        # k3s-prod 改名事故，mv 单文件不在任何分级模式被全放行）。L1 查询命令
-        # 匹配 L1 模式（grade 非 None）不受影响；L3/L4 deny 优先级不变。
-        # 非 prod 档（local/test/dev）维持现状：未分级命令交回原检查放行。
-        if not is_prod:
-            if not require_confirmation:
-                return None
-            action = "approve"
+    matrix = _md.load_matrix_or_empty()
+    resolved_env = _matrix_env_for(env, matrix)
+    rank = {_md.LEVEL_EXECUTE: 0, _md.LEVEL_APPROVE: 1, _md.LEVEL_REQUIRED: 2}
+
+    # 链式取保守：每个子命令各自查矩阵，取档位最高（最保守）者；
+    # unknown 动作 → 矩阵漏配 → 默认 approve（保守）。
+    best = None
+    for cand in candidates:
+        action = str(cand.get("action") or "unknown")
+        if action == "unknown":
+            level = _md.LEVEL_APPROVE
         else:
-            action = "approve"
-            require_confirmation = True  # prod 未分级 = 强制人工确认门（同变更类）
-        grade = grade or "L2"
+            level = _md.get_level(matrix, resolved_env, action)["level"]
+        weight = rank.get(level, 1)
+        if best is None or weight > best[0]:
+            best = (weight, level, action, cand)
+    _weight, level, action_name, primary = best
 
-    if was_ungraded and is_prod and action == "approve":
-        # B' 文案（要点 4）：未分级 + prod 明示"未分级命令在 prod 需人工确认"。
-        # 保留 "prod 变更确认门" 字样——approval 侧测试与用户提示都依赖它。
-        description = (
-            f"⚠ prod 变更确认门（未分级命令在 prod 需人工确认，B'）：{command} "
-            "不在 L1-L4 分级模式内，按 prod 档默认审批"
-        )
-    else:
-        description = (
-            f"命令分级 {grade}（{_grade_examples(grade)}）在 {env} 环境的权限矩阵"
-            f"判定为 {'需要审批' if action == 'approve' else '拒绝'}"
-        )
-        if require_confirmation:
-            description = f"⚠ prod 变更确认门：{description}"
+    if level == _md.LEVEL_EXECUTE:
+        return None  # 直接执行（交回原有检查）
+
+    require_confirmation = level == _md.LEVEL_REQUIRED
+    description = _matrix_description(
+        command, action_name, level, env, primary, classification,
+    )
     return {
-        "action": action,
-        "grade": grade,
+        "action": "approve",
+        "action_name": action_name,
+        "rule": str(primary.get("rule") or "").strip() or None,
+        "note": str(primary.get("note") or "").strip() or None,
         "env": env,
-        "env_tier": env_tier,
+        "env_tier": _map_env_tier(env, _load_ops_config()),
         "role": _active_role(),
+        "level": level,
         "require_confirmation": require_confirmation,
         "description": description,
+        "classification": classification,
     }
-
-
-def _grade_examples(grade: str) -> str:
-    return {
-        "L1": "查询",
-        "L2": "常规（重启服务/装包）",
-        "L3": "危险（rm -rf/iptables/重启DB/改配置）",
-        "L4": "致命（删namespace/删库/格式化）",
-    }.get(grade, "")

@@ -85,15 +85,16 @@ def _default_ops_env() -> str:
         return ""
 
 
-def _probe_ops_grade(command: str) -> Optional[str]:
-    """审批条目 grade 探测（照 exec API：ops 权限矩阵 approve 时才带）。"""
+def _probe_ops_action(command: str) -> Optional[str]:
+    """审批条目 action 探测（照 exec API：操作矩阵 approve 时才带；L1-L4
+    grade 已退役，OPS-DELTA #75）。"""
     try:
         from tools.ops_permissions import check_ops_command_permission as _check_ops
         _ops = _check_ops(command)
         if _ops and _ops.get("action") == "approve":
-            return _ops.get("grade")
+            return _ops.get("action_name")
     except Exception:
-        _log.debug("chat approval grade probe failed", exc_info=True)
+        _log.debug("chat approval action probe failed", exc_info=True)
     return None
 
 
@@ -377,7 +378,7 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
         _log.info("[%s] approval gate fired: cmd=%r desc=%r",
                   session.chat_session_id, command[:80], (description or "")[:80])
         env = _default_ops_env()
-        grade = _probe_ops_grade(command)
+        action = _probe_ops_action(command)
         redacted_command = _redact_text(command)
         approval_id = register_web_approval(
             command=redacted_command,
@@ -385,7 +386,7 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
             # 完整详情，不再单向截断丢信息。
             description=_redact_text(description or ""),
             env=env,
-            grade=grade,
+            action=action,
             session_key=session.chat_session_id,
             source="web",
             allow_session=allow_session,
@@ -401,7 +402,7 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
             "command": redacted_command,
             "description": _redact_text(description or ""),
             "env": env,
-            "grade": grade,
+            "action": action,
             "timeout_at": (av or {}).get("timeout_at"),
         })
         remaining = _approval_remaining_seconds(av)
