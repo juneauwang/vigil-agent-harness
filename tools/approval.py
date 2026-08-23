@@ -4570,10 +4570,20 @@ def check_all_command_guards(command: str, env_type: str,
     # Pure-tirith findings are session-max by design (no broad permanent
     # allowlisting of content-level security findings), so a prompt with
     # ONLY tirith warnings keeps Always hidden.  Mixed prompts (pattern +
-    # tirith) previously hid Always too, even though choosing it would
-    # correctly persist the pattern key and downgrade the tirith key to
-    # session — the UI was stricter than the persistence layer.
-    has_permanent_capable = any(not is_t for _, _, is_t in warnings)
+    # tirith) offer Always: choosing it persists the pattern key permanently
+    # and downgrades the tirith key to session.  Ops-matrix approve keys are
+    # permanent-capable in a pure-ops prompt (P5: matrix approve rides the
+    # pattern allowlist machinery), but a prompt that also carries a tirith
+    # content-security warning drops to session-max overall — a one-time
+    # "Always" must not swallow a content-level finding (PR #67312 semantics;
+    # P5 regression fix acceptance: bit.ly prompt has no Always).
+    has_tirith = any(is_t for _, _, is_t in warnings)
+    has_ops = any(key.startswith("ops_matrix:") for key, _, _ in warnings)
+    has_pattern = any(
+        (not is_t) and not key.startswith("ops_matrix:")
+        for key, _, is_t in warnings
+    )
+    has_permanent_capable = has_pattern or (has_ops and not has_tirith)
     # prod 变更确认门（require_confirmation）不提供永久 allowlist——每次都
     # 必须人工确认，Always 只会诱导"一次性授权=永久放行"。
     if _ops_confirmation_required:
