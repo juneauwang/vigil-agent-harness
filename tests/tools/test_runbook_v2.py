@@ -61,6 +61,13 @@ def v2_home(tmp_path, monkeypatch):
     home = tmp_path / "vigil_home"
     (home / "runbooks").mkdir(parents=True)
     (home / "services").mkdir(parents=True)
+    # YAPL P3 资产审批（§11.4）：v0.2 创建过审批门。本套件是 schema 校验测试，
+    # 与审批语义无关——显式 approvals.mode=off 绕过资产审批门（资产审批路径
+    # 由 test_matrix.py 专测），保持 41 例 schema 断言专注不串味。
+    (home / "config.yaml").write_text(
+        yaml.safe_dump({"approvals": {"mode": "off"}}, allow_unicode=True),
+        encoding="utf-8",
+    )
     (home / "topology.yaml").write_text(
         yaml.safe_dump(TOPOLOGY, allow_unicode=True, sort_keys=False),
         encoding="utf-8",

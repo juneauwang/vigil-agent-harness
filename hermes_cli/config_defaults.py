@@ -20,7 +20,7 @@ DEFAULT_CONFIG = {
     # Vigil 默认：cli 平台直接列 topo/runbook（OPS-DELTA #38）——首装 default
     # profile 即为完整 ops harness，与 vigil ops-init 生成的 ops profile 一致。
     "platform_toolsets": {
-        "cli": ["hermes-cli", "topo", "runbook"],
+        "cli": ["hermes-cli", "topo", "runbook", "matrix"],
     },
     # SQLite journal mode used by every Vigil database opener. WAL is the
     # normal default; set DELETE for weak-fsync/shared filesystems where WAL is

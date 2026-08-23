@@ -3,6 +3,7 @@ import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "reac
 import {
   Bell,
   History,
+  Grid3x3,
   LayoutDashboard,
   MessageSquare,
   Moon,
@@ -24,6 +25,7 @@ import { useApprovalPolling, useApprovalSnapshot } from "@/lib/approvalPoller";
 const OverviewPage = lazy(() => import("@/pages/OverviewPage"));
 const TopologyPage = lazy(() => import("@/pages/TopologyPage"));
 const RunbooksPage = lazy(() => import("@/pages/RunbooksPage"));
+const MatrixPage = lazy(() => import("@/pages/MatrixPage"));
 const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
 const ApprovalsPage = lazy(() => import("@/pages/ApprovalsPage"));
 const AuditPage = lazy(() => import("@/pages/AuditPage"));
@@ -35,12 +37,13 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
-/** 豆包菜单 7 项：7 个路由页。 */
+/** 豆包菜单 8 项：8 个路由页。 */
 const NAV_ITEMS: NavItem[] = [
   { path: "/chat", label: "Chat", icon: MessageSquare },
   { path: "/overview", label: "Overview", icon: LayoutDashboard },
   { path: "/topology", label: "Topology", icon: Network },
   { path: "/runbooks", label: "Runbooks", icon: ScrollText },
+  { path: "/matrix", label: "Matrix", icon: Grid3x3 },
   { path: "/incidents", label: "Incidents", icon: TriangleAlert },
   { path: "/approvals", label: "Approvals", icon: ShieldCheck },
   { path: "/audit", label: "Audit", icon: History },
@@ -263,6 +266,7 @@ export default function App() {
                 <Route path="/overview" element={<OverviewPage />} />
                 <Route path="/topology" element={<TopologyPage />} />
                 <Route path="/runbooks" element={<RunbooksPage />} />
+                <Route path="/matrix" element={<MatrixPage />} />
                 <Route path="/incidents" element={<IncidentsPage />} />
                 <Route path="/approvals" element={<ApprovalsPage />} />
                 <Route path="/audit" element={<AuditPage />} />

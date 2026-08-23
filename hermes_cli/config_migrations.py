@@ -666,7 +666,7 @@ def _migrate_to_34(results: Dict[str, Any], quiet: bool) -> None:
         return
     merged: list = list(cli_list)
     added: list = []
-    for ts in ("topo", "runbook"):
+    for ts in ("topo", "runbook", "matrix"):
         if ts not in merged:
             merged.append(ts)
             added.append(ts)

@@ -426,6 +426,7 @@ from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
 from hermes_cli.subcommands.topo_export import build_topo_export_parser
+from hermes_cli.subcommands.matrix import build_matrix_parser
 from hermes_cli.subcommands.vssh import build_vssh_parser
 from hermes_cli.subcommands.trajectory import build_trajectory_parser
 from hermes_cli.subcommands.watch import build_watch_parser
@@ -4649,6 +4650,13 @@ def cmd_topo_export(args):
     from hermes_cli.subcommands.topo_export import run as topo_export_run
 
     return topo_export_run(args)
+
+
+def cmd_matrix(args):
+    """操作矩阵管理（vigil matrix init/show/set/edit/reset，YAPL §11.7）。"""
+    from hermes_cli.subcommands.matrix import run as matrix_run
+
+    return matrix_run(args)
 
 
 def cmd_watch(args):
@@ -10968,7 +10976,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
-        "model", "monitoring", "pairing", "pets", "plugins", "portal", "profile",
+        "matrix", "model", "monitoring", "pairing", "pets", "plugins", "portal", "profile",
         "project", "proxy",
         "prompt-size",
         "send", "sessions", "setup",
@@ -12847,6 +12855,7 @@ def main():
     # =========================================================================
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
     build_topo_export_parser(subparsers, cmd_topo_export=cmd_topo_export)
+    build_matrix_parser(subparsers, cmd_matrix=cmd_matrix)
     build_vssh_parser(subparsers, cmd_vssh=cmd_vssh)
     build_trajectory_parser(subparsers, cmd_trajectory=cmd_trajectory)
     build_watch_parser(subparsers, cmd_watch=cmd_watch)

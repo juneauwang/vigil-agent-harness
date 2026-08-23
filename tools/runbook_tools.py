@@ -26,6 +26,7 @@ Data contract (schema v0.1): see ops-agent-harness.md §1 / §3 L4.
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import logging
 import re
@@ -255,6 +256,9 @@ _DEFAULT_CREATE_SCHEMA = {
         "（{cron, timezone}）替代 triggers；\n"
         "- 变量引用 {{ steps.<id>.params.<key> }} / {{ trigger_context.<字段> }}；\n"
         "- 无 permission 字段（权限=操作矩阵唯一裁决）；run_script.script 只引用资产。\n"
+        "v0.2 创建/变更会触发资产审批（YAPL §11.4）：矩阵判 {approve: required} 高危"
+        "动作的 runbook 强制人工审批；approvals.mode=smart 且全部动作矩阵判 execute 时"
+        "自动批准；审批失败不落盘。v0.1 保留原路径。"
         "runbook 只支持 .yaml——.md/其他格式不会被加载。"
         "runbook 是 Vigil 程序层机制（触发条件 + 步骤 + 命令 + 回滚），不是 Markdown 文档："
         "runbook_load 可按名/触发词加载，runbook_checkpoint 可门控部署阶段。"
@@ -1614,6 +1618,65 @@ def _scan_commands_for_secrets(steps: List[Dict[str, Any]], rollback: Optional[L
     return None
 
 
+def _runbook_v2_actions(data: Dict[str, Any]) -> List[str]:
+    """收集 runbook（含 rollback 场景）用到的全部动作（资产审批矩阵判定用）。"""
+    acts: List[str] = []
+    for step in data.get("steps") or []:
+        if isinstance(step, dict) and step.get("action"):
+            acts.append(str(step["action"]))
+    for scenario in data.get("rollback") or []:
+        if not isinstance(scenario, dict):
+            continue
+        for step in scenario.get("steps") or []:
+            if isinstance(step, dict) and step.get("action"):
+                acts.append(str(step["action"]))
+    return sorted(set(acts))
+
+
+def _asset_approve_runbook(data: Dict[str, Any], name: str, home: Path,
+                           env: str) -> tuple:
+    """v0.2 runbook 资产审批（YAPL P3 §11.4 双审批层次之资产审批）。
+
+    Returns (approved: bool, markers: Dict[str, str], error: str)。
+
+    语义（§11.5）：
+    - 强制人工：runbook 任一动作在矩阵对应 env 为 ``{approve: required}`` →
+      force_manual（不 smart、覆盖 approvals.mode、不提供 allowlist）；
+    - smart 自动批准：approvals.mode=smart 且全部动作矩阵判 execute 级
+      （矩阵是权限唯一裁决——execute 级动作执行时本就免审批，创建时同样
+      不需要人工在场；确定性智能，不引入 aux LLM）；
+    - approvals.mode=off 且无强制人工 → 跳过（与全系统 mode=off 语义一致）；
+    - 其余 → 人工门（fail-closed：无人在场 BLOCK，永不无人落盘）。
+    矩阵缺失 → 全部动作默认 approve（保守），不触发强制人工。
+    """
+    from tools.approval import request_asset_approval
+    from tools.matrix_data import get_level, load_matrix_or_empty
+
+    acts = _runbook_v2_actions(data)
+    matrix = load_matrix_or_empty(home)
+    levels = {a: get_level(matrix, env, a) for a in acts}
+    force_manual = any(v["level"] == "required" for v in levels.values())
+    smart_low_risk = bool(acts) and all(v["level"] == "execute" for v in levels.values())
+    action_desc = ", ".join(acts) or "(无动作)"
+    result = request_asset_approval(
+        asset_type="runbook",
+        asset_name=name,
+        description=(
+            f"runbook {name}（env={env or 'local'}）内容审批——"
+            f"动作: {action_desc}（矩阵裁决：{'含强制人工高危动作' if force_manual else '常规档位'}）"
+        ),
+        env=env or "local",
+        force_manual=force_manual,
+        smart_low_risk=smart_low_risk,
+    )
+    if not result.get("approved"):
+        return False, {}, str(result.get("message") or "资产审批未通过")
+    markers = {
+        "approved_by": str(result.get("approved_by") or "manual"),
+    }
+    return True, markers, ""
+
+
 def runbook_create(
     runbook: str,
     title: str,
@@ -1635,7 +1698,10 @@ def runbook_create(
 
     双 schema：steps 用 ``commands`` → v0.1（存量风格）；steps 用 ``action``
     → v0.2（声明式动作，命令彻底消失，yapl-design.md §10）。v0.2 写 version: 2，
-    走三层校验（结构/引用/关系），执行器在 P4 实现——当前仅可创建/校验/预览。
+    走三层校验（结构/引用/关系）**+ 资产审批**（YAPL P3 §11.4：创建/变更过人工
+    审批门；矩阵判含 {approve: required} 高危动作 → 强制人工不 smart；审批通过
+    后落盘带 approved_at/approved_by/approved_version 预审标记，P4 调度器执行
+    豁免用）。v0.1 保留原路径（不经资产审批，OPS-DELTA #69 注明过渡期）。
     Fail-closed：严格 kebab-case 名称（防路径穿越）、非空 steps、v0.1 commands
     拒绝疑似明文凭据（用 <vault:path/field> 占位符）、同名已存在需 overwrite=True。
     写盘前复用 ``_validate_runbook`` 校验，保证 runbook_load 能原样加载回来。
@@ -1756,6 +1822,28 @@ def runbook_create(
             f"runbook 已存在: {name}（{path}）。需要覆盖请 overwrite=true。"
         )
 
+    # YAPL P3 资产审批（§11.4）：v0.2 创建/变更过审批门（复用 approvals 机制，
+    # 矩阵 {approve: required} 高危动作强制人工）；v0.1 保留原路径（OPS-DELTA
+    # #69 注明过渡期）。审批失败不落盘 + 报错引导。
+    if v2_style:
+        approved, markers, approve_err = _asset_approve_runbook(
+            data, name, home, mapped_env or "local"
+        )
+        if not approved:
+            return tool_error(
+                f"runbook 资产审批未通过，未落盘: {approve_err}（内容未写入 "
+                f"{path}）。请修改后重试，或由用户在交互会话中重新创建。"
+            )
+        # 预审标记（执行豁免数据模型，P4 调度器接线）：approved_at / approved_by /
+        # approved_version（内容哈希——文件被改动后哈希漂移 = 豁免失效）。
+        approved_version = hashlib.sha256(
+            json.dumps(data, sort_keys=True, ensure_ascii=False,
+                       default=str).encode("utf-8")
+        ).hexdigest()[:16]
+        data["approved_at"] = _dt.datetime.now().astimezone().isoformat(timespec="seconds")
+        data["approved_by"] = markers.get("approved_by") or "manual"
+        data["approved_version"] = approved_version
+
     try:
         runbooks_dir.mkdir(parents=True, exist_ok=True)
         path.write_text(
@@ -1772,8 +1860,9 @@ def runbook_create(
             "path": str(path),
             "steps": len(steps),
             "note": (
-                ("已创建/更新 runbook（schema v0.2，声明式动作）。执行器在 P4 实现，"
-                 "当前仅可创建/校验/预览。runbook_load 可加载。")
+                ("已创建/更新 runbook（schema v0.2，声明式动作，已过资产审批）。"
+                 "预审标记 approved_at/approved_by/approved_version 已落盘（P4 执行豁免）。"
+                 "执行器在 P4 实现；runbook_load 可加载。")
                 if v2_style else
                 ("已创建/更新 runbook（schema v0.1）。runbook_load 可加载；"
                  "若意图是行为约束，触发词已写入 triggers。")

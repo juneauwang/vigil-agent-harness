@@ -2340,7 +2340,7 @@ def _get_platform_tools(
         # telegram/discord 等消息平台。工具可用性仍由 check_fn 数据存在性
         # 门控——无 topology.yaml/runbooks 时 schema 里不出现，零 footprint。
         if platform == "cli" and not explicitly_configured:
-            for _ops_ts in ("topo", "runbook"):
+            for _ops_ts in ("topo", "runbook", "matrix"):
                 if _ops_ts in enabled_toolsets:
                     continue
                 if _toolset_allowed_for_platform(_ops_ts, platform):

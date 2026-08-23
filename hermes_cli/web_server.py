@@ -3527,6 +3527,203 @@ async def get_ops_runbook_detail(name: str):
     return {"ok": True, "data": data}
 
 
+@app.get("/api/matrix")
+async def get_ops_matrix(request: Request):
+    """Ops dashboard: 操作矩阵全量视图（含每格来源 + 漏配默认 approve 警告）。
+
+    矩阵是安全资产（YAPL §11.7）：只读展示 + 人工改（PUT /api/matrix）。
+    LLM 侧只有 matrix_query 只读工具。端点不进 PUBLIC_API_PATHS——loopback
+    前缀放行、公网绑定走 OAuth/会话 token（_require_token 兜底）。
+    """
+    _require_token(request)
+    from tools.matrix_data import actions as matrix_actions
+    from tools.matrix_data import load_matrix_or_empty
+
+    def _build() -> dict:
+        data = load_matrix_or_empty()
+        data["actions"] = matrix_actions()
+        return data
+
+    data = await run_in_threadpool(_build)
+    return {"ok": True, "data": data}
+
+
+@app.post("/api/matrix/init")
+async def init_ops_matrix(payload: Dict[str, Any] = Body(default_factory=dict),
+                          request: Request = None):
+    """Ops dashboard: 用 setup 模板生成 matrix.yaml（人工操作，修改即审计）。
+
+    body: {template: "template1|2|3|4"（或 1-4）, selections?: {execute: [...],
+    approve: [...]}, force?: bool}。模板 4（自定义级联）必须带 selections；
+    已存在且非 force → 400（安全资产防误覆盖；重建走 CLI reset）。
+    """
+    _require_token(request)
+    from tools.matrix_data import (
+        TEMPLATE_NAMES,
+        init_matrix,
+    )
+
+    template = str((payload or {}).get("template") or "")
+    if template.isdigit():
+        template = f"template{template}"
+    if template not in TEMPLATE_NAMES:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                f"template 非法: {template!r}——合法：template1/2/3/4（或 1-4）。",
+            ),
+        )
+    selections = (payload or {}).get("selections") or None
+    if template == "template4" and not isinstance(selections, dict):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                "模板 4（自定义）必须带 selections: {execute: [动作], approve: [动作]}"
+                "（级联语义：approve 从 execute 剩余中选，其余 required）。",
+            ),
+        )
+    force = bool((payload or {}).get("force"))
+
+    def _init() -> dict:
+        return init_matrix(template, selections=selections, force=force)
+
+    try:
+        data = await run_in_threadpool(_init)
+    except FileExistsError as exc:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", str(exc)),
+        )
+    except (ValueError, MatrixValidationError) as exc:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", str(exc)),
+        )
+
+    from tools.matrix_data import actions as matrix_actions
+    data["actions"] = matrix_actions()
+    try:
+        from agent.trajectory import record_event
+        record_event(
+            type="matrix_change",
+            session_id="matrix-ui",
+            tool="matrix",
+            action="init",
+            result=f"-> {template}",
+            approval="",
+            meta={
+                "env": "*",
+                "action": "init",
+                "old": None,
+                "new": template,
+                "source": "ui",
+                "operator": "dashboard",
+            },
+        )
+    except Exception:
+        _log.exception("matrix UI init audit event failed")
+    return {"ok": True, "data": data}
+
+
+@app.put("/api/matrix")
+async def put_ops_matrix(payload: Dict[str, Any] = Body(default_factory=dict),
+                         request: Request = None):
+    """Ops dashboard: 单格改档位（人工操作，修改即审计）。
+
+    body: {env, action, level}——level ∈ execute / approve / required
+    （required = {approve: required} 强制人工）。落盘后该格来源 → manual、
+    顶层 source → manual；审计事件（type=matrix_change, source=ui）落
+    trajectory（/api/audit/events 可查）。
+    """
+    _require_token(request)
+    from tools.matrix_data import (
+        MatrixValidationError,
+        LEVEL_EXECUTE,
+        LEVEL_APPROVE,
+        LEVEL_REQUIRED,
+        actions,
+        load_matrix_or_empty,
+        set_level,
+        write_matrix,
+    )
+
+    env = str((payload or {}).get("env") or "").strip()
+    act = str((payload or {}).get("action") or "").strip()
+    level = str((payload or {}).get("level") or "").strip()
+    level_map = {
+        LEVEL_EXECUTE: LEVEL_EXECUTE,
+        LEVEL_APPROVE: LEVEL_APPROVE,
+        LEVEL_REQUIRED: LEVEL_REQUIRED,
+        "{approve: required}": LEVEL_REQUIRED,
+        "required": LEVEL_REQUIRED,
+    }
+    if level not in level_map:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                f"level 非法: {level!r}——合法值：execute / approve / required"
+                "（矩阵无 deny）。",
+            ),
+        )
+    norm_level = level_map[level]
+    if not env:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", "env 必填且不能为空。"),
+        )
+    if act not in set(actions()):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                f"action 非法: {act!r}——合法动作：{', '.join(actions())}。",
+            ),
+        )
+
+    def _apply() -> dict:
+        data = load_matrix_or_empty()
+        summary = set_level(data, env, act, norm_level)
+        write_matrix(data)
+        return {"summary": summary, "data": data}
+
+    try:
+        result = await run_in_threadpool(_apply)
+    except (ValueError, MatrixValidationError) as exc:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_request", str(exc)),
+        )
+
+    # 修改即审计（UI 来源；操作者 = dashboard 会话）。meta 无敏感值（矩阵无凭据）。
+    try:
+        from agent.trajectory import record_event
+        record_event(
+            type="matrix_change",
+            session_id="matrix-ui",
+            tool="matrix",
+            action=f"{env}.{act}",
+            result=f"{result['summary'].get('old') or '(未配置)'} -> {norm_level}",
+            approval="",
+            meta={
+                "env": env,
+                "action": act,
+                "old": result["summary"].get("old"),
+                "new": norm_level,
+                "source": "ui",
+                "operator": "dashboard",
+            },
+        )
+    except Exception:
+        _log.exception("matrix UI audit event failed")
+
+    if not result["summary"]["changed"]:
+        return {"ok": True, "changed": False}
+    return {"ok": True, "changed": True}
+
+
 # ---------------------------------------------------------------------------
 # UI 壳第二批：执行/审批/审计 API（OPS-DELTA #47，契约见 vigil-exec-api-draft.md）
 # ---------------------------------------------------------------------------
