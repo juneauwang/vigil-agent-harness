@@ -4167,6 +4167,25 @@ def check_all_command_guards(command: str, env_type: str,
                        deny_pattern, command[:200])
         return _user_deny_block_result(deny_pattern)
 
+    # YAPL P2（OPS-DELTA #68）：ansible -i inventory 契约化——inventory 主机集合
+    # 必须 ⊆ 拓扑表（堵"用 inventory 绕开拓扑表"，yapl-design.md §六）。无条件硬拦
+    # （先于 yolo/mode=off/永久 allowlist），fail-closed：读不到/解析不了/拓扑表
+    # 读不到一律拒绝。只拦显式 -i；默认 inventory 留 P5 操作分类层。
+    try:
+        from tools.ansible_inventory_guard import check_ansible_inventory_guard
+        ansible_block = check_ansible_inventory_guard(command)
+    except Exception as _ans_exc:
+        logger.debug("ansible inventory guard failed: %s", _ans_exc)
+        ansible_block = None
+    if ansible_block:
+        logger.warning("ansible inventory guard block: %s (command: %s)",
+                       ansible_block[:120], command[:200])
+        return {
+            "approved": False,
+            "ansible_inventory": True,
+            "message": ansible_block,
+        }
+
     # Ops harness graded permission matrix (ops-agent-harness.md §3):
     # command grade × active environment → execute / approve / deny. A matrix
     # DENY is a hard block — like the user deny rules above, it fires BEFORE

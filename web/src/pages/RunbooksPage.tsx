@@ -29,12 +29,154 @@ function EnvTag({ env }: { env?: string }) {
 }
 
 function KindTag({ kind, checklist }: { kind?: string; checklist?: boolean }) {
-  const label = kind === "deploy" ? "部署" : kind === "incident" ? "事故" : kind ?? "runbook";
+  const label =
+    kind === "deploy" ? "部署"
+    : kind === "incident" ? "事故"
+    : kind === "maintenance" ? "维护"
+    : kind === "checklist" ? "清单"
+    : kind ?? "runbook";
   return (
     <span className="rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
       {label}
       {checklist ? " · checklist" : ""}
     </span>
+  );
+}
+
+function ActionBadge({ action }: { action?: string }) {
+  if (!action) return null;
+  const family =
+    ["start", "stop", "restart", "reload", "enable", "disable"].includes(action) ? "生命周期"
+    : ["reboot", "shutdown"].includes(action) ? "主机"
+    : ["deploy", "rollback", "scale", "decommission"].includes(action) ? "发布"
+    : ["backup", "restore"].includes(action) ? "数据"
+    : action === "apply_config" ? "配置"
+    : ["query", "fetch_log", "verify"].includes(action) ? "查询"
+    : action === "transfer_file" ? "文件"
+    : action === "run_script" ? "执行"
+    : ["install", "upgrade", "remove"].includes(action) ? "包"
+    : "";
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px]"
+      title={family ? `${family}族动作` : undefined}
+    >
+      {action}
+      {family ? <span className="text-[var(--vigil-muted)]">· {family}</span> : null}
+    </span>
+  );
+}
+
+function ParamsView({ params }: { params: Record<string, unknown> }) {
+  const entries = Object.entries(params ?? {});
+  if (entries.length === 0) return null;
+  return (
+    <div className="mt-1.5 space-y-0.5 text-xs">
+      {entries.map(([k, v]) => (
+        <div key={k} className="flex gap-1.5">
+          <span className="shrink-0 font-mono text-[var(--vigil-muted)]">{k}:</span>
+          {typeof v === "object" && v !== null ? (
+            <div className="min-w-0 flex-1">
+              <DetailTree data={v as Record<string, unknown>} />
+            </div>
+          ) : (
+            <code className="min-w-0 flex-1 break-all text-[var(--vigil-text)] opacity-80">
+              {String(v)}
+            </code>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function OnFailureTag({ value }: { value?: unknown }) {
+  if (value === undefined || value === null) return null;
+  const label =
+    value === "stop" ? "失败即停"
+    : value === "continue" ? "失败继续"
+    : value === "rollback" ? "回滚"
+    : typeof value === "object" && value !== null && "rollback" in (value as object)
+      ? `回滚 → ${String((value as Record<string, unknown>).rollback)}`
+      : String(value);
+  return (
+    <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
+      <TriangleAlert className="size-3" />
+      on_failure: {label}
+    </span>
+  );
+}
+
+function ExpectView({ expect }: { expect: Record<string, unknown> }) {
+  if (!expect || typeof expect !== "object") return null;
+  const predKeys = ["contains", "http_status", "body_contains", "exit_code"];
+  return (
+    <div className="mt-1.5 space-y-0.5 text-xs">
+      <div className="text-[var(--vigil-muted)]">
+        expect: 通道 <code className="text-[var(--vigil-text)] opacity-75">{String(expect.target ?? "")}</code>
+      </div>
+      {predKeys.filter((k) => k in expect).map((k) => (
+        <div key={k} className="pl-3 text-[var(--vigil-muted)]">
+          {k}:{" "}
+          {typeof expect[k] === "object" && expect[k] !== null ? (
+            <code className="text-[var(--vigil-text)] opacity-75">
+              {JSON.stringify(expect[k])}
+            </code>
+          ) : (
+            <code className="text-[var(--vigil-text)] opacity-75">{String(expect[k])}</code>
+          )}
+        </div>
+      ))}
+      {"url" in expect ? (
+        <div className="pl-3 text-[var(--vigil-muted)]">
+          url: <code className="text-[var(--vigil-text)] opacity-75">{String(expect.url)}</code>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function StepView({ step }: { step: Record<string, unknown> }) {
+  const isV2 = typeof step.action === "string" && step.action.length > 0;
+  return (
+    <>
+      <div className="mb-1.5 flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">{String(step.title ?? step.id ?? "")}</span>
+        <span className="text-xs text-[var(--vigil-muted)]">id: {String(step.id ?? "")}</span>
+        {isV2 ? <ActionBadge action={String(step.action)} /> : null}
+        <OnFailureTag value={step.on_failure} />
+      </div>
+      {isV2 ? (
+        <ParamsView params={(step.params as Record<string, unknown>) ?? {}} />
+      ) : (
+        Array.isArray(step.commands) && step.commands.length > 0 && (
+          <div className="space-y-1">
+            {step.commands.map((cmd, j) => (
+              <pre
+                key={j}
+                className="scroll-thin overflow-x-auto rounded bg-[var(--vigil-muted-bg)] px-2.5 py-1.5 text-[11px]"
+              >
+                {String(cmd)}
+              </pre>
+            ))}
+          </div>
+        )
+      )}
+      {isV2 && step.expect ? (
+        <ExpectView expect={step.expect as Record<string, unknown>} />
+      ) : (
+        (step.verify || step.expect) ? (
+          <div className="mt-1.5 space-y-0.5 text-xs text-[var(--vigil-muted)]">
+            {step.verify ? (
+              <div>verify: <code className="text-[var(--vigil-text)] opacity-75">{String(step.verify)}</code></div>
+            ) : null}
+            {step.expect ? (
+              <div>expect: <code className="text-[var(--vigil-text)] opacity-75">{String(step.expect)}</code></div>
+            ) : null}
+          </div>
+        ) : null
+      )}
+    </>
   );
 }
 
@@ -69,18 +211,45 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
   const known = new Set([
     "name", "title", "version", "env", "kind", "checklist", "triggers",
     "summary", "steps", "rollback", "updated_at", "note",
+    "clusters", "host_groups", "hosts", "schedule", "on_failure",
   ]);
+  const schedule = data.schedule as Record<string, unknown> | undefined;
+  const clusters = (data.clusters as string[] | undefined) ?? [];
+  const hostGroups = (data.host_groups as string[] | undefined) ?? [];
+  const scopeHosts = (data.hosts as string[] | undefined) ?? [];
+  const scopeCount = clusters.length + hostGroups.length + scopeHosts.length;
 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--vigil-muted)]">
         <span>name: <span className="text-[var(--vigil-text)] opacity-80">{String(data.name ?? "")}</span></span>
+        <span>schema: <span className="text-[var(--vigil-text)] opacity-80">
+          v{String(data.version ?? "?")}{String(data.version) === "2" ? "（声明式动作）" : ""}
+        </span></span>
         <span>env: <span className="text-[var(--vigil-text)] opacity-80">{String(data.env ?? "-")}</span></span>
         <span>kind: <span className="text-[var(--vigil-text)] opacity-80">{String(data.kind ?? "-")}</span></span>
         <span>更新: <span className="text-[var(--vigil-text)] opacity-80">{String(data.updated_at ?? "-")}</span></span>
       </div>
 
       {data.summary ? <p className="text-sm text-[var(--vigil-text)] opacity-80">{String(data.summary)}</p> : null}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <OnFailureTag value={data.on_failure} />
+        {schedule ? (
+          <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
+            <Clock className="size-3" />
+            schedule: <code>{String(schedule.cron ?? "")}</code>
+            {schedule.timezone ? <span>（{String(schedule.timezone)}）</span> : null}
+          </span>
+        ) : null}
+        {scopeCount > 0 ? (
+          <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
+            目标范围: {clusters.length ? `集群 ${clusters.join(", ")}` : ""}
+            {hostGroups.length ? `${clusters.length ? " · " : ""}主机组 ${hostGroups.join(", ")}` : ""}
+            {scopeHosts.length ? `${clusters.length || hostGroups.length ? " · " : ""}主机 ${scopeHosts.join(", ")}` : ""}
+          </span>
+        ) : null}
+      </div>
 
       {triggers.length > 0 && (
         <section>
@@ -90,7 +259,7 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
           <div className="flex flex-wrap gap-1.5">
             {triggers.map((t, i) => (
               <span key={i} className="rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-xs">
-                {String(t)}
+                {typeof t === "object" && t !== null ? JSON.stringify(t) : String(t)}
               </span>
             ))}
           </div>
@@ -104,36 +273,13 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
           </h3>
           <ol className="space-y-2">
             {steps.map((step, i) => (
-              <li key={(step.id as string) ?? i} className="vigil-card p-3">
-                <div className="mb-1.5 flex flex-wrap items-center gap-2 text-sm">
-                  <span className="flex size-5 items-center justify-center rounded-full bg-[var(--vigil-muted-bg)] text-xs">
-                    {i + 1}
-                  </span>
-                  <span className="font-medium">{String(step.title ?? step.id ?? i)}</span>
-                  <span className="text-xs text-[var(--vigil-muted)]">id: {String(step.id ?? "")}</span>
+              <li key={(step.id as string) ?? i} className="vigil-card flex items-start gap-2 p-3">
+                <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full bg-[var(--vigil-muted-bg)] text-xs">
+                  {i + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <StepView step={step} />
                 </div>
-                {Array.isArray(step.commands) && step.commands.length > 0 && (
-                  <div className="space-y-1">
-                    {step.commands.map((cmd, j) => (
-                      <pre
-                        key={j}
-                        className="scroll-thin overflow-x-auto rounded bg-[var(--vigil-muted-bg)] px-2.5 py-1.5 text-[11px]"
-                      >
-                        {String(cmd)}
-                      </pre>
-                    ))}
-                  </div>
-                )}
-                {(step.verify || step.expect) ? (
-                  <div className="mt-1.5 space-y-0.5 text-xs text-[var(--vigil-muted)]">
-                    {step.verify ? (
-                      <div>verify: <code className="text-[var(--vigil-text)] opacity-75">{String(step.verify)}</code></div>
-                    ) : null}
-                    {step.expect ? (
-                      <div>expect: <code className="text-[var(--vigil-text)] opacity-75">{String(step.expect)}</code></div>
-                    ) : null}
-                  </div>
-                ) : null}
               </li>
             ))}
           </ol>
@@ -148,13 +294,25 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
           <div className="space-y-1.5">
             {rollback.map((rb, i) => (
               <div key={i} className="vigil-card p-3">
-                {rb.title ? <div className="mb-1 text-sm">{String(rb.title)}</div> : null}
-                {Array.isArray(rb.commands) &&
-                  rb.commands.map((cmd, j) => (
-                    <pre key={j} className="scroll-thin overflow-x-auto rounded bg-[var(--vigil-muted-bg)] px-2.5 py-1.5 text-[11px]">
-                      {String(cmd)}
-                    </pre>
-                  ))}
+                <div className="mb-1 text-sm font-medium">
+                  {String(rb.name ?? rb.title ?? `场景 ${i + 1}`)}
+                </div>
+                {Array.isArray(rb.steps) ? (
+                  <div className="space-y-1.5">
+                    {rb.steps.map((s, j) => (
+                      <div key={j} className="rounded border border-dotted border-[var(--vigil-border)] px-2 py-1.5">
+                        <StepView step={s as Record<string, unknown>} />
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  Array.isArray(rb.commands) &&
+                    rb.commands.map((cmd, j) => (
+                      <pre key={j} className="scroll-thin overflow-x-auto rounded bg-[var(--vigil-muted-bg)] px-2.5 py-1.5 text-[11px]">
+                        {String(cmd)}
+                      </pre>
+                    ))
+                )}
                 {rb.note ? <div className="mt-1 text-xs text-[var(--vigil-muted)]">{String(rb.note)}</div> : null}
               </div>
             ))}

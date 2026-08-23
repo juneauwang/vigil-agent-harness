@@ -31,6 +31,7 @@ import logging
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import yaml
 
@@ -51,6 +52,80 @@ _VAULT_REF_RE = re.compile(r"<vault:([A-Za-z0-9_./-]+)>")
 # 防路径穿越（".." / 隐藏文件/点号下划线）与非法文件名写盘。
 _CREATE_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _VALID_KINDS = {"deploy", "incident", "checklist"}
+
+
+# ── YAPL P2（批次五十三）：runbook schema v0.2 ────────────────────────────────
+# 设计单一事实来源 yapl-design.md §10。v0.1 用 steps[].commands（命令写死），
+# v0.2 用 steps[].action（动作枚举 + params），命令彻底消失。
+_V2_KINDS = {"incident", "deploy", "maintenance", "checklist"}
+_EXPECT_CHANNELS = (
+    "kubectl", "docker", "docker_compose", "systemctl", "pm2",
+    "http", "port", "process",
+)
+_ON_FAILURE_VALUES = ("stop", "continue", "rollback")
+# 只读动作：on_failure: continue 只允许出现在只读动作（§10.4 校验器拦变更动作）。
+_READONLY_ACTIONS = frozenset({"query", "fetch_log", "verify"})
+# 变量引用（§10.5）：{{ steps.<id>.params.<key...> }} / {{ steps.<id>.outputs.<key> }}
+# / {{ trigger_context.<field> }}——来源 = 触发上下文 + 步骤输出，LLM 不用猜值。
+_VAR_REF_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)*)\s*\}\}")
+_TRIGGER_CONTEXT_FIELDS = frozenset(
+    {"source", "alertname", "severity", "startsAt", "triggered_at"}
+)
+
+# 动作参数契约（§10.2 括号内声明）：required = 必填参数（缺失即报错，
+# target 缺失 = 报错）；typed = 类型/结构校验（其余参数仅要求出现）。
+# 执行修饰符 batch/interval/timeout/force 通用可选（不逐一列举）。
+_ACTION_CONTRACTS: Dict[str, Dict[str, Any]] = {
+    "start": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "stop": {"required": ["target"], "typed": {"target": "topo_ref", "force": "bool"}},
+    "restart": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "reload": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "enable": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "disable": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "reboot": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "shutdown": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "deploy": {"required": ["target"],
+               "typed": {"target": "topo_ref", "image": "str", "version": "str"}},
+    "rollback": {"required": ["target"],
+                 "typed": {"target": "topo_ref", "to": "str"}},
+    "scale": {"required": ["target", "replicas"],
+              "typed": {"target": "topo_ref", "replicas": "int"}},
+    "decommission": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "backup": {"required": ["target", "dest"],
+               "typed": {"target": "topo_ref", "dest": "str"}},
+    "restore": {"required": ["target", "from"],
+                "typed": {"target": "topo_ref", "from": "str"}},
+    "apply_config": {"required": ["target", "changes"],
+                     "typed": {"target": "topo_ref", "changes": "changes"}},
+    "query": {"required": [],
+              "typed": {"target": "topo_ref", "pattern": "str"}},
+    "fetch_log": {"required": ["target"],
+                  "typed": {"target": "topo_ref", "lines": "int",
+                            "grep": "str", "since": "str"}},
+    "verify": {"required": ["target"], "typed": {"target": "topo_ref"}},
+    "transfer_file": {"required": ["source", "dest"],
+                      "typed": {"source": "file_ref", "dest": "file_ref"}},
+    "run_script": {"required": ["script"], "typed": {"script": "asset"}},
+    "install": {"required": ["target", "package"],
+                "typed": {"target": "topo_ref", "package": "str",
+                          "version": "str", "repo": "str"}},
+    "upgrade": {"required": ["target", "package"],
+                "typed": {"target": "topo_ref", "package": "str",
+                          "version": "str", "repo": "str"}},
+    "remove": {"required": ["target", "package"],
+               "typed": {"target": "topo_ref", "package": "str", "deps": "bool"}},
+}
+
+# 引用校验的类型兼容表：主机族动作目标必须是 host/host_group/cluster（不能是
+# service）；包族动作目标必须是 host/host_group。其余动作四种类型皆可
+# （执行器按 action × target 类型 × managed_by 分派，P4）。
+_TARGET_TYPE_RESTRICTIONS: Dict[str, frozenset] = {
+    "reboot": frozenset({"host", "host_group", "cluster"}),
+    "shutdown": frozenset({"host", "host_group", "cluster"}),
+    "install": frozenset({"host", "host_group"}),
+    "upgrade": frozenset({"host", "host_group"}),
+    "remove": frozenset({"host", "host_group"}),
+}
 
 
 def _normalize_runbook_env(env: Any) -> Optional[str]:
@@ -163,12 +238,28 @@ _DEFAULT_CHECKPOINT_SCHEMA = {
 _DEFAULT_CREATE_SCHEMA = {
     "name": "runbook_create",
     "description": (
-        "创建/更新运维 runbook（程序层：结构化 YAML，runbooks/<name>.yaml，schema v0.1）。"
+        "创建/更新运维 runbook（程序层：结构化 YAML，runbooks/<name>.yaml）。"
+        "双 schema：v0.2（推荐，声明式动作）steps 用 action+params，命令彻底消失；"
+        "v0.1（存量风格）steps 用 commands。v0.2 语法：\n"
+        "- 步骤 = {id, title, action, params, expect?, on_failure?}；action 必须是动作词表"
+        "（start/stop/restart/reload/enable/disable/reboot/shutdown/deploy/rollback/"
+        "scale/decommission/backup/restore/apply_config/query/fetch_log/verify/"
+        "transfer_file/run_script/install/upgrade/remove），params 按动作契约填必填"
+        "（如 restart {target: 拓扑实体}、scale {target, replicas}、backup {target, dest}、"
+        "apply_config {target, changes: [{key, value}]}）；\n"
+        "- 目标四维范围：env ⊇ clusters ⊇ host_groups ⊇ hosts（均可空=不限），target 引用"
+        "拓扑表实体（先 topo_query 确认）；\n"
+        "- expect = {target: 检查通道, contains/http_status/body_contains/exit_code}；"
+        "on_failure = stop/continue(只读动作)/rollback/{rollback: 场景名}；\n"
+        "- triggers 双形态（字符串或 {alertname, severity}），checklist 用 schedule"
+        "（{cron, timezone}）替代 triggers；\n"
+        "- 变量引用 {{ steps.<id>.params.<key> }} / {{ trigger_context.<字段> }}；\n"
+        "- 无 permission 字段（权限=操作矩阵唯一裁决）；run_script.script 只引用资产。\n"
         "runbook 只支持 .yaml——.md/其他格式不会被加载。"
         "runbook 是 Vigil 程序层机制（触发条件 + 步骤 + 命令 + 回滚），不是 Markdown 文档："
         "runbook_load 可按名/触发词加载，runbook_checkpoint 可门控部署阶段。"
-        "用户说'沉淀/记录/保存为 runbook'时应调用本工具。命令一律拒绝明文密码/token——"
-        "用 <vault:path/field> 占位符（执行时从保险箱读取注入）。同名已存在需 "
+        "用户说'沉淀/记录/保存为 runbook'时应调用本工具。v0.1 命令一律拒绝明文"
+        "密码/token——用 <vault:path/field> 占位符（执行时从保险箱读取注入）。同名已存在需 "
         "overwrite=true 才覆盖。"
     ),
     "parameters": {
@@ -194,13 +285,19 @@ _DEFAULT_CREATE_SCHEMA = {
             "steps": {
                 "type": "array",
                 "description": (
-                    "步骤列表，每步 {id, title, commands: [命令]}；checklist 步骤"
-                    "可带 verify+expect（真实验证）。"
+                    "步骤列表。v0.2：每步 {id, title, action, params, expect?, on_failure?}"
+                    "（action ∈ 动作词表；params 按动作契约，如 restart {target}、"
+                    "scale {target, replicas}、backup {target, dest}、apply_config "
+                    "{target, changes: [{key, value}]}、fetch_log {target, lines?}、"
+                    "transfer_file {source: {host?, path}, dest: {host?, path}}、"
+                    "run_script {script, args?}）；v0.1：每步 {id, title, commands: [命令]}"
+                    "；checklist 步骤可带 verify+expect（真实验证）。"
                 ),
             },
             "rollback": {
                 "type": "array",
-                "description": "回滚步骤（可选），[{title, commands}]。",
+                "description": "回滚（可选）。v0.2：场景数组 [{name, steps: [{action, params}]}]；"
+                "v0.1：[{title, commands}]。on_failure: rollback 指向场景名。",
             },
             "env": {
                 "type": "string",
@@ -208,8 +305,32 @@ _DEFAULT_CREATE_SCHEMA = {
             },
             "kind": {
                 "type": "string",
-                "enum": ["deploy", "incident", "checklist"],
-                "description": "deploy/incident/checklist（默认 incident）。",
+                "enum": ["deploy", "incident", "checklist", "maintenance"],
+                "description": "deploy/incident/checklist/maintenance（v0.2 加 maintenance；v0.1 不支持 maintenance，默认 incident）。",
+            },
+            "clusters": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "目标集群（v0.2；可空 = env 内 all；必须存在于拓扑表）。",
+            },
+            "host_groups": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "目标主机组（v0.2；可空 = 不限组；host_group 不跨集群）。",
+            },
+            "hosts": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "目标主机（v0.2；可空 = 不限单机；必须存在于拓扑表）。",
+            },
+            "schedule": {
+                "type": "object",
+                "description": "定时（v0.2，checklist 用，替代 triggers）：{cron: 5/6 段表达式, timezone: IANA 名}；"
+                "cron 由 cron 工具生成，禁止手算。",
+            },
+            "on_failure": {
+                "type": ["string", "object"],
+                "description": "runbook 级默认失败处理（v0.2）：stop/continue/rollback/{rollback: 场景名}。",
             },
             "overwrite": {
                 "type": "boolean",
@@ -289,8 +410,640 @@ def _load_runbook(home: Path, name: str) -> Optional[Dict[str, Any]]:
     return _normalize(data)
 
 
-def _validate_runbook(data: Dict[str, Any], name: str) -> None:
-    """Raise ValueError when a runbook violates schema v0.1."""
+# ---------------------------------------------------------------------------
+# v0.2 分层校验器（YAPL P2：结构 / 引用 / 关系三层，默认全开悲观）
+# ---------------------------------------------------------------------------
+
+def _is_v2_runbook(data: Dict[str, Any]) -> bool:
+    """Schema 分流：步骤含 ``action`` → v0.2；含 ``commands`` → v0.1。
+
+    显式 ``version: 2`` 也判 v0.2。混合两种风格 → 直接报错（一次 runbook 只
+    用一种风格）。v0.1 的 checklist 步骤（verify+expect、无 commands）无
+    action，仍走 v0.1。
+    """
+    steps = data.get("steps") or []
+    if not isinstance(steps, list):
+        return data.get("version") == 2
+    has_action = any(isinstance(s, dict) and "action" in s for s in steps)
+    has_commands = any(isinstance(s, dict) and "commands" in s for s in steps)
+    if has_action and has_commands:
+        raise ValueError(
+            "runbook 步骤不得混用 v0.1 commands 与 v0.2 action——一次 runbook "
+            "只用一种风格（存量 v0.1 用 commands；v0.2 用 action+params）。"
+        )
+    if has_action:
+        return True
+    return data.get("version") == 2
+
+
+def _v2_actions(home: Optional[Path]) -> Optional[List[str]]:
+    """schemas.yaml actions 词表（动作未知不 unknown 兜底——动作是执行的）。"""
+    try:
+        from tools.topo_schemas import schema_list
+        return schema_list("actions", home)
+    except Exception:
+        return None
+
+
+def _topology_reference_index(home: Optional[Path]) -> Optional[Dict[str, str]]:
+    """拓扑引用索引：{实体名: kind}（cluster/host_group/host/service）。
+
+    引用校验（§10.8 第二层）：target 必须存在于拓扑表。读取失败/无拓扑 → None
+    （引用层跳过，不阻断——结构/关系层照常）。
+    """
+    try:
+        from tools.topo_tools import _all_services, load_topology
+    except Exception:
+        return None
+    topo = load_topology(home)
+    if topo is None:
+        return None
+    idx: Dict[str, str] = {}
+    for cluster in topo.get("clusters") or []:
+        if isinstance(cluster, dict) and cluster.get("name"):
+            idx[str(cluster["name"])] = "cluster"
+            for hg in cluster.get("host_groups") or []:
+                if isinstance(hg, str) and hg.strip():
+                    idx.setdefault(hg.strip(), "host_group")
+    for host in topo.get("hosts") or []:
+        if isinstance(host, dict) and host.get("name"):
+            idx.setdefault(str(host["name"]), "host")
+    for svc in _all_services(topo, home):
+        if svc.get("name"):
+            idx.setdefault(str(svc["name"]), "service")
+    return idx or None
+
+
+def _check_param_value(action: str, key: str, value: Any,
+                       step_id: str, name: str) -> Optional[str]:
+    """动作参数类型/结构校验；返回错误文案或 None（仅校验已声明类型的参数）。"""
+    kind = (_ACTION_CONTRACTS.get(action) or {}).get("typed", {}).get(key)
+    if kind is None:
+        return None
+    if kind == "str":
+        if not isinstance(value, str):
+            return f"runbook {name} 步骤 {step_id!r} 的 {action}.{key} 必须是字符串"
+    elif kind == "int":
+        if isinstance(value, bool) or not isinstance(value, int):
+            return f"runbook {name} 步骤 {step_id!r} 的 {action}.{key} 必须是整数"
+    elif kind == "bool":
+        if not isinstance(value, bool):
+            return f"runbook {name} 步骤 {step_id!r} 的 {action}.{key} 必须是 true/false"
+    elif kind == "topo_ref":
+        if not isinstance(value, str) or not value.strip():
+            return f"runbook {name} 步骤 {step_id!r} 的 {action}.{key} 必须是拓扑实体引用（字符串）"
+    elif kind == "asset":
+        if not isinstance(value, str) or not value.strip():
+            return f"runbook {name} 步骤 {step_id!r} 的 {action}.script 必须是资产引用"
+        if re.search(r"[\s\n;#&|$<>`(){}\[\]]", value) or value.startswith("#!"):
+            return (
+                f"runbook {name} 步骤 {step_id!r} 的 run_script.script 只引用资产"
+                "（不内联脚本）——拒绝换行/空白/shell 元字符；资产名形如 "
+                "scripts/backup.sh 或 backup"
+            )
+    elif kind == "changes":
+        if not isinstance(value, list) or not value:
+            return f"runbook {name} 步骤 {step_id!r} 的 apply_config.changes 必须是非空列表"
+        for i, ch in enumerate(value):
+            if not isinstance(ch, dict) or not str(ch.get("key") or "").strip():
+                return (
+                    f"runbook {name} 步骤 {step_id!r} 的 apply_config.changes[{i}] 必须含"
+                    " key（value 可选）"
+                )
+    elif kind == "file_ref":
+        if not isinstance(value, dict) or not str(value.get("path") or "").strip():
+            return (
+                f"runbook {name} 步骤 {step_id!r} 的 {action}.{key} 必须是 {{path: ...}}"
+                "（host 可选，缺省 = 目标机）"
+            )
+        if "host" in value and not isinstance(value["host"], str):
+            return f"runbook {name} 步骤 {step_id!r} 的 {action}.{key}.host 必须是字符串"
+    return None
+
+
+def _validate_expect(step: Dict[str, Any], name: str, where: str) -> None:
+    expect = step.get("expect")
+    if expect is None:
+        return
+    if not isinstance(expect, dict):
+        raise ValueError(f"runbook {name} {where} 的 expect 必须是对象")
+    channel = expect.get("target")
+    if channel not in _EXPECT_CHANNELS:
+        raise ValueError(
+            f"runbook {name} {where} 的 expect.target 必须是检查通道之一 "
+            f"{list(_EXPECT_CHANNELS)}（如 http/kubectl/systemctl），收到 {channel!r}"
+        )
+    preds = {k: v for k, v in expect.items() if k in
+             ("contains", "http_status", "body_contains", "exit_code")}
+    if not preds:
+        raise ValueError(
+            f"runbook {name} {where} 的 expect 至少需要一个谓词"
+            "（contains / http_status / body_contains / exit_code）"
+        )
+    if "contains" in preds and not isinstance(preds["contains"], dict):
+        raise ValueError(f"runbook {name} {where} 的 expect.contains 必须是 key-value 对象")
+    for pk in ("http_status", "exit_code"):
+        if pk in preds and (isinstance(preds[pk], bool) or not isinstance(preds[pk], int)):
+            raise ValueError(f"runbook {name} {where} 的 expect.{pk} 必须是整数")
+    if "body_contains" in preds and not isinstance(preds["body_contains"], str):
+        raise ValueError(f"runbook {name} {where} 的 expect.body_contains 必须是字符串")
+    if channel == "http" and "url" in expect and not isinstance(expect["url"], str):
+        raise ValueError(f"runbook {name} {where} 的 expect.url 必须是字符串")
+
+
+def _validate_on_failure(value: Any, name: str, where: str,
+                         rollback_names: List[str],
+                         action: Optional[str] = None) -> None:
+    """on_failure 三值语义 + 指定回滚场景引用（§10.4）。"""
+    if value is None:
+        return
+    if isinstance(value, str):
+        if value not in _ON_FAILURE_VALUES:
+            raise ValueError(
+                f"runbook {name} {where} 的 on_failure 必须是 {list(_ON_FAILURE_VALUES)} "
+                "之一或 {rollback: <场景名>}，收到 {value!r}"
+            )
+        if value == "continue" and action is not None and action not in _READONLY_ACTIONS:
+            raise ValueError(
+                f"runbook {name} {where} 的 on_failure: continue 只允许只读动作"
+                f"（query/fetch_log/verify），{action} 是变更动作——失败继续会掩盖问题，"
+                "改用 stop 或 rollback"
+            )
+        if value == "rollback" and not rollback_names:
+            raise ValueError(
+                f"runbook {name} {where} 的 on_failure: rollback 需要 rollback 场景"
+                "（至少一个）"
+            )
+        return
+    if isinstance(value, dict) and set(value.keys()) == {"rollback"}:
+        scenario = str(value.get("rollback") or "").strip()
+        if not scenario:
+            raise ValueError(f"runbook {name} {where} 的 on_failure.rollback 场景名不能为空")
+        if scenario not in rollback_names:
+            raise ValueError(
+                f"runbook {name} {where} 的 on_failure 引用不存在的回滚场景 {scenario!r}"
+                f"（可用: {', '.join(rollback_names) or '无'}）"
+            )
+        return
+    raise ValueError(
+        f"runbook {name} {where} 的 on_failure 必须是 stop/continue/rollback "
+        "或 {rollback: <场景名>}"
+    )
+
+
+def _validate_v2_step(step: Any, name: str, where: str, actions: List[str],
+                      rollback_names: List[str],
+                      runbook_on_failure: Any) -> None:
+    if not isinstance(step, dict):
+        raise ValueError(f"runbook {name} {where} 每项必须是对象")
+    step_id = step.get("id")
+    if not isinstance(step_id, str) or not step_id.strip():
+        raise ValueError(f"runbook {name} {where} 每项必须含非空字符串 id")
+    if not isinstance(step.get("title"), str) or not step["title"].strip():
+        raise ValueError(f"runbook {name} {where} 步骤 {step_id!r} 缺少非空 title")
+    action = step.get("action")
+    if not isinstance(action, str) or not action.strip():
+        raise ValueError(
+            f"runbook {name} {where} 步骤 {step_id!r} 缺少 action——v0.2 步骤必须声明"
+            "动作枚举（如 restart/verify/backup），命令彻底消失"
+        )
+    if actions is not None and action not in actions:
+        raise ValueError(
+            f"runbook {name} {where} 步骤 {step_id!r} 的 action {action!r} 不在动作词表"
+            f"（可用: {', '.join(actions)}；例: restart {{target: harbor}}）。"
+            "动作未知无法执行，不兜底——改用词表内动作"
+        )
+    params = step.get("params")
+    if not isinstance(params, dict):
+        raise ValueError(f"runbook {name} {where} 步骤 {step_id!r} 的 params 必须是对象")
+    contract = _ACTION_CONTRACTS.get(action) or {}
+    for req in contract.get("required") or []:
+        if req not in params:
+            raise ValueError(
+                f"runbook {name} {where} 步骤 {step_id!r} 的 {action} 缺少必填参数 "
+                f"{req!r}（契约: {action} {dict(contract.get('typed') or {})}）"
+            )
+    for key, value in params.items():
+        err = _check_param_value(action, key, value, step_id, name)
+        if err:
+            raise ValueError(err)
+    _validate_expect(step, name, f"步骤 {step_id!r}")
+    effective = step.get("on_failure", runbook_on_failure)
+    _validate_on_failure(effective, name, f"步骤 {step_id!r}", rollback_names, action)
+
+
+def _validate_schedule(schedule: Any, name: str) -> None:
+    if not isinstance(schedule, dict):
+        raise ValueError(f"runbook {name} 的 schedule 必须是对象 {{cron, timezone}}")
+    cron = schedule.get("cron")
+    if not isinstance(cron, str) or not cron.strip():
+        raise ValueError(
+            f"runbook {name} 的 schedule.cron 必填——cron 表达式（5/6 段）由 cron 工具"
+            "生成，禁止 LLM 手算"
+        )
+    fields = cron.strip().split()
+    if len(fields) not in (5, 6):
+        raise ValueError(
+            f"runbook {name} 的 schedule.cron {cron!r} 必须 5/6 段（分 时 日 月 周"
+            "[秒]），收到 {len(fields)} 段——用 cron 工具生成，不要手算"
+        )
+    if any(not re.fullmatch(r"[0-9A-Za-z*?/,@#-]+", f) for f in fields):
+        raise ValueError(f"runbook {name} 的 schedule.cron {cron!r} 含非法字符")
+    tz = schedule.get("timezone")
+    if not isinstance(tz, str) or not tz.strip():
+        raise ValueError(
+            f"runbook {name} 的 schedule.timezone 必填（IANA 时区名，如 Asia/Shanghai）"
+        )
+    try:
+        ZoneInfo(tz.strip())
+    except Exception:
+        raise ValueError(
+            f"runbook {name} 的 schedule.timezone {tz!r} 不是合法 IANA 时区名"
+            "（如 Asia/Shanghai / UTC）"
+        )
+
+
+def _validate_triggers_v2(triggers: Any, name: str) -> None:
+    """双形态触发：自然语言字符串 + 结构化对象（alertname 等精确匹配）。"""
+    if not isinstance(triggers, list):
+        raise ValueError(f"runbook {name} 的 triggers 必须是列表（字符串或对象）")
+    for t in triggers:
+        if isinstance(t, str):
+            if not t.strip():
+                raise ValueError(f"runbook {name} 的 triggers 含空字符串")
+            continue
+        if isinstance(t, dict):
+            if not t or not all(isinstance(k, str) and isinstance(v, (str, int, float, bool))
+                                for k, v in t.items()):
+                raise ValueError(
+                    f"runbook {name} 的 triggers 结构化项必须是标量键值对象"
+                    "（如 {alertname: HarborHealthcheckDown, severity: critical}）"
+                )
+            continue
+        raise ValueError(f"runbook {name} 的 triggers 每项必须是字符串或对象")
+
+
+def _iter_param_strings(params: Dict[str, Any]):
+    """遍历 params 值中的字符串（含嵌套 dict/list），供变量引用解析。
+
+    产出 (key, text)：key 为直接所属参数名（嵌套时沿用外层 key）。
+    """
+    if isinstance(params, dict):
+        for k, v in params.items():
+            for key, text in _iter_param_strings(v):
+                yield (k, text) if not key else (key, text)
+    elif isinstance(params, list):
+        for v in params:
+            yield from _iter_param_strings(v)
+    elif isinstance(params, str):
+        yield ("", params)
+
+
+def _validate_v2_var_refs(data: Dict[str, Any], name: str) -> None:
+    """关系层·变量引用：步骤存在 / params 字段存在 / 自引用拒绝。"""
+    steps = data.get("steps") or []
+    steps_by_id = {str(s.get("id")): s for s in steps if isinstance(s, dict)}
+    rollback = data.get("rollback") or []
+    owners: List[Dict[str, Any]] = []
+    for s in steps:
+        if isinstance(s, dict):
+            owners.append(s)
+    for scenario in rollback:
+        if isinstance(scenario, dict):
+            for s in scenario.get("steps") or []:
+                if isinstance(s, dict):
+                    owners.append(s)
+    backup_ids = {
+        str(s.get("id")) for s in steps
+        if isinstance(s, dict) and s.get("action") == "backup"
+    }
+    for owner in owners:
+        owner_id = str(owner.get("id") or "")
+        action = str(owner.get("action") or "")
+        for param_key, text in _iter_param_strings(owner.get("params") or {}):
+            for match in _VAR_REF_RE.finditer(text):
+                path = match.group(1)
+                segs = path.split(".")
+                if segs[0] == "trigger_context":
+                    if len(segs) != 2:
+                        raise ValueError(
+                            f"runbook {name} 步骤 {owner_id!r} 的变量引用 "
+                            f"{{{path}}} 不合法——trigger_context 引用形如 "
+                            "{{ trigger_context.alertname }}"
+                        )
+                    if segs[1] not in _TRIGGER_CONTEXT_FIELDS:
+                        raise ValueError(
+                            f"runbook {name} 步骤 {owner_id!r} 的变量引用 "
+                            f"{{{path}}} 的字段 {segs[1]!r} 不在触发上下文"
+                            f"（可用: {sorted(_TRIGGER_CONTEXT_FIELDS)}）"
+                        )
+                    continue
+                if len(segs) < 3 or segs[0] != "steps" or segs[2] not in ("params", "outputs"):
+                    raise ValueError(
+                        f"runbook {name} 步骤 {owner_id!r} 的变量引用 {{{path}}} 不合法"
+                        "——必须是 {{ steps.<id>.params.<key...> }} / "
+                        "{{ steps.<id>.outputs.<key> }} / {{ trigger_context.<field> }}"
+                    )
+                ref_id = segs[1]
+                if ref_id == owner_id:
+                    raise ValueError(
+                        f"runbook {name} 步骤 {owner_id!r} 自引用变量 {{{path}}}——"
+                        "步骤不能引用自己的 params"
+                    )
+                target = steps_by_id.get(ref_id)
+                if target is None:
+                    raise ValueError(
+                        f"runbook {name} 步骤 {owner_id!r} 的变量引用 {{{path}}} 指向"
+                        f"不存在的步骤 {ref_id!r}"
+                    )
+                if segs[2] == "params":
+                    sub = (target.get("params") or {})
+                    found = True
+                    for key in segs[3:]:
+                        if isinstance(sub, dict) and key in sub:
+                            sub = sub[key]
+                        else:
+                            found = False
+                            break
+                    if not found or not segs[3:]:
+                        raise ValueError(
+                            f"runbook {name} 步骤 {owner_id!r} 的变量引用 {{{path}}} 的"
+                            f"params 字段不存在于步骤 {ref_id!r}"
+                        )
+                    if action in ("restore", "rollback") and param_key == "from" \
+                            and ref_id not in backup_ids:
+                        raise ValueError(
+                            f"runbook {name} 步骤 {owner_id!r} 的 {action}.from 必须引用"
+                            "backup 步骤的 dest（{{ steps.<backup-id>.params.dest }}），"
+                            f"步骤 {ref_id!r} 不是 backup 动作"
+                        )
+                # outputs 是执行期产物，静态校验只查步骤存在
+
+
+def _validate_runbook_v2(data: Dict[str, Any], name: str,
+                         home: Optional[Path] = None) -> None:
+    """v0.2 分层校验：结构 → 引用（拓扑）→ 关系（交叉引用），默认全开悲观。"""
+    # ── 结构层 ──
+    rb_name = data.get("name")
+    if rb_name != name:
+        raise ValueError(f"runbook 内 name({rb_name!r}) 与文件名({name!r})不一致")
+    if not _CREATE_NAME_RE.match(name):
+        raise ValueError(
+            f"runbook {name} 名称非法——必须 kebab-case（小写字母/数字 + 连字符）"
+        )
+    if not isinstance(data.get("title"), str) or not data["title"].strip():
+        raise ValueError(f"runbook {name} 缺少 title")
+    version = data.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise ValueError(f"runbook {name} 的 version 必须是正整数（v0.2 写 2）")
+    kind = data.get("kind")
+    if kind not in _V2_KINDS:
+        raise ValueError(
+            f"runbook {name} 的 kind 必须是 {sorted(_V2_KINDS)} 之一，收到 {kind!r}"
+        )
+    env = data.get("env")
+    if env is not None and _normalize_runbook_env(env) is None:
+        raise ValueError(
+            f"runbook {name} env 非法: {env!r}（local/test/dev/prod；老值 uat/staging 按档位映射）"
+        )
+    if "permission" in data:
+        raise ValueError(
+            f"runbook {name} 含 permission 字段——设计定案（yapl-design.md §10.10）：权限 = "
+            "操作矩阵唯一裁决，runbook 无 permission 字段，请删除该字段"
+        )
+    for field in ("clusters", "host_groups", "hosts"):
+        value = data.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(isinstance(v, str) and v.strip() for v in value):
+            raise ValueError(
+                f"runbook {name} 的 {field} 必须是字符串数组（可空 = 不限）"
+            )
+    steps = data.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise ValueError(f"runbook {name} 缺少非空 steps")
+    actions = _v2_actions(home)
+    rollback = data.get("rollback") or []
+    if rollback is not None and not isinstance(rollback, list):
+        raise ValueError(f"runbook {name} 的 rollback 必须是场景数组（[{name, steps}]）")
+    rollback_names: List[str] = []
+    if rollback:
+        for scenario in rollback:
+            if not isinstance(scenario, dict) or not str(scenario.get("name") or "").strip():
+                raise ValueError(
+                    f"runbook {name} 的 rollback 场景必须含 name（如 rollback-main）"
+                )
+            rname = str(scenario["name"]).strip()
+            if rname in rollback_names:
+                raise ValueError(f"runbook {name} 的 rollback 场景名重复: {rname!r}")
+            rollback_names.append(rname)
+            rsteps = scenario.get("steps")
+            if not isinstance(rsteps, list) or not rsteps:
+                raise ValueError(f"runbook {name} 的 rollback 场景 {rname!r} 缺少非空 steps")
+            seen: set = set()
+            for s in rsteps:
+                if isinstance(s, dict) and isinstance(s.get("id"), str):
+                    if s["id"] in seen:
+                        raise ValueError(
+                            f"runbook {name} 的 rollback 场景 {rname!r} 步骤 id 重复: {s['id']!r}"
+                        )
+                    seen.add(s["id"])
+                _validate_v2_step(s, name, f"rollback 场景 {rname!r}", actions,
+                                  rollback_names, "stop")
+    runbook_on_failure = data.get("on_failure")
+    _validate_on_failure(runbook_on_failure, name, "runbook 级", rollback_names)
+    if "schedule" in data and "triggers" in data and data.get("triggers"):
+        raise ValueError(
+            f"runbook {name} 的 triggers 与 schedule 互斥——checklist 用 schedule 替代"
+            " triggers（§10.1）"
+        )
+    if "triggers" in data and data.get("triggers") is not None:
+        _validate_triggers_v2(data.get("triggers"), name)
+    if "schedule" in data and data.get("schedule") is not None:
+        _validate_schedule(data.get("schedule"), name)
+    seen_ids: set = set()
+    for s in steps:
+        if isinstance(s, dict) and isinstance(s.get("id"), str):
+            if s["id"] in seen_ids:
+                raise ValueError(f"runbook {name} 步骤 id 重复: {s['id']!r}")
+            seen_ids.add(s["id"])
+        _validate_v2_step(s, name, "steps", actions, rollback_names, runbook_on_failure)
+
+    # ── 引用层（拓扑表）──
+    idx = _topology_reference_index(home)
+    if idx is not None:
+        topo = None
+        try:
+            from tools.topo_tools import load_topology
+            topo = load_topology(home)
+        except Exception:
+            topo = None
+        host_endpoints = set()
+        for h in (topo or {}).get("hosts") or []:
+            if isinstance(h, dict):
+                ep = str(h.get("endpoint") or "").strip()
+                if ep:
+                    host_endpoints.add(ep.split(":")[0])
+        cluster_names = {str(c.get("name")) for c in
+                         ((topo or {}).get("clusters") or [])
+                         if isinstance(c, dict) and c.get("name")}
+        for cluster in data.get("clusters") or []:
+            if idx.get(str(cluster)) != "cluster":
+                raise ValueError(
+                    f"runbook {name} 的目标集群 {cluster!r} 不在拓扑表"
+                    f"（可用集群: {sorted(cluster_names) or '无'}）。先 topo_query 确认"
+                    "或用拓扑表已有集群"
+                )
+        for hg in data.get("host_groups") or []:
+            if idx.get(str(hg)) != "host_group":
+                raise ValueError(
+                    f"runbook {name} 的目标主机组 {hg!r} 不在拓扑表（host_group 属于某个"
+                    "集群的 host_groups 数组）。先 topo_query 确认"
+                )
+            owner = _host_group_owner(home, str(hg))
+            if data.get("clusters") and owner not in set(data.get("clusters") or []):
+                raise ValueError(
+                    f"runbook {name} 的主机组 {hg!r} 属于集群 {owner!r}，不在声明的"
+                    f"clusters {data.get('clusters')} 内——四维严格嵌套"
+                    "（host_group 不跨集群）"
+                )
+        for host in data.get("hosts") or []:
+            kind_of = idx.get(str(host))
+            if kind_of != "host":
+                raise ValueError(
+                    f"runbook {name} 的目标主机 {host!r} 不在拓扑表（hosts 段）。"
+                    "先 topo_discover/topo_query 确认或用拓扑表已有主机"
+                )
+            owner_cluster = _host_cluster(home, str(host))
+            if data.get("clusters") and owner_cluster not in set(data.get("clusters") or []):
+                raise ValueError(
+                    f"runbook {name} 的目标主机 {host!r} 属于集群 {owner_cluster!r}，不在"
+                    f"声明的 clusters {data.get('clusters')} 内——四维严格嵌套"
+                )
+        env_tier = _normalize_runbook_env(env)
+        if env_tier:
+            for cluster in data.get("clusters") or []:
+                cenv = _cluster_env(home, str(cluster))
+                if cenv and _normalize_runbook_env(cenv) != env_tier:
+                    raise ValueError(
+                        f"runbook {name} 的 env={env_tier} 与集群 {cluster!r} 的环境"
+                        f"{cenv!r} 不一致（env ⊇ cluster）"
+                    )
+            for host in data.get("hosts") or []:
+                henv = _host_env(home, str(host))
+                if henv and _normalize_runbook_env(henv) != env_tier:
+                    raise ValueError(
+                        f"runbook {name} 的 env={env_tier} 与主机 {host!r} 的环境"
+                        f"{henv!r} 不一致"
+                    )
+        for s in steps:
+            if not isinstance(s, dict):
+                continue
+            action = s.get("action")
+            params = s.get("params") or {}
+            target = params.get("target")
+            if isinstance(target, str) and _VAR_REF_RE.search(target):
+                continue  # 执行期注入，静态不校验
+            if isinstance(target, str) and target.strip():
+                kind_of = idx.get(target.strip())
+                if kind_of is None:
+                    raise ValueError(
+                        f"runbook {name} 步骤 {s.get('id')!r} 的 target {target!r} 不在"
+                        "拓扑表——target 是拓扑实体引用（service/host/host_group/cluster），"
+                        "先 topo_query 确认实体名"
+                    )
+                restricted = _TARGET_TYPE_RESTRICTIONS.get(action)
+                if restricted is not None and kind_of not in restricted:
+                    raise ValueError(
+                        f"runbook {name} 步骤 {s.get('id')!r} 的 {action}.target "
+                        f"{target!r} 类型不兼容——{action} 只接受 "
+                        f"{sorted(restricted)} 类型，收到 {kind_of}"
+                    )
+            for key in ("source", "dest"):
+                ref = params.get(key)
+                if isinstance(ref, dict) and isinstance(ref.get("host"), str):
+                    h = ref["host"]
+                    if idx.get(h) != "host" and h not in host_endpoints:
+                        raise ValueError(
+                            f"runbook {name} 步骤 {s.get('id')!r} 的 {key}.host {h!r} 不在"
+                            "拓扑表主机（name 或 endpoint）——transfer_file 的 host 必须是"
+                            "拓扑表主机"
+                        )
+            if action == "run_script" and isinstance(params.get("script"), str):
+                script = params["script"].strip()
+                if script.startswith("steps.") or script.startswith("trigger_context."):
+                    continue
+        # rollback 场景内的步骤同样做 target 引用校验
+        for scenario in rollback:
+            if not isinstance(scenario, dict):
+                continue
+            for s in scenario.get("steps") or []:
+                if not isinstance(s, dict):
+                    continue
+                target = (s.get("params") or {}).get("target")
+                if isinstance(target, str) and target.strip() \
+                        and not _VAR_REF_RE.search(target):
+                    kind_of = idx.get(target.strip())
+                    if kind_of is None:
+                        raise ValueError(
+                            f"runbook {name} rollback 场景 {scenario.get('name')!r} 步骤"
+                            f" {s.get('id')!r} 的 target {target!r} 不在拓扑表"
+                        )
+
+    # ── 关系层（变量引用 + 交叉引用）──
+    _validate_v2_var_refs(data, name)
+
+
+def _host_group_owner(home: Optional[Path], host_group: str) -> str:
+    try:
+        from tools.topo_tools import load_topology
+        for c in (load_topology(home) or {}).get("clusters") or []:
+            if isinstance(c, dict) and host_group in (c.get("host_groups") or []):
+                return str(c.get("name") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _host_cluster(home: Optional[Path], host: str) -> str:
+    try:
+        from tools.topo_tools import load_topology
+        for h in (load_topology(home) or {}).get("hosts") or []:
+            if isinstance(h, dict) and str(h.get("name")) == host:
+                return str(h.get("cluster") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _host_env(home: Optional[Path], host: str) -> str:
+    try:
+        from tools.topo_tools import load_topology
+        for h in (load_topology(home) or {}).get("hosts") or []:
+            if isinstance(h, dict) and str(h.get("name")) == host:
+                return str(h.get("env") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _cluster_env(home: Optional[Path], cluster: str) -> str:
+    try:
+        from tools.topo_tools import load_topology
+        for c in (load_topology(home) or {}).get("clusters") or []:
+            if isinstance(c, dict) and str(c.get("name")) == cluster:
+                return str(c.get("env") or "")
+    except Exception:
+        pass
+    return ""
+
+
+def _validate_runbook(data: Dict[str, Any], name: str,
+                      home: Optional[Path] = None) -> None:
+    """Raise ValueError when a runbook violates schema v0.1 or v0.2."""
+    if _is_v2_runbook(data):
+        _validate_runbook_v2(data, name, home)
+        return
     if data.get("name") != name:
         raise ValueError(f"runbook 内 name({data.get('name')!r}) 与文件名({name!r})不一致")
     if not isinstance(data.get("title"), str) or not data["title"].strip():
@@ -520,9 +1273,15 @@ def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
             "跨环境操作由命令级权限矩阵逐条判定（L2 及以上走审批），不是整体拒绝。"
         )
     payload["checklist_state"] = _checklist_state_for(home, name) if _is_checklist_runbook(rb) else None
-    payload["note"] = (
-        "本工具不执行任何命令；步骤命令由 agent 通过终端执行，逐条过权限矩阵。"
-    )
+    if _is_v2_runbook(rb):
+        payload["note"] = (
+            "v0.2 runbook（声明式动作，无命令）：执行器在 P4 实现，当前仅可创建/"
+            "校验/预览；步骤动作由执行器按 action × target 类型 × managed_by 生成命令。"
+        )
+    else:
+        payload["note"] = (
+            "本工具不执行任何命令；步骤命令由 agent 通过终端执行，逐条过权限矩阵。"
+        )
     vault_refs = _describe_vault_refs(payload)
     if vault_refs:
         payload["vault_refs"] = vault_refs
@@ -560,7 +1319,7 @@ def runbook_load(
         if data is None:
             return tool_error(f"runbook 不存在: {runbook}（可省略参数列出全部）")
         try:
-            _validate_runbook(data, runbook)
+            _validate_runbook(data, runbook, home)
         except ValueError as exc:
             return tool_error(f"runbook 校验失败: {exc}")
         return json.dumps(_full_payload(home, data), ensure_ascii=False, indent=2)
@@ -625,6 +1384,16 @@ def runbook_checkpoint(
         return tool_error(str(exc))
     if data is None:
         return tool_error(f"runbook 不存在: {runbook}")
+    try:
+        is_v2 = _is_v2_runbook(data)
+    except ValueError as exc:
+        return tool_error(str(exc))
+    if is_v2:
+        return tool_error(
+            f"runbook {runbook} 是 schema v0.2（声明式动作，无 commands）："
+            "v0.2 执行器在 P4 实现，当前仅可创建/校验/预览（runbook_load / "
+            "runbook_create）。"
+        )
     if not _is_checklist_runbook(data):
         return tool_error(f"runbook {runbook} 不是 checklist runbook（kind=deploy, checklist=true），无需 checkpoint")
     if status not in _VALID_STATUSES:
@@ -855,16 +1624,23 @@ def runbook_create(
     env: Optional[str] = None,
     kind: str = "incident",
     overwrite: bool = False,
+    clusters: Optional[List[str]] = None,
+    host_groups: Optional[List[str]] = None,
+    hosts: Optional[List[str]] = None,
+    schedule: Optional[Dict[str, Any]] = None,
+    on_failure: Optional[Any] = None,
     home: Optional[Path] = None,
 ) -> str:
-    """Create/overwrite a structured runbook (runbooks/<name>.yaml, schema v0.1).
+    """Create/overwrite a structured runbook (runbooks/<name>.yaml, v0.1/v0.2).
 
-    Fail-closed: 严格 kebab-case 名称（防路径穿越）、非空 steps/commands、
-    commands 拒绝疑似明文凭据（用 <vault:path/field> 占位符）、同名已存在需
-    overwrite=True。写盘前复用 ``_validate_runbook`` 校验，保证 runbook_load
-    能原样加载回来（checklist/deploy 规则一并生效）。env 接受四值
-    local/test/dev/prod；老值 uat→prod、staging→dev 按档位映射后落盘（create
-    是新写入，直接规范到新枚举；load 保留文件原值）。
+    双 schema：steps 用 ``commands`` → v0.1（存量风格）；steps 用 ``action``
+    → v0.2（声明式动作，命令彻底消失，yapl-design.md §10）。v0.2 写 version: 2，
+    走三层校验（结构/引用/关系），执行器在 P4 实现——当前仅可创建/校验/预览。
+    Fail-closed：严格 kebab-case 名称（防路径穿越）、非空 steps、v0.1 commands
+    拒绝疑似明文凭据（用 <vault:path/field> 占位符）、同名已存在需 overwrite=True。
+    写盘前复用 ``_validate_runbook`` 校验，保证 runbook_load 能原样加载回来。
+    env 接受四值 local/test/dev/prod；老值 uat→prod、staging→dev 按档位映射后落盘
+    （create 是新写入，直接规范到新枚举；load 保留文件原值）。
     """
     home = home or _hermes_home()
     name = str(runbook or "").strip()
@@ -875,8 +1651,6 @@ def runbook_create(
         )
     if not isinstance(title, str) or not title.strip():
         return tool_error("title 必填且不能为空。")
-    if kind not in _VALID_KINDS:
-        return tool_error(f"kind 必须是 {sorted(_VALID_KINDS)} 之一（默认 incident）。")
     mapped_env = None
     if env is not None:
         mapped_env = _normalize_runbook_env(env)
@@ -887,53 +1661,93 @@ def runbook_create(
             )
     if not isinstance(steps, list) or not steps:
         return tool_error("steps 必填且不能为空（[{id, title, commands: [...]}]）。")
-    for step in steps:
-        if not isinstance(step, dict):
-            return tool_error("steps 每项必须是对象 {id, title, commands}。")
-        if not isinstance(step.get("id"), str) or not step["id"].strip():
-            return tool_error("steps 每项必须含非空字符串 id。")
-        cmds = step.get("commands")
-        if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
-            return tool_error(f"步骤 {step.get('id')!r} 的 commands 必须是非空字符串列表。")
-    if rollback is not None:
-        if not isinstance(rollback, list):
-            return tool_error("rollback 必须是列表（[{title, commands}]）。")
-        for rb in rollback:
-            if not isinstance(rb, dict):
-                return tool_error("rollback 每项必须是对象 {title, commands}。")
-            cmds = rb.get("commands")
-            if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
-                return tool_error("rollback 每项必须含非空 commands 字符串列表。")
+    if not all(isinstance(s, dict) for s in steps):
+        return tool_error("steps 每项必须是对象。")
+    v2_style = any("action" in s for s in steps)
+    v1_style = any("commands" in s for s in steps)
+    if v2_style and v1_style:
+        return tool_error(
+            "steps 不得混用 v0.1 commands 与 v0.2 action——一次 runbook 只用一种风格："
+            "v0.1 存量用 commands；v0.2 用 action+params（命令彻底消失）。"
+        )
+    if not v2_style and not v1_style:
+        return tool_error("steps 每项必须含 commands（v0.1）或 action（v0.2）之一。")
 
-    secret_err = _scan_commands_for_secrets(steps, rollback)
-    if secret_err:
-        return tool_error(secret_err)
+    data: Dict[str, Any] = {}
+    if v2_style:
+        if kind not in _V2_KINDS:
+            return tool_error(f"kind 必须是 {sorted(_V2_KINDS)} 之一（v0.2 默认 incident）。")
+        data = {
+            "name": name,
+            "title": title.strip(),
+            "version": 2,
+            "kind": kind,
+        }
+        if mapped_env:
+            data["env"] = mapped_env
+        if triggers:
+            data["triggers"] = triggers
+        if isinstance(summary, str) and summary.strip():
+            data["summary"] = summary.strip()
+        if clusters:
+            data["clusters"] = list(clusters)
+        if host_groups:
+            data["host_groups"] = list(host_groups)
+        if hosts:
+            data["hosts"] = list(hosts)
+        if schedule:
+            data["schedule"] = schedule
+        if on_failure is not None:
+            data["on_failure"] = on_failure
+        data["steps"] = steps
+        if rollback:
+            data["rollback"] = rollback
+    else:
+        if kind not in _VALID_KINDS:
+            return tool_error(f"kind 必须是 {sorted(_VALID_KINDS)} 之一（默认 incident）。")
+        for step in steps:
+            if not isinstance(step.get("id"), str) or not step["id"].strip():
+                return tool_error("steps 每项必须含非空字符串 id。")
+            cmds = step.get("commands")
+            if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
+                return tool_error(f"步骤 {step.get('id')!r} 的 commands 必须是非空字符串列表。")
+        if rollback is not None:
+            if not isinstance(rollback, list):
+                return tool_error("rollback 必须是列表（[{title, commands}]）。")
+            for rb in rollback:
+                if not isinstance(rb, dict):
+                    return tool_error("rollback 每项必须是对象 {title, commands}。")
+                cmds = rb.get("commands")
+                if not isinstance(cmds, list) or not cmds or not all(isinstance(c, str) for c in cmds):
+                    return tool_error("rollback 每项必须含非空 commands 字符串列表。")
+        secret_err = _scan_commands_for_secrets(steps, rollback)
+        if secret_err:
+            return tool_error(secret_err)
+        data = {
+            "name": name,
+            "title": title.strip(),
+            "version": 1,
+            "kind": kind,
+        }
+        if mapped_env:
+            data["env"] = mapped_env
+        if triggers:
+            cleaned = [str(t).strip() for t in triggers if isinstance(t, str) and t.strip()]
+            if cleaned:
+                data["triggers"] = cleaned
+        if isinstance(summary, str) and summary.strip():
+            data["summary"] = summary.strip()
+        data["steps"] = steps
+        if rollback:
+            data["rollback"] = rollback
 
     runbooks_dir = _runbooks_dir(home)
     path = runbooks_dir / f"{name}.yaml"
     exists = path.is_file()
 
-    data: Dict[str, Any] = {
-        "name": name,
-        "title": title.strip(),
-        "version": 1,
-        "kind": kind,
-    }
-    if mapped_env:
-        data["env"] = mapped_env
-    if triggers:
-        cleaned = [str(t).strip() for t in triggers if isinstance(t, str) and t.strip()]
-        if cleaned:
-            data["triggers"] = cleaned
-    if isinstance(summary, str) and summary.strip():
-        data["summary"] = summary.strip()
-    data["steps"] = steps
-    if rollback:
-        data["rollback"] = rollback
-
     # 复用既有校验器：保证 runbook_load 能原样加载回来（checklist 规则一并生效）。
     try:
-        _validate_runbook(data, name)
+        _validate_runbook(data, name, home)
     except ValueError as exc:
         return tool_error(f"runbook 校验失败: {exc}")
 
@@ -958,8 +1772,11 @@ def runbook_create(
             "path": str(path),
             "steps": len(steps),
             "note": (
-                "已创建/更新 runbook（schema v0.1）。runbook_load 可加载；"
-                "若意图是行为约束，触发词已写入 triggers。"
+                ("已创建/更新 runbook（schema v0.2，声明式动作）。执行器在 P4 实现，"
+                 "当前仅可创建/校验/预览。runbook_load 可加载。")
+                if v2_style else
+                ("已创建/更新 runbook（schema v0.1）。runbook_load 可加载；"
+                 "若意图是行为约束，触发词已写入 triggers。")
             ),
         },
         ensure_ascii=False, indent=2,
@@ -998,6 +1815,11 @@ def _create_handler(args: Dict[str, Any], **kwargs) -> str:
         env=args.get("env"),
         kind=args.get("kind") or "incident",
         overwrite=bool(args.get("overwrite", False)),
+        clusters=args.get("clusters"),
+        host_groups=args.get("host_groups"),
+        hosts=args.get("hosts"),
+        schedule=args.get("schedule"),
+        on_failure=args.get("on_failure"),
     )
 
 

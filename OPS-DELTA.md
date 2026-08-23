@@ -2989,4 +2989,75 @@
   硬件层）、test_batch39（needs_review L2 / status L3 分流）。季度体检检查：
   `write_discovery` 产 version 4 + services/ + hardware/、`topo_query` 无参总览无
   cross_host/key_paths、ops_samples 无 hosts/ 目录。
-- **状态**：未 commit（待数据重建与用户核验后提交，branch v1.0）。
+- **状态**：已 commit 12327df2（branch v1.0），工作区干净；发布基线 vigil-agent-release 未动。
+
+### 67. 批次五十二验收 + runbook 清理（2026-08-23，主 session 实测验收）
+
+- **验收结论**：P1 数据层通过，可进 P2。实测证据：/api/topology → version 4、2 集群、4 主机、62 服务、detail 带 snapshot+checks、无 cross_host/key_paths；治理字段（owner/department/os/credentials）原样保留、TODO 未被编造；hardware/ 探针产出真实硬件（LAPTOP：AMD Ryzen 7 8840HS/16 核/23GB）；13 套件 pytest 213 passed / 6 skipped / 4 failed（4 failed = 存量 approval 签名 bug，非 P1 引入）；前端 tsc exit 0。
+- **runbook 清理**：删除 deploy-gateway-svc.yaml、gateway-svc-restart.yaml（引用样例实体 gateway-svc/order-db，重建后失效；备份 ~/notes/backups/vigil-topo-v3-20260822/runbook-removed/）。剩余 3 个有效：aliyun-kubeadm-topo-register / dsh-web-start / harbor-restart。
+- **遗留待办**（非阻塞，排期外）：
+  1. compose 粒度：discover 按 compose_project 聚合为项目一条（设计 9.3 要求，现为容器粒度，本机 harbor 拆 8 条）——P4 执行器前补
+  2. 服务行 cluster 继承：读取端应从所属 host 继承 cluster（现兜底 default，API 显示服务挂 default 集群）——P2 顺手修
+  3. 存量 approval bug：tools/approval.py:4631 `_record_approval_trajectory() got multiple values for 'status'`（ops_permissions_guard 4 例 + watch_tools 1 例失败）——独立批次修
+
+### 68. 批次五十三 YAPL P2 runbook 层——schema v0.2（action 枚举 + 分层校验 + 变量引用）+ ansible 契约化（2026-08-23，设计单一事实来源 yapl-design.md §10/§六）
+
+- **背景**：YAPL v1.0 P2 runbook 层：schema v0.1 → v0.2（命令彻底消失——steps 用
+  action 枚举 + params；目标四维声明 env ⊇ cluster ⊇ host_group ⊇ host；LLM 声明
+  契约，执行器 P4 生成命令）；ansible-playbook 契约化（堵"用 inventory 绕开拓扑
+  表"，§六处理三选一取校验模式）。老 runbook 不迁移（用户拍板：存量 3 个 v0.1
+  只读可跑）。
+- **怎么改**：
+  - `tools/topo_schemas.py` + `~/.vigil/schemas.yaml`：actions 词表 8 → 23 个
+    （§10.2 文本逐数为 23 个，标题"24"对不上——以文本为准，差异登记：文本数下来
+    生命周期 6 + 主机 2 + 发布 4 + 数据 2 + 配置 1 + 查询 3 + 文件 1 + 执行 1 +
+    包 3 = 23；旧枚举 restart_service 更名 restart，v0.1 不消费该词表无兼容影响）。
+  - `tools/runbook_tools.py`：`_validate_runbook` 双 schema 分流（_is_v2_runbook：
+    steps 含 action → v0.2；含 commands → v0.1；混用报错）；v0.2 三层校验——
+    结构（name kebab-case 与文件名一致/version 正整数/kind 含 maintenance/env
+    四档/拒绝 permission 字段/triggers 双形态/schedule cron 5/6 段 + IANA 时区/
+    triggers 与 schedule 互斥/on_failure 三值语义 + continue 只读动作限定/steps
+    非空 + id 唯一/动作 ∈ 词表不兜底/params 按 §10.2 契约校验必填与类型/expect
+    通道枚举 + 谓词）、引用（target 存在性 + 类型兼容表：reboot/shutdown 不接
+    service、install/upgrade/remove 只接 host/host_group；四维严格嵌套：cluster/
+    host_group/host 存在性 + 归属集群在声明 clusters 内 + env 档位一致；无拓扑
+    数据时引用层跳过不阻断）、关系（变量引用解析 steps.<id>.params/outputs +
+    trigger_context 字段白名单 + 自引用拒绝 + restore/rollback.from 必须引用
+    backup 步骤 dest）。runbook_create 扩展 v0.2 字段（clusters/host_groups/hosts/
+    schedule/on_failure），描述注入 v0.2 语法说明；v0.2 写 version: 2；checkpoint
+    遇 v0.2 返回"执行器 P4 实现，当前仅可创建/校验/预览"；load 对 v0.2 全层校验。
+  - `tools/ansible_inventory_guard.py`（新增）：ansible/ansible-playbook 命令含
+    `-i <inventory>` → 解析 inventory 主机集合（ini/yaml）→ 与拓扑表主机比对
+    （name 或 endpoint）→ 有缺失 = 拒绝列主机 + 引导补拓扑/改用拓扑表主机；
+    fail-closed（文件读不到/格式不识别/拓扑表读不到一律拒绝）。接线：approval.
+    check_all_command_guards（terminal 全路径，无条件硬拦先于 yolo/allowlist）+
+    sudo_exec。P2 过渡期边界：只拦显式 -i，默认 inventory（/etc/ansible/hosts）
+    留 P5 操作分类层。
+  - `hermes_cli/subcommands/topo_export.py`：P1 遗留待办 #2——build_view 服务行
+    cluster 从所属 host 继承（v0.4 服务行不冗余 cluster，显式 cluster 仍优先）。
+  - `web/`：RunbooksPage v0.1/v0.2 双形态渲染（动作徽标 + params + expect 通道/
+    谓词 + on_failure 标签 + schedule + 目标四维范围 + 双形态 triggers + 场景化
+    rollback）；ops.ts yamlPreview 修数组对象缩进（i>0 项缺 `- `、嵌套深一级），
+    v0.2 结构序列化正确。
+- **测试**：新增 test_runbook_v2 41 例（结构/引用/关系/双 schema 兼容）、
+  test_ansible_inventory 16 例（正常/绕行/混合/解析失败 fail-closed/守卫接线）、
+  test_topo_v4 补 build_view cluster 继承；相关 24 套件 390 过 6 跳、approval 系
+  另 233 过；前端 vitest 19 文件 140 过 + `tsc -b --noEmit` ✓。失败 9 例全为
+  存量基线问题（git stash 到 P1 基线复现：approval.py `_record_approval_trajectory`
+  签名冲突 4 + launchctl 检测 1 + approval_plugin_hooks 4），非本批引入。
+- **核销方式**：测试常驻——test_runbook_v2（v0.2 分层校验/双 schema/变量引用）、
+  test_ansible_inventory（inventory ⊆ 拓扑表 + fail-closed）。季度体检检查：
+  `_validate_runbook` 对 v0.2 报 permission 拒绝、`check_all_command_guards` 对
+  `ansible -i <含拓扑外主机>` 返回 ansible_inventory 硬拦、build_view 服务行
+  cluster ≠ default（继承所属 host）。
+- **实测**（9131，pid 2659062，新代码重启）：`runbook_create` 落盘
+  nginx-config-update.yaml（version 2, kind maintenance，3 步骤 action 枚举 +
+  rollback 场景 + 变量引用）→ `runbook_load` 全层校验通过（note 标明 v0.2 仅
+  可创建/校验/预览）→ `runbook_checkpoint` 返回"v0.2 执行器在 P4 实现"；未知动作
+  frobnicate 报错列合法动作；permission 字段拒绝；存量 3 个 v0.1 runbook load
+  全过；ansible 拦截：good inventory（LAPTOP-T2JA2ERE/8.140.60.44）放行、含
+  rogue-company-host 拒绝列缺失主机、check_all_command_guards 硬拦
+  （approved=False, ansible_inventory=True）、垃圾文件 fail-closed；/api/runbooks
+  返回 4 条含 v0.2；/api/topology 服务行 cluster 已继承（nginx→local、
+  kubelet→beijing_aliyun，不再 default）。
+- **状态**：待 commit（branch v1.0，工作区仅本批 + #67 验收记录未提交）。

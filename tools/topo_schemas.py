@@ -51,9 +51,33 @@ _DEFAULT_SCHEMAS: Dict[str, Any] = {
         "bare": None,
         "unknown": None,
     },
+    # runbook 动作词表（yapl-design.md §10.2：8 族；逐个数 23 个，标题"24"
+    # 以文本为准，差异在 OPS-DELTA #68 登记）。v0.1 runbook 不消费该词表
+    # （steps 用 commands），仅 v0.2 runbook 校验动作合法性。
+    # 动作未知不 unknown 兜底——动作是执行的，未知动作无法执行（校验器报错）。
     "actions": [
-        "query", "fetch_log", "verify", "restart_service",
-        "deploy", "rollback", "backup", "restore",
+        # 生命周期（6）：start/stop/restart/reload {target, batch?, interval?, timeout?,
+        #   force?(stop)}；enable/disable {target}
+        "start", "stop", "restart", "reload", "enable", "disable",
+        # 主机（2）：reboot/shutdown {target, batch?, interval?, timeout?}
+        "reboot", "shutdown",
+        # 发布（4）：deploy {target, image?, version?, batch?, interval?}
+        #   rollback {target, to?}；scale {target, replicas(必填)}；decommission {target}
+        "deploy", "rollback", "scale", "decommission",
+        # 数据（2）：backup {target, dest, batch?}；restore {target, from, batch?}
+        "backup", "restore",
+        # 配置（1）：apply_config {target, changes: [{key(必填), value?}], batch?, interval?}
+        "apply_config",
+        # 查询（3）：query {target?, pattern?}；fetch_log {target, lines?, grep?, since?}
+        #   verify {target}
+        "query", "fetch_log", "verify",
+        # 文件（1）：transfer_file {source: {host?, path}, dest: {host?, path}}
+        "transfer_file",
+        # 执行（1）：run_script {script(资产引用), args?}
+        "run_script",
+        # 包（3）：install/upgrade {target, package, version?, repo?}
+        #   remove {target, package, deps?(默认 false)}
+        "install", "upgrade", "remove",
     ],
     "service_status": ["running", "restarting", "exited", "failed"],
     "raid_tool": ["ssacli", "storcli", "megacli", "mdadm", "perccli", "none"],

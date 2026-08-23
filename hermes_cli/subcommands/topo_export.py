@@ -299,15 +299,20 @@ def build_view(home: Path) -> Optional[Dict[str, Any]]:
                 index = _load_host_index(home, row) or {}
             except Exception:
                 index = {}
+        # YAPL P2（OPS-DELTA #68）：v0.4 服务行不冗余 cluster——读取端从所属 host
+        # 继承（host.cluster → index.cluster → default），显式 cluster 仍优先。
+        host_cluster = str(row.get("cluster") or index.get("cluster") or "default")
         for svc in index.get("services") or []:
             if not isinstance(svc, dict):
                 continue
-            s_card = _card_fields(_sanitize(svc))
+            s_row = dict(svc)
+            s_row.setdefault("cluster", host_cluster)
+            s_card = _card_fields(_sanitize(s_row))
             if not s_card["name"]:
                 continue
             s_card["on_key_path"] = s_card["name"] in kp_names
             s_card["kind"] = "service"
-            detail = _load_detail(home, svc)
+            detail = _load_detail(home, s_row)
             # 批三十三 4：服务状态在第三层 entities/*.yaml（status 字段），
             # 从 detail merge（detail 已 sanitize；无 status/load 失败保持空）。
             detail_status = str((detail or {}).get("status") or "").strip()

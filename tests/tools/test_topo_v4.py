@@ -354,3 +354,38 @@ def test_topo_query_overview_v4_no_old_sections(tmp_path, monkeypatch):
     assert node["type"] == "host"
     nginx = next(s for s in node["services"] if s["name"] == "nginx")
     assert nginx["depends_on"] == ["postgres"]
+
+
+def test_build_view_service_cluster_inherits_host(tmp_path):
+    """P1 遗留待办 #2：API（build_view）服务行 cluster 从所属 host 继承。
+
+    v0.4 服务行不冗余 cluster（设计 §9.3）；读取端应继承 host.cluster，
+    而非兜底 default（API 曾显示服务挂 default 集群）。
+    """
+    from hermes_cli.subcommands.topo_export import build_view
+
+    home = tmp_path / "vigil_home"
+    (home / "services").mkdir(parents=True)
+    (home / "topology.yaml").write_text(
+        "version: 4\n"
+        "environments:\n  - {name: prod, isolation: strict, role: prod}\n"
+        "clusters:\n  - {name: k3s-prod, env: prod, type: k3s}\n"
+        "hosts:\n"
+        "  - {name: node1, type: host, env: prod, cluster: k3s-prod, endpoint: '10.0.0.1', "
+        "role: [worker], runtime: [k3s], source: manual, last_verified: '2026-08-23'}\n",
+        encoding="utf-8",
+    )
+    (home / "services" / "node1.yaml").write_text(
+        "host: node1\nservices:\n"
+        "  - {name: harbor, type: registry, managed_by: docker}\n"
+        "  - {name: nginx, type: gateway, managed_by: helm, cluster: k3s-prod}\n",
+        encoding="utf-8",
+    )
+    view = build_view(home)
+    assert view is not None
+    host = view["hosts"][0]
+    assert host["card"]["cluster"] == "k3s-prod"
+    svc_cards = {s["card"]["name"]: s["card"]["cluster"] for s in host["services"]}
+    # 服务行无 cluster → 继承 host；显式 cluster 仍优先。
+    assert svc_cards["harbor"] == "k3s-prod"
+    assert svc_cards["nginx"] == "k3s-prod"

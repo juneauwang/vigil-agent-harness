@@ -392,6 +392,16 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     if err:
         return tool_error(err)
 
+    # YAPL P2（OPS-DELTA #68）：sudo 下跑 ansible -i 同样过 inventory 契约化
+    # 守卫（inventory 主机集合必须 ⊆ 拓扑表；fail-closed）。
+    try:
+        from tools.ansible_inventory_guard import check_ansible_inventory_guard
+        ansible_block = check_ansible_inventory_guard(command)
+    except Exception:
+        ansible_block = None
+    if ansible_block:
+        return tool_error(ansible_block)
+
     # 权限矩阵联动：``sudo <command>`` 过 ops_permissions（env 档位 + 变更类判定）。
     decision = check_ops_command_permission(f"sudo {command}", target_env=target_env)
     if decision:
