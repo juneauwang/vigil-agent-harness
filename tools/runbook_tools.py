@@ -1395,8 +1395,8 @@ def runbook_checkpoint(
     if is_v2:
         return tool_error(
             f"runbook {runbook} 是 schema v0.2（声明式动作，无 commands）："
-            "v0.2 执行器在 P4 实现，当前仅可创建/校验/预览（runbook_load / "
-            "runbook_create）。"
+            "checkpoint 是 v0.1 checklist 阶段门；v0.2 请用 runbook_execute 执行"
+            "（执行器生成命令 + 矩阵审批门 + expect/on_failure + 执行记录）。"
         )
     if not _is_checklist_runbook(data):
         return tool_error(f"runbook {runbook} 不是 checklist runbook（kind=deploy, checklist=true），无需 checkpoint")

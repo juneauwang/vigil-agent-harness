@@ -1,0 +1,996 @@
+"""YAPL P4 runbook v0.2 执行引擎（yapl-design.md §10 + §11.1/11.4/11.5）。
+
+命令由执行器生成（``tools/runbook_handlers``）——LLM 永不接触命令语法；
+权限 = 操作矩阵唯一裁决（每步执行时查 matrix，runbook 无 permission 字段）；
+``{approve: required}`` 强制人工（覆盖 approvals.mode，无 allowlist 绕过）；
+定时执行走资产审批豁免（预审 runbook 跳过逐次审批）+ 事后审计（执行记录
+JSONL + 通知）；逃生舱受控（run_script 只引用资产库脚本，不内联）。
+
+步骤流程（§10.1/§10.2）：变量替换 → target 解析 → 审批门（action × env 查
+矩阵）→ handler 生成命令 → 现有执行通道 → expect 检查 → 执行记录。
+
+执行记录：``~/.vigil/runtime/runbook_executions.jsonl``（JSONL，追加式，改后
+可被前端/审计查询）。stdout/stderr 截断 + 强制 redact（凭据明文永不落盘）。
+"""
+
+from __future__ import annotations
+
+import getpass
+import hashlib
+import json
+import logging
+import re
+import shlex
+import subprocess
+import threading
+import time
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
+
+from tools.runbook_handlers import (
+    UnsupportedCommand,
+    evaluate_expect,
+    generate_commands,
+    generate_expect_check,
+)
+from tools.registry import registry, tool_error
+
+logger = logging.getLogger(__name__)
+
+_EXEC_TIMEOUT_S = 120
+_LEDGER_DIRNAME = "runtime"
+_LEDGER_FILENAME = "runbook_executions.jsonl"
+_LEDGER_MAX_LINES = 500
+_STDOUT_MAX_CHARS = 2000
+_lock = threading.RLock()
+
+_VAR_REF_RE = re.compile(r"\{\{\s*([^}]+?)\s*\}\}")
+
+# 执行记录补充脱敏：赋值式凭据形态（password=… / token: …，含引号包裹）——
+# agent.redact 对句内带引号形态可能漏网（实测），审计账本宁多掩不漏。
+# 与 runbook 校验器的 _PLAINTEXT_SECRET_ASSIGN_RE 同族模式。
+_SECRET_ASSIGN_RE = re.compile(
+    r'(?i)(password|passwd|secret|token|api[_-]?key|credential|auth|pass)'
+    r'\s*[=:]\s*[\'\"]?([^,\'\"\s}]+)'
+)
+
+
+def _hermes_home() -> Path:
+    from tools.runbook_tools import _hermes_home as _rb_home
+    return _rb_home()
+
+
+def _redact(text: str) -> str:
+    try:
+        from agent.redact import redact_sensitive_text
+        return str(redact_sensitive_text(text or ""))
+    except Exception:
+        return str(text or "")
+
+
+def _clip(text: str, limit: int = _STDOUT_MAX_CHARS) -> str:
+    text = _redact(text or "")
+    text = _SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=***", text)
+    if len(text) > limit:
+        return text[:limit] + f"\n…(截断 {len(text) - limit} 字符)"
+    return text
+
+
+# ---------------------------------------------------------------------------
+# 执行记录（事后审计数据模型）
+# ---------------------------------------------------------------------------
+
+def ledger_path(home: Optional[Path] = None) -> Path:
+    home = Path(home or _hermes_home()).resolve()
+    return home / _LEDGER_DIRNAME / _LEDGER_FILENAME
+
+
+def record_execution(home: Optional[Path], entry: Dict[str, Any]) -> None:
+    """追加一条执行记录（JSONL）。best-effort：失败只记日志，不阻断执行。"""
+    home = Path(home or _hermes_home()).resolve()
+    path = ledger_path(home)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(entry, ensure_ascii=False, default=str)
+        with _lock:
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            lines = path.read_text(encoding="utf-8").splitlines()
+            if len(lines) > _LEDGER_MAX_LINES:
+                path.write_text("\n".join(lines[-_LEDGER_MAX_LINES:]) + "\n",
+                                encoding="utf-8")
+    except Exception as exc:
+        logger.warning("runbook 执行记录写入失败: %s", exc)
+
+
+def recent_executions(home: Optional[Path] = None,
+                      limit: int = 50) -> List[Dict[str, Any]]:
+    """最近 N 条执行记录（新→旧）。"""
+    path = ledger_path(home)
+    if not path.is_file():
+        return []
+    rows: List[Dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    rows.append(json.loads(line))
+                except Exception:
+                    continue
+    except Exception as exc:
+        logger.warning("runbook 执行记录读取失败: %s", exc)
+        return []
+    rows.reverse()
+    return rows[: max(1, min(int(limit) if limit else 50, 200))]
+
+
+# ---------------------------------------------------------------------------
+# target 解析（§10.2 多态：service / host / host_group / cluster）
+# ---------------------------------------------------------------------------
+
+def _local_host_names() -> set:
+    import socket
+    names = {socket.gethostname()}
+    try:
+        names.update(socket.gethostbyname_ex(socket.gethostname())[2])
+    except Exception:
+        pass
+    return names
+
+
+def _is_local_endpoint(endpoint: Any, host_name: str) -> bool:
+    e = str(endpoint or "").strip()
+    if not e or e in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if e == host_name:
+        return True
+    if e in _local_host_names():
+        return True
+    return False
+
+
+def resolve_target(home: Path, topo: Dict[str, Any],
+                   name: str) -> Dict[str, Any]:
+    """target 多态解析：service / host / host_group / cluster → 执行目标。
+
+    目标不存在 = 拒绝执行 + 提示重查拓扑（§六 topo_ref 执行端校验）。
+
+    Returns 执行目标 dict（handlers 消费）：
+        name / type / env / cluster / managed_by / host（所属主机名）/
+        endpoint / os / container / compose_project / compose_service /
+        namespace / config_dir / data_dir / remote / host_row。
+    """
+    from tools.topo_tools import (
+        _all_core_entities,
+        _container_name_for_entity,
+        _enrich_entity_detail,
+    )
+
+    name = str(name or "").strip()
+    if not name:
+        raise ValueError("target 必填（拓扑实体引用）")
+    clusters = {
+        str(c.get("name")): c
+        for c in (topo.get("clusters") or [])
+        if isinstance(c, dict) and c.get("name")
+    }
+    if name in clusters:
+        c = clusters[name]
+        endpoint = str(c.get("endpoint") or "").strip()
+        cred = c.get("credential") or {}
+        return {
+            "name": name,
+            "type": "cluster",
+            "env": str(c.get("env") or ""),
+            "cluster": name,
+            "managed_by": "",
+            "host": "",
+            "endpoint": endpoint,
+            "os": "",
+            "container": "",
+            "compose_project": "",
+            "compose_service": "",
+            "namespace": str((c.get("attrs") or {}).get("namespace") or ""),
+            "config_dir": "",
+            "data_dir": "",
+            "remote": bool(endpoint and not _is_local_endpoint(endpoint, "")),
+            "host_row": {},
+        }
+    for c in clusters.values():
+        for hg in c.get("host_groups") or []:
+            hg_name = hg.get("name") if isinstance(hg, dict) else hg
+            if str(hg_name or "") == name:
+                return {
+                    "name": name,
+                    "type": "host_group",
+                    "env": str(c.get("env") or ""),
+                    "cluster": str(c.get("name") or ""),
+                    "managed_by": "",
+                    "host": "",
+                    "endpoint": str(c.get("endpoint") or "").strip(),
+                    "os": "",
+                    "container": "",
+                    "compose_project": "",
+                    "compose_service": "",
+                    "namespace": str((c.get("attrs") or {}).get("namespace") or ""),
+                    "config_dir": "",
+                    "data_dir": "",
+                    "remote": False,
+                    "host_row": {},
+                }
+
+    hosts = {str(h.get("name")): h for h in (topo.get("hosts") or [])
+             if isinstance(h, dict) and h.get("name")}
+    entities = [_enrich_entity_detail(home, e)
+                for e in _all_core_entities(topo, home)]
+    entity = next((e for e in entities if str(e.get("name")) == name), None)
+    if entity is None:
+        raise ValueError(
+            f"target {name!r} 不在拓扑表——target 是拓扑实体引用"
+            "（service/host/host_group/cluster），先 topo_query 确认实体名"
+        )
+
+    host_name = str(entity.get("_host") or entity.get("name") or "")
+    host_row = hosts.get(host_name) or {}
+    endpoint = str(entity.get("endpoint") or host_row.get("endpoint") or "").strip()
+    snapshot = entity.get("snapshot") if isinstance(entity.get("snapshot"), dict) else {}
+    by_runtime = snapshot.get("by_runtime") if isinstance(snapshot.get("by_runtime"), dict) else {}
+    common = snapshot.get("common") if isinstance(snapshot.get("common"), dict) else {}
+    compose_block = by_runtime.get("docker_compose") if isinstance(by_runtime.get("docker_compose"), dict) else {}
+    k8s_block = by_runtime.get("kubectl") if isinstance(by_runtime.get("kubectl"), dict) else {}
+    attrs = entity.get("attrs") or {}
+
+    container = _container_name_for_entity(entity)
+    compose_project = str(compose_block.get("project") or attrs.get("compose_project") or "").strip()
+    services = compose_block.get("services") or compose_block.get("containers") or []
+    compose_service = ""
+    for s in services:
+        if isinstance(s, dict) and s.get("name"):
+            compose_service = str(s["name"])
+            break
+
+    return {
+        "name": name,
+        "type": "service" if entity.get("_host") else "host",
+        "env": str(entity.get("env") or host_row.get("env") or ""),
+        "cluster": str(entity.get("cluster") or host_row.get("cluster") or "default"),
+        "managed_by": str(entity.get("managed_by") or ""),
+        "host": host_name,
+        "endpoint": endpoint,
+        "os": str(host_row.get("os") or ""),
+        "container": container,
+        "compose_project": compose_project,
+        "compose_service": compose_service,
+        "namespace": str(attrs.get("namespace") or k8s_block.get("namespace") or ""),
+        "config_dir": str(common.get("config_dir") or ""),
+        "data_dir": str(common.get("data_dir") or ""),
+        "remote": bool(endpoint and not _is_local_endpoint(endpoint, host_name)),
+        "host_row": host_row,
+    }
+
+
+# ---------------------------------------------------------------------------
+# 变量替换（§10.5）
+# ---------------------------------------------------------------------------
+
+def substitute_text(text: str, step_values: Dict[str, Dict[str, Any]],
+                    trigger_ctx: Dict[str, Any], where: str) -> str:
+    """``{{ steps.<id>.params.<key> }}`` / ``{{ steps.<id>.outputs.<key> }}`` /
+    ``{{ trigger_context.<field> }}`` → 实际值。未执行/不存在/未注入 = 报错停。"""
+
+    def _lookup(path: str) -> str:
+        segs = path.split(".")
+        if segs[0] == "trigger_context":
+            if len(segs) != 2:
+                raise ValueError(f"{where} 变量引用 {{{path}}} 不合法——"
+                                 "trigger_context 引用形如 {{ trigger_context.alertname }}")
+            key = segs[1]
+            if key not in trigger_ctx:
+                raise ValueError(
+                    f"{where} 变量引用 {{{path}}} 的字段 {key!r} 未注入触发上下文"
+                    f"（可用: {sorted(trigger_ctx)}）——触发原因由调度器/调用方注入"
+                )
+            return str(trigger_ctx[key])
+        if segs[0] == "steps":
+            if len(segs) < 4 or segs[2] not in ("params", "outputs"):
+                raise ValueError(
+                    f"{where} 变量引用 {{{path}}} 不合法——必须是 "
+                    "{{ steps.<id>.params.<key> }} / {{ steps.<id>.outputs.<key> }}"
+                )
+            ref_id = segs[1]
+            bucket = step_values.get(ref_id)
+            if bucket is None:
+                raise ValueError(
+                    f"{where} 变量引用 {{{path}}} 指向步骤 {ref_id!r}——该步骤"
+                    "尚未执行或不存在（步骤按顺序执行，只能引用已执行步骤）"
+                )
+            sub: Any = bucket
+            for key in segs[2:]:
+                if isinstance(sub, dict) and key in sub:
+                    sub = sub[key]
+                else:
+                    raise ValueError(
+                        f"{where} 变量引用 {{{path}}} 的 {key!r} 不存在于步骤 "
+                        f"{ref_id!r} 的 {segs[2]}"
+                    )
+            if isinstance(sub, (dict, list)):
+                raise ValueError(
+                    f"{where} 变量引用 {{{path}}} 必须引用标量值，收到 "
+                    f"{type(sub).__name__}"
+                )
+            return str(sub)
+        raise ValueError(f"{where} 变量引用 {{{path}}} 不合法")
+
+    return _VAR_REF_RE.sub(lambda m: _lookup(m.group(1).strip()), str(text))
+
+
+def substitute_params(params: Any, step_values: Dict[str, Dict[str, Any]],
+                      trigger_ctx: Dict[str, Any], where: str) -> Any:
+    """深拷贝 params 并替换全部字符串引用。"""
+    if isinstance(params, dict):
+        return {k: substitute_params(v, step_values, trigger_ctx, where)
+                for k, v in params.items()}
+    if isinstance(params, list):
+        return [substitute_params(v, step_values, trigger_ctx, where)
+                for v in params]
+    if isinstance(params, str):
+        return substitute_text(params, step_values, trigger_ctx, where)
+    return params
+
+
+# ---------------------------------------------------------------------------
+# 审批门（§11.1/11.5）
+# ---------------------------------------------------------------------------
+
+def _step_approval(home: Path, env: str, action: str, desc: str) -> Optional[str]:
+    """交互执行审批门：矩阵档位 execute → 放行；approve → 审批；required →
+    强制人工（覆盖 approvals.mode，无 allowlist）。返回 None = 放行。"""
+    from tools.approval import request_ops_approval
+    from tools.matrix_data import get_level, load_matrix_or_empty
+    level = get_level(load_matrix_or_empty(home), env, action)["level"]
+    if level == "execute":
+        return None
+    required = level == "required"
+    decision = {
+        "action": "approve",
+        "grade": "L4" if required else "L2",
+        "env": env,
+        "require_confirmation": required,
+        "description": (
+            f"操作矩阵 {action}@{env} 档位"
+            + ("=强制人工（{approve: required}，不 smart 不 allowlist）"
+               if required else "=approve（交互审批）")
+        ),
+    }
+    res = request_ops_approval(desc or action, decision)
+    if not res.get("approved"):
+        return str(res.get("message")
+                   or f"审批未通过（{action}@{env}）——fail-closed 不执行")
+    return None
+
+
+def _check_scheduled_exemption(data: Dict[str, Any]) -> Optional[str]:
+    """定时执行豁免（§11.4）：预审标记存在 + 内容哈希未漂移 = 豁免逐次审批。
+
+    返回 None = 可豁免；否则拒绝原因（未预审 / 内容被手改后豁免失效）。
+    """
+    approved_at = data.get("approved_at")
+    approved_by = data.get("approved_by")
+    approved_version = data.get("approved_version")
+    if not approved_at or not approved_by:
+        return (
+            "runbook 未过资产审批（缺 approved_at/approved_by 预审标记）——"
+            "定时执行豁免前提是创建时人工审过；请先 runbook_create 重新创建"
+            "（过资产审批落盘预审标记）"
+        )
+    payload = {k: v for k, v in data.items()
+               if k not in ("approved_at", "approved_by", "approved_version")}
+    current = hashlib.sha256(
+        json.dumps(payload, sort_keys=True, ensure_ascii=False,
+                   default=str).encode("utf-8")
+    ).hexdigest()[:16]
+    if approved_version and current != approved_version:
+        return (
+            f"runbook 内容自审批后已被修改（approved_version={approved_version}，"
+            f"当前哈希={current}）——执行豁免失效；请 runbook_create 重新过资产"
+            "审批后再定时执行"
+        )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# 执行通道（§10.2：走现有通道，不新造）
+# ---------------------------------------------------------------------------
+
+def _exec_local(argv: List[str], timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"exit_code": 1, "stdout": "", "stderr": f"执行超时（{timeout}s）",
+                "timed_out": True}
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": f"执行失败：{exc}"}
+    return {"exit_code": proc.returncode,
+            "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
+
+
+def _remote_ssh_argv(target: Dict[str, Any]):
+    from hermes_cli.subcommands.vssh import (
+        _build_ssh_argv,
+        _resolve_topology_credential,
+    )
+    host = str(target.get("host") or "")
+    cred = _resolve_topology_credential(host, allow_fallback=False)
+    user = str((cred or {}).get("user") or "root")
+    port = int((cred or {}).get("port") or 22)
+    argv, env = _build_ssh_argv(host, user=user, port=port, cred=cred)
+    return argv, env, host
+
+
+def _exec_remote(target: Dict[str, Any], argv: List[str],
+                 timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
+    from tools.sudo_tool import _ssh_run
+    try:
+        ssh_argv, ssh_env, host = _remote_ssh_argv(target)
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": f"远端凭据解析失败：{exc}"}
+    remote_cmd = " ".join(shlex.quote(a) for a in argv)
+    try:
+        proc = _ssh_run(ssh_argv, ssh_env, remote_cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"exit_code": 1, "stdout": "", "stderr": f"远端执行超时（{timeout}s）",
+                "timed_out": True}
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": f"远端执行失败：{exc}"}
+    return {"exit_code": proc.returncode,
+            "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
+
+
+def _exec_sudo(home: Path, target: Dict[str, Any], cmd: str,
+               timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
+    from hermes_cli.subcommands.vssh import _resolve_topology_credential
+    from tools.sudo_tool import _run_local_sudo, _run_remote_sudo
+    host = str(target.get("host") or "")
+    remote = bool(target.get("remote"))
+    try:
+        if remote:
+            cred = _resolve_topology_credential(host, allow_fallback=False)
+            if not cred:
+                return {"exit_code": 1, "stdout": "", "stderr":
+                        f"远端 sudo 需要拓扑表 {host} 的 credential（vault）引用",
+                        "blocked": True}
+            user = str(cred.get("user") or "root")
+            port = int(cred.get("port") or 22)
+            proc = _run_remote_sudo(host, user, port, cmd, cred)
+        else:
+            cred = _resolve_topology_credential(host, allow_fallback=False) or {}
+            if not cred:
+                return {"exit_code": 1, "stdout": "", "stderr":
+                        "本地 sudo 需要拓扑表 credential（vault/askpass）引用——"
+                        "提权命令请先补充 credential 声明或由用户手动执行",
+                        "blocked": True}
+            proc = _run_local_sudo(cmd, cred)
+    except subprocess.TimeoutExpired:
+        return {"exit_code": 1, "stdout": "", "stderr": f"sudo 执行超时（{timeout}s）",
+                "timed_out": True}
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": f"sudo 执行失败：{exc}"}
+    return {"exit_code": proc.returncode,
+            "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
+
+
+def _exec_transfer(home: Path, spec: Dict[str, Any],
+                   timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
+    """transfer_file 三形态：本→本 / 本→远 / 远→本 / 远→远（scp 直传）。"""
+    source = spec.get("source") or {}
+    dest = spec.get("dest") or {}
+    src_host = str(source.get("host") or "").strip()
+    dst_host = str(dest.get("host") or "").strip()
+    src_path = str(source.get("path") or "").strip()
+    dst_path = str(dest.get("path") or "").strip()
+    if not src_path or not dst_path:
+        return {"exit_code": 1, "stdout": "", "stderr":
+                "transfer_file 需要 source.path 与 dest.path"}
+    if not src_host and not dst_host:
+        return _exec_local(["cp", "-a", src_path, dst_path], timeout)
+
+    from hermes_cli.subcommands.vssh import _build_ssh_argv, _resolve_topology_credential
+    from tools.sudo_tool import _scp_argv_from_ssh
+
+    def _scp_argv_for(host: str, local: str, remote_path: str, upload: bool):
+        cred = _resolve_topology_credential(host, allow_fallback=False)
+        user = str((cred or {}).get("user") or "root")
+        port = int((cred or {}).get("port") or 22)
+        ssh_argv, ssh_env = _build_ssh_argv(host, user=user, port=port, cred=cred)
+        if upload:
+            argv = _scp_argv_from_ssh(ssh_argv, Path(local), remote_path)
+        else:
+            argv = _scp_argv_from_ssh(ssh_argv, Path(local), remote_path)
+            argv[-2], argv[-1] = argv[-1], argv[-2]
+        return argv, ssh_env
+
+    try:
+        if src_host and dst_host:
+            # 远→远直传：A 端 key 认证发起（B 需信任 A，否则报错引导分两步）。
+            cred_a = _resolve_topology_credential(src_host, allow_fallback=False)
+            user_a = str((cred_a or {}).get("user") or "root")
+            port_a = int((cred_a or {}).get("port") or 22)
+            ssh_argv_a, ssh_env_a = _build_ssh_argv(src_host, user=user_a,
+                                                    port=port_a, cred=cred_a)
+            prefix = ["scp"]
+            for piece in ssh_argv_a[1:-1]:
+                if piece == "-p" and prefix[-1] == "scp":
+                    pass
+                prefix.append(piece)
+            argv = prefix + [f"{ssh_argv_a[-1]}:{src_path}",
+                             f"{src_host}@{_host_endpoint(src_host)}:{dst_path}"]
+            env = ssh_env_a
+        elif src_host:
+            argv, env = _scp_argv_for(src_host, dst_path, src_path, upload=False)
+        else:
+            argv, env = _scp_argv_for(dst_host, src_path, dst_path, upload=True)
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": f"scp 参数构造失败：{exc}"}
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
+                              env=env)
+    except subprocess.TimeoutExpired:
+        return {"exit_code": 1, "stdout": "", "stderr": f"scp 超时（{timeout}s）",
+                "timed_out": True}
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": f"scp 执行失败：{exc}"}
+    return {"exit_code": proc.returncode,
+            "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
+
+
+def _host_endpoint(host: str) -> str:
+    from hermes_cli.subcommands.vssh import _resolve_topology_credential
+    # endpoint 解析：拓扑 host 行 endpoint；本函数只被远→远直传的 dest 端使用。
+    from tools.topo_tools import load_topology
+    topo = load_topology()
+    for h in (topo or {}).get("hosts") or []:
+        if isinstance(h, dict) and str(h.get("name")) == host:
+            return str(h.get("endpoint") or host)
+    return host
+
+
+def _exec_script_asset(home: Path, spec: Dict[str, Any],
+                       timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
+    """run_script：只引用资产库脚本（§10.9 逃生舱受控），不内联。
+
+    脚本资产 = ``~/.vigil/scripts/<name>.sh``（或裸名），审批标记在
+    ``~/.vigil/scripts/.meta/<name>.json``（script_asset_create 落盘）。
+    引用不存在 / 未经资产审批 / 内容哈希漂移 → 报错引导，不执行。
+    """
+    name = str(spec.get("script_asset") or "").strip()
+    if not name or re.search(r"[\\/]", name):
+        return {"exit_code": 1, "stdout": "", "stderr":
+                f"脚本资产引用非法: {name!r}——资产名形如 scripts/backup.sh 或 backup"}
+    scripts_dir = Path(home).resolve() / "scripts"
+    candidates = [scripts_dir / name]
+    if not Path(name).suffix:
+        candidates += [scripts_dir / f"{name}.sh", scripts_dir / f"{name}.bash"]
+    script_path = next((p for p in candidates if p.is_file()), None)
+    if script_path is None:
+        return {"exit_code": 1, "stdout": "", "stderr":
+                f"脚本资产 {name!r} 不存在（{scripts_dir}）——用 script_asset_create "
+                "创建（内容过 tirith 扫描 + 资产审批后落盘预审标记）；run_script "
+                "只引用资产，不内联脚本"}
+    meta_path = scripts_dir / ".meta" / f"{script_path.name}.json"
+    if not meta_path.is_file():
+        return {"exit_code": 1, "stdout": "", "stderr":
+                f"脚本资产 {name!r} 无审批标记（{meta_path} 缺失）——资产需经 "
+                "script_asset_create 过资产审批后才能被 run_script 引用"}
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr":
+                f"脚本资产 {name!r} 审批标记损坏：{exc}"}
+    if not meta.get("approved_at") or not meta.get("approved_by"):
+        return {"exit_code": 1, "stdout": "", "stderr":
+                f"脚本资产 {name!r} 缺预审标记（approved_at/approved_by）——"
+                "需重新过资产审批"}
+    content_hash = hashlib.sha256(script_path.read_bytes()).hexdigest()[:16]
+    if meta.get("approved_version") and content_hash != meta.get("approved_version"):
+        return {"exit_code": 1, "stdout": "", "stderr":
+                f"脚本资产 {name!r} 内容自审批后已被修改（哈希漂移）——执行豁免"
+                "失效，需重新过资产审批（script_asset_create --force）"}
+
+    args = [str(a) for a in (spec.get("args") or [])]
+    argv = ["bash", str(script_path)] + args
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return {"exit_code": 1, "stdout": "", "stderr": f"脚本执行超时（{timeout}s）",
+                "timed_out": True}
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": f"脚本执行失败：{exc}"}
+    return {"exit_code": proc.returncode,
+            "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
+
+
+def _run_spec(home: Path, target: Dict[str, Any],
+              spec: Dict[str, Any]) -> Dict[str, Any]:
+    if "transfer" in spec:
+        return _exec_transfer(home, spec["transfer"])
+    if "script_asset" in spec:
+        return _exec_script_asset(home, spec)
+    if spec.get("sudo"):
+        cmd = spec["cmd"] if "cmd" in spec else " ".join(spec.get("argv") or [])
+        return _exec_sudo(home, target, cmd)
+    if "argv" in spec:
+        argv = list(spec["argv"])
+    else:
+        cmd = spec["cmd"]
+        argv = ["bash", "-c", cmd] if spec.get("shell") else shlex.split(cmd)
+    if target.get("remote"):
+        return _exec_remote(target, argv)
+    return _exec_local(argv)
+
+
+# ---------------------------------------------------------------------------
+# 步骤执行
+# ---------------------------------------------------------------------------
+
+def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
+                  step_values: Dict[str, Dict[str, Any]],
+                  trigger_ctx: Dict[str, Any],
+                  runner: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
+                  approve: Callable[[str, str, str], Optional[str]],
+                  where: str) -> Dict[str, Any]:
+    step_id = str(step.get("id") or "")
+    action = str(step.get("action") or "")
+    ctx = f"{where}步骤 {step_id!r}"
+    entry: Dict[str, Any] = {"id": step_id, "action": action, "status": "pending"}
+    try:
+        params = substitute_params(step.get("params") or {}, step_values,
+                                   trigger_ctx, ctx)
+        entry["params"] = params
+        target: Dict[str, Any] = {}
+        if "target" in params:
+            from tools.topo_tools import load_topology
+            topo = load_topology(home)
+            if topo is None:
+                raise ValueError(f"{ctx} 拓扑表不存在——target 解析需要拓扑（topo_query 确认实体）")
+            target = resolve_target(home, topo, str(params["target"]))
+            entry["target"] = {"name": target.get("name"), "type": target.get("type"),
+                               "env": target.get("env"), "host": target.get("host"),
+                               "managed_by": target.get("managed_by")}
+        approve_err = approve(env, action, f"{ctx} {action} {params.get('target', '')}")
+        if approve_err:
+            entry.update({"status": "blocked", "ok": False, "error": approve_err})
+            return entry
+        specs = generate_commands(action, params, target)
+        entry["commands"] = []
+        for spec in specs:
+            result = runner(spec, target)
+            desc = str(spec.get("desc") or spec.get("cmd") or spec.get("argv") or action)
+            entry["commands"].append({
+                "desc": desc,
+                "exit_code": result.get("exit_code"),
+                "stdout": _clip(result.get("stdout") or "", 800),
+                "stderr": _clip(result.get("stderr") or "", 800),
+            })
+            if result.get("exit_code") != 0:
+                entry.update({
+                    "status": "failed", "ok": False,
+                    "error": _clip(f"命令失败（exit {result.get('exit_code')}）: {desc}\n"
+                                   f"{result.get('stderr') or result.get('stdout') or ''}",
+                                   4000),
+                })
+                return entry
+        # expect（§10.3）：声明式检查 + 断言
+        expect = step.get("expect")
+        if expect:
+            expect_specs = generate_expect_check(expect, target)
+            check_results = [runner(s, target) for s in expect_specs]
+            ok, detail = evaluate_expect(expect, check_results)
+            detail = _clip(detail or "", 2000)
+            entry["expect"] = {"ok": ok, "detail": detail}
+            if not ok:
+                entry.update({"status": "failed", "ok": False,
+                              "error": _clip(f"expect 未通过: {detail}", 4000)})
+                return entry
+        entry["status"] = "ok"
+        entry["ok"] = True
+        outputs = {"exit_code": 0, "stdout": "", "stderr": ""}
+        if entry.get("commands"):
+            last = entry["commands"][-1]
+            outputs = {"exit_code": last.get("exit_code"), "stdout": last.get("stdout"),
+                       "stderr": last.get("stderr")}
+        step_values[step_id] = {"params": params, "outputs": outputs}
+        return entry
+    except (ValueError, UnsupportedCommand) as exc:
+        entry.update({"status": "failed", "ok": False, "error": str(exc)})
+        return entry
+    except Exception as exc:
+        logger.exception("runbook 步骤执行异常 %s", ctx)
+        entry.update({"status": "failed", "ok": False,
+                      "error": f"执行异常：{exc}"})
+        return entry
+
+
+def _resolve_on_failure(value: Any, default: str) -> tuple:
+    """on_failure 四形态：stop / continue / rollback / {rollback: 场景名}。"""
+    if value is None:
+        value = default
+    if value == "stop":
+        return "stop", None
+    if value == "continue":
+        return "continue", None
+    if value == "rollback":
+        return "rollback", None
+    if isinstance(value, dict) and "rollback" in value:
+        return "rollback", str(value.get("rollback") or "")
+    raise ValueError(f"on_failure 非法: {value!r}")
+
+
+def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
+                           *, env: str, home: Path,
+                           step_values: Dict[str, Dict[str, Any]],
+                           trigger_ctx: Dict[str, Any],
+                           runner: Callable, approve: Callable) -> Dict[str, Any]:
+    scenarios = data.get("rollback") or []
+    scenario = None
+    if scenario_name:
+        scenario = next((s for s in scenarios if isinstance(s, dict)
+                         and str(s.get("name")) == scenario_name), None)
+        if scenario is None:
+            return {"ok": False, "error":
+                    f"rollback 场景 {scenario_name!r} 不存在（可用: "
+                    f"{', '.join(str(s.get('name')) for s in scenarios if isinstance(s, dict))}）"}
+    elif scenarios:
+        scenario = scenarios[0]
+    if scenario is None or not isinstance(scenario, dict):
+        return {"ok": False, "error": "runbook 未定义 rollback 场景，无法回滚"}
+    rb_steps = scenario.get("steps") or []
+    rb_results: List[Dict[str, Any]] = []
+    for step in rb_steps:
+        res = _run_one_step(step, env=env, home=home, step_values=step_values,
+                            trigger_ctx=trigger_ctx, runner=runner, approve=approve,
+                            where=f"rollback[{scenario.get('name')}]")
+        rb_results.append(res)
+        if not res.get("ok"):
+            return {"ok": False, "results": rb_results,
+                    "error": f"rollback 步骤 {res.get('id')!r} 失败："
+                             f"{res.get('error')}——rollback 失败 → 强制 stop，人工介入"}
+    return {"ok": True, "results": rb_results}
+
+
+# ---------------------------------------------------------------------------
+# 执行引擎
+# ---------------------------------------------------------------------------
+
+def execute_runbook(
+    data: Dict[str, Any],
+    *,
+    env: str = "",
+    trigger_context: Optional[Dict[str, Any]] = None,
+    home: Optional[Path] = None,
+    runner: Optional[Callable] = None,
+    scheduled: bool = False,
+) -> Dict[str, Any]:
+    """v0.2 runbook 执行（引擎核心）。
+
+    Args:
+        data: runbook 数据（_load_runbook 产物）。
+        env: 矩阵环境（缺省取 runbook.env 或 local）。
+        trigger_context: 触发上下文（§10.6；交互执行默认 source=user）。
+        home: VIGIL_HOME（测试注入）。
+        runner: 命令执行器（测试注入 mock；缺省 = 真实通道）。
+        scheduled: 定时执行（走资产审批豁免 + 事后审计）。
+    Returns:
+        执行结果 dict（含 steps / result / error / ledger 已落盘）。
+    """
+    home = Path(home or _hermes_home()).resolve()
+    name = str(data.get("name") or "")
+    rb_env = str(env or data.get("env") or "local").strip() or "local"
+    scheduled = bool(scheduled)
+
+    from tools.runbook_tools import _is_v2_runbook, _validate_runbook
+    try:
+        if not _is_v2_runbook(data):
+            return {"runbook": name, "result": "error",
+                    "error": f"runbook {name} 是 schema v0.1（commands 写死）——"
+                             "v0.1 走老执行路径（runbook_load + terminal 执行），"
+                             "新执行器只处理 v0.2 声明式动作"}
+        _validate_runbook(data, name, home)
+    except ValueError as exc:
+        return {"runbook": name, "result": "blocked",
+                "error": f"runbook 校验失败，拒绝执行: {exc}"}
+
+    if scheduled:
+        exempt_err = _check_scheduled_exemption(data)
+        if exempt_err:
+            return {"runbook": name, "result": "blocked", "error": exempt_err}
+
+    trigger_ctx: Dict[str, Any] = {
+        "source": "schedule" if scheduled else "user",
+        "triggered_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+    }
+    if isinstance(trigger_context, dict):
+        for k, v in trigger_context.items():
+            if k not in trigger_ctx:
+                trigger_ctx[str(k)] = v
+
+    def _runner(spec: Dict[str, Any], target: Dict[str, Any]) -> Dict[str, Any]:
+        if runner is not None:
+            return runner(spec, target)
+        return _run_spec(home, target, spec)
+
+    def _approve(step_env: str, action: str, desc: str) -> Optional[str]:
+        if scheduled:
+            return None  # 定时豁免：已预审 runbook 跳过逐次审批（§11.4）
+        return _step_approval(home, step_env, action, desc)
+
+    step_values: Dict[str, Dict[str, Any]] = {}
+    steps = data.get("steps") or []
+    results: List[Dict[str, Any]] = []
+    status = "ok"
+    error: Optional[str] = None
+    rolled_back = False
+    t0 = time.time()
+    default_on_failure = str(data.get("on_failure") or "stop")
+
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        res = _run_one_step(step, env=rb_env, home=home, step_values=step_values,
+                            trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
+                            where="runbook ")
+        results.append(res)
+        if res.get("ok"):
+            continue
+        error = res.get("error") or f"步骤 {res.get('id')} 失败"
+        try:
+            on_failure, scene = _resolve_on_failure(
+                step.get("on_failure"), default_on_failure)
+        except ValueError as exc:
+            status = "failed"
+            error = str(exc)
+            break
+        if on_failure == "continue":
+            continue
+        if on_failure == "rollback":
+            rb = _run_rollback_scenario(
+                data, scene, env=rb_env, home=home, step_values=step_values,
+                trigger_ctx=trigger_ctx, runner=_runner, approve=_approve)
+            status = "rolled_back" if rb.get("ok") else "failed"
+            if not rb.get("ok"):
+                error = f"{error}；{rb.get('error')}"
+            else:
+                error = (f"{error}（已执行 rollback 场景 "
+                         f"{scene or '（默认）'} 后终止）")
+            results.append({"id": "__rollback__", "action": "rollback",
+                            "status": status, "ok": rb.get("ok"),
+                            "steps": rb.get("results", []),
+                            "error": rb.get("error")})
+            rolled_back = True
+            break
+        status = "failed"
+        break
+
+    entry: Dict[str, Any] = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "runbook": name,
+        "env": rb_env,
+        "source": trigger_ctx.get("source"),
+        "trigger_context": {k: str(v) for k, v in trigger_ctx.items()},
+        "result": status,
+        "error": _clip(error or "", 4000),
+        "rolled_back": rolled_back,
+        "steps": results,
+        "duration_s": round(time.time() - t0, 2),
+        "operator": getpass.getuser(),
+    }
+    record_execution(home, entry)
+    return {
+        "runbook": name,
+        "env": rb_env,
+        "result": status,
+        "error": error,
+        "rolled_back": rolled_back,
+        "steps": results,
+        "duration_s": entry["duration_s"],
+        "ledger": str(ledger_path(home)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 工具入口
+# ---------------------------------------------------------------------------
+
+def runbook_execute(
+    runbook: str,
+    env: str = "",
+    trigger_context: Optional[Dict[str, Any]] = None,
+    home: Optional[Path] = None,
+    runner: Optional[Callable] = None,
+    approval_callback: Optional[Callable] = None,
+) -> str:
+    """交互执行 runbook（v0.2 声明式动作，命令由执行器生成）。
+
+    LLM 调用本工具执行 v0.2 runbook：每步变量替换 → target 解析 → 矩阵审批门
+    （execute/approve/{approve: required} 强制人工）→ handler 生成命令 → 执行
+    → expect 检查 → 执行记录。命令由执行器生成，LLM 永不接触命令语法。
+    """
+    home = Path(home or _hermes_home()).resolve()
+    name = str(runbook or "").strip()
+    if not name:
+        return tool_error("runbook 必填（runbooks/<name>.yaml 的 name）")
+    from tools.runbook_tools import _load_runbook, check_runbook_requirements
+    if not check_runbook_requirements():
+        return tool_error("runbooks/ 无数据——先创建 runbook（runbook_create）")
+    data = _load_runbook(home, name)
+    if data is None:
+        return tool_error(f"runbook 不存在: {name}")
+    result = execute_runbook(
+        data, env=env, trigger_context=trigger_context, home=home,
+        runner=runner, scheduled=False,
+    )
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
+# Registry
+# ---------------------------------------------------------------------------
+
+_DEFAULT_EXECUTE_SCHEMA = {
+    "name": "runbook_execute",
+    "description": (
+        "执行 schema v0.2 runbook（声明式动作，命令由执行器生成——LLM 永不接触"
+        "命令语法）。按步骤顺序执行：变量替换 → target 解析（拓扑表）→ 矩阵审批门"
+        "（每步 action × env 查操作矩阵：execute 直接执行 / approve 交互审批 / "
+        "{approve: required} 强制人工）→ 命令执行 → expect 检查 → 执行记录。"
+        "on_failure：stop（默认）/ continue（只读动作）/ rollback（回滚后终止；"
+        "rollback 失败强制 stop）。执行前确认 runbook 的 env 与目标实体在拓扑表"
+        "（topo_query）。v0.1 runbook（commands 写死）不走本工具——那是老执行"
+        "路径。修改矩阵 = 人工操作（vigil matrix CLI / UI），LLM 无 set 路径。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "runbook": {
+                "type": "string",
+                "description": "runbook 名（如 nginx-config-update）。",
+            },
+            "env": {
+                "type": "string",
+                "description": "矩阵环境（local/test/dev/prod；缺省取 runbook.env）。",
+            },
+            "trigger_context": {
+                "type": "object",
+                "description": "触发上下文注入（§10.6）：如 {alertname: ...}；"
+                               "交互执行默认 source=user, triggered_at=now。",
+            },
+        },
+        "required": ["runbook"],
+    },
+}
+
+
+def _execute_handler(args: Dict[str, Any], **kwargs) -> str:
+    return runbook_execute(
+        runbook=args.get("runbook", ""),
+        env=args.get("env") or "",
+        trigger_context=args.get("trigger_context"),
+    )
+
+
+def _register() -> None:
+    from tools.runbook_tools import check_runbook_requirements
+    registry.register(
+        name="runbook_execute",
+        toolset="runbook",
+        schema=_DEFAULT_EXECUTE_SCHEMA,
+        handler=_execute_handler,
+        check_fn=check_runbook_requirements,
+        emoji="▶️",
+        max_result_size_chars=30_000,
+    )
+
+
+_register()

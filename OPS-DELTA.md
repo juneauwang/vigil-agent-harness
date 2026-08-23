@@ -3141,3 +3141,87 @@
     拒绝 → 不落盘 + 报错引导；approvals.mode=smart + 全 execute 动作 → 自动批准
     落盘（approved_by=smart(matrix=all-execute)）；v0.1 runbook 创建无审批无标记。
 - **状态**：待 commit（branch v1.0，工作区仅本批改动）；发布基线 vigil-agent-release 未动。
+
+### 70. 批次五十五 YAPL P4 执行器·阶段 1——执行引擎骨架（runbook_execute + 步骤流程 + 审批门接矩阵 + 执行记录）（2026-08-23，设计单一事实来源 yapl-design.md §10/§11）
+
+- **背景**：P4 执行器层阶段 1：v0.2 runbook 从"仅可创建/校验/预览"到可执行。
+  命令由执行器生成（LLM 永不接触命令语法）；权限 = 操作矩阵唯一裁决（每步执行
+  时查 matrix，runbook 无 permission 字段）；`{approve: required}` 强制人工
+  （覆盖 approvals.mode，无 allowlist 绕过）。
+- **怎么改**：
+  - `tools/runbook_exec.py`（新增，执行引擎）：`runbook_execute` 工具 +
+    `execute_runbook` 引擎核心。每步流程 = 变量替换 → target 解析 → 审批门 →
+    handler 生成命令 → 现有执行通道 → expect 检查 → 执行记录；
+    - **变量替换**（§10.5）：`{{ steps.<id>.params.<key> }}`（从已执行步骤的
+      实际 params 取值）/ `{{ steps.<id>.outputs.<key> }}`（exit_code/stdout/
+      stderr）/ `{{ trigger_context.<field> }}`；步骤未执行/不存在/字段缺失 =
+      报错停；
+    - **target 解析**（§10.2）：service / host / host_group / cluster 多态 →
+      topo_tools 实体 → managed_by / endpoint / os / container / compose
+      project/namespace / 本地远端判定（endpoint ∈ 本机网卡 = local）；不在
+      拓扑表 = 拒绝（前置校验层已先拦，双保险）；
+    - **审批门**（§11.1/11.5）：矩阵 execute → 直接执行；approve → 交互审批
+      （复用 request_ops_approval，CLI 提示 / web 注册表 / gateway 回环，
+      无人在场 fail-closed）；required → 强制人工（require_confirmation 语义，
+      不提供 allowlist）；定时执行豁免（见阶段 4 前置逻辑：预审标记 + 内容哈希
+      漂移检查，本批已实现 `_check_scheduled_exemption`）；
+    - **on_failure**（§10.4）：stop（默认）/ continue（只读）/ rollback /
+      {rollback: 场景名}；rollback 后终止；rollback 失败 → 强制 stop 人工介入；
+    - **expect**（§10.3）：`generate_expect_check` 确定性生成检查命令
+      （http/docker/systemctl/kubectl/pm2/process/port 通道）+ 谓词断言
+      （http_status / body_contains / contains / exit_code）；
+    - **执行记录**（事后审计数据模型）：`~/.vigil/runtime/runbook_executions.jsonl`
+      JSONL 追加（上限 500 行），stdout/stderr/error 截断 + 强制脱敏
+      （redact + 补充赋值式凭据掩码——实测 redact 对句内引号形态漏网）；
+    - 工具注册 toolset=runbook，check_fn 同 runbook 系（数据存在性门控）。
+  - `tools/runbook_tools.py`：`runbook_checkpoint` 的 v0.2 分支提示改为指向
+    `runbook_execute`（checkpoint 是 v0.1 checklist 阶段门，不混用）。
+- **测试**：tests/tools/test_runbook_exec.py 引擎部分（变量替换跨步骤/trigger_
+  context/缺失报错、target 多态/不存在拒绝、审批三态、on_failure 四形态 +
+  rollback 终止 + rollback 失败强制 stop、expect 通过/失败、定时豁免未预审
+  拒绝/预审放行/哈希漂移拒绝、执行记录脱敏断言）——17 例。
+- **核销方式**：测试常驻——test_runbook_exec.py 引擎用例；季度体检：
+  执行一次 v0.2 runbook 后 `runtime/runbook_executions.jsonl` 出现记录且无
+  凭据明文；矩阵 required 动作执行被强制人工拦截。
+- **状态**：与阶段 2 同批 commit（工作区一并）。
+
+### 71. 批次五十六 YAPL P4 执行器·阶段 2——23 动作 handler 命令生成表（2026-08-23，设计单一事实来源 yapl-design.md §10.2）
+
+- **背景**：P4 执行器层阶段 2：动作 → 确定性命令生成（handler 唯一命令来源），
+  未覆盖组合报错引导不猜命令。
+- **怎么改**：
+  - `tools/runbook_handlers.py`（新增，命令生成器）：`generate_commands(action,
+    params, target)` → CommandSpec 列表（argv 零 shell / cmd+shell / sudo /
+    transfer / script_asset 五形态）；分派 = action × target 类型 × managed_by；
+    - 生命周期 start/stop/restart/reload/enable/disable：systemd（sudo）、
+      docker、docker_compose（-p project）、kubectl（rollout restart /
+      scale replicas）、pm2 五通道；
+    - 主机族 reboot/shutdown：systemctl reboot/poweroff（sudo）；
+    - 发布族 deploy/rollback/scale/decommission：kubectl（set image + rollout
+      status / rollout undo / scale / delete）与 docker_compose（up -d
+      --force-recreate / rm -sf）通道；单容器 docker 发布 = 未覆盖报错引导
+      （先纳入 compose）；
+    - 数据族 backup/restore：docker cp 容器路径（src 推导：params.src →
+      snapshot config/data 目录 → /etc/<name>(gateway/web) / /var/lib/<name>）；
+      主机 tar；
+    - 配置族 apply_config：nginx 容器 sed -E 行翻转（key 取末段，value 标量
+      校验）与 kubectl configmap patch（argv 零 shell）通道；
+    - 查询族 query/fetch_log/verify：多通道（docker/systemd/kubectl/pm2），
+      pattern/grep 用 shlex.quote + `|| true`（grep 无命中不误判失败）；
+    - 文件 transfer_file：三/四形态（本→本 cp、本→远/远→本 scp、远→远直传）
+      返回 transfer spec 由执行器走 ssh argv 通道；
+    - 执行族 run_script：只引用资产（script_asset spec，执行器解析
+      ~/.vigil/scripts/ + 预审标记校验）；
+    - 包族 install/upgrade/remove：apt（Ubuntu/Debian）与 dnf（Rocky/CentOS/
+      RHEL）按 target.os 判定，version/repo/deps 语义；
+    - `generate_expect_check` / `evaluate_expect`：expect 通道确定性生成 +
+      谓词断言（§10.3）。
+  - 安全：参数一律 shlex.quote 进 shell 形态；argv 形态零 shell；命令不含
+    凭据（远端经 ssh argv 注入）；生成命令不引入注入面（value 标量校验等）。
+- **测试**：tests/tools/test_runbook_exec.py 命令生成表部分（restart×5 通道、
+  enable/disable k8s、reboot/shutdown、query/fetch_log/verify 多通道、
+  apply_config nginx sed + k8s configmap、backup/restore、包族 os 分派、
+  transfer/script spec、未覆盖组合报错、expect 通道枚举 + 断言）——22 例。
+- **核销方式**：测试常驻——命令生成表用例；季度体检：新增 managed_by 时
+  handler 同步（schemas.yaml 注释已注明"managed_by 加值贵"）。
+- **状态**：与阶段 1 同批 commit（工作区一并）。

@@ -391,11 +391,11 @@ class TestV2DualSchema:
         loaded = _load(runbook_load(runbook="deploy-check", home=v2_home))
         assert "echo ok" in loaded["steps"][0]["commands"][0]
 
-    def test_v2_checkpoint_returns_p4_message(self, v2_home):
+    def test_v2_checkpoint_points_to_executor(self, v2_home):
         runbook_create(**_v2_runbook(), home=v2_home)
         out = _load(runbook_checkpoint(runbook="nginx-config-update", step_id="backup",
                                        status="pass", home=v2_home))
-        assert "P4" in out.get("error", "")
+        assert "runbook_execute" in out.get("error", "")
 
     def test_v1_checkpoint_still_works(self, v2_home):
         runbook_create(**self._v1_runbook(), home=v2_home)
