@@ -8,6 +8,7 @@ following the switch for a custom env name.
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 from cli import HermesCLI
 from hermes_cli.commands import resolve_command
@@ -57,6 +58,21 @@ def _make_cli():
 def env_home(tmp_path, monkeypatch):
     (tmp_path / "config.yaml").write_text(
         CONFIG_TPL.format(env="test"), encoding="utf-8"
+    )
+    # 初始化矩阵：P5 矩阵语义（unknown → 默认 approve）在矩阵存在时对任意 env
+    # 全量生效；矩阵未初始化（OPS-DELTA #76 惰性）只对 prod 档门控、test 档
+    # 交回原检查——与本测试"矩阵跟随 /env 切换"的意图不符，故 fixture 显式
+    # 初始化（对齐真实运维环境：配置自定义 env 的部署已跑过 vigil matrix init）。
+    (tmp_path / "matrix.yaml").write_text(
+        yaml.safe_dump({
+            "schema_version": 1,
+            "updated_at": "2026-08-23T00:00:00+08:00",
+            "source": "test",
+            "base_template": "template2",
+            "matrix": {"prod": {"restart": {"approve": "required"}}},
+            "sources": {"prod": {"restart": "template2"}},
+        }, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
     )
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     hc._LOAD_CONFIG_CACHE.clear()

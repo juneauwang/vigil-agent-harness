@@ -109,6 +109,35 @@ def defined_environments(ops_config: Optional[Dict[str, Any]] = None) -> List[Di
     ]
 
 
+def all_defined_environments(ops_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """/env 可用名单（含自定义名）：config ops.environments 定义的全部环境按名字
+    原样返回——bare_metal_prod 这类自定义名仍以本名展示/切换。
+
+    与 ``defined_environments``（档位折叠）分工：后者把自定义名映射成四值档位
+    供权限判定用；这里保留每个定义的名字本身供 /env 展示与切换（role/isolation
+    仍来自原始定义，切换后权限判定侧继续走 ``_map_env_tier`` 档位映射，语义不
+    放松——更严不更松）。config 未定义时回退内置四值 local/test/dev/prod。
+    """
+    ops = ops_config if ops_config is not None else _load_ops_config()
+    envs = ops.get("environments") or []
+    if not isinstance(envs, list) or not envs:
+        return [dict(e) for e in _DEFAULT_ENVIRONMENTS]
+    result: List[Dict[str, Any]] = []
+    seen: set = set()
+    for e in envs:
+        if not isinstance(e, dict):
+            continue
+        raw_name = str(e.get("name") or "").strip()
+        if not raw_name:
+            continue
+        key = raw_name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(dict(e))
+    return result or [dict(e) for e in _DEFAULT_ENVIRONMENTS]
+
+
 def _raw_env_definition(env: str, ops_config: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     """按名（大小写不敏感）查 config ops.environments 的原始定义（未映射）。
 

@@ -3538,3 +3538,59 @@
   季度体检：未初始化矩阵（无 matrix.yaml）时非 prod 命令交回原检查、
   tirith 警告弹窗无"Always allow"（allow_permanent=False）。
 - **状态**：独立 fix commit（P5 回归修复）。
+
+### 77. 存量 bug 修复批次——4 例（approval 轨迹签名冲突 / launchctl 高危漏判 / env 可用名单 / topo 落盘断言）（2026-08-23，P5 后续批次）
+
+- **背景**：P5 收官后全量回归 + 分套件验收暴露 4 个存量 bug（均与 YAPL 无关的
+  既有问题），本批次全部修复。实际失败面与任务书略有出入：任务书列的
+  test_ops_permissions_guard 4 例当前已过（batch61 后旧状态），实跑失败为
+  test_approval_plugin_hooks 4 例 + test_approval 1 例 + test_env_command 3 例
+  + test_topo_slash_command 1 例（后两文件 P4 基线同失败，纯存量）。
+- **Bug 1——_record_approval_trajectory 签名冲突（4 例，最高优先）**：
+  `tools/approval.py::_record_approval_trajectory(status, *, command,
+  description, ...)` 定义 status 为位置参数，但 check_execute_code_guard 无
+  回调 fallback（约 :3610）与 check_all_command_guards 无回调 fallback（约
+  :4744）两处同时传位置 `"requested"` 与 `status="pending_approval"` 关键字
+  → `TypeError: got multiple values for argument 'status'`。其余 14 处调用均
+  只传位置参数。**修复**：删除两处多余的 `status="pending_approval"` kwarg
+  （与 requested 记录行为一致，record_event 的 approval 字段即状态；最小改动，
+  不引入 meta 字段）。git blame：两处与批次二十三（fc723eb86）同批引入。
+- **Bug 2——launchctl 高危检测漏判（1 例）**：DANGEROUS_PATTERNS 的 launchctl
+  模式目标匹配只写 `(vigil|ai\.vigil)`，注释里明说的服务标签
+  `ai.hermes.gateway` 反而漏判；且 `start` 动词缺失（start/stop 同属服务
+  生命周期）。`launchctl stop ai.hermes.gateway` → dangerous=False。
+  **修复**：动词列补 `start`，标签匹配扩为 `(vigil|hermes|gateway)`；查询类
+  动词（list/print）不在列、非自身标签（com.example.unrelated）不命中，
+  对照测试 test_unrelated_labels_not_flagged 保持不误伤。
+- **Bug 3——/env 可用环境列表缺 config 定义环境（3 例）**：cli.py /env 的
+  可用名单来自 ops_permissions.defined_environments()（档位折叠：自定义名
+  bare_metal_prod → prod 档被折叠掉），于是列表只有 local/test/prod、
+  `/env bare_metal_prod` 报"未定义"、报错提示也不列自定义名。**修复**：新增
+  `all_defined_environments()`（config ops.environments 按名字原样返回，去重
+  保序；未定义回退内置四值），cli.py /env 展示与切换改用该名单；档位映射
+  语义由权限判定侧 `_map_env_tier` 保留（bare_metal_prod 仍走 prod 档，更严
+  不更松）——`defined_environments()` 折叠语义与其单测不动。测试侧：env_home
+  fixture 显式初始化 matrix.yaml（P5 矩阵语义在矩阵存在时对任意 env 全量生效；
+  矩阵未初始化惰性（OPS-DELTA #76）只对 prod 门控、test 档交回原检查，与本
+  测试"矩阵跟随 /env 切换"的意图不符；真实运维环境配置自定义 env 即已跑过
+  vigil matrix init）。
+- **Bug 4——topo slash 交互收集落盘断言陈旧（1 例）**：交互链路
+  （收集 host/env/凭据 → 确认 → write_discovery）实测完整可用，落盘产物为
+  v0.4 布局 `services/<host>.yaml` + `entities/...` + `topology.yaml`；测试
+  断言 `hosts/8.140.60.44.yaml` 是 batch52（12327df2，拓扑 schema v0.4 分层）
+  前的旧路径（P4 基线即失败，存量）。**修复**：断言改 `services/8.140.60.44.yaml`；
+  不改 topo 数据层（v0.4 写路径是刻意设计）。
+- **测试**：4 个文件全绿——test_approval 100 + test_approval_plugin_hooks 21
+  + test_ops_permissions_guard 18 + test_env_command 6 + test_topo_slash_command
+  8 = 153 passed；相关回归 test_command_guards 29 + test_ops_permissions 23 +
+  邻域 299（sudo_exec / ops_confirmation_gate / terminal_matrix /
+  action_classifier / ops_target / batch28_exec_api / topo_discovery /
+  topo_v4 / topo_tools / topo_status_sync）全绿，无新增失败。已知存量（本批
+  不动，HEAD 复现同失败）：test_gateway_restart_loop 14 例；test_ops_
+  permissions_guard 先跑时 test_command_guards 2 例跨文件状态污染（单跑 29
+  全绿，batch61 验收口径不变）。
+- **9131 实测**：/env 展示与 launchctl 检测不涉及运行时可跳过（任务书明确）。
+- **核销方式**：测试常驻——上述 4 文件 + 回归套件；季度体检：launchctl
+  stop/start ai.hermes.gateway 判 dangerous 且 list 不误伤、/env 无参列出全部
+  config 定义环境（含自定义名）、trajectory 无多值参数 TypeError。
+- **状态**：独立 fix commit（存量 bug 修复批次）。

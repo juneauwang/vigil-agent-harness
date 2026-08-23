@@ -980,7 +980,7 @@ DANGEROUS_PATTERNS = [
     # the `vigil gateway stop|restart` pattern above by driving launchd
     # directly against the service label (commonly `ai.hermes.gateway`).
     # Catch the operations that stop, restart, or unload it.
-    (r'\blaunchctl\s+(stop|kickstart|bootout|unload|kill|disable|remove)\b.*\b(vigil|ai\.vigil)\b', "stop/restart vigil launchd service (kills running agents)"),
+    (r'\blaunchctl\s+(stop|start|kickstart|bootout|unload|kill|disable|remove)\b.*\b(vigil|hermes|gateway)\b', "stop/restart vigil/hermes launchd service (kills running agents)"),
     # File copy/move/edit into sensitive system paths (/etc/ and macOS
     # /private/etc/ mirror).
     (rf'\b(cp|mv|install)\b.*\s{_SYSTEM_CONFIG_PATH}', "copy/move file into system config path"),
@@ -3609,7 +3609,7 @@ def _run_approval_gate(
         # queue for /approve /deny review, agent sees approval_required.
         _record_approval_trajectory(
             "requested", command=display_target, description=description,
-            session_key=session_key, status="pending_approval",
+            session_key=session_key,
         )
         submit_pending(session_key, {
             "command": display_target,
@@ -4743,7 +4743,7 @@ def check_all_command_guards(command: str, env_type: str,
             pending_data.update(smart_denied=True, allow_permanent=False)
         _record_approval_trajectory(
             "requested", command=command, description=combined_desc,
-            session_key=session_key, status="pending_approval",
+            session_key=session_key,
         )
         submit_pending(session_key, pending_data)
         result = {

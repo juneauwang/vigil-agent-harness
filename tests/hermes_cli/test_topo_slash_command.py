@@ -143,8 +143,9 @@ def test_topo_no_host_interactive_collection(topo_home, monkeypatch):
     assert calls["env"] == "prod"
     assert calls["creds"]["user"] == "ops"
     assert calls["creds"]["key_path"] == "/keys/id_ed25519"
-    # 交互收集成功落盘（合并语义默认 merge=True）。
-    index = topo_home / "hosts" / "8.140.60.44.yaml"
+    # 交互收集成功落盘（合并语义默认 merge=True；v0.4 第二层目录 services/，
+    # batch52 拓扑 schema v0.4 分层后 hosts/ 不再使用）。
+    index = topo_home / "services" / "8.140.60.44.yaml"
     assert index.is_file()
     data = yaml.safe_load(index.read_text(encoding="utf-8"))
     assert {s["name"] for s in data["services"]} == {"app"}
