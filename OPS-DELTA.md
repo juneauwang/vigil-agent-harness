@@ -3253,3 +3253,46 @@
 - **核销方式**：测试常驻——test_script_assets.py；季度体检：scripts/.meta 标记
   与内容哈希一致、run_script 引用不存在资产时报错引导而非内联。
 - **状态**：与阶段 4/5 后续批次同链（本批独立可验收，随阶段 4 提交或独立 commit）。
+
+### 73. 批次五十八 YAPL P4 执行器·阶段 4——调度器接线（schedule 注册 + 定时豁免 + 事后审计 + cron_gen 工具）（2026-08-23，设计单一事实来源 yapl-design.md §10.7/§11.4）
+
+- **背景**：P4 执行器层阶段 4：runbook schedule（cron + timezone）注册到现有
+  cron 调度器（不新造轮子）；定时触发 = 资产审批豁免（预审 runbook 跳过逐次
+  审批，不弹窗）+ 执行后记录 + 通知（事后审计，无人值守矛盾解法）；未预审
+  runbook 定时执行 → 拒绝并提示先过资产审批。cron_gen 工具承接 §10.7
+  "LLM 禁止手算 cron"——自然语言 → cron 确定性转换。
+- **怎么改**：
+  - `cron/jobs.py`：`create_job` 新增 `runbook` 参数（kebab-case 校验、
+    与 no_agent 互斥、job 字典落 `runbook` 标记 + 标签源）；runbook job 是
+    确定性 tick（无 LLM），prompt 可为空。
+  - `cron/scheduler.py`：`run_job` 在 no_agent 分支后、LLM 路径前插 runbook
+    分支——`_load_runbook` 缺失 → 失败通知；存在 → `execute_runbook(
+    scheduled=True)` 带 trigger_context（source=schedule、schedule.cron/
+    timezone 取实际触发的 job 调度，runbook 内声明式 schedule 兜底）；结果
+    摘要 + 每步状态 → 通知（事后审计）；ok/rolled_back 为成功。
+  - `tools/runbook_schedule.py`（新增）：`register_runbook_schedule`（幂等
+    注册/更新/注销，`use_cron_store` 隔离 VIGIL_HOME，job 名 `runbook:<名>`）
+    + `runbook_schedule_status`（只读查询）。runbook_create 落盘后同步调用
+    （失败仅日志，不阻断落盘）。
+  - `tools/cron_gen.py`（新增，toolset=runbook）：自然语言 → cron 确定性
+    转换（每 N 分钟/小时/天、每小时、每天 [时段词] H 点 [M 分] 与 HH:MM、
+    每周[星期X]、每月 D 日、每季度；中文/阿拉伯数字）+ 已给 cron 校验回显 +
+    tz IANA 验证与当前墙钟；未匹配/非法 → 报错引导，绝不猜测手算。时段词
+    语义：凌晨/早上/上午原值、中午→12、下午/晚上 +12（12 点不变）。
+  - 修复：工具发现机制只认模块顶层 `registry.register`——`runbook_exec.py` /
+    `script_assets.py` / `cron_gen.py` 原用 `_register()` 包装会被 AST 扫描
+    跳过（CLI 运行时 `runbook_execute`/`script_asset_*`/`cron_gen` 全部缺失，
+    阶段 1-3 埋的接线 bug），统一改为顶层注册。
+- **接线点（OPS-DELTA 注明）**：cron job schedule 由 `cron.jobs.parse_schedule`
+  解析（croniter），ticker 按 hermes 配置时区推进；runbook.schedule.timezone
+  是权威墙钟语义（校验 + 展示 + 执行记录），调度推进时区差异登记在案——hermes
+  配置时区 ≠ runbook timezone 时以 hermes 配置时区为准（ticker 机制不双跑）。
+- **测试**：tests/tools/test_runbook_schedule.py 23 例（cron_gen 13 组短语→
+  cron 全对 + 非法引导 + tz helper；注册/更新同步/注销/无 schedule noop；
+  定时触发预审豁免执行 + trigger_context 注入 + 执行记录 source=schedule +
+  未预审拒绝 + runbook 缺失报错 + 矩阵 required 下定时执行零审批回调）。
+- **核销方式**：测试常驻——test_runbook_schedule.py；季度体检：
+  `runbooks/<名>.yaml` 带 schedule 时 `vigil cron` 出现 `runbook:<名>` job，
+  触发后 `runtime/runbook_executions.jsonl` 记录 source=schedule；cron_gen
+  未匹配输入返回引导而非猜测。
+- **状态**：阶段 4 独立 commit（阶段 5 前端/实测随后）。

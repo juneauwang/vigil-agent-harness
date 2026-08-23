@@ -289,25 +289,23 @@ def _list_handler(args: Dict[str, Any], **kwargs) -> str:
     return script_asset_list()
 
 
-def _register() -> None:
-    registry.register(
-        name="script_asset_create",
-        toolset="runbook",
-        schema=_DEFAULT_CREATE_SCHEMA,
-        handler=_create_handler,
-        check_fn=lambda: True,
-        emoji="📜",
-        max_result_size_chars=8_000,
-    )
-    registry.register(
-        name="script_asset_list",
-        toolset="runbook",
-        schema=_DEFAULT_LIST_SCHEMA,
-        handler=_list_handler,
-        check_fn=lambda: True,
-        emoji="🗂️",
-        max_result_size_chars=8_000,
-    )
-
-
-_register()
+# 顶层 registry.register（工具发现机制只认模块顶层调用——_register() 包装会被
+# AST 扫描跳过，导致 CLI 运行时工具不加载；YAPL P1-3 曾踩此坑）。
+registry.register(
+    name="script_asset_create",
+    toolset="runbook",
+    schema=_DEFAULT_CREATE_SCHEMA,
+    handler=_create_handler,
+    check_fn=lambda: True,
+    emoji="📜",
+    max_result_size_chars=8_000,
+)
+registry.register(
+    name="script_asset_list",
+    toolset="runbook",
+    schema=_DEFAULT_LIST_SCHEMA,
+    handler=_list_handler,
+    check_fn=lambda: True,
+    emoji="🗂️",
+    max_result_size_chars=8_000,
+)

@@ -2894,6 +2894,83 @@ def run_job(
         return True, doc, output, None
 
     # ---------------------------------------------------------------
+    # YAPL P4 runbook 定时执行分支（§10.7 schedule + §11.4 执行豁免）——
+    # 确定性执行引擎，无 LLM。资产审批豁免（预审 runbook 跳过逐次审批）在
+    # runbook_exec.execute_runbook(scheduled=True) 内校验；执行记录 + 通知
+    # = 事后审计（无人值守矛盾解法）。未预审 → 拒绝并提示先过资产审批。
+    # ---------------------------------------------------------------
+    if job.get("runbook"):
+        rb_name = str(job.get("runbook") or "").strip()
+        from tools.runbook_exec import execute_runbook
+        from tools.runbook_tools import _hermes_home as _rb_home, _load_runbook
+        _rb_home_path = _rb_home()
+        data = _load_runbook(_rb_home_path, rb_name)
+        now_iso = _hermes_now().strftime("%Y-%m-%d %H:%M:%S")
+        if data is None:
+            err = (f"runbook {rb_name!r} 不存在——调度任务无法执行"
+                   f"（runbooks/{rb_name}.yaml 缺失或已被删除）")
+            logger.warning("Job '%s': %s", job_id, err)
+            doc = (f"# Cron Runbook: {rb_name}\n\n"
+                   f"**Job ID:** {job_id}\n**Run Time:** {now_iso}\n"
+                   f"**Mode:** runbook (scheduled)\n**Status:** failed\n\n{err}\n")
+            return False, doc, err, err
+        # trigger_context.schedule = 实际触发的 job 调度（job 是 firing 主体）；
+        # runbook 内声明式 schedule 作为回退（job 缺字段时兜底）。
+        job_sched = job.get("schedule") if isinstance(job.get("schedule"), dict) else {}
+        rb_sched = data.get("schedule") if isinstance(data.get("schedule"), dict) else {}
+        cron_expr = (
+            str(job.get("schedule_display") or job_sched.get("expr")
+                or job_sched.get("cron") or "").strip()
+            or str(rb_sched.get("cron") or "").strip()
+        )
+        tz = str(job.get("runbook_timezone") or rb_sched.get("timezone") or "").strip()
+        result = execute_runbook(
+            data,
+            env="",
+            home=_rb_home_path,
+            scheduled=True,
+            trigger_context={
+                "schedule": {
+                    "cron": cron_expr,
+                    "timezone": tz,
+                }
+            },
+        )
+        status = str(result.get("result") or "unknown")
+        lines = [
+            f"# Cron Runbook: {rb_name}",
+            "",
+            f"**Job ID:** {job_id}",
+            f"**Run Time:** {now_iso}",
+            f"**Mode:** runbook (scheduled)",
+            f"**Result:** {status}",
+            f"**Env:** {result.get('env') or ''}",
+            f"**Duration:** {result.get('duration_s')}s",
+        ]
+        if result.get("error"):
+            lines += ["", f"**Error:** {result['error']}"]
+        for step in result.get("steps") or []:
+            sid = str(step.get("id") or "?")
+            sstatus = str(step.get("status") or "?")
+            detail = ""
+            cmds = step.get("commands") or []
+            if cmds:
+                detail = " — " + "; ".join(
+                    str(c.get("desc") or "") for c in cmds if c.get("desc"))
+            elif step.get("error"):
+                detail = " — " + str(step["error"])[:200]
+            lines.append(f"- {sid}: {sstatus}{detail}")
+            if step.get("steps"):  # rollback 块
+                for rs in step["steps"]:
+                    lines.append(f"  · {rs.get('id')}: {rs.get('status')}")
+        output = "\n".join(lines) + "\n"
+        # 结果摘要作为最终消息送达（事后审计通知）。
+        alert = (f"⚠ Cron runbook '{rb_name}' {status}"
+                 + (f"：{result.get('error')}" if result.get("error") else ""))
+        ok = status in ("ok", "rolled_back")
+        return ok, output, output, (None if ok else (result.get("error") or alert))
+
+    # ---------------------------------------------------------------
     # Default (LLM) path — import and construct the agent machinery now
     # that we know we actually need it. Doing these imports here instead of
     # at module top keeps no_agent ticks from paying for AIAgent / SessionDB

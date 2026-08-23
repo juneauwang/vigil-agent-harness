@@ -1853,6 +1853,16 @@ def runbook_create(
     except Exception as exc:
         return tool_error(f"写入 runbook 失败: {exc}")
 
+    # YAPL P4（§10.7）：带 schedule 的 runbook 落盘后同步注册到现有 cron 调度器
+    # （幂等：按 runbook 标记更新/注销）。失败只记日志，不阻断落盘（调度可
+    # 后续用 vigil cron 手动补）。
+    try:
+        from tools.runbook_schedule import register_runbook_schedule
+        schedule = data.get("schedule") if v2_style else None
+        register_runbook_schedule(name, schedule, home)
+    except Exception as exc:
+        logger.warning("runbook 调度注册失败（不影响落盘）: %s", exc)
+
     return json.dumps(
         {
             "status": "updated" if exists else "created",
