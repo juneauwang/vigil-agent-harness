@@ -218,9 +218,14 @@ class TestCommandGeneration:
     def test_backup_restore_container(self):
         t = {**_nginx_target(), "managed_by": "docker"}
         b = rh.generate_commands("backup", {"target": "nginx", "dest": "/b/latest"}, t)[0]
-        assert b["cmd"] == "docker cp docker-nginx-1:/etc/nginx /b/latest"
+        assert b["cmd"] == "mkdir -p /b && docker cp docker-nginx-1:/etc/nginx /b/latest"
+        assert b["shell"] is True
         r = rh.generate_commands("restore", {"target": "nginx", "from": "/b/latest"}, t)[0]
-        assert r["cmd"] == "docker cp /b/latest docker-nginx-1:/etc/nginx"
+        assert r["cmd"] == "docker cp /b/latest/. docker-nginx-1:/etc/nginx/"
+        # 无目录层级 dest → 不包 mkdir，保持纯 argv 形态。
+        b2 = rh.generate_commands("backup", {"target": "nginx", "dest": "latest"}, t)[0]
+        assert b2["cmd"] == "docker cp docker-nginx-1:/etc/nginx latest"
+        assert b2["shell"] is False
 
     def test_package_os_dispatch(self):
         t = {**_nginx_target(), "type": "host", "managed_by": "", "os": "Ubuntu 24.04"}
@@ -359,6 +364,18 @@ class TestExecutionEngine:
         assert host["type"] == "host" and host["os"].startswith("Ubuntu")
         cluster = resolve_target(mhome, topo, "local")
         assert cluster["type"] == "cluster"
+
+    def test_local_endpoint_matches_interface_ip(self, mhome):
+        """本机服务 endpoint 是网卡 IP（非 hostname）时判定 local，不误走 SSH。"""
+        from tools.runbook_exec import _is_local_endpoint
+        from tools.topo_tools import load_topology
+        topo = load_topology(mhome)
+        svc = resolve_target(mhome, topo, "nginx")
+        assert svc.get("remote") is False
+        # 拓扑 endpoint = 172.18.120.67（本机 eth0，非 DNS 名）→ 必须判 local。
+        assert _is_local_endpoint(svc.get("endpoint"), svc.get("host")) is True
+        # 非本机地址 → remote。
+        assert _is_local_endpoint("10.203.0.9", svc.get("host")) is False
 
     def test_approval_execute_level_passes(self, mhome):
         res = execute_runbook(_rb(), home=mhome, runner=_ok_runner())

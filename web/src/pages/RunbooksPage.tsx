@@ -7,11 +7,19 @@ import {
   Clock,
   FileText,
   ListChecks,
+  Loader2,
+  Play,
   Terminal,
   TriangleAlert,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api";
-import type { RunbookDetailResponse, RunbookSummary } from "@/lib/api";
+import type {
+  RunbookDetailResponse,
+  RunbookExecution,
+  RunbookStepResult,
+  RunbookSummary,
+} from "@/lib/api";
 import { DetailTree } from "@/components/DetailTree";
 import { EmptyState } from "@/components/EmptyState";
 import { cn, yamlPreview } from "@/lib/ops";
@@ -347,6 +355,109 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+function ExecResultLabel({ result }: { result?: string }) {
+  const cls =
+    result === "ok" ? "text-[var(--vigil-ok)]"
+    : result === "rolled_back" ? "text-[var(--vigil-warn)]"
+    : result === "blocked" ? "text-[var(--vigil-warn)]"
+    : "text-[var(--vigil-error)]";
+  const label =
+    result === "ok" ? "成功"
+    : result === "rolled_back" ? "已回滚"
+    : result === "blocked" ? "被拦截"
+    : result === "failed" ? "失败"
+    : String(result ?? "未知");
+  return <span className={`font-semibold ${cls}`}>{label}</span>;
+}
+
+function ExecSteps({ steps }: { steps?: RunbookStepResult[] }) {
+  if (!steps || steps.length === 0) return null;
+  return (
+    <ol className="mt-2 space-y-1.5">
+      {steps.map((st, i) => {
+        const key = String(st.id ?? `step-${i}`);
+        const ok = st.ok || st.status === "ok";
+        const fail = st.status === "failed" || st.status === "blocked" || st.status === "error";
+        const desc = (st.commands ?? [])
+          .map((c) => c.desc ?? c.command ?? "")
+          .filter(Boolean)
+          .join("；");
+        return (
+          <li key={key} className="flex items-start gap-2 text-xs">
+            <span
+              className={`mt-0.5 shrink-0 rounded px-1.5 py-px font-mono text-[10px] ${
+                ok ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-ok)]"
+                : fail ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-error)]"
+                : "bg-[var(--vigil-muted-bg)] text-[var(--vigil-muted)]"
+              }`}
+            >
+              {String(st.status ?? "?")}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-[var(--vigil-text)] opacity-90">
+                {key}
+                {st.action ? <span className="ml-1.5 text-[var(--vigil-muted)]">· {String(st.action)}</span> : null}
+              </div>
+              {desc ? <div className="truncate text-[var(--vigil-muted)]">{desc}</div> : null}
+              {st.error ? <div className="text-[var(--vigil-error)]">{String(st.error).slice(0, 400)}</div> : null}
+              {st.steps && st.steps.length > 0 ? (
+                <div className="mt-1 border-l border-[var(--vigil-border)] pl-2">
+                  <div className="text-[10px] text-[var(--vigil-muted)]">回滚场景</div>
+                  <ExecSteps steps={st.steps} />
+                </div>
+              ) : null}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ExecConfirmModal({
+  name,
+  running,
+  onCancel,
+  onConfirm,
+}: {
+  name: string;
+  running: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-md rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-5 shadow-lg">
+        <div className="flex items-center gap-2">
+          <Play className="size-4 text-[var(--vigil-primary)]" />
+          <h2 className="text-sm font-semibold">执行 runbook</h2>
+          <button className="ml-auto rounded p-1 hover:bg-[var(--vigil-muted-bg)]" onClick={onCancel} aria-label="关闭" disabled={running}>
+            <X className="size-4" />
+          </button>
+        </div>
+        <p className="mt-3 text-sm text-[var(--vigil-text)] opacity-80">
+          确认执行 <code className="font-mono">{name}</code>？步骤按操作矩阵逐次裁决
+          （execute 直跑；approve / 强制人工 → 右下角审批卡，需人工确认）。
+        </p>
+        <div className="mt-5 flex justify-end gap-2">
+          <button type="button" className="vigil-btn border border-[var(--vigil-border)] px-3 py-1 text-xs" onClick={onCancel} disabled={running}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="vigil-btn px-3 py-1 text-xs"
+            onClick={onConfirm}
+            disabled={running}
+          >
+            {running ? <Loader2 className="mr-1 inline size-3.5 animate-spin" /> : null}
+            确认执行
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RunbooksPage() {
   const [searchParams] = useSearchParams();
   const urlName = searchParams.get("name");
@@ -355,6 +466,54 @@ export default function RunbooksPage() {
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [execModal, setExecModal] = useState(false);
+  const [execRunning, setExecRunning] = useState(false);
+  const [execResult, setExecResult] = useState<RunbookExecution | null>(null);
+  const [execError, setExecError] = useState<string | null>(null);
+  const [history, setHistory] = useState<RunbookExecution[]>([]);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getRunbookExecutions(20)
+      .then((resp) => {
+        if (alive && resp.ok && resp.data) setHistory(resp.data.executions);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const refreshHistory = () => {
+    api
+      .getRunbookExecutions(20)
+      .then((resp) => {
+        if (resp.ok && resp.data) setHistory(resp.data.executions);
+      })
+      .catch(() => {});
+  };
+
+  const runSelected = () => {
+    if (!selected || execRunning) return;
+    setExecRunning(true);
+    setExecError(null);
+    setExecResult(null);
+    setExecModal(false);
+    api
+      .runRunbook(selected)
+      .then((resp: { ok: boolean; error?: string; data?: RunbookExecution }) => {
+        if (resp.ok && resp.data) setExecResult(resp.data);
+        else setExecError(resp.error ?? "执行失败");
+      })
+      .catch((e: unknown) => {
+        setExecError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        setExecRunning(false);
+        refreshHistory();
+      });
+  };
 
   useEffect(() => {
     let alive = true;
@@ -482,17 +641,103 @@ export default function RunbooksPage() {
               {detailError}
             </div>
           ) : detail ? (
-            <div className="vigil-card p-5">
-              <div className="mb-3 flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-semibold">{String(detail.title ?? detail.name ?? "")}</h2>
-                <EnvTag env={String(detail.env ?? "")} />
-                <KindTag kind={String(detail.kind ?? "")} checklist={Boolean(detail.checklist)} />
+            <div className="space-y-4">
+              <div className="vigil-card p-5">
+                <div className="mb-3 flex flex-wrap items-center gap-2">
+                  <h2 className="text-base font-semibold">{String(detail.title ?? detail.name ?? "")}</h2>
+                  <EnvTag env={String(detail.env ?? "")} />
+                  <KindTag kind={String(detail.kind ?? "")} checklist={Boolean(detail.checklist)} />
+                  {String(detail.version) === "2" ? (
+                    <button
+                      type="button"
+                      className="vigil-btn ml-auto border border-[var(--vigil-primary)]/40 px-3 py-1 text-xs"
+                      onClick={() => setExecModal(true)}
+                      disabled={execRunning}
+                    >
+                      {execRunning ? <Loader2 className="mr-1 inline size-3.5 animate-spin" /> : <Play className="mr-1 inline size-3.5" />}
+                      {execRunning ? "执行中…" : "执行"}
+                    </button>
+                  ) : null}
+                </div>
+                <RunbookDetail data={detail} />
               </div>
-              <RunbookDetail data={detail} />
+
+              {execResult ? (
+                <div className="vigil-card p-5">
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    <h3 className="text-xs font-semibold">执行结果</h3>
+                    <ExecResultLabel result={String(execResult.result ?? "")} />
+                    <span className="text-[10px] text-[var(--vigil-muted)]">
+                      {String(execResult.ts ?? "")} · {String(execResult.env ?? "")} ·{" "}
+                      {(execResult.duration_s ?? 0).toFixed(1)}s
+                    </span>
+                  </div>
+                  {execResult.error ? (
+                    <p className="mt-2 break-words text-xs text-[var(--vigil-error)]">{execResult.error}</p>
+                  ) : null}
+                  <ExecSteps steps={execResult.steps} />
+                </div>
+              ) : null}
+
+              {execError ? (
+                <div className="vigil-card border-dashed p-5 text-sm text-[var(--vigil-error)]">
+                  执行失败：{execError}
+                </div>
+              ) : null}
+
+              <div className="vigil-card p-5">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs font-semibold">执行历史（最近 {history.length} 次）</h3>
+                  <button
+                    type="button"
+                    className="ml-auto rounded border border-[var(--vigil-border)] px-2 py-0.5 text-[10px] hover:border-[var(--vigil-primary)]"
+                    onClick={refreshHistory}
+                  >
+                    刷新
+                  </button>
+                </div>
+                {history.length > 0 ? (
+                  <table className="vigil-table mt-2">
+                    <thead>
+                      <tr>
+                        <th>runbook</th>
+                        <th>时间</th>
+                        <th>来源</th>
+                        <th>结果</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {history.map((h, i) => (
+                        <tr key={`${String(h.runbook ?? "")}-${String(h.ts ?? "")}-${i}`}>
+                          <td className="font-mono text-xs">{String(h.runbook ?? "")}</td>
+                          <td className="text-xs text-[var(--vigil-muted)]">{String(h.ts ?? "")}</td>
+                          <td className="text-xs text-[var(--vigil-muted)]">{String(h.source ?? "")}</td>
+                          <td className="text-xs">
+                            <ExecResultLabel result={String(h.result ?? "")} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <p className="mt-2 text-xs text-[var(--vigil-muted)]">
+                    暂无执行记录（交互 / 定时执行都会落到 runtime/runbook_executions.jsonl）
+                  </p>
+                )}
+              </div>
             </div>
           ) : null}
         </div>
       </div>
+
+      {execModal && (
+        <ExecConfirmModal
+          name={selected ?? ""}
+          running={execRunning}
+          onCancel={() => setExecModal(false)}
+          onConfirm={runSelected}
+        />
+      )}
     </div>
   );
 }

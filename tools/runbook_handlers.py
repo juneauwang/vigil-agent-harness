@@ -411,6 +411,15 @@ def _backup(params: Dict[str, Any], target: Dict[str, Any], name: str,
         if not container:
             raise UnsupportedCommand(f"backup 目标 {name!r} 缺 docker 容器名")
         src = _backup_src(target, params)
+        parent = dest.rsplit("/", 1)[0] if "/" in dest else ""
+        if parent:
+            # docker cp 要求目标父目录存在——先 mkdir -p（本地主机侧）。
+            return [{
+                "cmd": (f"mkdir -p {_q(parent)} && "
+                        f"docker cp {_q(container)}:{_q(src)} {_q(dest)}"),
+                "shell": True, "sudo": False,
+                "desc": f"docker cp {container}:{src} {dest}",
+            }]
         return [{"cmd": f"docker cp {_q(container)}:{_q(src)} {_q(dest)}",
                  "shell": False, "sudo": False,
                  "desc": f"docker cp {container}:{src} {dest}"}]
@@ -421,6 +430,14 @@ def _backup(params: Dict[str, Any], target: Dict[str, Any], name: str,
                 f"backup 主机目标 {name!r} 需要 src 参数（备份哪个路径），"
                 "例如 src=/etc/nginx"
             )
+        parent = dest.rsplit("/", 1)[0] if "/" in dest else ""
+        if parent:
+            return [{
+                "cmd": (f"mkdir -p {_q(parent)} && "
+                        f"tar -czf {_q(dest)} {_q(src)}"),
+                "shell": True, "sudo": True,
+                "desc": f"tar -czf {dest} {src}",
+            }]
         return [{"cmd": f"tar -czf {_q(dest)} {_q(src)}", "shell": False,
                  "sudo": True, "desc": f"tar -czf {dest} {src}"}]
     raise UnsupportedCommand(
@@ -439,9 +456,11 @@ def _restore(params: Dict[str, Any], target: Dict[str, Any], name: str,
         if not container:
             raise UnsupportedCommand(f"restore 目标 {name!r} 缺 docker 容器名")
         dst = _backup_src(target, params)
-        return [{"cmd": f"docker cp {_q(src)} {_q(container)}:{_q(dst)}",
+        # 目录复原语义：src 是 backup 产物目录 → 内容拷入 dst（拖尾 /. 与 /，
+        # 避免 docker cp 把 src 目录塞成 dst/src 子目录）。
+        return [{"cmd": f"docker cp {_q(src)}/. {_q(container)}:{_q(dst)}/",
                  "shell": False, "sudo": False,
-                 "desc": f"docker cp {src} {container}:{dst}"}]
+                 "desc": f"docker cp {src}/. {container}:{dst}/"}]
     if etype == "host" or mb == "bare":
         dst = str(params.get("dest") or "").strip() or _backup_src(target, params)
         return [{"cmd": f"tar -xzf {_q(src)} -C {_q(dst)}", "shell": False,
