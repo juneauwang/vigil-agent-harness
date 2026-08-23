@@ -138,7 +138,10 @@ def test_discover_maps_services_ports_images():
     assert names["harbor"]["managed_by"] == "docker_compose"
     assert names["harbor"]["endpoint"] == "203.0.113.20:30443"
     assert names["harbor"]["detail"] == "entities/prod__203.0.113.20__harbor.yaml"
-    assert names["postgres"]["type"] == "db"
+    # compose 项目 db（service postgres，无同名 service）→ 聚合为项目名 db 一条。
+    assert names["db"]["type"] == "db"
+    assert names["db"]["managed_by"] == "docker_compose"
+    assert names["db"]["endpoint"] == "203.0.113.20:5432"
     # k8s 枚举：grafana svc（nodePort 30030）+ deploy（镜像）→ managed_by kubectl。
     assert names["grafana"]["type"] == "monitor"
     assert names["grafana"]["managed_by"] == "kubectl"
@@ -159,7 +162,10 @@ def test_discover_maps_services_ports_images():
         "replication_targets": [], "storage_backend": "",
     }
     assert d["details"]["harbor"]["snapshot"]["by_runtime"]["docker_compose"]["project"] == "harbor"
-    assert d["details"]["postgres"]["snapshot"]["by_type"] == {
+    assert d["details"]["harbor"]["snapshot"]["by_runtime"]["docker_compose"]["services"] == [
+        {"name": "harbor", "state": "running"},
+    ]
+    assert d["details"]["db"]["snapshot"]["by_type"] == {
         "backup_dir": "", "role": "standalone",
     }
     assert names["grafana"]["detail"] == "entities/prod__203.0.113.20__grafana.yaml"
@@ -262,6 +268,177 @@ def test_discover_parses_compose_ls_plain_fallback():
     assert d["probes"]["compose"] == "ok(1 projects)"
     assert d["details"]["harbor"]["snapshot"]["by_runtime"]["docker_compose"]["project"] == "harbor"
     assert "attrs" not in d["host"]
+
+
+# ---------------------------------------------------------------------------
+# 批六十七：compose 项目聚合（9.3）+ helm release 探测（9.5 补缺口）
+# ---------------------------------------------------------------------------
+
+COMPOSE_PS_MULTI = """\
+{"Command":"","ID":"1","Image":"nginx:1.25","Labels":"com.docker.compose.project=web-app,com.docker.compose.service=nginx,com.docker.compose.project.working_dir=/opt/web-app","Names":"web-app-nginx-1","Ports":"0.0.0.0:8080->80/tcp","State":"running"}
+{"Command":"","ID":"2","Image":"postgres:16","Labels":"com.docker.compose.project=web-app,com.docker.compose.service=db,com.docker.compose.project.working_dir=/opt/web-app","Names":"web-app-db-1","Ports":"0.0.0.0:5432->5432/tcp","State":"running"}
+{"Command":"","ID":"3","Image":"redis:7","Labels":"com.docker.compose.project=web-app,com.docker.compose.service=cache,com.docker.compose.project.working_dir=/opt/web-app","Names":"web-app-cache-1","Ports":"127.0.0.1:6379->6379/tcp, 0.0.0.0:8081->8081/tcp","State":"running"}
+"""
+
+COMPOSE_PS_SAME_NAME = """\
+{"Command":"","ID":"4","Image":"goharbor/harbor-core:v2.15.1","Labels":"com.docker.compose.project=harbor-local,com.docker.compose.service=core","Names":"harbor-core","Ports":"","State":"running"}
+{"Command":"","ID":"5","Image":"goharbor/nginx-photon:v2.15.1","Labels":"com.docker.compose.project=harbor-local,com.docker.compose.service=harbor","Names":"harbor-proxy","Ports":"0.0.0.0:30443->8443/tcp","State":"running"}
+"""
+
+COMPOSE_PS_NO_PORT = """\
+{"Command":"","ID":"6","Image":"langgenius/dify-api:1.14","Labels":"com.docker.compose.project=dify,com.docker.compose.service=api","Names":"dify-api-1","Ports":"","State":"running"}
+{"Command":"","ID":"7","Image":"nginx:latest","Labels":"com.docker.compose.project=dify,com.docker.compose.service=nginx","Names":"dify-nginx-1","Ports":"","State":"restarting"}
+"""
+
+DOCKER_RUN_SINGLE = """\
+{"Command":"","ID":"8","Image":"registry:2","Labels":"","Names":"kind-registry","Ports":"0.0.0.0:5000->5000/tcp","State":"running"}
+"""
+
+KUBE_HARBOR = (
+    '{"items":['
+    '{"kind":"Service","metadata":{"name":"harbor","namespace":"harbor"},'
+    '"spec":{"ports":[{"port":80,"nodePort":30443}]}},'
+    '{"kind":"Deployment","metadata":{"name":"harbor","namespace":"harbor"},'
+    '"spec":{"template":{"spec":{"containers":[{"image":"goharbor/harbor-core:v2.15.1"}]}}}}'
+    ']}'
+)
+
+HELM_LIST = json.dumps([
+    {"name": "grafana", "namespace": "monitoring", "revision": "3",
+     "updated": "2026-08-01", "status": "deployed", "chart": "grafana-8.0.0",
+     "app_version": "11.0"},
+    {"name": "cilium", "namespace": "kube-system", "revision": "2",
+     "updated": "2026-08-01", "status": "deployed", "chart": "cilium-1.16.19",
+     "app_version": "1.16.19"},
+])
+
+
+def _docker_runner(**overrides):
+    return FakeRunner(**{
+        "docker ps": "",
+        "compose ls": "",
+        "kubectl": "",
+        "ss -tlnp": "",
+        "nvidia-smi": "",
+        **overrides,
+    })
+
+
+def test_compose_project_aggregates_to_single_row():
+    """9.3：多容器 compose 项目 → 一条服务行；容器细节进 L3 状态列表。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": COMPOSE_PS_MULTI}))
+    names = {s["name"]: s for s in d["services"]}
+    assert set(names) == {"web-app"}                       # 3 容器 → 1 条
+    svc = names["web-app"]
+    assert svc["managed_by"] == "docker_compose"
+    assert svc["type"] == "gateway"                        # 主 service nginx
+    assert svc["endpoint"] == "10.0.0.9:8080"              # 首个 published 端口
+    assert svc["extra_ports"] == [5432, 6379, 8081]        # 其余去重
+    assert svc["detail"] == "entities/dev__10.0.0.9__web-app.yaml"
+    dc = d["details"]["web-app"]["snapshot"]["by_runtime"]["docker_compose"]
+    assert dc["project"] == "web-app"
+    assert dc["workdir"] == "/opt/web-app"                 # working_dir label
+    assert dc["services"] == [                              # 容器状态列表
+        {"name": "web-app-nginx-1", "state": "running"},
+        {"name": "web-app-db-1", "state": "running"},
+        {"name": "web-app-cache-1", "state": "running"},
+    ]
+    # 项目 published 端口全部进 seen_ports → ss 不补 unidentified。
+    assert not any(s["name"].startswith("unidentified-") for s in d["services"])
+
+
+def test_compose_same_name_service_preferred():
+    """命名规则：与项目同名的 compose service 优先（harbor-local → harbor）。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": COMPOSE_PS_SAME_NAME}))
+    names = {s["name"]: s for s in d["services"]}
+    assert set(names) == {"harbor"}
+    assert names["harbor"]["type"] == "registry"
+    assert names["harbor"]["managed_by"] == "docker_compose"
+    assert names["harbor"]["endpoint"] == "10.0.0.9:30443"
+    assert d["details"]["harbor"]["snapshot"]["by_runtime"]["docker_compose"][
+        "project"] == "harbor-local"
+
+
+def test_compose_no_same_name_service_falls_back_project_name():
+    """命名规则：无同名 service → 用项目名（dify 项目 → dify）。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": COMPOSE_PS_NO_PORT}))
+    names = {s["name"]: s for s in d["services"]}
+    assert set(names) == {"dify"}
+    assert names["dify"]["endpoint"] is None               # 无 published 端口 → null
+    assert names["dify"]["type"] == "app"
+    assert d["details"]["dify"]["snapshot"]["by_runtime"]["docker_compose"]["workdir"] == ""
+
+
+def test_compose_name_yields_to_k8s_same_name():
+    """命名规则：compose 同名 service 与 k8s 服务重名 → compose 退让项目名。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": COMPOSE_PS_SAME_NAME, "kubectl": KUBE_HARBOR}))
+    names = {s["name"]: s for s in d["services"]}
+    assert names["harbor"]["managed_by"] == "kubectl"      # k8s 行保持
+    assert names["harbor"]["endpoint"] == "10.0.0.9:30443"
+    assert names["harbor-local"]["managed_by"] == "docker_compose"
+    assert d["details"]["harbor"]["snapshot"]["by_runtime"]["kubectl"]["namespace"] == "harbor"
+    assert d["details"]["harbor-local"]["snapshot"]["by_runtime"]["docker_compose"][
+        "project"] == "harbor-local"
+
+
+def test_docker_run_single_container_keeps_container_granularity():
+    """无 compose_project 的 docker run 单容器 → 容器粒度一条（managed_by docker）。"""
+    d = discover_host("10.0.0.9", "dev", runner=_docker_runner(
+        **{"docker ps": DOCKER_RUN_SINGLE}))
+    names = {s["name"]: s for s in d["services"]}
+    assert set(names) == {"kind-registry"}
+    svc = names["kind-registry"]
+    assert svc["managed_by"] == "docker"
+    assert svc["type"] == "registry"
+    assert svc["endpoint"] == "10.0.0.9:5000"
+    docker_block = d["details"]["kind-registry"]["snapshot"]["by_runtime"]["docker"]
+    assert docker_block["containers"] == [{"name": "kind-registry", "state": "running"}]
+    assert docker_block["port_mapping"] == {"5000": ""}
+    assert docker_block["image"] == "registry:2"
+
+
+def test_helm_releases_attached_to_k8s_entity_and_extra():
+    """helm release → k8s svc 实体档案 by_runtime.helm.releases；未关联单独记录。"""
+    d = discover_host("203.0.113.20", "prod", runner=_docker_runner(
+        **{"kubectl": KUBE, "helm list": HELM_LIST}))
+    assert d["probes"]["helm"] == "ok(2 releases)"
+    # grafana svc（monitoring ns）匹配 grafana release → 挂实体档案。
+    helm_block = d["details"]["grafana"]["snapshot"]["by_runtime"]["helm"]
+    assert helm_block["releases"] == [{
+        "name": "grafana", "namespace": "monitoring", "revision": "3",
+        "status": "deployed", "chart": "grafana-8.0.0",
+    }]
+    # 未匹配（cilium，无同名 svc）→ 单独记录 {env}-helm-extra 实体档案。
+    extra = d["details"]["prod-helm-extra"]
+    assert extra["snapshot"]["by_runtime"]["helm"]["releases"] == [{
+        "name": "cilium", "namespace": "kube-system", "revision": "2",
+        "status": "deployed", "chart": "cilium-1.16.19",
+    }]
+    assert extra["detail"] == "entities/prod__203.0.113.20__prod-helm-extra.yaml"
+    # k8s 服务行本身不变（managed_by kubectl，粒度不拆）。
+    svc = next(s for s in d["services"] if s["name"] == "grafana")
+    assert svc["managed_by"] == "kubectl"
+
+
+def test_helm_unavailable_is_skipped_not_blocking():
+    """helm 不存在/失败 → skipped 记录，其余探针照常，不阻塞发现。"""
+    d = discover_host("203.0.113.20", "prod", runner=_docker_runner(
+        **{"kubectl": KUBE, "helm list": ProbeResult("", 127)}))
+    assert d["probes"]["helm"] == "skipped（helm 不可用）"
+    assert {s["name"] for s in d["services"]} == {"grafana"}
+    assert "prod-helm-extra" not in d["details"]
+
+
+def test_helm_not_probed_when_kubectl_unavailable():
+    """kubectl 不可用 → helm 探针不运行（前提不成立），probes 只记 kubectl。"""
+    runner = _docker_runner(**{"kubectl": ProbeResult("", 127, "kubectl: command not found")})
+    d = discover_host("203.0.113.20", "prod", runner=runner)
+    assert "helm" not in d["probes"]
+    assert d["probes"]["kubectl"] == "skipped（kubectl 不可用）"
 
 
 def test_discover_docker_permission_denied_is_explicit():
@@ -866,7 +1043,7 @@ def test_write_discovery_writes_v4_structure(tmp_path):
     assert data["updated_at"]
     # unidentified 端口在 pending_review，不入服务索引 → 3 条。
     assert {s["name"] for s in data["services"]} == {
-        "harbor", "postgres", "grafana"}
+        "harbor", "db", "grafana"}
 
     topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
     assert topo["version"] == 4
@@ -901,7 +1078,7 @@ def test_write_discovery_writes_v4_structure(tmp_path):
     try:
         from tools.topo_tools import topo_query
         node = json.loads(topo_query(host="203.0.113.20"))
-        assert {s["name"] for s in node["services"]} >= {"harbor", "postgres"}
+        assert {s["name"] for s in node["services"]} >= {"harbor", "db"}
     finally:
         hc._LOAD_CONFIG_CACHE.clear()
 
@@ -994,24 +1171,24 @@ def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path)
         yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
     )
 
-    # 重扫：发现结果比现有索引多一个 db 服务 → 只追加 db。
+    # 重扫：发现结果比现有索引多一个 redis 服务 → 只追加 redis。
     d2 = dict(d)
     d2["services"] = list(d["services"]) + [{
-        "name": "db", "type": "db", "managed_by": "docker_compose",
-        "endpoint": "203.0.113.20:5433", "source": "discovered",
+        "name": "redis", "type": "cache", "managed_by": "docker_compose",
+        "endpoint": "203.0.113.20:6379", "source": "discovered",
         "last_verified": "2026-08-14", "needs_review": True,
-        "detail": "entities/prod__203.0.113.20__db.yaml",
+        "detail": "entities/prod__203.0.113.20__redis.yaml",
     }]
     d2["details"] = dict(d["details"])
-    d2["details"]["db"] = {
-        "name": "db", "detail": "entities/prod__203.0.113.20__db.yaml",
-        "version": "16", "updated_at": "2026-08-14",
+    d2["details"]["redis"] = {
+        "name": "redis", "detail": "entities/prod__203.0.113.20__redis.yaml",
+        "version": "7", "updated_at": "2026-08-14",
         "checks": [],
         "snapshot": {
             "captured_at": "2026-08-14T00:00:00+00:00", "source": "discovered",
-            "common": {"version": "16", "config_dir": "", "log_dir": "", "data_dir": "", "mode": "single"},
-            "by_type": {"backup_dir": "", "role": "standalone"},
-            "by_runtime": {"docker_compose": {"project": "db", "workdir": "", "services": []}},
+            "common": {"version": "7", "config_dir": "", "log_dir": "", "data_dir": "", "mode": "single"},
+            "by_type": {"persistence": "none"},
+            "by_runtime": {"docker_compose": {"project": "redis", "workdir": "", "services": []}},
         },
         "notes": "",
     }
@@ -1025,10 +1202,10 @@ def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path)
     assert names["app"]["endpoint"] == "203.0.113.20:8080"   # 手动行保留
     assert names["app"]["source"] == "manual"                # 手动行不被覆盖
     assert names["app"]["needs_review"] is False
-    assert names["db"]["endpoint"] == "203.0.113.20:5433"    # 新服务追加
+    assert names["redis"]["endpoint"] == "203.0.113.20:6379"  # 新服务追加
     assert names["harbor"]["endpoint"] == "203.0.113.20:30443"  # 原自动行保留
-    # db 实体文件新写入；app 手动实体文件不被创建/覆盖。
-    assert (home / "entities" / "prod__203.0.113.20__db.yaml").is_file()
+    # redis 实体文件新写入；app 手动实体文件不被创建/覆盖。
+    assert (home / "entities" / "prod__203.0.113.20__redis.yaml").is_file()
     assert not (home / "entities" / "prod__203.0.113.20__app.yaml").exists()
 
 

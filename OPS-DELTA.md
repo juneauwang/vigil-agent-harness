@@ -3891,3 +3891,80 @@
   （无审计写入）、unknown 不计入、30 天窗口、coverage_pct 舍入、_query 管道
   shell 修复不回归。
 - **状态**：独立 feat commit（runbook 执行锁 + 覆盖率仪表盘批次）。
+
+### 82. 拓扑发现粒度规范化——compose 项目聚合 + helm release 探测（2026-08-23，设计 9.3/9.5 最后缺口）
+
+- **背景**：batch52 遗留待办①——compose 粒度（现为容器粒度，本机 harbor 拆 8
+  条）+ helm release 探测缺口（by_runtime.helm.releases 从未填充，设计 9.5）。
+  9.3 粒度定案：docker compose = 项目一条（容器细节进第三层）、k8s = service
+  一条（已实现，本批只验证不改）、systemd = 单元一条。
+- **新增**（`tools/topo_discovery.py`，读取端/前端零改动，拓扑展示自动适应）：
+  - **compose 项目聚合**：docker ps 容器按 `com.docker.compose.project` 分组 →
+    每个项目产一条服务行。命名规则（9.3）：默认取与项目同名的 compose service
+    名（项目名剥环境后缀 -local/-dev/-prod/-test/-staging/-uat 后与 service
+    同名也算应用主 service——harbor-local 内有 service harbor → name: harbor）；
+    直接同名优先（nocobase 项目内 service nocobase）；无 → 项目名。**与 k8s
+    服务同名时 compose 退让项目名**（k8s 行已实现不改，同机 compose + k8s 双跑
+    保持 k8s 服务名）。type 按 9.7 判定表对项目主 service 归类；endpoint 取项目
+    内有 published 端口的容器主端口（第一个，无 → null）；extra_ports 其余
+    published 端口去重；depends_on/log_paths 照旧。第三层档案
+    `by_runtime.docker_compose = {project, workdir（working_dir label，探测不到
+    空）, services: [{name: 容器名, state}]}`（状态列表，快照记状态不记配置）。
+    无 compose_project 的 docker run 单容器 → 保持容器粒度一条（name = 容器名，
+    managed_by: docker，by_runtime.docker）。
+  - **helm release 探测**：kubectl 可用时 `helm list -A -o json`（失败 skipped
+    不阻塞）。k8s service 条目**不变**（粒度不拆，managed_by 保持 kubectl），
+    release 细节写该实体档案 `by_runtime.helm.releases = [{name, chart, revision,
+    status, namespace}]`。关联规则：release 的 (namespace, name) 与 k8s svc 实体
+    完全匹配才挂载；关联不上（集群级组件如 cilium/istio-base）→ 单独记录
+    `{cluster|env|default}-helm-extra` 实体档案（与实体文件名同源兜底），待集群
+    实体档案（设计 9.5 预留）落地后迁入。
+  - k8s 探针前置：kubectl 探测移到 docker 之前（compose 聚合命名需知道 k8s 服务
+    名），probe 顺序变化仅影响 probes 字典展示顺序，runtime 判定结果不变。
+- **语义边界**：第一层治理字段（owner/os/credentials）不覆盖（本机 host 行保留）；
+  快照记状态不记配置内容；helm 信息只是档案补充不参与 managed_by 判定；阿里云
+  3 台未补跑（本批只重建本机，补跑命令 `vigil topo-discover -e prod -H
+  <host>`，凭据就绪后执行）。
+- **顺手修**：`_parse_published_ports` 只认 host 已发布端口（含 `->` 映射）——
+  容器内部端口（`5001/tcp` 无 host 映射）不再视为 published。存量解析偏差：此前
+  dify 项目 api 容器行 endpoint 记 LAPTOP:5001（实际不可达）；修复后项目 endpoint
+  取真实 published 端口（plugin_daemon 5003）。
+- **P2/P4 兼容检查（结果：差异报告，未改 runbook）**：`nginx-config-update`
+  （v0.2，target: nginx）——dify compose 项目聚合实体名为 `docker`（项目名，无
+  同名/剥后缀 service），target `nginx` 不再命中拓扑 → `resolve_target` 拒绝执行
+  （"target 'nginx' 不在拓扑表"）。按任务约束不擅自改 runbook/实体；建议后续：
+  runbook target 改 `docker`（handler 按 compose_service label 执行，语义不变）
+  或对实体建别名。`harbor-restart`（v0.1 老执行路径）不受影响。
+- **测试**：`tests/tools/test_topo_discovery.py` +8 例（多容器项目聚合一条 +
+  extra_ports 去重 + L3 services 状态列表 + workdir；同名 service 优先；无同名
+  退让项目名；k8s 同名冲突 compose 退让；docker run 单容器保持容器粒度；helm
+  匹配挂实体 + 未关联单独记录；helm 失败 skipped；kubectl 不可用 helm 不探测）；
+  存量断言 postgres→db 对齐（db 项目聚合）。回归：topo_discovery/v4/v2/tools/
+  status_sync/batch39/update_contract/credential_fail_closed/ssh_auth_breaker/
+  sudo_exec/batch33/topo_slash/runbook_exec/lock 14 套件 **249 passed / 6
+  skipped**。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv 重启，
+  pid 76871；VIGIL_DASHBOARD_SESSION_TOKEN=vigil-monitor-test-9131）：
+  - 备份后删除本机 services/LAPTOP-T2JA2ERE.yaml + entities/local__laptop-t2ja2ere__*.yaml
+    （备份 ~/notes/backups/vigil-topo-v4-20260823-before-compose-aggregate/）；
+    重跑 `vigil topo-discover -e local --yes` 重建。
+  - **服务条数收敛：59 → 46**。compose 聚合实体命名清单（供核对）：docker（dify，
+    gateway，endpoint LAPTOP:5003 = plugin_daemon 真实 published，extra [8777]）、
+    harbor-local（registry，1514，k8s harbor 同名冲突退让项目名）、code（app，
+    3000，extra [8765]）、auto_ssh_serve_platform（app，8000）、nocobase（app，
+    13000，extra [5432]）、kind-registry（docker run 单容器，容器粒度）。
+  - 档案结构：docker 实体 `by_runtime.docker_compose = {project: docker,
+    workdir: /home/wpwang/dify/docker, services: [13 容器状态]}`；harbor 实体
+    kubectl（ns harbor）+ helm（release harbor/harbor-1.19.1/revision 1）；匹配
+    实体 istio-ingress/istiod 均挂 helm releases；`local-helm-extra` 实体记
+    cilium + istio-base（未关联集群级组件）。
+  - `GET /api/topology`（无 token loopback 可读）：LAPTOP 46 服务，compose 行
+    在列，nginx 不在（runbook 差异如上）。
+  - 治理字段保留：topology.yaml 本机 host 行 owner/credentials 原样未覆盖。
+  - 本机 helm 实际存在（5 releases）→ 走真实探测路径而非 skipped（任务书预期
+    本机无 helm，实测有，更完整）。
+- **核销方式**：测试常驻——test_topo_discovery 8 新增例 + 存量 topo 回归；季度
+  体检：compose 聚合命名规则（同名/剥后缀/k8s 退让）、endpoint 取真实 published
+  端口、L3 services 状态列表、helm 关联规则（匹配/单独记录）、managed_by 保持
+  kubectl、治理字段不覆盖、阿里云补跑。
+- **状态**：独立 feat commit（拓扑发现粒度规范化批次）。

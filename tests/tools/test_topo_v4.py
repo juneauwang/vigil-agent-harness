@@ -278,7 +278,7 @@ def test_snapshot_by_type_branches_per_service():
     })
     d = discover_host("node-x", "dev", runner=runner)
     by_name = {n: det["snapshot"]["by_type"] for n, det in d["details"].items()}
-    assert by_name["postgres"] == {"backup_dir": "", "role": "standalone"}
+    assert by_name["db"] == {"backup_dir": "", "role": "standalone"}
     assert by_name["harbor"] == {"replication_targets": [], "storage_backend": ""}
 
 

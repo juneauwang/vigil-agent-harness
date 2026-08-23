@@ -430,6 +430,8 @@ def _parse_docker_ps(output: str) -> List[Dict[str, Any]]:
             "state": str(row.get("State") or "").strip(),
             "compose_project": labels_map.get("com.docker.compose.project", ""),
             "compose_service": labels_map.get("com.docker.compose.service", ""),
+            "compose_workdir": labels_map.get(
+                "com.docker.compose.project.working_dir", ""),
         })
     return [c for c in containers if c["name"]]
 
@@ -451,20 +453,34 @@ def _docker_first_name(names) -> str:
 
 
 def _parse_published_ports(ports_str: str) -> List[int]:
-    """'0.0.0.0:30443->5000/tcp, :::30443->5000/tcp' → [30443]（去重）。"""
+    """'0.0.0.0:30443->5000/tcp, :::30443->5000/tcp' → [30443]（去重）。
+
+    只认 host 已发布端口（含 ``->`` 的映射）；容器内部端口（``5001/tcp``
+    无 host 映射）不视为 published——compose 项目聚合的 endpoint 必须是
+    主机可达地址（OPS-DELTA #82 顺修存量解析偏差）。
+    """
     ports: List[int] = []
     for part in str(ports_str).split(","):
         part = part.strip()
         m = re.match(r".*?(\d+)->", part)
         if m:
             port = int(m.group(1))
-        else:
-            m = re.match(r".*?(\d+)/", part)
-            if not m:
-                continue
-            port = int(m.group(1))
-        if port not in ports:
-            ports.append(port)
+            if port not in ports:
+                ports.append(port)
+    return ports
+
+
+def _svc_ports(svc: Dict[str, Any]) -> List[int]:
+    """服务行 endpoint 主端口 + extra_ports（供 ss 未识别端口过滤）。"""
+    ports: List[int] = []
+    ep = svc.get("endpoint")
+    if ep and ":" in str(ep):
+        try:
+            ports.append(int(str(ep).rsplit(":", 1)[-1]))
+        except ValueError:
+            pass
+    ports.extend(int(p) for p in (svc.get("extra_ports") or [])
+                 if isinstance(p, (int, str)) and str(p).isdigit())
     return ports
 
 
@@ -489,6 +505,29 @@ def _parse_compose_ls(output: str) -> List[str]:
         if line and not line.startswith("NAME"):
             projects.append(line.split()[0])
     return projects
+
+
+def _parse_helm_list(output: str) -> List[Dict[str, Any]]:
+    """helm list -A -o json → [{name, chart, revision, status, namespace}]。"""
+    try:
+        data = json.loads(output or "[]")
+    except json.JSONDecodeError:
+        return []
+    releases: List[Dict[str, Any]] = []
+    for row in data or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        releases.append({
+            "name": name,
+            "chart": str(row.get("chart") or "").strip(),
+            "revision": str(row.get("revision") or "").strip(),
+            "status": str(row.get("status") or "").strip(),
+            "namespace": str(row.get("namespace") or "").strip(),
+        })
+    return releases
 
 
 def _parse_ss_tlnp(output: str) -> List[Dict[str, Any]]:
@@ -938,6 +977,180 @@ def _probe(runner: Callable[[str], ProbeResult], cmd: str) -> ProbeResult:
     return runner(cmd)
 
 
+def _by_type_block(service_type: str) -> Dict[str, Any]:
+    """type 专属静态事实（9.5 by_type 分支；大部分 type 空是诚实的）。"""
+    if service_type == "db":
+        return {"backup_dir": "", "role": "standalone"}
+    if service_type == "registry":
+        return {"replication_targets": [], "storage_backend": ""}
+    if service_type == "cache":
+        return {"persistence": "none"}
+    if service_type == "monitor":
+        return {"collection_mode": ""}
+    return {}
+
+
+_COMPOSE_ENV_SUFFIXES = ("-local", "-dev", "-prod", "-test", "-staging", "-uat")
+
+
+def _compose_same_name_service(project: str, svc_names: List[str]) -> Optional[str]:
+    """与项目同名的 compose service 名（9.3 命名规则，OPS-DELTA #82）。
+
+    直接同名优先（nocobase 项目内 service nocobase）；项目名剥环境后缀
+    （-local/-dev/-prod/-test/-staging/-uat）后与 service 同名也算应用主
+    service（项目 harbor-local 内有 service harbor → 'harbor'）。无 → None
+    （调用方用项目名兜底）。
+    """
+    if project in svc_names:
+        return project
+    for suffix in _COMPOSE_ENV_SUFFIXES:
+        if project.endswith(suffix):
+            base = project[: -len(suffix)]
+            if base and base in svc_names:
+                return base
+    return None
+
+
+def _service_from_compose_project(
+    project: str,
+    containers: List[Dict[str, Any]],
+    host: str,
+    env: str,
+    details: Dict[str, Any],
+    cluster: str = "",
+    k8s_svc_names: set = (),
+) -> Dict[str, Any]:
+    """compose 项目 → 一条 v0.4 服务行（9.3：docker compose = 项目一条）。
+
+    命名规则（OPS-DELTA #82）：默认取与项目同名的 compose service 名（项目
+    harbor-local 内有 service harbor → name: harbor）；无同名 service → 用项目名；
+    与 k8s 服务同名时退让项目名（k8s 服务行已实现不改，同机 compose + k8s 双跑
+    场景保持 k8s 服务名）。type 按 9.7 判定表对项目主 service（同名 service，
+    无则首个容器）归类；endpoint 取项目内有 published 端口的容器主端口（第一
+    个，无 → null）；extra_ports 其他 published 端口（去重）；容器细节进第三层
+    档案 by_runtime.docker_compose.services（状态列表——快照记状态不记配置）。
+    """
+    svc_names = [c.get("compose_service") or "" for c in containers]
+    same_name_svc = _compose_same_name_service(project, svc_names)
+    if same_name_svc and same_name_svc not in k8s_svc_names:
+        name = _sanitize_name(same_name_svc)
+    else:
+        name = _sanitize_name(project)
+    if same_name_svc:
+        main = containers[svc_names.index(same_name_svc)]
+    else:
+        main = containers[0]
+    service_type = _classify_service_type(
+        main.get("compose_service") or main.get("name") or "",
+        main.get("image") or "")
+    all_ports: List[int] = []
+    for c in containers:
+        for p in _parse_published_ports(c.get("ports") or ""):
+            if p not in all_ports:
+                all_ports.append(p)
+    endpoint = f"{host}:{all_ports[0]}" if all_ports else None
+    detail_path = _entity_filename(cluster, host, name, env)
+    workdir = next((c.get("compose_workdir") or ""
+                    for c in containers if c.get("compose_workdir")), "")
+    runtime_block: Dict[str, Any] = {
+        "project": project,
+        "workdir": workdir,
+        "services": [
+            {"name": c.get("name") or "", "state": c.get("state") or ""}
+            for c in containers
+        ],
+    }
+    svc = {
+        "name": name,
+        "type": service_type,
+        "managed_by": "docker_compose",
+        "endpoint": endpoint,
+        "extra_ports": all_ports[1:] if len(all_ports) > 1 else [],
+        "log_paths": [],
+        "depends_on": [],
+        "source": "discovered",
+        "last_verified": _dt.date.today().isoformat(),
+        "needs_review": True,
+        "detail": detail_path,
+    }
+    details[name] = {
+        "name": name,
+        "detail": detail_path,
+        "version": _image_version(main.get("image") or ""),
+        "updated_at": _dt.date.today().isoformat(),
+        "checks": [],
+        "snapshot": {
+            "captured_at": _now_iso(),
+            "source": "discovered",
+            "common": {
+                "version": _image_version(main.get("image") or ""),
+                "config_dir": "",
+                "log_dir": "",
+                "data_dir": "",
+                "mode": "single",
+            },
+            "by_type": _by_type_block(service_type),
+            "by_runtime": {"docker_compose": runtime_block},
+        },
+        "notes": "",
+    }
+    return svc
+
+
+def _attach_helm_releases(
+    releases: List[Dict[str, Any]],
+    svc_ns: Dict[str, str],
+    details: Dict[str, Any],
+    *,
+    cluster: str = "",
+    host: str = "",
+    env: str = "",
+) -> None:
+    """helm release → k8s service 实体档案 by_runtime.helm.releases（9.5 补缺口）。
+
+    关联规则（OPS-DELTA #82）：release 的 (namespace, name) 与 k8s svc 实体
+    完全匹配才挂载（helm release 名 == svc 名且落在 release 的 namespace 内）；
+    k8s service 条目本身不变（粒度不拆，managed_by 保持 kubectl）。关联不上
+    （集群级组件如 cilium/istio-base）→ 单独记录到
+    ``{cluster|env|default}-helm-extra`` 实体档案（与实体文件名同源兜底），
+    待集群实体档案（设计 9.5 预留）落地后迁入。
+    """
+    by_entity: Dict[str, List[Dict[str, Any]]] = {}
+    unmatched: List[Dict[str, Any]] = []
+    for rel in releases:
+        name = str(rel.get("name") or "")
+        ns = str(rel.get("namespace") or "")
+        if svc_ns.get(name) == ns and name in details:
+            by_entity.setdefault(name, []).append(rel)
+        else:
+            unmatched.append(rel)
+    for name, rels in by_entity.items():
+        by_runtime = details[name]["snapshot"].setdefault("by_runtime", {})
+        by_runtime.setdefault("helm", {})["releases"] = rels
+    if unmatched:
+        extra_name = _sanitize_name(f"{cluster or env or 'default'}-helm-extra")
+        detail_path = _entity_filename(cluster, host, extra_name, env)
+        details[extra_name] = {
+            "name": extra_name,
+            "detail": detail_path,
+            "version": "",
+            "updated_at": _dt.date.today().isoformat(),
+            "checks": [],
+            "snapshot": {
+                "captured_at": _now_iso(),
+                "source": "discovered",
+                "common": {
+                    "version": "", "config_dir": "", "log_dir": "",
+                    "data_dir": "", "mode": "single",
+                },
+                "by_type": {},
+                "by_runtime": {"helm": {"releases": unmatched}},
+            },
+            "notes": "未关联到 k8s service 的 helm release（集群级组件，单独记录）；"
+                     "集群实体档案落地后迁入",
+        }
+
+
 def _service_from_container(c: Dict[str, Any], host: str, env: str,
                             details: Dict[str, Any], cluster: str = "") -> Dict[str, Any]:
     """docker 容器 → v0.4 服务行（第二层）+ 第三层档案草案（snapshot/checks）。
@@ -958,15 +1171,7 @@ def _service_from_container(c: Dict[str, Any], host: str, env: str,
     detail_path = _entity_filename(cluster, host, name, env)
     image = c.get("image") or ""
     service_type = _classify_service_type(name, image)
-    by_type: Dict[str, Any] = {}
-    if service_type == "db":
-        by_type = {"backup_dir": "", "role": "standalone"}
-    elif service_type == "registry":
-        by_type = {"replication_targets": [], "storage_backend": ""}
-    elif service_type == "cache":
-        by_type = {"persistence": "none"}
-    elif service_type == "monitor":
-        by_type = {"collection_mode": ""}
+    by_type = _by_type_block(service_type)
     if project:
         runtime_block: Dict[str, Any] = {
             "project": project,
@@ -1082,23 +1287,52 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
     gpus: List[str] = []
     compose_projects: List[str] = []
 
-    # 1) docker 枚举（docker ps + compose ls）。
+    # 0) k8s 枚举先行（可选：kubectl 可用才扫）——compose 项目聚合命名需要 k8s
+    #    服务名（同名冲突时 compose 退让项目名，k8s 行已实现不改）；helm 探针
+    #    以 kubectl 可用为前提。v0.4：k8s = Service 一条（9.3），Deployment 只
+    #    喂实体档案 by_runtime.kubectl.deployments，不占服务行。
+    k8s_res = _probe(runner, "kubectl get deploy,svc -A -o json 2>/dev/null")
+    k8s_rows: List[Dict[str, Any]] = []
+    if k8s_res.ok:
+        probes["kubectl"] = "ok"
+        k8s_rows = _parse_kubectl(k8s_res.stdout)
+    else:
+        if _is_likely_permission_denied(k8s_res):
+            probes["kubectl"] = "权限不足（可加 --sudo-password 重试）"
+        else:
+            probes["kubectl"] = "skipped（kubectl 不可用）"
+    k8s_svc_names = {
+        r["name"] for r in k8s_rows if r["kind"] == "k8s-service"
+    }
+
+    # 1) docker 枚举（docker ps + compose ls）。compose 项目聚合为一条（9.3），
+    # 无 compose_project 的 docker run 单容器保持容器粒度一条。
     docker_res = _probe(runner, "docker ps --format '{{json .}}'")
     if docker_res.ok:
         runtime = "docker"
         probes["docker"] = "ok"
-        for c in _parse_docker_ps(docker_res.stdout):
+        containers = _parse_docker_ps(docker_res.stdout)
+        projects: Dict[str, List[Dict[str, Any]]] = {}
+        standalone: List[Dict[str, Any]] = []
+        for c in containers:
+            p = c.get("compose_project") or ""
+            if p:
+                projects.setdefault(p, []).append(c)
+            else:
+                standalone.append(c)
+        for project, group in projects.items():
+            svc = _service_from_compose_project(
+                project, group, host, env, details,
+                cluster=cluster, k8s_svc_names=k8s_svc_names)
+            if svc["name"] not in [s["name"] for s in services]:
+                services.append(svc)
+            for p in _svc_ports(svc):
+                seen_ports.add(p)
+        for c in standalone:
             svc = _service_from_container(c, host, env, details, cluster=cluster)
             if svc["name"] not in [s["name"] for s in services]:
                 services.append(svc)
-            ep_port: List[int] = []
-            ep = svc.get("endpoint")
-            if ep and ":" in str(ep):
-                try:
-                    ep_port.append(int(str(ep).rsplit(":", 1)[-1]))
-                except ValueError:
-                    pass
-            for p in ep_port + (svc.get("extra_ports") or []):
+            for p in _svc_ports(svc):
                 seen_ports.add(p)
         compose_res = _probe(runner, "docker compose ls --format json")
         if compose_res.ok:
@@ -1113,79 +1347,86 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
             reason = (docker_res.stdout or "").strip().splitlines()
             probes["docker"] = reason[-1][:120] if reason else "docker 不可用（exit!=0）"
 
-    # 2) k8s 枚举（可选：kubectl 可用才扫）。v0.4：k8s = Service 一条（9.3），
-    # Deployment 只喂实体档案 by_runtime.kubectl.deployments，不占服务行。
-    k8s_res = _probe(runner, "kubectl get deploy,svc -A -o json 2>/dev/null")
-    k8s_deploys: Dict[str, Dict[str, Any]] = {}
+    # 2) k8s 枚举消费（probe 已先行）。deploy 喂档案；svc 一条服务行（9.3）。
+    k8s_deploys: Dict[str, Dict[str, Any]] = {
+        f"{r.get('namespace')}/{r['name']}": r
+        for r in k8s_rows if r["kind"] == "k8s-deploy"
+    }
+    svc_ns: Dict[str, str] = {}
     if k8s_res.ok:
         runtime = "k3s" if runtime == "unknown" else runtime
-        probes["kubectl"] = "ok"
-        for row in _parse_kubectl(k8s_res.stdout):
-            if row["kind"] == "k8s-deploy":
-                k8s_deploys[f"{row.get('namespace')}/{row['name']}"] = row
-                continue
+        for row in k8s_rows:
             if row["kind"] != "k8s-service":
                 continue
             for p in row.get("ports") or []:
                 seen_ports.add(p)
             name = row["name"]
-            if name not in [s["name"] for s in services]:
-                node_port = row.get("ports")[0] if row.get("ports") else None
-                detail_path = _entity_filename(cluster, host, name, env)
-                image = ""
-                dep = k8s_deploys.get(f"{row.get('namespace')}/{name}")
-                if dep:
-                    image = dep.get("image") or ""
-                service_type = _classify_service_type(name, image)
-                svc = {
-                    "name": name,
-                    "type": service_type,
-                    "managed_by": "kubectl",
-                    "endpoint": f"{host}:{node_port}" if node_port else None,
-                    "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
-                    "log_paths": [],
-                    "depends_on": [],
+            if name in [s["name"] for s in services]:
+                # 与 compose 聚合实体同名 → compose 已退让项目名，正常不会命中；
+                # 多 namespace 同名 svc 仍是首见优先（现有行为，不在本批范围）。
+                continue
+            node_port = row.get("ports")[0] if row.get("ports") else None
+            detail_path = _entity_filename(cluster, host, name, env)
+            image = ""
+            dep = k8s_deploys.get(f"{row.get('namespace')}/{name}")
+            if dep:
+                image = dep.get("image") or ""
+            service_type = _classify_service_type(name, image)
+            svc = {
+                "name": name,
+                "type": service_type,
+                "managed_by": "kubectl",
+                "endpoint": f"{host}:{node_port}" if node_port else None,
+                "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
+                "log_paths": [],
+                "depends_on": [],
+                "source": "discovered",
+                "last_verified": _dt.date.today().isoformat(),
+                "needs_review": True,
+                "detail": detail_path,
+            }
+            services.append(svc)
+            deployments = []
+            if dep:
+                deployments.append({"name": dep["name"], "replicas": 0, "ready": 0})
+            details[name] = {
+                "name": name,
+                "detail": detail_path,
+                "version": _image_version(image),
+                "updated_at": _dt.date.today().isoformat(),
+                "checks": [],
+                "snapshot": {
+                    "captured_at": _now_iso(),
                     "source": "discovered",
-                    "last_verified": _dt.date.today().isoformat(),
-                    "needs_review": True,
-                    "detail": detail_path,
-                }
-                services.append(svc)
-                deployments = []
-                if dep:
-                    deployments.append({"name": dep["name"], "replicas": 0, "ready": 0})
-                details[name] = {
-                    "name": name,
-                    "detail": detail_path,
-                    "version": _image_version(image),
-                    "updated_at": _dt.date.today().isoformat(),
-                    "checks": [],
-                    "snapshot": {
-                        "captured_at": _now_iso(),
-                        "source": "discovered",
-                        "common": {
-                            "version": _image_version(image),
-                            "config_dir": "",
-                            "log_dir": "",
-                            "data_dir": "",
-                            "mode": "single",
-                        },
-                        "by_type": {},
-                        "by_runtime": {
-                            "kubectl": {
-                                "namespace": row.get("namespace", ""),
-                                "deployments": deployments,
-                                "pvc": [],
-                            },
+                    "common": {
+                        "version": _image_version(image),
+                        "config_dir": "",
+                        "log_dir": "",
+                        "data_dir": "",
+                        "mode": "single",
+                    },
+                    "by_type": {},
+                    "by_runtime": {
+                        "kubectl": {
+                            "namespace": row.get("namespace", ""),
+                            "deployments": deployments,
+                            "pvc": [],
                         },
                     },
-                    "notes": "",
-                }
-    else:
-        if _is_likely_permission_denied(k8s_res):
-            probes["kubectl"] = "权限不足（可加 --sudo-password 重试）"
+                },
+                "notes": "",
+            }
+            svc_ns[name] = row.get("namespace", "")
+        # helm release 探测（kubectl 可用且 helm 存在时）：k8s service 条目不变，
+        # release 细节写实体档案 by_runtime.helm.releases；失败 skipped 不阻塞。
+        helm_res = _probe(runner, "helm list -A -o json 2>/dev/null")
+        if helm_res.ok:
+            releases = _parse_helm_list(helm_res.stdout)
+            probes["helm"] = f"ok({len(releases)} releases)"
+            _attach_helm_releases(releases, svc_ns, details,
+                                  cluster=cluster, host=host, env=env)
         else:
-            probes["kubectl"] = "skipped（kubectl 不可用）"
+            probes["helm"] = "skipped（helm 不可用）"
 
     # 2.5) ss 监听端口探测（先于 systemd：供无端口系统服务过滤 + 未识别端口补条目）。
     ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
