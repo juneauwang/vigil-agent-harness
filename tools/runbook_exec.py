@@ -557,6 +557,11 @@ def _host_endpoint(host: str) -> str:
     return host
 
 
+def _scripts_dir(home: Path) -> Path:
+    from tools.script_assets import scripts_dir as _sd
+    return _sd(home)
+
+
 def _exec_script_asset(home: Path, spec: Dict[str, Any],
                        timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
     """run_script：只引用资产库脚本（§10.9 逃生舱受控），不内联。
@@ -566,20 +571,14 @@ def _exec_script_asset(home: Path, spec: Dict[str, Any],
     引用不存在 / 未经资产审批 / 内容哈希漂移 → 报错引导，不执行。
     """
     name = str(spec.get("script_asset") or "").strip()
-    if not name or re.search(r"[\\/]", name):
-        return {"exit_code": 1, "stdout": "", "stderr":
-                f"脚本资产引用非法: {name!r}——资产名形如 scripts/backup.sh 或 backup"}
-    scripts_dir = Path(home).resolve() / "scripts"
-    candidates = [scripts_dir / name]
-    if not Path(name).suffix:
-        candidates += [scripts_dir / f"{name}.sh", scripts_dir / f"{name}.bash"]
-    script_path = next((p for p in candidates if p.is_file()), None)
+    from tools.script_assets import meta_dir, resolve_script_path, scripts_dir
+    script_path = resolve_script_path(home, name)
     if script_path is None:
         return {"exit_code": 1, "stdout": "", "stderr":
-                f"脚本资产 {name!r} 不存在（{scripts_dir}）——用 script_asset_create "
-                "创建（内容过 tirith 扫描 + 资产审批后落盘预审标记）；run_script "
-                "只引用资产，不内联脚本"}
-    meta_path = scripts_dir / ".meta" / f"{script_path.name}.json"
+                f"脚本资产 {name!r} 不存在（{scripts_dir(home)}）——用 "
+                "script_asset_create 创建（内容过 tirith 扫描 + 资产审批后落盘"
+                "预审标记）；run_script 只引用资产，不内联脚本"}
+    meta_path = meta_dir(home) / f"{script_path.name}.json"
     if not meta_path.is_file():
         return {"exit_code": 1, "stdout": "", "stderr":
                 f"脚本资产 {name!r} 无审批标记（{meta_path} 缺失）——资产需经 "
