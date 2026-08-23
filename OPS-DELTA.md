@@ -3594,3 +3594,68 @@
   stop/start ai.hermes.gateway 判 dangerous 且 list 不误伤、/env 无参列出全部
   config 定义环境（含自定义名）、trajectory 无多值参数 TypeError。
 - **状态**：独立 fix commit（存量 bug 修复批次）。
+
+### 78. UI 监控 API 批次——健康探测 / PromQL 查询 / 活跃告警 + 监控页（2026-08-23，YAPL 之后第一个新功能面）
+
+- **背景**：YAPL P1-P5 收官后 dashboard 没有任何监控页面/API——agent 侧有
+  prom 工具集（prom_query/alert_query，批次三），但人看不到监控数据。本批补
+  齐 UI 监控展示层。定位：通用监控展示层，Prometheus 协议为底座但不绑死——
+  查询/告警走 PromQL/Alertmanager 兼容层；**服务健康不依赖 Prometheus**
+  （开箱即用，拓扑数据即可探测）。数据源复用 ops.prometheus 配置段（零新配置）；
+  未配置 → 503 + 明确提示，健康探测照常。
+- **新增**（纯新增面，不改既有功能语义，未碰 YAPL 核心）：
+  - `hermes_cli/monitoring.py`：健康探测（拓扑服务枚举 + 并发探测 + 30s 缓存）
+    + PromQL 查询 + Alertmanager 活跃告警三个只读函数。探测复用 P4 执行器
+    检查通道语义（http_status / port）但独立轻量实现（不依赖 runbook 执行器）。
+  - `hermes_cli/web_server.py` 三个端点（全 `_require_token`，不进
+    PUBLIC_API_PATHS，与 /api/matrix 同机制）：
+    - `GET /api/monitoring/health`——遍历拓扑服务（P1 数据层 services/），
+      HTTP 类 endpoint → GET 200-399 = up；端口类 → TCP 通 = up；无 endpoint/
+      需认证 → unknown（不误报）；extra_ports 补充探测。并发 5、单次 3s、
+      批次总 30s（超时未完成 → unknown，不误报 down）；30s 短缓存（内存
+      dict + TTL，refresh=1 强制重探）；只读动态状态——不落盘、不写拓扑、
+      不产生审计、凭据明文不落日志。
+    - `GET /api/monitoring/query?promql=&duration=&step=`——封装 prom_tools
+      只读通道，结构化 series（时间点 + min/max/last）；promql 必填、
+      duration/step 默认 30m/60s、非法 400；未配置 503；上游超时/错误 502
+      （上游原始信息不吞）。
+    - `GET /api/monitoring/alerts`——Alertmanager /api/v2/alerts 实时快照
+      （alertname/severity/instance/labels/startsAt/state，resolved 过滤）；
+      未配置 503；空列表 200 不 500。
+  - 前端：`web/src/lib/api.ts` 三个调用 + `MonitoringPage.tsx`（三块布局：
+    服务健康表格/汇总/状态筛选/30s 自动刷新；PromQL 查询 + 手写 SVG
+    sparkline（不引图表库）；活跃告警 severity 色标复用 Incidents 分级样式；
+    未配置/空态引导，全 unknown 不崩）+ App.tsx 路由 /monitoring（label「监控」，
+    Activity 图标）。
+- **语义边界（与 Incidents 并存）**：`/api/incidents`（批五十）是 watch 采集
+  的告警流（inbox 归档）；`/api/monitoring/alerts` 直接查 Alertmanager 实时
+  状态——两者并存：Incidents = 采集归档，monitoring/alerts = 实时快照。
+- **测试**：后端 `tests/hermes_cli/test_monitoring_api.py` 16 例（health
+  三态/HTTP 非 2xx=down/30s 缓存 + 强制重探/批次超时 unknown 不误报/token
+  401；query 未配置 503/参数校验 400/上游错误透传 502/结构化 series/自定义
+  duration-step；alerts 未配置 503/空列表 200/字段映射 + resolved 过滤/上游
+  错误 502）；前端 `MonitoringPage.test.tsx` 6 例（渲染三态徽标/筛选/告警徽标
+  + 空态/Prometheus 未配置引导（健康块照常）/查询 series + sparkline/加载失败
+  空态）。vitest 21 文件 153 过、`tsc -b --noEmit` 过、`npm run build` 过。
+  存量回归：prom_tools/topo/runbook/web 端点套件 212 passed 全绿。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv
+  重启，pid 3495518；VIGIL_DASHBOARD_SESSION_TOKEN 固定便于 curl）：
+  - `GET /api/monitoring/health`：真实拓扑 4 主机 62 服务全量探测——summary
+    `{up: 10, down: 45, unknown: 7}`；本机真实在听的 web/frontend/backend/
+    app/nocobase/healthtracker/kind-registry/harbor-registry 等 up（0.8-2.9ms）；
+    未监听端口（istio/argocd 等 k8s 服务本 WSL 未跑）down（1-4ms，connection
+    refused 快失败）；无 endpoint 服务（阿里云 3 台 kubelet/hbrclient + 本机
+    nginx）unknown（不误报）；extra_ports 补充探测（eventbus 4222/6222/8222
+    均 down，如实）。第二次请求 cached=true、checked_at 不变（30s 缓存生效）。
+  - 无 token → 三端点均 401；`/api/monitoring/query?promql=up` →
+    503 `prometheus_unavailable`（config ops.prometheus.endpoint 为空）；
+    `/api/monitoring/alerts` → 503 `alertmanager_unavailable`（未配置分支验证，
+    任务书允许）；参数校验/上游错误路径由单测覆盖（本机无 Prometheus 实例）。
+  - 前端：SPA 根页 200 且注入 session token；`/monitoring` 路由 200；
+    web_dist 含 MonitoringPage 分块（MonitoringPage-*.js）；三块渲染/徽标/
+    刷新由 vitest 6 例覆盖（本环境无浏览器，服务端 serve 验证 + 组件测试）。
+  - 实测后清理：服务保留运行（9131 = 开发目录服务，沿用旧批习惯）。
+- **核销方式**：测试常驻——test_monitoring_api.py 16 + MonitoringPage 6 +
+  存量回归；季度体检：health 三态（无 endpoint 不误报 down）、30s 缓存、
+  query/alerts 未配置 503 提示、无新配置项（零新配置）。
+- **状态**：独立 feat commit（UI 监控 API 批次）。

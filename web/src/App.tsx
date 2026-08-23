@@ -1,6 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
 import {
+  Activity,
   Bell,
   History,
   Grid3x3,
@@ -30,6 +31,7 @@ const IncidentsPage = lazy(() => import("@/pages/IncidentsPage"));
 const ApprovalsPage = lazy(() => import("@/pages/ApprovalsPage"));
 const AuditPage = lazy(() => import("@/pages/AuditPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
+const MonitoringPage = lazy(() => import("@/pages/MonitoringPage"));
 
 interface NavItem {
   path: string;
@@ -37,7 +39,7 @@ interface NavItem {
   icon: typeof LayoutDashboard;
 }
 
-/** 豆包菜单 8 项：8 个路由页。 */
+/** 豆包菜单 9 项：9 个路由页。 */
 const NAV_ITEMS: NavItem[] = [
   { path: "/chat", label: "Chat", icon: MessageSquare },
   { path: "/overview", label: "Overview", icon: LayoutDashboard },
@@ -47,6 +49,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/incidents", label: "Incidents", icon: TriangleAlert },
   { path: "/approvals", label: "Approvals", icon: ShieldCheck },
   { path: "/audit", label: "Audit", icon: History },
+  { path: "/monitoring", label: "监控", icon: Activity },
 ];
 
 const THEME_KEY = "vigil-console-theme";
@@ -270,6 +273,7 @@ export default function App() {
                 <Route path="/incidents" element={<IncidentsPage />} />
                 <Route path="/approvals" element={<ApprovalsPage />} />
                 <Route path="/audit" element={<AuditPage />} />
+                <Route path="/monitoring" element={<MonitoringPage />} />
                 <Route path="*" element={<Navigate to="/overview" replace />} />
               </Routes>
             </Suspense>
