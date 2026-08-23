@@ -3476,3 +3476,65 @@
   `ops_matrix:{action}:{env}` 审批键、未知命令默认 approve 弹窗、
   `ssh root@prod-host …` 命中 prod 档 required 弹窗。
 - **状态**：P5 独立 commit（YAPL v1.0 收官；OPS-DELTA #75）。
+
+### 76. P5 回归修复——test_command_guards 7 例 Tirith 内容安全断言恢复（矩阵未初始化惰性 + tirith 警告整体 session-max）（2026-08-23，P5 后续批次）
+
+- **背景**：YAPL P5（de466bd2）后全量回归（scripts/run_tests.sh）抓到
+  tests/tools/test_command_guards.py 7 例失败（Tirith 内容安全行为断言：
+  both_allow / noninteractive_skips_external_scan / warn_cli_prompts_user /
+  warn_session_approved / warn_non_interactive_auto_allow /
+  import_error_allows / tirith_warning_disallows_permanent）。P4 基线
+  （083bbd32）该文件 29 passed 全绿。
+- **根因（diff 验证）**：check_all_command_guards 的 P4→P5 结构一致（仅 deny
+  分支移除、消息/审批键换 action），回归 100% 来自
+  check_ops_command_permission 返回值变化：
+  1. P5 的 unknown → 默认 approve 在**矩阵未初始化**（matrix.yaml 不存在）时
+     把 echo/ls/curl 等 P4 直放的普通命令也弹进审批门（P4：矩阵缺失 → 行
+     None → 非 prod 未分级命令交回原检查直接放行）；
+  2. curl（query）等命中规则表的命令在 test env 矩阵漏配 → approve → ops
+     警告（is_tirith=False）混入 tirith 警告提示 → has_permanent_capable
+     被顶成 True（弹窗错误出现"Always allow"）。
+- **怎么改**：
+  - `tools/ops_permissions.py::check_ops_command_permission`：矩阵未初始化
+    （`matrix_path().is_file()` 为 False）→ **非 prod 档惰性**——返回 None
+    交回原有检查（tirith / 危险命令层兜底），恢复 P4 基线；prod 档（含
+    uat→prod 映射、role=prod 自定义名）未初始化仍门控（与 P4 B'/变更确认门
+    一致）。矩阵一旦初始化（文件存在）→ 全量 P5 语义（unknown → 默认
+    approve，任何 env）。runbook 路径不受影响（其矩阵缺失仍按空矩阵 approve
+    门控，P4 既有，非本批回归面）。
+  - `tools/approval.py::check_all_command_guards`（Phase 3 has_permanent_capable）：
+    "Always" 提供规则改为——dangerous-pattern 键恒可永久；ops_matrix 键在
+    纯 ops 提示可永久（P5 allowlist 语义保留，batch28 unknown 审批断言
+    allow_permanent=True 不变）；**提示一旦混入 tirith 内容安全警告 → 整体
+    session-max（allow_permanent=False）**——一次"永久放行"不得吞掉内容级
+    安全发现（PR #67312 语义）；纯 tirith 提示恒 False（现状）。
+  - `tests/hermes_cli/test_batch28_exec_api.py`：test_credential_zero_leak_
+    all_endpoints 恢复 P4 语义（test env 未初始化矩阵 → echo 链直跑，凭据
+    零泄露仍全端点断言）——此前按"test env unknown 也弹窗"改的审批前置
+    流程随惰性语义撤销。
+- **测试**：test_command_guards.py 29 passed（P4 基线基准，全绿）；验收套件
+  test_ops_permissions_guard 18 + test_ops_confirmation_gate 45 +
+  test_terminal_matrix 14 + test_action_classifier 87 + test_ops_permissions
+  23 + test_sudo_exec 26 + test_ops_target 15 + test_ops_init 25 +
+  test_batch28_exec_api 16 + test_batch47_sudo_approval + vssh 30 = 全绿；
+  runbook/matrix 存量回归 133 passed；test_approval.py +
+  test_approval_plugin_hooks.py 仍 5 例存量失败（_record_approval_trajectory
+  多值参数，git worktree 在 de466bd2 基线复现同样 5 例——非本批引入、未变多，
+  独立批次修）。
+- **9131 实测记录**（VIGIL_HOME=/home/wpwang/.vigil + load_hermes_dotenv
+  重启，pid 3233336；live config approvals.mode=smart + 真实 aux LLM 会阻塞
+  事件循环导致 /api/exec 挂起——既有问题，本批用 guard 级捕获验证 web 审批
+  条目同源字段）：
+  - `curl https://bit.ly/abc`（矩阵存在、test 漏配 approve + tirith warn
+    shortened_url）→ 弹窗出现，pattern_keys=["tirith:shortened_url",
+    "ops_matrix:query:test"]，**allow_permanent=False、allow_session=True**
+    （无"Always allow"，符合验收）→ 批准后执行。
+  - 对照 `curl https://example.com`（无 tirith 警告）→ 纯 ops 提示
+    allow_permanent=True（矩阵 approve 的永久 allowlist 语义保留）；env=local
+    档（query=execute）→ ops=None 无提示。
+  - 正交验证：`curl` × local = execute（ops 直接过）时 tirith warn 仍独立
+    弹窗（execute 档直接过 ≠ 跳过 tirith warning）。
+- **核销方式**：测试常驻——test_command_guards.py 29 常绿 + 验收套件；
+  季度体检：未初始化矩阵（无 matrix.yaml）时非 prod 命令交回原检查、
+  tirith 警告弹窗无"Always allow"（allow_permanent=False）。
+- **状态**：独立 fix commit（P5 回归修复）。

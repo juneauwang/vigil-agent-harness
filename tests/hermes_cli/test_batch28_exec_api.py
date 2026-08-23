@@ -459,22 +459,15 @@ def test_credential_zero_leak_all_endpoints(client, env_home):
         'echo "PASSWORD=hunter2"; echo "API_TOKEN=sk-abc123def456"; '
         "echo 'https://admin:s3cret-pw@example.com/x'"
     )
-    # YAPL P5：echo 链全 unknown → 默认 approve → 审批弹窗；批准后执行。
     r = client.post("/api/exec", json={"command": secret_cmd, "env": "test"})
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["status"] == "needs_approval"
-    approval_id = body["approval_id"]
-    r = client.post(f"/api/approvals/{approval_id}/approve", json={"scope": "once"})
-    assert r.status_code == 200
+    assert body["status"] == "executed"
     exec_id = body["exec_id"]
-
-    events = _sse_events(client, f"/api/exec/{exec_id}/stream")
-    assert events[0][0] == "exec:start"
-    assert any(e == "exec:exit" for e, _ in events)
 
     rec = client.get(f"/api/exec/{exec_id}").json()
     assert rec["status"] == "executed"
+    events = _sse_events(client, f"/api/exec/{exec_id}/stream")
 
     all_text = " ".join([
         json.dumps(body, ensure_ascii=False),

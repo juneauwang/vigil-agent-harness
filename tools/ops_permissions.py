@@ -260,8 +260,25 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         # 无会话 env 且无目标级 env → 矩阵无可判定环境，交回原检查（热路径零额外开销）。
         return None
 
-    from tools.action_classifier import classify_command
     from tools import matrix_data as _md
+
+    # 矩阵未初始化（matrix.yaml 不存在）→ 非 prod 档惰性（回归修复，OPS-DELTA
+    # #76）：P5 把 L1-L4 分级换成 classifier 后，unknown → 默认 approve 在矩阵
+    # 缺失时把 echo/ls/curl 等普通命令也弹进审批门，破坏 P4 基线（矩阵缺失 →
+    # 行 None → 非 prod 未分级命令交回原检查直接放行）。矩阵未初始化时只对
+    # prod 档门控（与 P4 B'/变更确认门一致：prod 档默认审批）；local/test/dev
+    # 交回原有检查（tirith / 危险命令层兜底）。矩阵一旦初始化（文件存在）→
+    # 全量 P5 语义（unknown → 默认 approve）。runbook 路径不受影响（其矩阵
+    # 缺失仍按空矩阵 approve 门控，P4 既有，非本批回归面）。
+    if not _md.matrix_path().is_file():
+        ops_config = _load_ops_config()
+        env_def = _raw_env_definition(env, ops_config)
+        role = str((env_def or {}).get("role") or "").strip().lower()
+        is_prod = role == "prod" if role else _map_env_tier(env, ops_config) == "prod"
+        if not is_prod:
+            return None
+
+    from tools.action_classifier import classify_command
 
     classification = classify_command(command)
     candidates = classification.get("chain") or [classification]
