@@ -3225,3 +3225,31 @@
 - **核销方式**：测试常驻——命令生成表用例；季度体检：新增 managed_by 时
   handler 同步（schemas.yaml 注释已注明"managed_by 加值贵"）。
 - **状态**：与阶段 1 同批 commit（工作区一并）。
+
+### 72. 批次五十七 YAPL P4 执行器·阶段 3——脚本资产库 + run_script 受控执行（2026-08-23，设计单一事实来源 yapl-design.md §10.9/§11.3/§11.4）
+
+- **背景**：逃生舱受控——run_script 只引用资产库脚本（不内联）。脚本资产创建
+  /变更走内容审批（tirith 扫描 + 资产审批），交互执行 execute（11.3 特例：
+  资产已预审）；引用不存在脚本 = 报错引导创建。install/upgrade/remove 包族
+  handler 与 rollback 场景引用已在阶段 1/2 完成（本批验收）。
+- **怎么改**：
+  - `tools/script_assets.py`（新增）：`script_asset_create`（名称 kebab-case
+    防穿越 / 内容非空+上限 / tirith 扫描 block→拒绝、warn→强制人工 / 资产审批
+    门复用 P3 request_asset_approval，**smart_low_risk=False**——脚本内容本身
+    是风险裁决，不走矩阵式 smart 自动批准；approvals.mode=off 且非 warn 跳过；
+    fail-closed 永不无人落盘 / 落盘 0700 脚本 + `.meta/<name>.json` 预审标记
+    approved_at/approved_by/approved_version=内容哈希 / 覆盖需 overwrite=true
+    重新审批）+ `script_asset_list`（只读列出 + 审批状态）；
+  - `tools/runbook_exec.py`：`_exec_script_asset` 复用 script_assets 的
+    resolve/read_meta（消除重复）：引用不存在 → 报错引导 script_asset_create；
+    无审批标记 / 缺 approved_* / 内容哈希漂移 → 拒绝执行（豁免失效）；通过 →
+    `bash <path> <args>` 执行。
+  - 包族 handler（阶段 2 已建）：apt/dnf 按 target.os 判定、remove deps 默认
+    false 保守——本批测试覆盖。
+- **测试**：tests/tools/test_script_assets.py 12 例（创建审批通过落盘带三标记 /
+  拒绝不落盘 / mode=off 跳过 / 名称+内容校验 / tirith block 拒绝 / overwrite
+  语义 / list / run_script 缺资产引导 / 无标记拒绝 / 哈希漂移拒绝 / 正常执行
+  argv 捕获 / resolve 路径 helper）；包族与 rollback 场景由阶段 1/2 用例覆盖。
+- **核销方式**：测试常驻——test_script_assets.py；季度体检：scripts/.meta 标记
+  与内容哈希一致、run_script 引用不存在资产时报错引导而非内联。
+- **状态**：与阶段 4/5 后续批次同链（本批独立可验收，随阶段 4 提交或独立 commit）。
