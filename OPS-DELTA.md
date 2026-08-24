@@ -4203,3 +4203,81 @@
     临时 runbook 文件已清理（不留在用户 runbooks 里）。
 - **状态**：独立 fix commit（本批 batch70），只含 3 个工具文件 +
   OPS-DELTA.md 本条登记；YAPL 核心/测试本体未动。
+
+### 86. YAPL 主框架阶段 A——契约基础设施 + resolve_topo_ref（2026-08-24，batch71）
+
+- **背景**：YAPL P1-P5 + 监控/用量/播报/小项/粒度/排查全部完成（HEAD
+  88694774，batch70）。本批 = YAPL 主框架（LLM 编译工具）第一阶段——契约
+  基础设施：契约文件加载 + 分层校验器 + resolve_topo_ref 共享库。设计单一
+  事实来源 = yapl-design.md 第十三章（2026-08-24 逐字段盘完）。只做阶段 A，
+  不做 LLM 生成管线/沙箱/注册（阶段 B）、不做 runbook 第 24 动作（阶段 C）。
+  开发在 branch v1.0（vigil-agent），发布基线 vigil-agent-release 不动。
+- **新增模块（零侵入，独立文件）**：
+  - `tools/contract_tools.py` —— 契约加载器 + 分层校验器（schema v0.1）：
+    - 加载器：`~/.vigil/contracts/` 目录加载（缺失 = 空集）；非 .yaml 忽略 +
+      警告（照 runbooks/ 先例）；文件名 `<name>.yaml` ↔ 内部 name 一致 =
+      硬校验拒绝；`load_contracts` / `load_contract`。
+    - 分层校验（失败 = ValueError 带字段/枚举/示例引导，不落盘）：
+      - 结构层：name kebab-case（同 runbook 创建名规则）+ 与文件名一致 +
+        统一命名空间重名拒绝（内置工具表 `registry.get_all_tool_names()` +
+        runbooks/*.yaml stem）；description 非空；action 必填 ∈ schemas.yaml
+        actions 词表（当前 23 个，词表读取失败跳过——同 runbook v0.2 惯例）；
+        **拒绝 permission/steps 字段**（设计铁律：权限 = 矩阵唯一裁决，契约
+        是原子层）。
+      - params 层：类型系统 string/integer/boolean/float/topo_ref(+kind)/
+        enum(非空标量 values)/list(必带 items，items 不支持 list 嵌套)；
+        default 类型与声明一致（integer 拒绝 bool）；required=true + default
+        = 矛盾拒绝；enum default ∈ values。
+      - returns 层：键 + 类型（支持设计 13.1 简写 `restarted: integer`
+        归一为完整声明）；**拒绝 topo_ref（含 list items 内）**——返回是
+        数据不是引用。
+      - tests 命门：最少 2 用例（1 正常 + ≥1 错误路径）；input 与 params
+        匹配（未知键拒绝 / required 缺失拒绝 / 值类型一致）；expect 精确
+        匹配结构 或 `{error: <非空错误码>}` 二选一（错误码枚举后续随实现
+        扩展）；handler mock 可选 `{status: failed|success}`（本批只校验
+        存在性/形态，语义阶段 B 用）。
+  - `tools/topo_ref.py` —— `resolve_topo_ref(topo, name, kind=None,
+    context=None, home=None)` 共享库，解析顺序（**永不静默取第一个**）：
+    1. 精确匹配（kind 限定下唯一）→ 返回；2. 上下文收敛（context
+    `{env?, cluster?, host?}` 过滤，实体侧未知字段不参与排除避免误杀）→
+    范围内唯一 → 返回；3. 歧义报错列候选（实体全名 cluster__host__name +
+    env/cluster 归属）→ 引导 clarify/改全名；4. 无匹配拒绝 + 提示先
+    topo_query。实体获取与 P4 resolve_target 同源（topo 行 +
+    `tools.topo_tools._all_services`，service 层需 home 读 services 索引）。
+- **核心接入（修现状坑）**：`tools/runbook_exec.py` `resolve_target` 的
+  service 层旧实现 `next(...)` **静默取第一个**（重名服务时命中错误实体）——
+  改为调 `resolve_topo_ref(kind="service")`（重名报歧义不再静默）；
+  host/cross_host/cluster/host_group 匹配逻辑保留（host 显式查表 →
+  cross_host 旧层 → service 层，列表序行为与旧 next() 一致）。执行引擎新增
+  scope 线程：`execute_runbook` 从 runbook 声明范围（env + 单值
+  clusters/hosts）构建 `{env?, cluster?, host?}` 上下文，经
+  `_run_one_step` / `_run_rollback_scenario` 传入 target 解析——唯一名行为
+  不变（精确匹配优先，上下文只在重名时参与），范围收敛由 runbook 声明驱动。
+- **回归面**：新增 `tests/tools/test_contracts.py`（加载器 5 + 结构层 10 +
+  params 类型系统 12 + returns 3 + tests 命门 9）+ `tests/tools/test_topo_ref.py`
+  （解析四步 + kind 限定/跨层歧义 + resolve_target 接入回归：唯一名行为不变、
+  重名不再静默、runbook 范围 scope 收敛）。存量回归：runbook_exec / runbook_v2 /
+  runbook_tools / runbook_create / runbook_lock / runbook_schedule /
+  runbook_coverage / runbook_vault_refs / batch40_runbook_gate /
+  batch44_runbook_semantic_secret / matrix / topo_tools / topo_v2 / topo_v4 /
+  topo_status_sync / batch39_topo_sync / topo_update_contract / topo_discovery
+  （373 passed / 6 skipped）+ topo_slash / batch33_topo_slash / runbook_progress
+  （23 passed）。canonical 全量（约 30min）未跑，以回归套件 + 9131 实机为准。
+- **实测验证**（9131 用新代码重启，VIGIL_HOME=/home/wpwang/.vigil +
+  load_hermes_dotenv()，pid 2574978 常驻，令牌实测生效）：
+  - 契约加载：contracts/ 缺失 → load_contracts = {}（空集）；
+    手写合法契约（设计 13.1 rolling-restart，action=restart ∈ 23 词表）→
+    load + validate 全过；非法契约（缺 tests）→ BLOCKED「tests 最少 2 个
+    用例（1 正常 + ≥1 错误路径）——无用例 = 碰运气」；追加 permission 字段 →
+    BLOCKED「禁止 permission 字段——权限 = 操作矩阵唯一裁决」；临时契约文件
+    已清理（不留在用户 contracts/）。
+  - topo_ref 三路径（真实拓扑 49 服务 4 主机，重名风险 = kubelet × 2 于
+    beijing_aliyun/prod 两主机）：唯一路径 dify → service@LAPTOP-T2JA2ERE；
+    上下文收敛 kubelet + host=39.106.217.32 / 39.107.92.54 → 各自命中；
+    歧义路径 kubelet 无上下文 → BLOCKED 列候选
+    `beijing_aliyun__39.106.217.32__kubelet` / `beijing_aliyun__39.107.92.54__kubelet`
+    + 「不静默取第一个」；无匹配 ghost-service → BLOCKED + 「先 topo_query
+    确认实体名」。resolve_target 接入同路径验证（kubelet 不再静默、ctx 收敛
+    命中 39.107.92.54、dify 唯一行为不变）。
+- **状态**：独立 feat commit（batch71），只含 2 新模块 + runbook_exec 接入
+  + 2 测试文件 + OPS-DELTA.md 本条登记。

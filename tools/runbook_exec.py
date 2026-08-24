@@ -200,10 +200,14 @@ def _is_local_endpoint(endpoint: Any, host_name: str) -> bool:
 
 
 def resolve_target(home: Path, topo: Dict[str, Any],
-                   name: str) -> Dict[str, Any]:
+                   name: str,
+                   context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """target 多态解析：service / host / host_group / cluster → 执行目标。
 
     目标不存在 = 拒绝执行 + 提示重查拓扑（§六 topo_ref 执行端校验）。
+    ``context``（``{env?, cluster?, host?}`` = runbook 执行范围）仅参与
+    service 层重名收敛——host/cluster/host_group 匹配逻辑照旧；service 层
+    改走 ``tools.topo_ref.resolve_topo_ref``（不再静默取第一个，重名报歧义）。
 
     Returns 执行目标 dict（handlers 消费）：
         name / type / env / cluster / managed_by / host（所属主机名）/
@@ -211,7 +215,6 @@ def resolve_target(home: Path, topo: Dict[str, Any],
         namespace / config_dir / data_dir / remote / host_row。
     """
     from tools.topo_tools import (
-        _all_core_entities,
         _container_name_for_entity,
         _enrich_entity_detail,
     )
@@ -271,14 +274,19 @@ def resolve_target(home: Path, topo: Dict[str, Any],
 
     hosts = {str(h.get("name")): h for h in (topo.get("hosts") or [])
              if isinstance(h, dict) and h.get("name")}
-    entities = [_enrich_entity_detail(home, e)
-                for e in _all_core_entities(topo, home)]
-    entity = next((e for e in entities if str(e.get("name")) == name), None)
+    entity = hosts.get(name)
     if entity is None:
-        raise ValueError(
-            f"target {name!r} 不在拓扑表——target 是拓扑实体引用"
-            "（service/host/host_group/cluster），先 topo_query 确认实体名"
-        )
+        # v0.2/3 存量 cross_host 层并入 host 层（与旧 _all_core_entities
+        # 列表序 next() 命中行为一致：第一层 host/cross_host 先于 service）。
+        for ch in topo.get("cross_host") or []:
+            if isinstance(ch, dict) and str(ch.get("name")) == name:
+                entity = ch
+                break
+    if entity is None:
+        from tools.topo_ref import resolve_topo_ref
+        entity = resolve_topo_ref(topo, name, kind="service",
+                                  context=context, home=home)
+    entity = _enrich_entity_detail(home, entity)
 
     host_name = str(entity.get("_host") or entity.get("name") or "")
     host_row = hosts.get(host_name) or {}
@@ -710,6 +718,7 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
                   runner: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
                   approve: Callable[[str, str, str], Optional[str]],
                   where: str,
+                  scope: Optional[Dict[str, Any]] = None,
                   emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
                   phase: str = "runbook") -> Dict[str, Any]:
     """执行单个步骤并发出进度事件（OPS-DELTA #80）。
@@ -730,7 +739,7 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
         })
     entry = _run_one_step_impl(step, env=env, home=home, step_values=step_values,
                                trigger_ctx=trigger_ctx, runner=runner,
-                               approve=approve, where=where)
+                               approve=approve, where=where, scope=scope)
     if emit is not None:
         emit("step_done" if entry.get("ok") else "step_failed", {
             "step_id": step_id,
@@ -793,7 +802,8 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                        trigger_ctx: Dict[str, Any],
                        runner: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
                        approve: Callable[[str, str, str], Optional[str]],
-                       where: str) -> Dict[str, Any]:
+                       where: str,
+                       scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     step_id = str(step.get("id") or "")
     action = str(step.get("action") or "")
     ctx = f"{where}步骤 {step_id!r}"
@@ -808,7 +818,8 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
             topo = load_topology(home)
             if topo is None:
                 raise ValueError(f"{ctx} 拓扑表不存在——target 解析需要拓扑（topo_query 确认实体）")
-            target = resolve_target(home, topo, str(params["target"]))
+            target = resolve_target(home, topo, str(params["target"]),
+                                    context=scope)
             entry["target"] = {"name": target.get("name"), "type": target.get("type"),
                                "env": target.get("env"), "host": target.get("host"),
                                "managed_by": target.get("managed_by")}
@@ -886,6 +897,7 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
                            step_values: Dict[str, Dict[str, Any]],
                            trigger_ctx: Dict[str, Any],
                            runner: Callable, approve: Callable,
+                           scope: Optional[Dict[str, Any]] = None,
                            emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
                            phase: str = "rollback") -> Dict[str, Any]:
     scenarios = data.get("rollback") or []
@@ -906,7 +918,7 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
     for step in rb_steps:
         res = _run_one_step(step, env=env, home=home, step_values=step_values,
                             trigger_ctx=trigger_ctx, runner=runner, approve=approve,
-                            where=f"rollback[{scenario.get('name')}]",
+                            where=f"rollback[{scenario.get('name')}]", scope=scope,
                             emit=emit, phase=phase)
         rb_results.append(res)
         if not res.get("ok"):
@@ -952,6 +964,14 @@ def execute_runbook(
     rb_env = str(env or data.get("env") or "local").strip() or "local"
     scheduled = bool(scheduled)
     version = str(data.get("version") or "v0.2")
+    scope: Optional[Dict[str, Any]] = None
+    if data.get("env"):
+        scope = {"env": str(data.get("env"))}
+    for key, field in (("cluster", "clusters"), ("host", "hosts")):
+        vals = data.get(field)
+        if isinstance(vals, list) and len(vals) == 1:
+            scope = dict(scope or {})
+            scope[key] = str(vals[0])
 
     def _emit(ev_type: str, fields: Optional[Dict[str, Any]] = None) -> None:
         """构建并回调一个进度事件（带 base 字段；回调失败仅记日志）。"""
@@ -1046,7 +1066,7 @@ def execute_runbook(
                 continue
             res = _run_one_step(step, env=rb_env, home=home, step_values=step_values,
                                 trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
-                                where="runbook ", emit=_emit)
+                                where="runbook ", scope=scope, emit=_emit)
             results.append(res)
             if res.get("ok"):
                 continue
@@ -1069,7 +1089,8 @@ def execute_runbook(
                 })
                 rb = _run_rollback_scenario(
                     data, scene, env=rb_env, home=home, step_values=step_values,
-                    trigger_ctx=trigger_ctx, runner=_runner, approve=_approve, emit=_emit)
+                    trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
+                    scope=scope, emit=_emit)
                 status = "rolled_back" if rb.get("ok") else "failed"
                 if not rb.get("ok"):
                     error = f"{error}；{rb.get('error')}"
