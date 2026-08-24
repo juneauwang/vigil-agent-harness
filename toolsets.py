@@ -320,6 +320,18 @@ TOOLSETS = {
         "includes": [],
     },
 
+    "contract": {
+        "description": (
+            "YAPL 编译契约工具（yapl-design.md 第十三章，阶段 B）：契约 → LLM 生成 "
+            "薄包装 → 沙箱自证 → 资产审批 → 注册后的工具。注册 = 用户显式编译 + "
+            "审批（registry.yaml 有记录才有工具）；按数据存在性门控（无注册契约时 "
+            "零工具零 footprint）。工具调用走薄包装 + P4 handler 通道，调用层矩阵按 "
+            "契约 action 裁决（type=tool 引用 = run_script 资产预审语义，阶段 C）。"
+        ),
+        "tools": [],
+        "includes": [],
+    },
+
     "prom": {
         "description": (
             "Prometheus 监控（只读，OPS-DELTA #10）：prom_query 做 PromQL 查询"

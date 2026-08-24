@@ -427,6 +427,7 @@ from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
 from hermes_cli.subcommands.topo_export import build_topo_export_parser
 from hermes_cli.subcommands.matrix import build_matrix_parser
+from hermes_cli.subcommands.contract import build_contract_parser
 from hermes_cli.subcommands.vssh import build_vssh_parser
 from hermes_cli.subcommands.trajectory import build_trajectory_parser
 from hermes_cli.subcommands.watch import build_watch_parser
@@ -4657,6 +4658,13 @@ def cmd_matrix(args):
     from hermes_cli.subcommands.matrix import run as matrix_run
 
     return matrix_run(args)
+
+
+def cmd_contract(args):
+    """YAPL 契约管理（vigil contract compile/list，阶段 B 编译生成管线）。"""
+    from hermes_cli.subcommands.contract import run as contract_run
+
+    return contract_run(args)
 
 
 def cmd_watch(args):
@@ -12861,6 +12869,7 @@ def main():
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
     build_topo_export_parser(subparsers, cmd_topo_export=cmd_topo_export)
     build_matrix_parser(subparsers, cmd_matrix=cmd_matrix)
+    build_contract_parser(subparsers, cmd_contract=cmd_contract)
     build_vssh_parser(subparsers, cmd_vssh=cmd_vssh)
     build_trajectory_parser(subparsers, cmd_trajectory=cmd_trajectory)
     build_watch_parser(subparsers, cmd_watch=cmd_watch)

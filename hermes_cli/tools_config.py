@@ -2333,14 +2333,15 @@ def _get_platform_tools(
         if x_search_auto_enabled:
             enabled_toolsets.add("x_search")
 
-        # Ops harness (OPS-DELTA #14): topo/runbook 工具集对 cli 平台默认启用，
-        # 让 default profile 的 ``vigil`` 会话开箱即用运维事实层（拓扑表 + 
-        # runbook），无需 ``-p ops``。只在用户**没有**保存显式工具集列表时
-        # 生效（显式列表权威，不覆盖用户选择）；平台仅限 cli，不污染
-        # telegram/discord 等消息平台。工具可用性仍由 check_fn 数据存在性
-        # 门控——无 topology.yaml/runbooks 时 schema 里不出现，零 footprint。
+        # Ops harness (OPS-DELTA #14/#87): topo/runbook/matrix/contract 工具集
+        # 对 cli 平台默认启用，让 default profile 的 ``vigil`` 会话开箱即用
+        # 运维事实层（拓扑表 + runbook + 编译契约工具），无需 ``-p ops``。
+        # 只在用户**没有**保存显式工具集列表时生效（显式列表权威，不覆盖用户
+        # 选择）；平台仅限 cli，不污染 telegram/discord 等消息平台。工具可用性
+        # 仍由数据存在性门控——无 topology.yaml/runbooks/registry.yaml 时
+        # schema 里不出现，零 footprint。
         if platform == "cli" and not explicitly_configured:
-            for _ops_ts in ("topo", "runbook", "matrix"):
+            for _ops_ts in ("topo", "runbook", "matrix", "contract"):
                 if _ops_ts in enabled_toolsets:
                     continue
                 if _toolset_allowed_for_platform(_ops_ts, platform):

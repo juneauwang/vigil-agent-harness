@@ -4281,3 +4281,101 @@
     命中 39.107.92.54、dify 唯一行为不变）。
 - **状态**：独立 feat commit（batch71），只含 2 新模块 + runbook_exec 接入
   + 2 测试文件 + OPS-DELTA.md 本条登记。
+
+### 87. YAPL 主框架阶段 B——编译生成管线（2026-08-24，batch72）
+
+- **背景**：YAPL 主框架阶段 A（契约基础设施，batch71，HEAD 1223804c）验收后，
+  本批 = 阶段 B 编译生成管线：契约 → LLM 生成 Python 薄包装 → 沙箱跑 tests
+  自证 → 资产审批 → 注册工具表。设计单一事实来源 = yapl-design.md 第十三章
+  §13.4-13.6（2026-08-24 定案）。只做阶段 B，不做 runbook 第 24 动作 /
+  type=tool 引用（阶段 C）、不做前端。开发在 branch v1.0（vigil-agent），
+  发布基线 vigil-agent-release 不动。
+- **新增模块（独立文件，核心面窄）**：
+  - `tools/contract_runtime.py` —— 信任层：`run_specs(specs, target, *,
+    home, runner)`（runner 注入 = 沙箱 mock；None = 真实
+    `runbook_exec._run_spec` 通道：local/ssh/sudo/transfer/script_asset）+
+    `any_spec_failed`（任一条非零退出 → execution_failed 映射）。
+    生成代码只允许 import 白名单（runbook_handlers/runbook_exec/topo_tools/
+    topo_ref/本模块）——执行细节全部落在信任层，LLM 不写执行逻辑。
+  - `tools/contract_compile.py` —— 编译管线核心：
+    - 生成规范 `_GENERATION_SPEC`（固定模板注入系统提示：参数校验逐项 /
+      topo_ref 解析 / 分派调 handler / 结果包装 / 三错误码
+      invalid_params|entity_not_found|execution_failed）+ 默认生成器
+      `_default_llm_generate`（复用 `chat_api._create_chat_agent`，
+      config model.default 路径，`enabled_toolsets=[]` 零工具，用量记
+      `_last_llm_usage` 供 token 预算评估）。
+    - 越界扫描 `_overreach_scan`（12 项禁止模式：subprocess/os.system/
+      socket./urllib/requests./eval(/exec( 等）+ ast.parse 语法检查先行
+      （语法错直接重试不进沙箱）。
+    - 沙箱自证 `sandbox_selftest`：独立子进程 + TemporaryDirectory（不落盘
+      主目录），合成沙箱拓扑（hosts+services，**entity_not_found 用例专属
+      引用不建实体**——验证拒绝路径；同一实体既正常又不存在 = 契约自相矛盾
+      沙箱按存在建、该用例自然失败）；handler 通道 monkeypatch
+      `runbook_handlers.generate_commands` + 注入 runner（
+      `handler: {status: failed}` 用例 → exit_code 1 验证错误传播）；60s 超时
+      防死循环；失败带用例名/期望/实际 → LLM 重试（上限 3 次）。
+    - 注册：编译代码落 `contracts/compiled/<name>.py` chmod 0600（只读语义，
+      人工不改）+ `registry.yaml` 原子记录（name/action/status/compiled_at/
+      approved_by/path/toolset/schema）+ 动态 `registry.register(name,
+      toolset="contract", schema, handler, emoji="📜")`；失败回滚
+      （unlink+deregister）。重名拒绝（registry.yaml 条目 或 统一工具命名空间
+      冲突）→ register_conflict。
+    - 工具可见性：schema 由契约 params 自动生成（enum→enum、list→array、
+      topo_ref→string）；启动钩子 `ensure_compiled_tools_registered`
+      （model_tools 模块级调用，幂等热加载 registry.yaml 已注册契约，注册后
+      按 registry generation 增量对 `get_tool_definitions` 可见）；执行入口
+      `_tool_handler_for` = 每次现读代码文件（只读语义）+ 自动附加
+      time_elapsed + JSON 串返回（registry 工具管线只接受字符串结果）。
+  - `hermes_cli/subcommands/contract.py` —— `vigil contract compile
+    <name> [--yes] [--max-retries N]`（--yes = 非交互显式同意注册审批，
+    置 VIGIL_INTERACTIVE + approval_callback 返回 once）+ `vigil contract
+    list`（registry.yaml 记录查询）；挂载进 `hermes_cli/main.py`。
+  - `toolsets.py` 新增 `"contract"` toolset（tools: []，数据存在性门控——
+    无注册契约零工具零 footprint）；`hermes_cli/tools_config.py` cli 平台
+    默认启用列表加 `"contract"`（显式列表权威，不覆盖用户选择）。
+  - **凭据纪律（设计 13.2 补）**：生成代码零凭据接触（薄包装只引用实体，
+    SSH/远程执行走 handler 凭据注入链）；params 校验器阶段 A 已拒绝
+    password/secret/token/key 类参数（contract_tools 校验器），本批生成规范
+    同步禁止生成代码含凭据逻辑。
+- **动态注册机制选择（OPS-DELTA 注明）**：工具发现机制原只认模块顶层
+  `registry.register`（import 时静态）；编译工具是运行时产物，动态注册走
+  `registry.register(toolset="contract")` + 启动钩子热加载——注册后按
+  generation 增量对 `get_tool_definitions`（model_tools.py:305 语义）可见，
+  容器/热重载无影响（每次现读代码文件，只读语义）。重名与内置工具表统一
+  命名空间互斥。
+- **回归面**：新增 `tests/tools/test_contract_compile.py` 24 用例（编译状态机
+  各失败路径：contract_not_found/契约校验失败/generation_failed 重试超限/
+  语法错重试/越界拒绝重试/自证失败重试带用例名引导/审批拒绝不注册/tirith
+  block 拒/register_conflict 重名拒绝；沙箱自证：全过/失败带用例名/超时杀
+  死；注册：registry.yaml 记录/0600 落盘/schema 生成/动态注册后
+  get_tool_definitions 可见/ensure 钩子幂等热加载；mock 生成器注入不真调
+  LLM）。存量回归：test_contracts/test_topo_ref/test_runbook_exec/
+  test_script_assets/test_runbook_v2/tools/create/lock/schedule/coverage/
+  vault_refs/test_batch40_runbook_gate/test_batch44_runbook_semantic_secret
+  （294 passed）+ test_approval/test_command_guards/test_batch47_sudo_approval/
+  test_topo_tools/test_topo_v4/test_batch39_topo_sync（193 passed）。
+  实机修复 2 个单元测不到的问题：沙箱 ENF 专属引用被误建实体（
+  `present | (absent - present)` → 只建正常用例引用）；registry dispatch 给
+  handler 传 task_id 等 kwargs + 工具管线只收字符串结果（handler 改
+  `**kwargs` + JSON 串返回）。
+- **实测验证**（9131 用新代码重启，VIGIL_HOME=/home/wpwang/.vigil +
+  load_hermes_dotenv()，VIGIL_DASHBOARD_SESSION_TOKEN=vigil-b70-test-9131）：
+  - 真编译全链路：`~/.vigil/contracts/verify-service.yaml`（action=verify，
+    returns {ok: boolean}，3 用例含 entity_not_found + handler failed）→
+    `vigil contract compile verify-service --yes` 一次通过：LLM 生成合规薄
+    包装（白名单 import + call(params, *, home, context, runner) + 三错误码 +
+    跑通沙箱 3/3）→ 资产审批（approved_by=wpwang）→ 注册。token 消耗：
+    deepseek-v4-flash 1 次 API 调用，in=24336 out=2375 total=26711，
+    estimated_cost_usd=0.003633，latency 17.4s，prompt cache 命中
+    3200/24336（13%）——单契约编译一次约 2.7 万 token / <$0.004（预算评估
+    参考：普通契约 ≈ 25k prompt 模板 + 2-3k 生成）。
+  - 注册后可见 + 直调：新进程 import model_tools（启动钩子日志
+    `compiled contracts re-registered: 1`），`get_tool_definitions(
+    enabled_toolsets=["contract"])` 含 verify-service；`handle_function_call`
+    直调 target=dify（真实拓扑唯一名，docker_compose 服务）→
+    `{"ok": true, "time_elapsed": 0.085}`（真实 docker inspect 通道）；
+    错误路径 ghost-svc → entity_not_found、缺参 → invalid_params。
+  - 测试契约已全部清理（contracts/ 恢复到实测前状态），9131 已用新代码
+    重启常驻。
+- **状态**：独立 feat commit（batch72），只含 4 新文件 + 4 文件接入 +
+  1 测试文件 + OPS-DELTA.md 本条登记。

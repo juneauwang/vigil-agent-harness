@@ -213,6 +213,15 @@ def _run_async(coro):
 
 discover_builtin_tools()
 
+# YAPL 阶段 B（OPS-DELTA #87）：registry.yaml 已注册的编译契约 → 热加载进
+# 运行时工具表（幂等；动态注册照 registry.register 模式，注册后按 generation
+# 增量对 get_tool_definitions 可见）。失败只记日志不阻断启动。
+try:
+    from tools.contract_compile import ensure_compiled_tools_registered
+    ensure_compiled_tools_registered()
+except Exception:
+    logger.exception("compiled contract re-registration hook failed")
+
 # MCP tool discovery (external MCP servers from config) used to run here as
 # a module-level side effect.  It was removed because discover_mcp_tools()
 # internally uses a blocking future.result(timeout=120) wait, and the
