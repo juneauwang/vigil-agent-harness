@@ -123,10 +123,10 @@ class TestRemoteSudoAskpassInjection:
         assert "/tmp/vigil-sudo-" in calls["cleanup"]
 
     def test_remote_non_vault_credential_fail_closed(self, tmp_path, monkeypatch):
-        """ssh_key / askpass 类型不支持远端注入 → fail-closed。"""
+        """askpass 类型仍不支持远端注入 → fail-closed（batch74 起 ssh_key 走 sudo -n）。"""
         with pytest.raises(RuntimeError, match="vault 类型"):
             _run_remote_sudo("host", "ops", 22, "ss -tlnp",
-                             {"type": "ssh_key", "ref": "/keys/x.pem"})
+                             {"type": "askpass", "ref": "/keys/x"})
 
     def test_remote_sudo_scp_dest_pure_remote_path(self, tmp_path, monkeypatch):
         """批五十回归：``_run_remote_sudo`` 传给 ``_scp`` 的 dest 是纯远端路径。

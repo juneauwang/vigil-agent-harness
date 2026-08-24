@@ -844,7 +844,7 @@ def _host_roles_for(runtime: str) -> List[str]:
     runtime = str(runtime or "").strip()
     if runtime in ("docker",):
         return ["docker-host"]
-    if runtime in ("k8s", "k3s"):
+    if runtime in ("k8s", "k3s", "kubernetes"):
         return ["worker"]
     return []
 
@@ -1405,7 +1405,21 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
     }
     svc_ns: Dict[str, str] = {}
     if k8s_res.ok:
-        runtime = "k3s" if runtime == "unknown" else runtime
+        if runtime == "unknown":
+            # batch74（OPS-DELTA #89）：kubectl 可用 ≠ k3s——标准 kubeadm 集群
+            # （containerd + cilium）被误标 k3s（用户阿里云 beijing 集群实证）。
+            # 追加 k3s 特征探测（两条独立 probe，任一命中即 k3s）：server
+            # gitVersion 含 k3s（k3s 的 gitVersion 形如 v1.x.x+k3s1）、
+            # /etc/rancher 安装路径存在。探测失败/超时 → 保守标 kubernetes
+            # （宁可把 k3s 漏标成 kubernetes，不可把 kubeadm 误标 k3s）。
+            k3s_git = _probe(
+                runner,
+                "kubectl version -o json 2>/dev/null | grep -o 'k3s[0-9]*' | head -1",
+            )
+            rancher_dir = _probe(runner, "ls -d /etc/rancher 2>/dev/null")
+            detected = bool(k3s_git.stdout.strip() or rancher_dir.stdout.strip())
+            runtime = "k3s" if detected else "kubernetes"
+            probes["k3s"] = "detected" if detected else "not-detected(standard-kubernetes)"
         for row in k8s_rows:
             if row["kind"] != "k8s-service":
                 continue

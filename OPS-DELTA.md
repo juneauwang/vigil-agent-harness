@@ -4488,3 +4488,89 @@
   test_topo_provider/test_batch33_topo_slash（33 passed）。
 - **状态**：独立 feat commit（batch73），只含 1 新测试文件 + 8 文件接入 +
   OPS-DELTA.md 本条登记。
+
+### 89. runbook_create 强制 v0.2 + 远端 sudo root 免密 + K3S runtime 误判（2026-08-24，batch74）
+
+- **背景**：用户 dogfood 实证 3 个 bug，一批修复。开发在 branch v1.0（vigil-agent），
+  发布基线 vigil-agent-release 不动。前端无改动。
+- **任务 1——runbook_create 强制 v0.2（最高优先级）**：用户让 Vigil 写"探查 argocd
+  状态，未运行则恢复"的 runbook，Vigil 生成 v0.1 格式（steps[].commands 裸 SSH
+  命令），执行时 LLM 直接 terminal 跑——resolve_topo_ref / 动作词表 / 矩阵动作裁决
+  全部被绕过（topo_ref 被击穿，只剩 terminal 审批门兜底）。这是 §六"LLM 绕行入口"
+  教训的第三个实例（schema 只写"v0.2 推荐"不强制，v0.1 保留本意是存量兼容，却成了
+  LLM 偷懒路径）。修复：
+  - `runbook_create` 内、`_validate_runbook` 前加 v0.2 强制门：`is_new`（同名文件
+    不存在）且提交 v0.1（steps 含 commands）→ 直接 tool_error："新 runbook 必须
+    使用 v0.2 声明式格式…v0.1 commands 格式仅供 overwrite 存量文件"；动作词表从
+    schemas.yaml actions 读（含第 24 动作 runbook），不硬编码；
+  - 存量判定 = `exists and not _is_v2_runbook(磁盘文件)`：存量 v0.1 + overwrite=true
+    + 提交 v0.1 → 放行（v0.1 仅此一途）；磁盘已是 v0.2 + 提交 v0.1 → 即使 overwrite
+    也拒绝（不能把 v0.2 降级成 v0.1）；存量文件不可读 → 保守拒绝；
+  - `_DEFAULT_CREATE_SCHEMA` description："v0.2（推荐）"→"v0.2（唯一允许的新建格式）"
+    + "新建 runbook 必须用 v0.2；v0.1 commands 格式会被拒绝，仅供 overwrite 存量文件"；
+  - `_validate_runbook` 不动（存量 v0.1 加载/校验/checklist 语义保留）。
+  - 新测试 `test_batch74_runbook_v2_required.py`（6 例）：新建 v0.1 拒绝（含
+    "必须使用 v0.2"、动作词表含 runbook）、新建 v0.2 通过（过资产审批 + 预审标记）、
+    存量 v0.1 overwrite 放行、存量 v0.2 提交 v0.1 拒绝（磁盘保持 v0.2）、argocd 同款
+    v0.2（query/scale/restart, target: argocd-server）通过。
+  - 存量测试适配（v0.1 语义测试全部改为"先放 v0.1 存量 + overwrite=true"）：
+    test_runbook_create（secret 扫描 4 例 + deploy checklist 1 例走 overwrite 存量，
+    其余 create 机制用例改 v0.2 + fixture 补 approvals.mode=off）、
+    test_batch44_runbook_semantic_secret（fixture 预置 v0.1 存量 + overwrite）、
+    test_runbook_v2 双 schema（v1 用例预置存量 + overwrite）、test_matrix
+    test_v1_unaffected 同理。
+- **任务 2——远端 sudo root 免密 + 非 root 兜底（sudo_tool._run_remote_sudo）**：
+  原实现无脑要求 vault 类型凭据，把最常见场景（root + 无密码 key，如 aliyun_nopass.pem）
+  拦了。修复：
+  - `cred_type == "ssh_key"`：user==root → `_ssh_run(…, "sudo -n <command>")` 直通
+    （root 的 sudo 默认免密，-n 保证不卡交互）；exit≠0 且 stderr 命中
+    `_SUDO_AUTH_FAILURE_HINTS`（"a password is required" 等）→ 可操作错误"远端 sudo
+    需要密码…请配置 vault 凭据或手动执行"；命令自身失败（无密码提示）→ 直通返回
+    结果，不误报；
+  - `cred_type == "ssh_key"`：user!=root → 先试 `sudo -n`，成功直通（可能配了
+    NOPASSWD），认证失败 → 报错引导配 vault（保持现状语义）；
+  - vault → 现有 `sudo -A` + scp askpass 流程不变；askpass 类型仍 fail-closed；
+    任何情况不猜密码、不翻 ~/.ssh/、不换用户名重试（§Q/§AD 教训）。
+  - 新测试 `test_batch74_sudo_root_nopass.py`（7 例）：root+ssh_key 命令形态
+    `sudo -n <command>` 且无 askpass/vault 注入、密码提示 → "配置 vault" 引导、
+    vault 走 `sudo -A` 不变、非 root 成功直通 / 失败引导、命令自身失败直通、
+    askpass fail-closed。test_sudo_exec 的"ssh_key 不支持远端注入"用例改为 askpass
+    类型（ssh_key 已支持）。
+- **任务 3——K3S runtime 误判（topo_discovery）**：原实现
+  `runtime = "k3s" if runtime == "unknown" else runtime`——kubectl 可用且 runtime
+  还是 unknown → 一律标 k3s，不探测任何 k3s 特征，标准 kubeadm 集群（containerd +
+  cilium）被误标 k3s（用户阿里云 beijing 集群实证，手动改数据后 re-discover 复发）。
+  修复（两条独立 probe，任一命中即 k3s，兼容远端 shell）：
+  - `kubectl version -o json 2>/dev/null | grep -o 'k3s[0-9]*' | head -1`（k3s 的
+    server gitVersion 形如 v1.x.x+k3s1）；
+  - `ls -d /etc/rancher 2>/dev/null`（k3s 安装路径）；
+  - 两条都空/探测失败/超时 → 保守标 `kubernetes`（宁可把 k3s 漏标成 kubernetes，
+    不可把 kubeadm 误标 k3s）；probes["k3s"] 记 detected / not-detected 供审计；
+  - `_host_roles_for` 把 kubernetes 并入 worker 分支（标准 k8s 节点 role 不落空）；
+    存量 topology.yaml 已有 runtime 不受影响（discover 只改新发现，合并时治理字段
+    不覆盖）。
+  - 新测试 `test_batch74_k3s_detect.py`（6 例）：gitVersion +k3s → k3s、标准 v1.30.x
+    → kubernetes（role 仍 worker）、kubectl 不可用 → unknown（落盘 ["bare"]）且不跑
+    k3s 探测、/etc/rancher 存在 → k3s、两特征都失败 → 保守 kubernetes、docker 可用
+    时 docker 优先。test_topo_discovery 的 `test_discover_docker_unavailable_…`
+    断言 ["k3s"] → ["kubernetes"]（默认 runner 无 k3s 特征）；FakeRunner 改最长前缀
+    优先（"kubectl version" override 覆盖泛化 "kubectl" key）。
+- **顺修存量测试 bug（test_approval_interrupt）**：两个用例直接给
+  `approval._get_approval_config` 赋 lambda（改 timeout/deny 策略）且从不恢复 →
+  泄漏成"mode 恒 manual"，全套件后续所有走资产审批的用例（v0.2 runbook 创建、
+  ops_permissions_guard / cron_approval_mode / approval_mode_parity 等）被错误
+  BLOCK（基线 HEAD 同组合 51 例失败，与本批功能无关，但 v0.2 runbook 用例因此
+  全量跑必挂）。setup 保存原函数、teardown 恢复——顺修后 51 → 32 例，本批相关
+  用例（runbook_v2 / matrix / approval_mode_parity / script_assets）全转绿；
+  剩余 32 例（terminal cwd/spill、command_guards、cron_approval_mode、
+  ops_permissions_guard、hardline_blocklist 等）与基线 HEAD 完全一致 = 存量
+  全量顺序干扰，单跑全绿，与本批无关。
+- **验收**：3 个新测试文件全绿（6+7+6）；实测 runbook_create 提交 v0.1 新格式
+  → "新 runbook 必须使用 v0.2"拒绝信息出现，argocd 同款 v0.2（action:
+  query/scale/restart，target: argocd-server）→ created 落盘 version:2 +
+  approved_by 预审标记；回归 tests/tools 全套 6418 passed / 32 failed（32 与
+  基线 HEAD 同文件同用例，存量干扰）；runbook / sudo / topo / approval 相关
+  套件零回归。
+- **状态**：独立 feat commit（batch74，1 个 commit），只含 3 个工具文件 + 6 个
+  存量测试文件适配 + 1 个存量测试顺修（test_approval_interrupt）+ 3 个新测试
+  文件 + OPS-DELTA.md 本条登记。

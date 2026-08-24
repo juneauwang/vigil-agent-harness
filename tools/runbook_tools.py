@@ -245,8 +245,9 @@ _DEFAULT_CREATE_SCHEMA = {
     "name": "runbook_create",
     "description": (
         "创建/更新运维 runbook（程序层：结构化 YAML，runbooks/<name>.yaml）。"
-        "双 schema：v0.2（推荐，声明式动作）steps 用 action+params，命令彻底消失；"
-        "v0.1（存量风格）steps 用 commands。v0.2 语法：\n"
+        "双 schema：v0.2（唯一允许的新建格式，声明式动作）steps 用 action+params，命令彻底消失；"
+        "v0.1（存量风格）steps 用 commands。新建 runbook 必须用 v0.2；v0.1 commands 格式"
+        "会被拒绝，仅供 overwrite 存量文件。v0.2 语法：\n"
         "- 步骤 = {id, title, action, params, expect?, on_failure?}；action 必须是动作词表"
         "（start/stop/restart/reload/enable/disable/reboot/shutdown/deploy/rollback/"
         "scale/decommission/backup/restore/apply_config/query/fetch_log/verify/"
@@ -263,7 +264,7 @@ _DEFAULT_CREATE_SCHEMA = {
         "- 无 permission 字段（权限=操作矩阵唯一裁决）；run_script.script 只引用资产。\n"
         "v0.2 创建/变更会触发资产审批（YAPL §11.4）：矩阵判 {approve: required} 高危"
         "动作的 runbook 强制人工审批；approvals.mode=smart 且全部动作矩阵判 execute 时"
-        "自动批准；审批失败不落盘。v0.1 保留原路径。"
+        "自动批准；审批失败不落盘。v0.1（仅存量 overwrite）保留原路径。"
         "runbook 只支持 .yaml——.md/其他格式不会被加载。"
         "runbook 是 Vigil 程序层机制（触发条件 + 步骤 + 命令 + 回滚），不是 Markdown 文档："
         "runbook_load 可按名/触发词加载，runbook_checkpoint 可门控部署阶段。"
@@ -1948,6 +1949,34 @@ def runbook_create(
     runbooks_dir = _runbooks_dir(home)
     path = runbooks_dir / f"{name}.yaml"
     exists = path.is_file()
+
+    # batch74（OPS-DELTA #89）：新 runbook 强制 v0.2 声明式格式——v0.1 commands
+    # 裸命令绕过 resolve_topo_ref / 动作词表 / 矩阵裁决（§六 LLM 绕行入口教训
+    # 第三例）。v0.1 仅允许 overwrite 磁盘上已存在的 v0.1 存量文件；磁盘已是
+    # v0.2 时覆盖提交必须保持 v0.2（不能把 v0.2 降级成 v0.1）。
+    if not v2_style:
+        if not exists:
+            actions = _v2_actions(home) or []
+            actions_text = "/".join(actions) if actions else "（schemas.yaml actions 词表）"
+            return tool_error(
+                "新 runbook 必须使用 v0.2 声明式格式（steps 用 action+params，命令彻底"
+                f"消失；action ∈ 动作词表 {actions_text}，params 按动作契约填必填）。"
+                "v0.1 commands 格式仅供 overwrite 存量文件。"
+                "参考：{action: restart, params: {target: <拓扑实体>}} 或 "
+                "{action: scale, params: {target: <实体>, replicas: N}}"
+            )
+        try:
+            existing = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if _is_v2_runbook(existing):
+                return tool_error(
+                    f"runbook 已是 v0.2 格式: {name}——覆盖提交必须保持 v0.2 声明式格式"
+                    "（steps 用 action+params），不能降级为 v0.1 commands 格式。"
+                )
+        except Exception:
+            return tool_error(
+                f"无法读取存量 runbook: {name}（{path}）——v0.1 commands 格式仅允许"
+                "覆盖可读的 v0.1 存量文件；请改用 v0.2 格式或先修复存量文件。"
+            )
 
     # 复用既有校验器：保证 runbook_load 能原样加载回来（checklist 规则一并生效）。
     try:

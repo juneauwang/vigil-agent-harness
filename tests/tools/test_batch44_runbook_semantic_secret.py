@@ -30,6 +30,13 @@ from tools.runbook_tools import (
 def rb_home(tmp_path, monkeypatch):
     home = tmp_path / "vigil_home"
     (home / "runbooks").mkdir(parents=True)
+    # batch74：v0.1 仅允许 overwrite 存量文件——预置一个 v0.1 存量，
+    # 让本套件的 v0.1 凭据语义扫描测试继续走 v0.1 路径。
+    (home / "runbooks" / "semantic-secret-check.yaml").write_text(
+        "name: semantic-secret-check\ntitle: 存量\nversion: 1\nkind: incident\n"
+        "steps:\n  - id: s1\n    title: x\n    commands: [echo old]\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("VIGIL_HOME", str(home))
     hc._LOAD_CONFIG_CACHE.clear()
     try:
@@ -109,21 +116,21 @@ class TestRunbookCreateSemantic:
             "mkdir -p /root/user.pem",
             "docker run -d -p 8080:80 nginx",
         ]}])
-        result = _load(runbook_create(**data, home=rb_home))
-        assert result["status"] == "created", result
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
+        assert result.get("status") in ("created", "updated"), result
 
     def test_allows_vault_pass_assignment_ref(self, rb_home):
         data = _incident(steps=[{"id": "s1", "title": "x", "commands": [
             "VAULT_PASS=secret/data/CSNDC/maas envsubst < tmpl > out",
         ]}])
-        result = _load(runbook_create(**data, home=rb_home))
-        assert result["status"] == "created", result
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
+        assert result.get("status") in ("created", "updated"), result
 
     def test_rejects_plaintext_sshpass(self, rb_home):
         data = _incident(steps=[{"id": "s1", "title": "x", "commands": [
             "sshpass -p 'hunter2' ssh user@host",
         ]}])
-        result = _load(runbook_create(**data, home=rb_home))
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert "error" in result
         assert "明文凭据" in result["error"]
         assert "topo_query" in result["error"]
@@ -133,7 +140,7 @@ class TestRunbookCreateSemantic:
         data = _incident(steps=[{"id": "s1", "title": "x", "commands": [
             "PASSWORD=hunter2 somecmd",
         ]}])
-        result = _load(runbook_create(**data, home=rb_home))
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert "error" in result
         assert "PASSWORD" in result["error"]
         assert "hunter2" not in result["error"]
@@ -142,5 +149,5 @@ class TestRunbookCreateSemantic:
         data = _incident(steps=[{"id": "s1", "title": "x", "commands": [
             "curl -u admin:<vault:ansible/pass> http://localhost/health",
         ]}])
-        result = _load(runbook_create(**data, home=rb_home))
-        assert result["status"] == "created", result
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
+        assert result.get("status") in ("created", "updated"), result

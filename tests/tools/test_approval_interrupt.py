@@ -34,8 +34,13 @@ class TestApprovalInterrupt:
     def setup_method(self):
         from tools.interrupt import set_interrupt
         from tools import interrupt as _interrupt_mod
+        from tools import approval as _approval_mod
 
         _clear_approval_state()
+        # 用例里直接给 _get_approval_config 赋 lambda（改超时/deny 策略）——
+        # 必须保存原函数，teardown 恢复，否则泄漏成"mode 恒 manual"，后续
+        # 全套件资产审批（v0.2 runbook 创建等）被错误 BLOCK。
+        self._orig_get_approval_config = _approval_mod._get_approval_config
         # Wipe ALL per-thread interrupt bits — thread idents are recycled by
         # the OS, so a bit set on a now-dead thread in a prior test can leak
         # onto a fresh worker that happens to reuse the ident.
@@ -63,6 +68,8 @@ class TestApprovalInterrupt:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
+        from tools import approval as _approval_mod
+        _approval_mod._get_approval_config = self._orig_get_approval_config
         _clear_approval_state()
 
     def test_interrupt_unblocks_pending_approval_quickly(self):

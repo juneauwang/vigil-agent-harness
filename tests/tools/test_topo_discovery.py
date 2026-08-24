@@ -82,15 +82,18 @@ class FakeRunner:
 
     def __call__(self, cmd: str) -> ProbeResult:
         self.calls.append(cmd)
-        for key, value in self.probes.items():
-            if key in cmd:
-                if isinstance(value, Exception):
-                    raise value
-                if isinstance(value, ProbeResult):
-                    return value
-                if isinstance(value, tuple):
-                    return ProbeResult(value[0], value[1], value[2] if len(value) > 2 else "")
-                return ProbeResult(value)
+        # 最长前缀优先：override 用更具体的 key（如 "kubectl version"）覆盖
+        # 泛化 key（"kubectl"），batch74 起 kubectl 有两条探测命令。
+        matches = [(k, v) for k, v in self.probes.items() if k in cmd]
+        if matches:
+            _, value = max(matches, key=lambda kv: len(kv[0]))
+            if isinstance(value, Exception):
+                raise value
+            if isinstance(value, ProbeResult):
+                return value
+            if isinstance(value, tuple):
+                return ProbeResult(value[0], value[1], value[2] if len(value) > 2 else "")
+            return ProbeResult(value)
         return ProbeResult("", 127)
 
 
@@ -246,7 +249,11 @@ def test_discover_ssh_failure_raises_no_partial_data():
 
 def test_discover_docker_unavailable_falls_through_to_other_probes():
     """docker 未安装（exit 127）→ 记录 skipped，其余探针照常。"""
-    runner = _default_runner(**{"docker ps": ("", 127), "compose ls": ("", 127)})
+    runner = _default_runner(**{
+        "docker ps": ("", 127), "compose ls": ("", 127),
+        # 标准 kubeadm：kubectl version 输出无 k3s 特征 → 标准 kubernetes。
+        "kubectl version": "",
+    })
     d = discover_host("203.0.113.20", "prod", runner=runner)
     assert d["probes"]["docker"] != "ok"
     assert d["probes"]["kubectl"] == "ok"
@@ -254,8 +261,10 @@ def test_discover_docker_unavailable_falls_through_to_other_probes():
     # v0.4：unidentified 端口进 pending_review（不入 services）。
     assert {s["name"] for s in d["services"]} == {"grafana"}
     assert {s["name"] for s in d["pending_review"]} == {"unidentified-9090"}
-    # 无 docker 容器 → runtime 跟随 k8s（v0.4 数组形态）。
-    assert d["host"]["runtime"] == ["k3s"]
+    # 无 docker 容器 → runtime 跟随 k8s（v0.4 数组形态）。batch74：默认 runner
+    # 的 kubectl 探测输出无 k3s 特征 → 标准 kubernetes，不再一律误标 k3s。
+    assert d["host"]["runtime"] == ["kubernetes"]
+    assert d["host"]["role"] == ["worker"]
 
 
 def test_discover_parses_compose_ls_plain_fallback():

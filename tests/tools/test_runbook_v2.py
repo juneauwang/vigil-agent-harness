@@ -383,9 +383,15 @@ class TestV2DualSchema:
         }
 
     def test_v1_create_and_load_unchanged(self, v2_home):
-        out = _load(runbook_create(**self._v1_runbook(), home=v2_home))
-        assert out["status"] == "created"
+        # batch74：v0.1 仅允许 overwrite 存量文件——先手工放 v0.1 存量。
         path = v2_home / "runbooks" / "deploy-check.yaml"
+        path.write_text(
+            "name: deploy-check\ntitle: 存量\nversion: 1\nkind: deploy\n"
+            "steps:\n  - id: preflight\n    title: x\n    commands: [echo ok]\n",
+            encoding="utf-8",
+        )
+        out = _load(runbook_create(**self._v1_runbook(), overwrite=True, home=v2_home))
+        assert out.get("status") in ("created", "updated"), out
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
         assert data["version"] == 1
         loaded = _load(runbook_load(runbook="deploy-check", home=v2_home))
@@ -398,7 +404,12 @@ class TestV2DualSchema:
         assert "runbook_execute" in out.get("error", "")
 
     def test_v1_checkpoint_still_works(self, v2_home):
-        runbook_create(**self._v1_runbook(), home=v2_home)
+        (v2_home / "runbooks" / "deploy-check.yaml").write_text(
+            "name: deploy-check\ntitle: 存量\nversion: 1\nkind: deploy\n"
+            "steps:\n  - id: preflight\n    title: x\n    commands: [echo ok]\n",
+            encoding="utf-8",
+        )
+        runbook_create(**self._v1_runbook(), overwrite=True, home=v2_home)
         out = _load(runbook_checkpoint(runbook="deploy-check", step_id="preflight",
                                        status="pass", home=v2_home))
         assert out.get("recorded") == "preflight"

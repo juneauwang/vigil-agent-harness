@@ -514,12 +514,17 @@ class TestAssetApproval:
         assert "BLOCKED" in out["error"]
 
     def test_v1_unaffected(self, mhome):
-        """v0.1 runbook 走原路径：无资产审批、无预审标记。"""
+        """v0.1 runbook 走原路径（batch74 起仅 overwrite 存量）：无资产审批、无预审标记。"""
         _matrix_with_required(mhome)
+        (mhome / "runbooks" / "v1-rb.yaml").write_text(
+            "name: v1-rb\ntitle: 存量\nversion: 1\nkind: incident\n"
+            "steps:\n  - id: s1\n    title: x\n    commands: [echo old]\n",
+            encoding="utf-8",
+        )
         v1 = {"runbook": "v1-rb", "title": "v1", "kind": "incident",
               "steps": [{"id": "s1", "title": "x", "commands": ["echo hi"]}]}
-        out = json.loads(runbook_create(**v1, home=mhome))
-        assert out["status"] == "created"
+        out = json.loads(runbook_create(**v1, overwrite=True, home=mhome))
+        assert out.get("status") in ("created", "updated")
         written = yaml.safe_load((mhome / "runbooks" / "v1-rb.yaml").read_text())
         assert "approved_at" not in written
         assert "approved_version" not in written

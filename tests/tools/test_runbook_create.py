@@ -25,6 +25,12 @@ SAMPLE_RUNBOOKS = PROJECT_ROOT / "hermes_cli" / "ops_samples" / "runbooks"
 def rb_home(tmp_path, monkeypatch):
     home = tmp_path / "vigil_home"
     (home / "runbooks").mkdir(parents=True)
+    # batch74 强制 v0.2：本套件多数用例改走 v0.2 新建（过资产审批门）——
+    # 显式 approvals.mode=off 绕过人工门，保持 create 机制断言专注不串味。
+    (home / "config.yaml").write_text(
+        yaml.safe_dump({"approvals": {"mode": "off"}}, allow_unicode=True),
+        encoding="utf-8",
+    )
     for src in sorted(SAMPLE_RUNBOOKS.glob("*.yaml")):
         shutil.copy2(src, home / "runbooks" / src.name)
     monkeypatch.setenv("VIGIL_HOME", str(home))
@@ -40,6 +46,29 @@ def _load(result: str) -> dict:
 
 
 def _incident_runbook(**overrides):
+    """v0.2 形态（batch74 起新建强制 v0.2）：action 声明式，命令彻底消失。"""
+    data = {
+        "runbook": "ansible-syntax-check",
+        "title": "修改 ansible 后语法校验",
+        "triggers": ["修改 ansible", "syntax check"],
+        "summary": "改完 ansible playbook 后自动跑 syntax-check。",
+        "env": "test",
+        "kind": "incident",
+        "steps": [
+            {
+                "id": "check",
+                "title": "语法校验",
+                "action": "query",
+                "params": {"pattern": "ansible"},
+            }
+        ],
+    }
+    data.update(overrides)
+    return data
+
+
+def _incident_v1(**overrides):
+    """v0.1 形态：仅供 overwrite 磁盘上已存在的 v0.1 存量文件。"""
     data = {
         "runbook": "ansible-syntax-check",
         "title": "修改 ansible 后语法校验",
@@ -61,6 +90,20 @@ def _incident_runbook(**overrides):
     return data
 
 
+def _seed_v1(home: Path, name: str = "ansible-syntax-check") -> Path:
+    """在 runbooks/ 手工放一个 v0.1 存量文件（v0.1 仅允许 overwrite 存量）。"""
+    path = home / "runbooks" / f"{name}.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {"name": name, "title": "存量 v0.1", "version": 1, "kind": "incident",
+             "steps": [{"id": "s1", "title": "x", "commands": ["echo old"]}]},
+            allow_unicode=True, sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 class TestRunbookCreate:
     def test_create_roundtrip_loadable(self, rb_home):
         result = _load(runbook_create(**_incident_runbook(), home=rb_home))
@@ -74,7 +117,8 @@ class TestRunbookCreate:
         assert loaded["name"] == "ansible-syntax-check"
         assert loaded["kind"] == "incident"
         assert "修改 ansible" in loaded["triggers"]
-        assert "ansible-playbook --syntax-check" in loaded["steps"][0]["commands"][0]
+        assert loaded["steps"][0]["action"] == "query"
+        assert "commands" not in str(loaded["steps"])
 
     def test_fuzzy_match_via_triggers(self, rb_home):
         runbook_create(**_incident_runbook(), home=rb_home)
@@ -82,41 +126,47 @@ class TestRunbookCreate:
         assert result["name"] == "ansible-syntax-check"
 
     def test_rejects_plaintext_password_in_steps(self, rb_home):
-        data = _incident_runbook(
+        # v0.1 仅允许 overwrite 存量文件——先手工放 v0.1 存量，再提交带明文的 v0.1。
+        seed = _seed_v1(rb_home)
+        data = _incident_v1(
             steps=[{"id": "check", "title": "x",
                     "commands": ["curl -u admin:secret123 http://localhost/health"]}]
         )
-        result = _load(runbook_create(**data, home=rb_home))
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert "error" in result
         assert "明文凭据" in result["error"]
         assert "<vault:path/field>" in result["error"]
         # 拒绝时值不回显：错误消息不含 secret123。
         assert "secret123" not in result["error"]
-        assert not (rb_home / "runbooks" / "ansible-syntax-check.yaml").exists()
+        # 拒绝不落盘：磁盘仍是最初的存量内容。
+        assert yaml.safe_load(seed.read_text(encoding="utf-8"))["steps"][0]["commands"] == ["echo old"]
 
     def test_rejects_plaintext_password_assignment_form(self, rb_home):
-        data = _incident_runbook(
+        _seed_v1(rb_home)
+        data = _incident_v1(
             steps=[{"id": "x", "title": "x", "commands": ["mysql -e 'SELECT 1' --password=abc"]}]
         )
-        result = _load(runbook_create(**data, home=rb_home))
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert "error" in result
         assert "password" in result["error"]
 
     def test_vault_placeholder_allowed(self, rb_home):
-        data = _incident_runbook(
+        _seed_v1(rb_home)
+        data = _incident_v1(
             steps=[{"id": "x", "title": "x",
                     "commands": ["curl -u admin:<vault:ansible/pass> http://localhost/health"]}]
         )
-        result = _load(runbook_create(**data, home=rb_home))
-        assert result["status"] == "created"
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
+        assert result.get("status") in ("created", "updated"), result
 
     def test_port_flag_not_treated_as_secret(self, rb_home):
-        data = _incident_runbook(
+        _seed_v1(rb_home)
+        data = _incident_v1(
             steps=[{"id": "x", "title": "x",
                     "commands": ["docker run -d -p 8080:80 nginx"]}]
         )
-        result = _load(runbook_create(**data, home=rb_home))
-        assert result["status"] == "created"
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
+        assert result.get("status") in ("created", "updated"), result
 
     @pytest.mark.parametrize("env_val", ["local", "test", "dev", "prod"])
     def test_create_env_four_values_roundtrip(self, rb_home, env_val):
@@ -184,13 +234,15 @@ class TestRunbookCreate:
         assert "steps" in result["error"]
 
     def test_deploy_kind_requires_rollback_and_verify(self, rb_home):
-        # kind=deploy 复用既有 checklist 校验：无 verify+expect / 无 rollback → 拒绝。
-        data = _incident_runbook(kind="deploy")
-        result = _load(runbook_create(**data, home=rb_home))
+        # kind=deploy 复用既有 checklist 校验（v0.1 专属）：无 verify+expect /
+        # 无 rollback → 拒绝。batch74 起 v0.1 仅 overwrite 存量——先放存量。
+        _seed_v1(rb_home)
+        data = _incident_v1(kind="deploy")
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert "error" in result
         assert "checklist" in result["error"] or "rollback" in result["error"]
         # 补全后可通过。
-        data = _incident_runbook(
+        data = _incident_v1(
             kind="deploy",
             steps=[
                 {"id": "preflight", "title": "x", "commands": ["kubectl get deploy"],
@@ -198,8 +250,8 @@ class TestRunbookCreate:
             ],
             rollback=[{"title": "回滚", "commands": ["kubectl rollout undo deploy/x"]}],
         )
-        result = _load(runbook_create(**data, home=rb_home))
-        assert result["status"] == "created"
+        result = _load(runbook_create(**data, overwrite=True, home=rb_home))
+        assert result.get("status") in ("created", "updated"), result
 
     def test_handler_passes_args(self, rb_home, monkeypatch):
         import tools.runbook_tools as rt

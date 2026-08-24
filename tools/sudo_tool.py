@@ -311,14 +311,37 @@ def _ssh_run(ssh_argv: List[str], ssh_env: Dict[str, str], remote_cmd: str,
     return proc
 
 
+def _sudo_needs_password(proc: subprocess.CompletedProcess) -> bool:
+    """``sudo -n`` 失败的 stderr 是否指向"需要密码/认证"（而非命令自身失败）。"""
+    stderr = (proc.stderr or "").lower()
+    return any(hint in stderr for hint in _SUDO_AUTH_FAILURE_HINTS)
+
+
 def _run_remote_sudo(host: str, user: str, port: int, command: str,
                      cred: Dict[str, Any]) -> subprocess.CompletedProcess:
-    """远端 sudo：scp 0700 askpass + 保险箱文件 → 远端 /tmp → ``sudo -A`` → 清理。"""
+    """远端 sudo：vault 凭据走 ``sudo -A``；ssh_key 凭据走 ``sudo -n`` 直通。
+
+    batch74（OPS-DELTA #89）：ssh_key 无密码 key + root → ``sudo -n`` 直通
+    （root 的 sudo 默认免密，-n 保证不卡交互）；非 root 先试 ``sudo -n``
+    （可能配了 NOPASSWD），认证失败 → 报错引导配 vault。任何情况下不猜密码、
+    不翻 ~/.ssh/、不换用户名重试（§Q/§AD 教训，fail-closed）。
+    """
     cred_type = str(cred.get("type") or "")
+    if cred_type == "ssh_key":
+        ssh_argv, ssh_env = _build_ssh_argv(host, user=user, port=port, cred=cred)
+        proc = _ssh_run(ssh_argv, ssh_env, f"sudo -n {command}")
+        if proc.returncode != 0 and _sudo_needs_password(proc):
+            raise RuntimeError(
+                f"远端 sudo 需要密码（当前凭据为 {user} 的 ssh_key，sudo 仍要求认证）"
+                "——请配置 vault 类型凭据（拓扑表 host credential 声明 vault，携带 "
+                "sudo 密码）或手动执行；禁止猜密码/翻 ~/.ssh/（§Q/§AD 教训）"
+            )
+        return proc
     if cred_type != "vault":
         raise RuntimeError(
-            "远端 sudo 需要 vault 类型凭据（携带 sudo 密码）——ssh_key 无密码、"
-            "askpass 类型暂不支持远端注入；请补充拓扑表 vault credential 声明或手动执行"
+            "远端 sudo 需要 vault 类型凭据（携带 sudo 密码）或 ssh_key（root 无密码"
+            "免密直通）——askpass 类型暂不支持远端注入；请补充拓扑表 vault credential "
+            "声明或手动执行"
         )
     vault_file = path_for(str(cred["ref"]))
     if not vault_file.is_file():
