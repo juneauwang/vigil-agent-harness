@@ -720,12 +720,17 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
                   where: str,
                   scope: Optional[Dict[str, Any]] = None,
                   emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-                  phase: str = "runbook") -> Dict[str, Any]:
+                  phase: str = "runbook",
+                  scheduled: bool = False,
+                  exec_id: Optional[str] = None,
+                  depth: int = 0) -> Dict[str, Any]:
     """执行单个步骤并发出进度事件（OPS-DELTA #80）。
 
     ``emit(type, fields)`` 收到事件字段（step_id/title/action/target/status/
     detail 等，缺省字段由引擎补）；None = 不播报（LLM 工具路径）。``phase``
-    标记 runbook / rollback，供 UI 区分回滚步骤。
+    标记 runbook / rollback，供 UI 区分回滚步骤。``scheduled``/``exec_id``
+    透传给嵌套执行（子 runbook 引用 / 编译工具调用，YAPL 阶段 C）。``depth``
+    嵌套深度（顶层 0；子 runbook 引用每层 +1，超过 _MAX_NESTING_DEPTH 拒绝）。
     """
     step_id = str(step.get("id") or "")
     if emit is not None:
@@ -739,7 +744,8 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
         })
     entry = _run_one_step_impl(step, env=env, home=home, step_values=step_values,
                                trigger_ctx=trigger_ctx, runner=runner,
-                               approve=approve, where=where, scope=scope)
+                               approve=approve, where=where, scope=scope,
+                               scheduled=scheduled, exec_id=exec_id, depth=depth)
     if emit is not None:
         emit("step_done" if entry.get("ok") else "step_failed", {
             "step_id": step_id,
@@ -803,7 +809,10 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                        runner: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
                        approve: Callable[[str, str, str], Optional[str]],
                        where: str,
-                       scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+                       scope: Optional[Dict[str, Any]] = None,
+                       scheduled: bool = False,
+                       exec_id: Optional[str] = None,
+                       depth: int = 0) -> Dict[str, Any]:
     step_id = str(step.get("id") or "")
     action = str(step.get("action") or "")
     ctx = f"{where}步骤 {step_id!r}"
@@ -812,6 +821,17 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
         params = substitute_params(step.get("params") or {}, step_values,
                                    trigger_ctx, ctx)
         entry["params"] = params
+        if action == "runbook":
+            # YAPL 主框架阶段 C（OPS-DELTA #88）：第 24 动作——嵌套引用。
+            # 子 runbook / 编译工具调用走内联分派（不需要 target 解析 + 矩阵
+            # 门差异：type=runbook 查 runbook 动作档位；type=tool = run_script
+            # 资产预审语义 execute 豁免）。
+            return _run_runbook_step(
+                step, params, env=env, home=home, step_values=step_values,
+                trigger_ctx=trigger_ctx, runner=runner, approve=approve,
+                where=where, scope=scope, scheduled=scheduled, exec_id=exec_id,
+                depth=depth,
+            )
         target: Dict[str, Any] = {}
         if "target" in params:
             from tools.topo_tools import load_topology
@@ -899,7 +919,8 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
                            runner: Callable, approve: Callable,
                            scope: Optional[Dict[str, Any]] = None,
                            emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
-                           phase: str = "rollback") -> Dict[str, Any]:
+                           phase: str = "rollback",
+                           depth: int = 0) -> Dict[str, Any]:
     scenarios = data.get("rollback") or []
     scenario = None
     if scenario_name:
@@ -919,13 +940,333 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
         res = _run_one_step(step, env=env, home=home, step_values=step_values,
                             trigger_ctx=trigger_ctx, runner=runner, approve=approve,
                             where=f"rollback[{scenario.get('name')}]", scope=scope,
-                            emit=emit, phase=phase)
+                            emit=emit, phase=phase, depth=depth)
         rb_results.append(res)
         if not res.get("ok"):
             return {"ok": False, "results": rb_results,
                     "error": f"rollback 步骤 {res.get('id')!r} 失败："
                              f"{res.get('error')}——rollback 失败 → 强制 stop，人工介入"}
     return {"ok": True, "results": rb_results}
+
+
+# ---------------------------------------------------------------------------
+# YAPL 主框架阶段 C：嵌套编排（runbook 第 24 动作）
+# ---------------------------------------------------------------------------
+
+# 环状防护运行时兜底（§13.5）：关系校验已做引用图 DFS 无环检测，此处再设
+# 执行栈深度上限——防校验遗漏 / 文件被外部手改后成环时死循环（fail-closed，
+# 超限拒绝执行）。
+_MAX_NESTING_DEPTH = 10
+
+def _merge_sub_scope(sub_data: Dict[str, Any],
+                     parent_scope: Optional[Dict[str, Any]],
+                     parent_env: str) -> Dict[str, Any]:
+    """子 runbook 范围继承（yapl-design.md §13.5）：子声明缺省字段从父执行
+    上下文补（env/cluster/host——同时是 resolve_topo_ref 的 context）；子声明了
+    = 子声明优先，但受父范围约束（父已有该维度且子声明不同 → 拒绝，OPS-DELTA
+    #88 注明合并规则）。"""
+    scope = dict(parent_scope or {})
+    declared_env = str(sub_data.get("env") or "").strip()
+    if declared_env:
+        if scope.get("env") and str(scope["env"]) != declared_env:
+            raise ValueError(
+                f"子 runbook {sub_data.get('name') or '?'} 声明 env={declared_env!r} "
+                f"超出父范围（父 env={scope.get('env')!r}）——子范围受父约束，"
+                "请删子 env 继承父，或改父范围"
+            )
+        scope["env"] = declared_env
+    elif scope.get("env"):
+        pass  # 缺省继承父 env
+    for key, field in (("cluster", "clusters"), ("host", "hosts")):
+        vals = sub_data.get(field)
+        if isinstance(vals, list) and len(vals) == 1:
+            val = str(vals[0])
+            if scope.get(key) and str(scope[key]) != val:
+                raise ValueError(
+                    f"子 runbook {sub_data.get('name') or '?'} 声明 "
+                    f"{field}={val!r} 超出父范围（父 {key}={scope.get(key)!r}）"
+                    "——子范围受父约束，请继承父范围或改父范围"
+                )
+            scope[key] = val
+    return scope
+
+
+def _scope_source_label(sub_data: Dict[str, Any], merged: Dict[str, Any]) -> str:
+    """ledger 范围来源标记：declared（子声明了任一范围字段）/ inherited（全继承）。"""
+    declared = any(
+        sub_data.get(f) for f in ("env", "clusters", "host_groups", "hosts")
+    )
+    return "declared" if declared else "inherited"
+
+
+def _run_sub_runbook(ref: str, sub_data: Dict[str, Any], *, env: str, home: Path,
+                     trigger_ctx: Dict[str, Any],
+                     runner: Callable, approve: Callable,
+                     parent_scope: Optional[Dict[str, Any]],
+                     scheduled: bool, exec_id: Optional[str],
+                     emit: Optional[Callable[[str, Dict[str, Any]], None]],
+                     depth: int = 0) -> Dict[str, Any]:
+    """执行子 runbook（type=runbook）：范围继承 + 每步照常走现有执行引擎
+    （审批门查矩阵 / expect / on_failure——无豁免）+ 子失败子的 on_failure
+    先生效（子自己回滚）→ 父引用步骤视为失败。子执行记入 ledger。"""
+    from tools.runbook_tools import _validate_runbook
+    try:
+        _validate_runbook(sub_data, ref, home)
+    except ValueError as exc:
+        return {"ok": False, "error": f"子 runbook {ref} 校验失败，拒绝执行: {exc}"}
+    try:
+        sub_scope = _merge_sub_scope(sub_data, parent_scope, env)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    sub_env = str(sub_scope.get("env") or env or "local").strip() or "local"
+
+    def _sub_emit(ev_type: str, fields: Optional[Dict[str, Any]] = None) -> None:
+        if emit is None:
+            return
+        ev: Dict[str, Any] = {
+            "type": ev_type,
+            "exec_id": exec_id,
+            "runbook": ref,
+            "version": str(sub_data.get("version") or "2"),
+            "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        }
+        if fields:
+            ev.update(fields)
+        try:
+            emit(ev)
+        except Exception:
+            logger.debug("sub-runbook progress callback failed", exc_info=True)
+
+    # 变量不跨层（§13.5）：子步骤用自己的 step_values——父 {{ steps... }} 不
+    # 能被子直接引用，跨层传值走 params 显式传入（父执行时已解析）。
+    sub_step_values: Dict[str, Dict[str, Any]] = {}
+    t0 = time.time()
+    results, status, error, rolled_back = _run_steps_loop(
+        sub_data, env=sub_env, home=home, step_values=sub_step_values,
+        trigger_ctx=trigger_ctx, runner=runner, approve=approve,
+        scope=sub_scope, emit=_sub_emit, scheduled=scheduled, exec_id=exec_id,
+        where=f"子 runbook {ref} ",
+        depth=depth,
+    )
+    entry: Dict[str, Any] = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "runbook": ref,
+        "version": str(sub_data.get("version") or "2"),
+        "env": sub_env,
+        "source": trigger_ctx.get("source"),
+        "trigger_context": {
+            k: (v if isinstance(v, (dict, list)) else str(v))
+            for k, v in trigger_ctx.items()
+        },
+        "result": status,
+        "error": _clip(error or "", 4000),
+        "rolled_back": rolled_back,
+        "steps": results,
+        "duration_s": round(time.time() - t0, 2),
+        "operator": getpass.getuser(),
+        "scope_source": _scope_source_label(sub_data, sub_scope),
+        "nested": True,
+    }
+    if exec_id:
+        entry["exec_id"] = exec_id
+    record_execution(home, entry)
+    if status != "ok":
+        return {
+            "ok": False,
+            "error": (f"子 runbook {ref} 执行失败（result={status}）: "
+                      f"{error or '子步骤失败'}"),
+            "sub_result": status,
+            "sub_steps": results,
+            "scope_source": entry["scope_source"],
+        }
+    return {
+        "ok": True,
+        "sub_result": status,
+        "sub_steps": results,
+        "scope_source": entry["scope_source"],
+        "sub_env": sub_env,
+    }
+
+
+def _run_runbook_step(step: Dict[str, Any], params: Dict[str, Any], *,
+                      env: str, home: Path, step_values: Dict[str, Dict[str, Any]],
+                      trigger_ctx: Dict[str, Any],
+                      runner: Callable, approve: Callable,
+                      where: str, scope: Optional[Dict[str, Any]],
+                      scheduled: bool, exec_id: Optional[str],
+                      depth: int = 0) -> Dict[str, Any]:
+    """runbook 动作分派：type=tool（编译契约工具，run_script 资产预审语义
+    execute 豁免）/ type=runbook（子 runbook 嵌套执行）。"""
+    step_id = str(step.get("id") or "")
+    ref = str(params.get("ref") or "").strip()
+    rtype = str(params.get("type") or "").strip()
+    if not ref or rtype not in ("runbook", "tool"):
+        return {"id": step_id, "action": "runbook", "status": "failed",
+                "ok": False, "error": f"{where}步骤 {step_id!r} 的 runbook 引用"
+                "缺 ref/type——校验器应已拒绝（type ∈ runbook|tool 必填不猜）"}
+
+    if rtype == "runbook" and depth >= _MAX_NESTING_DEPTH:
+        # 运行时兜底（§13.5）：超过嵌套深度上限 → fail-closed 拒绝执行。正常
+        # 路径永远到不了（关系校验已拒绝环）；此门只防校验遗漏/文件被外部
+        # 手改后成环的死循环。
+        return {"id": step_id, "action": "runbook", "status": "failed",
+                "ok": False, "error": f"{where}步骤 {step_id!r} 的嵌套深度超过"
+                f"上限 {_MAX_NESTING_DEPTH}——runbook 引用链异常（应已在校验层"
+                "拒绝环状引用）；请检查 runbooks/ 引用关系"}
+
+    if rtype == "tool":
+        # type=tool = run_script 资产预审语义（§13.5/13.6）：工具注册时已过
+        # 沙箱自证 + 内容审批，是已预审资产——交互执行 execute（豁免逐次
+        # 审批，不查矩阵）；定时触发走父 runbook 资产审批豁免 + 事后审计。
+        from tools.contract_compile import load_compiled_call, registered_contracts
+        if ref not in (registered_contracts(home) or {}):
+            return {"id": step_id, "action": "runbook", "status": "failed",
+                    "ok": False, "error": f"编译契约工具 {ref!r} 未注册"
+                    "（contracts/registry.yaml 无记录）——先 vigil contract "
+                    f"compile {ref}"}
+        tool_params = {k: v for k, v in params.items()
+                       if k not in ("ref", "type")}
+        try:
+            fn = load_compiled_call(home, ref)
+            out = fn(dict(tool_params), home=home, context=scope, runner=None)
+        except Exception as exc:
+            return {"id": step_id, "action": "runbook", "status": "failed",
+                    "ok": False, "error": f"编译契约工具 {ref} 调用失败: "
+                    f"{type(exc).__name__}: {exc}"}
+        step_values[step_id] = {
+            "params": params,
+            "outputs": {"result": out},
+        }
+        if isinstance(out, dict) and out.get("error"):
+            return {"id": step_id, "action": "runbook", "status": "failed",
+                    "ok": False, "params": params, "tool": ref, "type": "tool",
+                    "output": out, "error": out.get("error")}
+        return {"id": step_id, "action": "runbook", "status": "ok", "ok": True,
+                "params": params, "tool": ref, "type": "tool", "output": out}
+
+    # type=runbook：父引用步骤查 runbook 动作档位（矩阵未配 = 漏配默认 approve，
+    # 保守 §13.6）——与普通动作同一审批门，无豁免。
+    approve_err = approve(env, "runbook", f"{where}步骤 {step_id!r} 引用子 runbook {ref}")
+    if approve_err:
+        return {"id": step_id, "action": "runbook", "status": "blocked",
+                "ok": False, "error": approve_err}
+    from tools.runbook_tools import _load_runbook
+    try:
+        sub_data = _load_runbook(home, ref)
+    except ValueError as exc:
+        return {"id": step_id, "action": "runbook", "status": "failed",
+                "ok": False, "error": str(exc)}
+    if sub_data is None:
+        return {"id": step_id, "action": "runbook", "status": "failed",
+                "ok": False, "error": f"子 runbook {ref} 不存在（runbooks/{ref}.yaml）"}
+    sub_res = _run_sub_runbook(
+        ref, sub_data, env=env, home=home, trigger_ctx=trigger_ctx,
+        runner=runner, approve=approve, parent_scope=scope,
+        scheduled=scheduled, exec_id=exec_id, emit=None, depth=depth + 1,
+    )
+    entry: Dict[str, Any] = {
+        "id": step_id, "action": "runbook", "type": "runbook",
+        "ref": ref, "params": params,
+        "status": "ok" if sub_res.get("ok") else "failed",
+        "ok": bool(sub_res.get("ok")),
+        "sub_result": sub_res.get("sub_result"),
+        "sub_steps": sub_res.get("sub_steps") or [],
+        "scope_source": sub_res.get("scope_source"),
+    }
+    if not sub_res.get("ok"):
+        entry["error"] = sub_res.get("error") or "子 runbook 执行失败"
+    else:
+        step_values[step_id] = {
+            "params": params,
+            "outputs": {"result": sub_res},
+        }
+    return entry
+
+
+# ---------------------------------------------------------------------------
+# 步骤循环（父/子共用：子 runbook 展开后每步照常走现有执行引擎）
+# ---------------------------------------------------------------------------
+
+def _run_steps_loop(data: Dict[str, Any], *, env: str, home: Path,
+                    step_values: Dict[str, Dict[str, Any]],
+                    trigger_ctx: Dict[str, Any],
+                    runner: Callable, approve: Callable,
+                    scope: Optional[Dict[str, Any]] = None,
+                    emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+                    scheduled: bool = False,
+                    exec_id: Optional[str] = None,
+                    depth: int = 0,
+                    where: str = "runbook ") -> tuple:
+    """执行 steps 循环（on_failure 四形态 + 回滚联动）。返回
+    (results, status, error, rolled_back)。父 runbook 与嵌套子 runbook 共用
+    ——子失败时子的 on_failure 先生效（stop/rollback 子自己的场景），子最终
+    失败 → 父引用步骤视为失败 → 父步骤的 on_failure 生效（回滚联动：父
+    on_failure: rollback 时，子已完成步骤的回滚由子自己的 rollback 场景处理
+    ——子执行失败本身已触发子的回滚，父回滚只处理父已完成的其他步骤）。"""
+    steps = data.get("steps") or []
+    results: List[Dict[str, Any]] = []
+    status = "ok"
+    error: Optional[str] = None
+    rolled_back = False
+    # runbook 级 on_failure 三形态：stop/continue/rollback 字符串 或
+    # {rollback: 场景名} 对象——不能 str() 化（dict 会被串成 "{'rollback': …}"
+    # 字符串导致 _resolve_on_failure 拒收；阶段 C 父回滚联动依赖 dict 形态）。
+    default_on_failure = data.get("on_failure") or "stop"
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        res = _run_one_step(step, env=env, home=home, step_values=step_values,
+                            trigger_ctx=trigger_ctx, runner=runner, approve=approve,
+                            where=where, scope=scope, emit=emit, phase="runbook",
+                            scheduled=scheduled, exec_id=exec_id, depth=depth)
+        results.append(res)
+        if res.get("ok"):
+            continue
+        error = res.get("error") or f"步骤 {res.get('id')} 失败"
+        try:
+            on_failure, scene = _resolve_on_failure(
+                step.get("on_failure"), default_on_failure)
+        except ValueError as exc:
+            status = "failed"
+            error = str(exc)
+            break
+        if on_failure == "continue":
+            continue
+        if on_failure == "rollback":
+            if emit is not None:
+                emit("rollback_start", {
+                    "step_id": str(step.get("id") or ""),
+                    "status": "running",
+                    "detail": _clip(
+                        f"步骤 {step.get('id')} 失败，触发回滚（场景 {scene or '默认'}）", 2000),
+                })
+            rb = _run_rollback_scenario(
+                data, scene, env=env, home=home, step_values=step_values,
+                trigger_ctx=trigger_ctx, runner=runner, approve=approve,
+                scope=scope, emit=emit, depth=depth)
+            status = "rolled_back" if rb.get("ok") else "failed"
+            if not rb.get("ok"):
+                error = f"{error}；{rb.get('error')}"
+            else:
+                error = (f"{error}（已执行 rollback 场景 "
+                         f"{scene or '（默认）'} 后终止）")
+            if emit is not None:
+                emit("rollback_done", {
+                    "step_id": str(step.get("id") or ""),
+                    "status": "ok" if rb.get("ok") else "failed",
+                    "detail": _clip(
+                        rb.get("error")
+                        or f"rollback 场景 {scene or '（默认）'} 执行完成", 2000),
+                })
+            results.append({"id": "__rollback__", "action": "rollback",
+                            "status": status, "ok": rb.get("ok"),
+                            "steps": rb.get("results", []),
+                            "error": rb.get("error")})
+            rolled_back = True
+            break
+        status = "failed"
+        break
+    return results, status, error, rolled_back
 
 
 # ---------------------------------------------------------------------------
@@ -942,6 +1283,7 @@ def execute_runbook(
     scheduled: bool = False,
     exec_id: Optional[str] = None,
     progress_callback: Optional[Callable[[dict], None]] = None,
+    collect_scope: bool = False,
 ) -> Dict[str, Any]:
     """v0.2 runbook 执行（引擎核心）。
 
@@ -956,6 +1298,10 @@ def execute_runbook(
         progress_callback: 进度事件回调（OPS-DELTA #80）——每步/回滚/终态
             事件实时回调，不落库（实时可见与事后审计分离）；回调异常只记
             日志不阻断执行；None = 不播报。
+        collect_scope: 单独运行（standalone）时，runbook 无任何范围声明
+            （env/clusters/host_groups/hosts 全缺省）→ 返回待收集状态
+            （``needs_scope``），由调用方 clarify 用户收集 env/cluster/host
+            后重跑（§13.5）；缺省 False 保持旧语义（env 缺省 local）。
     Returns:
         执行结果 dict（含 steps / result / error / ledger 已落盘）。
     """
@@ -972,6 +1318,28 @@ def execute_runbook(
         if isinstance(vals, list) and len(vals) == 1:
             scope = dict(scope or {})
             scope[key] = str(vals[0])
+
+    # 单独运行无范围声明 → 待收集（§13.5）：执行器标记"范围缺失需收集"，不
+    # 执行——由调用方 clarify 用户（目标 env/cluster/host，单台确认模式复用）
+    # 后带范围重跑；用户无响应/拒绝 = 不执行（fail-closed）。
+    if collect_scope:
+        has_declared_scope = any(
+            data.get(f) for f in ("env", "clusters", "host_groups", "hosts")
+        ) or bool(env)
+        if not has_declared_scope:
+            return {
+                "runbook": name,
+                "result": "needs_scope",
+                "status": "scope_collection",
+                "error": (
+                    f"runbook {name} 未声明执行范围（env/clusters/host_groups/"
+                    "hosts 全缺省）——单独运行需要收集目标范围：env/cluster/host"
+                    "（子 runbook 无范围声明时完全继承父上下文；单独运行靠 "
+                    "clarify 收集，用户无响应/拒绝 = 不执行）"
+                ),
+                "steps": [],
+                "duration_s": 0.0,
+            }
 
     def _emit(ev_type: str, fields: Optional[Dict[str, Any]] = None) -> None:
         """构建并回调一个进度事件（带 base 字段；回调失败仅记日志）。"""
@@ -1053,65 +1421,12 @@ def execute_runbook(
             return _step_approval(home, step_env, action, desc)
 
         step_values: Dict[str, Dict[str, Any]] = {}
-        steps = data.get("steps") or []
-        results: List[Dict[str, Any]] = []
-        status = "ok"
-        error: Optional[str] = None
-        rolled_back = False
         t0 = time.time()
-        default_on_failure = str(data.get("on_failure") or "stop")
-
-        for step in steps:
-            if not isinstance(step, dict):
-                continue
-            res = _run_one_step(step, env=rb_env, home=home, step_values=step_values,
-                                trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
-                                where="runbook ", scope=scope, emit=_emit)
-            results.append(res)
-            if res.get("ok"):
-                continue
-            error = res.get("error") or f"步骤 {res.get('id')} 失败"
-            try:
-                on_failure, scene = _resolve_on_failure(
-                    step.get("on_failure"), default_on_failure)
-            except ValueError as exc:
-                status = "failed"
-                error = str(exc)
-                break
-            if on_failure == "continue":
-                continue
-            if on_failure == "rollback":
-                _emit("rollback_start", {
-                    "step_id": str(step.get("id") or ""),
-                    "status": "running",
-                    "detail": _clip(
-                        f"步骤 {step.get('id')} 失败，触发回滚（场景 {scene or '默认'}）", 2000),
-                })
-                rb = _run_rollback_scenario(
-                    data, scene, env=rb_env, home=home, step_values=step_values,
-                    trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
-                    scope=scope, emit=_emit)
-                status = "rolled_back" if rb.get("ok") else "failed"
-                if not rb.get("ok"):
-                    error = f"{error}；{rb.get('error')}"
-                else:
-                    error = (f"{error}（已执行 rollback 场景 "
-                             f"{scene or '（默认）'} 后终止）")
-                _emit("rollback_done", {
-                    "step_id": str(step.get("id") or ""),
-                    "status": "ok" if rb.get("ok") else "failed",
-                    "detail": _clip(
-                        rb.get("error")
-                        or f"rollback 场景 {scene or '（默认）'} 执行完成", 2000),
-                })
-                results.append({"id": "__rollback__", "action": "rollback",
-                                "status": status, "ok": rb.get("ok"),
-                                "steps": rb.get("results", []),
-                                "error": rb.get("error")})
-                rolled_back = True
-                break
-            status = "failed"
-            break
+        results, status, error, rolled_back = _run_steps_loop(
+            data, env=rb_env, home=home, step_values=step_values,
+            trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
+            scope=scope, emit=_emit, scheduled=scheduled, exec_id=exec_id,
+        )
 
         _emit("runbook_done", {
             "status": status,
@@ -1185,7 +1500,7 @@ def runbook_execute(
         return tool_error(f"runbook 不存在: {name}")
     result = execute_runbook(
         data, env=env, trigger_context=trigger_context, home=home,
-        runner=runner, scheduled=False,
+        runner=runner, scheduled=False, collect_scope=True,
     )
     return json.dumps(result, ensure_ascii=False, indent=2)
 

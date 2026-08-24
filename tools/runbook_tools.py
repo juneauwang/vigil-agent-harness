@@ -115,6 +115,11 @@ _ACTION_CONTRACTS: Dict[str, Dict[str, Any]] = {
                           "version": "str", "repo": "str"}},
     "remove": {"required": ["target", "package"],
                "typed": {"target": "topo_ref", "package": "str", "deps": "bool"}},
+    # YAPL 主框架阶段 C（OPS-DELTA #88）：runbook 第 24 动作——嵌套引用
+    # （params: {ref: <名>, type: runbook|tool}）。ref = 子 runbook 名 或
+    # 已注册编译契约工具名；type 必填不猜（runbook|tool 二选一）。
+    "runbook": {"required": ["ref", "type"],
+                "typed": {"ref": "str", "type": "runbook_ref_type"}},
 }
 
 # 引用校验的类型兼容表：主机族动作目标必须是 host/host_group/cluster（不能是
@@ -514,6 +519,13 @@ def _check_param_value(action: str, key: str, value: Any,
                     f"runbook {name} 步骤 {step_id!r} 的 apply_config.changes[{i}] 必须含"
                     " key（value 可选）"
                 )
+    elif kind == "runbook_ref_type":
+        if value not in ("runbook", "tool"):
+            return (
+                f"runbook {name} 步骤 {step_id!r} 的 runbook.type 必须是 "
+                f"runbook|tool 二选一（收到 {value!r}）——type 必填不猜："
+                "type=runbook 引子 runbook，type=tool 引编译契约工具"
+            )
     elif kind == "file_ref":
         if not isinstance(value, dict) or not str(value.get("path") or "").strip():
             return (
@@ -784,6 +796,122 @@ def _validate_v2_var_refs(data: Dict[str, Any], name: str) -> None:
                 # outputs 是执行期产物，静态校验只查步骤存在
 
 
+def _runbook_names(home: Optional[Path]) -> Set[str]:
+    """runbooks/*.yaml 文件 stem 集（嵌套引用校验的引用面）。"""
+    try:
+        rdir = Path(home) / "runbooks"
+        if not rdir.is_dir():
+            return set()
+        return {p.stem for p in rdir.glob("*.yaml")
+                if not p.name.startswith(".")}
+    except Exception:
+        return set()
+
+
+def _compiled_contract_names(home: Optional[Path]) -> Set[str]:
+    """contracts/registry.yaml 已注册编译契约名集（type=tool 引用的引用面）。"""
+    try:
+        from tools.contract_compile import registered_contracts
+        return set((registered_contracts(home) or {}).keys())
+    except Exception:
+        return set()
+
+
+def _find_runbook_cycle(name: str,
+                        graph: Dict[str, List[str]]) -> Optional[List[str]]:
+    """DFS 从 ``name`` 出发找它参与的引用环；返回环路路径 [a, b, a]。"""
+    def dfs(node: str, path: List[str]):
+        if node in path:
+            i = path.index(node)
+            return path[i:] + [node]
+        nxts = graph.get(node) or []
+        if not nxts:
+            return None
+        path.append(node)
+        for nxt in nxts:
+            found = dfs(nxt, path)
+            if found:
+                return found
+        path.pop()
+        return None
+    return dfs(name, [])
+
+
+def _validate_runbook_refs(data: Dict[str, Any], name: str,
+                           home: Optional[Path]) -> None:
+    """关系层·runbook 引用：ref 存在（type=runbook → runbooks/；type=tool →
+    contracts/registry.yaml）+ 环状防护（引用自己/互相引用 → 拒绝，报环路路径）。
+
+    变量不跨层语义：子 runbook 文件内 {{ steps... }} 只引用自身步骤（本校验器
+    不跨文件解析）；父向子传值走 params 显式传入——父 steps 的 params 里的
+    {{ }} 由父执行时解析后传入子（OPS-DELTA #88 注明）。
+    """
+    rbs = _runbook_names(home)
+    tools = _compiled_contract_names(home)
+    steps: List[Dict[str, Any]] = [s for s in (data.get("steps") or [])
+                                   if isinstance(s, dict)]
+    for scenario in (data.get("rollback") or []):
+        if isinstance(scenario, dict):
+            steps.extend(s for s in (scenario.get("steps") or [])
+                         if isinstance(s, dict))
+    edges: Dict[str, List[str]] = {}
+    for s in steps:
+        if s.get("action") != "runbook":
+            continue
+        params = s.get("params") or {}
+        step_id = str(s.get("id") or "")
+        ref = str(params.get("ref") or "").strip()
+        rtype = str(params.get("type") or "").strip()
+        if not ref or rtype not in ("runbook", "tool"):
+            continue  # 结构层已拒绝（ref 必填 / type 枚举）
+        if ref == name:
+            raise ValueError(
+                f"runbook {name} 步骤 {step_id!r} 引用自己（ref={ref!r}）——"
+                "runbook 嵌套禁止引用自己（引用图无环）；请断开自引用"
+            )
+        if rtype == "runbook":
+            if ref not in rbs:
+                raise ValueError(
+                    f"runbook {name} 步骤 {step_id!r} 引用的子 runbook {ref!r} "
+                    "不存在——先 runbook_create 创建（runbooks/<name>.yaml）"
+                )
+            edges.setdefault(name, []).append(ref)
+        else:
+            if ref not in tools:
+                raise ValueError(
+                    f"runbook {name} 步骤 {step_id!r} 引用的编译契约工具 {ref!r} "
+                    "未注册——先 vigil contract compile <name>（contracts/"
+                    "registry.yaml 有记录才可引用；type=tool = run_script 资产"
+                    "预审语义）"
+                )
+    if not edges:
+        return
+    # 全图边（含其他 runbook 的引用——跨文件互相引用成环也要拒）。
+    graph = dict(edges)
+    for rb in sorted(rbs):
+        try:
+            other = _load_runbook(home, rb)
+        except Exception:
+            continue
+        if not isinstance(other, dict):
+            continue
+        for s in (other.get("steps") or []):
+            if not isinstance(s, dict) or s.get("action") != "runbook":
+                continue
+            params = s.get("params") or {}
+            if str(params.get("type") or "") == "runbook":
+                r = str(params.get("ref") or "").strip()
+                if r:
+                    graph.setdefault(rb, []).append(r)
+    cycle = _find_runbook_cycle(name, graph)
+    if cycle:
+        raise ValueError(
+            f"runbook {name} 引用图成环（环路: {' → '.join(cycle)}）——"
+            "runbook 嵌套禁止互相引用（引用图无环）；请断开环路（子 runbook "
+            "只引用更细粒度的原子动作）"
+        )
+
+
 def _validate_runbook_v2(data: Dict[str, Any], name: str,
                          home: Optional[Path] = None) -> None:
     """v0.2 分层校验：结构 → 引用（拓扑）→ 关系（交叉引用），默认全开悲观。"""
@@ -945,6 +1073,13 @@ def _validate_runbook_v2(data: Dict[str, Any], name: str,
                 continue
             action = s.get("action")
             params = s.get("params") or {}
+            if action == "runbook":
+                # YAPL 主框架阶段 C（OPS-DELTA #88）：runbook 动作的 params 是
+                # 嵌套引用（{ref, type}）+ 编译工具参数（type=tool 时任意契约
+                # params，如 target 是普通字符串参数）——不是 runbook 级拓扑
+                # target，跳过引用层 target 校验（工具参数按编译契约 schema
+                # 校验，见 contract compile）。
+                continue
             target = params.get("target")
             if isinstance(target, str) and _VAR_REF_RE.search(target):
                 continue  # 执行期注入，静态不校验
@@ -984,6 +1119,8 @@ def _validate_runbook_v2(data: Dict[str, Any], name: str,
             for s in scenario.get("steps") or []:
                 if not isinstance(s, dict):
                     continue
+                if s.get("action") == "runbook":
+                    continue  # 同 runbook 动作语义：params 非拓扑 target
                 target = (s.get("params") or {}).get("target")
                 if isinstance(target, str) and target.strip() \
                         and not _VAR_REF_RE.search(target):
@@ -996,6 +1133,7 @@ def _validate_runbook_v2(data: Dict[str, Any], name: str,
 
     # ── 关系层（变量引用 + 交叉引用）──
     _validate_v2_var_refs(data, name)
+    _validate_runbook_refs(data, name, home)
 
 
 def _host_group_owner(home: Optional[Path], host_group: str) -> str:

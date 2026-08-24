@@ -4379,3 +4379,112 @@
     重启常驻。
 - **状态**：独立 feat commit（batch72），只含 4 新文件 + 4 文件接入 +
   1 测试文件 + OPS-DELTA.md 本条登记。
+
+### 88. YAPL 主框架阶段 C——runbook 第 24 动作 + 嵌套编排 + 3 补丁（2026-08-24，batch73）
+
+- **背景**：YAPL 主框架阶段 A（契约基础设施，batch71）/ 阶段 B（编译生成管线，
+  batch72）验收后，本批 = 阶段 C 编排层闭环：runbook 第 24 动作（嵌套引用）+
+  子 runbook 范围继承 + 环状防护 + 回滚联动 + 变量不跨层 + type=tool 工具引用；
+  外加 3 补丁（凭据纪律校验器 / topo_update credentials 数组 / CLI 命令索引）。
+  设计单一事实来源 = yapl-design.md §13.5/§13.6 + §13.2（2026-08-24 定案）。
+  开发在 branch v1.0（vigil-agent），发布基线 vigil-agent-release 不动。只做
+  阶段 C 主体 + 3 补丁：不做引导注入完整清单（任务 5 只覆盖 4 命令）、不做期望
+  状态、不做前端。
+- **runbook 第 24 动作（词表 + 校验器）**：
+  - `schemas.yaml actions` +1 = `runbook`（词表配置化，照 9.6 加值流程）；矩阵
+    setup 四模板不动——`matrix_data._build_cells` 显式跳过 runbook 动作，未配
+    档位 = 漏配默认 approve（保守，`get_level` 未配 action → approve 语义已
+    有）；手动 `vigil matrix set runbook <env> <level>` 仍可显式配档位。
+  - 校验器（runbook_tools `_validate_runbook_v2` 分层扩展）：
+    - 结构层：`_ACTION_CONTRACTS["runbook"]` = `{required: [ref, type],
+      typed: {ref: str, type: runbook_ref_type}}`——ref 非空字符串、type 枚举
+      runbook|tool 必填不猜；
+    - 关系层 `_validate_runbook_refs`：type=runbook → ref ∈ runbooks/ 文件
+      （不存在 = 报错引导先 runbook_create）；type=tool → ref ∈ 契约编译注册表
+      （contracts/registry.yaml，未注册 = 报错引导先 vigil contract compile）；
+      引用自己 / 互相引用（跨文件全图 DFS）→ 拒绝并报环路路径（如
+      `a → b → a`）；
+    - 变量不跨层：子 runbook 文件内 `{{ steps... }}` 只引用自身步骤（校验器
+      不跨文件解析）；父向子传值走 params 显式传入——父 steps 的 params 里的
+      `{{ }}` 由父执行时解析后传入子（`_run_one_step_impl` 先 substitute_params
+      再分派 runbook 动作）。
+    - 引用层修正：runbook 动作的 params 不是拓扑 target（type=tool 时 target
+      是普通契约参数）→ 跳过 runbook 步骤的 target 引用校验（否则
+      `target: nginx` 这类工具参数会被误拒"不在拓扑表"）。
+- **执行器（runbook_exec 嵌套编排）**：
+  - `_run_one_step_impl` 对 `action: runbook` 内联分派 `_run_runbook_step`：
+    - type=runbook：`approve(env, "runbook", …)` 查 runbook 动作档位（未配 =
+      漏配默认 approve，保守）；`_run_sub_runbook` 加载子 runbook（_load_runbook
+      路径）→ 再校验（引用校验通过前提下）→ 范围继承 `_merge_sub_scope`：子
+      声明缺省字段从父执行上下文补（env/cluster/host，同时是 resolve_topo_ref
+      的 context）；子声明了 = 子声明优先但受父约束（父已有该维度且子声明不同
+      → 拒绝）。子步骤顺序执行，每步照常走现有执行引擎（审批门查矩阵 /
+      expect / on_failure——无豁免）；子执行记入 ledger（runbook/version/范围
+      来源 inherited|declared/结果，nested 标记）。
+    - type=tool：调阶段 B 注册工具（contract_compile.load_compiled_call，
+      context=scope 透传）——run_script 资产预审语义：交互执行 execute（不查
+      矩阵，工具已资产审批）；定时触发走父 runbook 资产审批豁免 + 事后审计；
+      参数传参照工具 params（父 steps 的 `{{ }}` 解析后传入）。
+  - 回滚联动：子失败 → 子的 on_failure 先生效（stop/rollback 子自己的场景，
+    子执行失败本身已触发子的回滚）→ 子最终失败 → 父引用步骤视为失败 → 父
+    步骤的 on_failure 生效（父 on_failure: rollback 时，父回滚只处理父已完成
+    的其他步骤）。步骤循环抽成 `_run_steps_loop` 父/子共用。
+  - 单独运行无范围声明（collect_scope=True）：执行器返回待收集状态
+    （result=needs_scope / status=scope_collection），由调用方 clarify 用户
+    （目标 env/cluster/host，单台确认模式复用）后带范围重跑；用户无响应/拒绝
+    = 不执行（fail-closed）。LLM 工具 `runbook_execute` 与 web 执行入口
+    （web_server POST）均 collect_scope=True；web 侧对 needs_scope 补一个
+    runbook_done(scope_collection) 终态事件，SSE 不按"异常结束"收尾。
+  - 环状防护运行时兜底：执行栈深度上限 `_MAX_NESTING_DEPTH=10`（depth 贯穿
+    步骤循环/回滚/嵌套分派），超限 fail-closed 拒绝执行——防校验遗漏 / 文件
+    被外部手改后成环的死循环。
+  - 顺修存量真 bug：runbook 级 `on_failure: {rollback: 场景}`（dict 形态）此前
+    被 `str()` 串成 `"{'rollback': …}"` 导致 `_resolve_on_failure` 拒收——父
+    回滚联动依赖 dict 形态，改为原值传递（stop/continue/rollback 字符串不受
+    影响）。
+- **补丁 1——凭据纪律校验器（contract_tools.validate_contract）**：params
+  参数名匹配 password/passwd/secret/token/key/api_key/private_key/access_key/
+  credential/auth_key/pwd 等词（大小写不敏感、`_` 视作词边界，复合名
+  ssh_key/api_token/db_password 也拒；monkey/keyboard 这类含 key 词的正常名不
+  误杀）+ default 值形态疑似凭据（`password=…`/`token: …`/PEM 私钥块）→ 报错
+  "契约 params 不支持凭据参数（凭据走拓扑 credentials / secret 引用，设计
+  13.2）"——引导改用 topo_ref/vault 引用。
+- **补丁 2——topo_update credentials 数组（topo_tools，堵 LLM 绕行）**：
+  背景 2026-08-24 dogfood：topo_update 字段白名单不支持 v0.4 credentials 数组
+  → LLM 会话里无法表单更新凭据 → 绕行直接编辑 topology.yaml（敏感字段绕行更
+  危险）。本补丁：host 行 credentials 数组更新（v0.4 结构
+  [{type: ssh_key|secret, ref, user?, port?}]），白名单字段补 credentials；
+  校验 type 枚举 / ref 必填非空 / 数组形态 / port 1..65535；非 host 实体拒绝
+  （服务凭据走所属 host）；写盘走既有 topology.yaml 落盘路径 + 审计
+  （credentials_updated + credentials_refs 进返回 audit，照现有 topo_update
+  审计）；**凭据纪律**：ref 只收引用（路径 / vault:… 引用 / 标识，字符集
+  `[A-Za-z0-9._~/:\-]+`，含空白/= 的疑似明文被拒），不接受明文凭据值写入；
+  校验失败不落盘。
+- **补丁 3——运维 CLI 命令索引（LLM 引导注入）**：dogfood §F 教训（不工具化/
+  不索引 → LLM 人肉推理空耗 40K token）。注入点 = 现有 L1 注入槽位：topo
+  memory provider 的 system prompt block（plugins/memory/topo，
+  `render_topo_block` 末尾追加 `_CLI_COMMAND_INDEX` 一行）——随 TOPO 段注入，
+  数据存在性门控不变（非 ops profile 零 prompt 变化）。本批至少覆盖
+  contract compile/list + topo-discover + topo-update + matrix show 四个
+  （完整运维 CLI 清单后续 dogfood 补）：索引如实标注——`vigil topo-discover`、
+  `vigil contract compile <name>`、`vigil contract list`、`vigil matrix show`
+  是 CLI 命令；topo-update 无 CLI 子命令（现成路径 = topo_update 工具，表单
+  更新不编辑 topology.yaml），如实标工具路径避免误导 LLM 找不存在的命令。
+- **回归面**：新增 `tests/tools/test_batch73_yapl_stage_c.py` 43 用例（校验器：
+  ref 必填/type 枚举/子 runbook 不存在引导/自引用拒绝/环状拒绝含环路路径/工具
+  未注册引导/注册通过/范围四字段全可选/变量引用文件内自洽；执行器：嵌套顺序
+  + 范围继承 inherited|declared/子声明超出父范围拒绝/子步骤查矩阵无豁免/runbook
+  动作档位门/子失败子的 on_failure 先生效/父回滚联动/type=tool execute 豁免 +
+  上下文透传/未注册运行时拒绝/变量不跨层/跨层显式传参/无范围待收集/深度兜底
+  断链；补丁：凭据参数名 10 组 + 明文默认值拒绝 + 正常参数通过 + 词边界不误杀/
+  topo_update credentials 增改删 + 非法形态拒绝 + 非 host 拒绝 + 校验失败不
+  落盘/CLI 索引注入 + 无拓扑静默）。存量回归：runbook_exec/runbook_v2/
+  runbook_tools/create/coverage/lock/schedule/vault_refs/batch40/batch44
+  （196 passed）+ contract_compile/contracts/topo_tools/topo_v4/topo_ref/
+  topo_update_contract/matrix/terminal_matrix/batch39/topo_discovery（254
+  passed，1 例 test_sudo_stdin_guard_still_blocks_before_matrix 为存量隔离性
+  flake，HEAD batch72 同组合复现，与本批无关）+ test_batch59_runbook_exec_api
+  （fake_execute 补 collect_scope kwarg）/test_runbook_progress/
+  test_topo_provider/test_batch33_topo_slash（33 passed）。
+- **状态**：独立 feat commit（batch73），只含 1 新测试文件 + 8 文件接入 +
+  OPS-DELTA.md 本条登记。

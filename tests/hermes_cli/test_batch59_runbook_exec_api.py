@@ -193,13 +193,14 @@ def test_exec_post_happy_wiring(ehome, client, monkeypatch):
 
     def fake_execute(data, *, env="", trigger_context=None, home=None,
                      runner=None, scheduled=False, exec_id=None,
-                     progress_callback=None):
+                     progress_callback=None, collect_scope=False):
         calls["data"] = data
         calls["env"] = env
         calls["scheduled"] = scheduled
         calls["home"] = home
         calls["exec_id"] = exec_id
         calls["progress_callback"] = progress_callback
+        calls["collect_scope"] = collect_scope
         if progress_callback is not None:
             progress_callback({
                 "type": "runbook_done", "exec_id": exec_id, "runbook": data.get("name"),
@@ -232,6 +233,9 @@ def test_exec_post_happy_wiring(ehome, client, monkeypatch):
     assert calls["home"] == ehome
     assert calls["data"]["name"] == "t-v2"
     assert callable(calls["progress_callback"])
+    # 批七十三（YAPL 阶段 C）：web 执行入口 collect_scope=True——无范围声明
+    # 的 runbook 返回待收集状态，由调用方 clarify 收集 env/cluster/host。
+    assert calls["collect_scope"] is True
 
 
 def test_exec_post_approval_gate_web(ehome, client, monkeypatch):

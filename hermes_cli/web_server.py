@@ -3749,7 +3749,20 @@ async def create_runbook_execution(payload: Dict[str, Any] = Body(default_factor
                 home=home,
                 exec_id=exec_id,
                 progress_callback=_progress_cb,
+                collect_scope=True,
             )
+            if isinstance(result, dict) and result.get("result") == "needs_scope":
+                # 无范围声明 → 待收集终态（YAPL 阶段 C §13.5）：给 SSE 流一个
+                # 明确终态事件（status=scope_collection），避免前端按"异常结束"
+                # 收尾——收集由调用方（LLM clarify）完成，用户无响应 = 不执行。
+                _progress_cb({
+                    "type": "runbook_done", "exec_id": exec_id,
+                    "runbook": name,
+                    "version": str(data.get("version") or "2"),
+                    "ts": _now_iso_utc(),
+                    "status": "scope_collection",
+                    "error": result.get("error"),
+                })
             with _RUNBOOK_STREAMS_LOCK:
                 stream["result"] = result
         except Exception as exc:

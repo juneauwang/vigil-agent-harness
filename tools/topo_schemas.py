@@ -78,6 +78,11 @@ _DEFAULT_SCHEMAS: Dict[str, Any] = {
         # 包（3）：install/upgrade {target, package, version?, repo?}
         #   remove {target, package, deps?(默认 false)}
         "install", "upgrade", "remove",
+        # YAPL 主框架阶段 C（OPS-DELTA #88）：第 24 动作 runbook——嵌套引用
+        # （params: {ref: <名>, type: runbook|tool}），校验/执行/审批全链路复用
+        # 普通动作（yapl-design.md §13.5/13.6）。矩阵 setup 四模板不配该动作
+        # （漏配默认 approve，保守）；手动 matrix set runbook 可配档位。
+        "runbook",
     ],
     # YAPL P5（OPS-DELTA #75）：操作分类层规则表可配置化——schemas.yaml
     # ``ops.schemas.command_rules``（[{pattern, action, note}]，按序命中、长模式

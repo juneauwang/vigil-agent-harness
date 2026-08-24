@@ -116,6 +116,8 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
         "last_verified=今天；修改 PROD 环境实体前需要人工审批确认。"
         "L2 可写：type/managed_by/endpoint/extra_ports/log_paths/depends_on/needs_review；"
         "L3 可写：version/notes/checks（verify 检查列表）。"
+        "host 行可写 credentials 数组（[{type: ssh_key|secret, ref, user?, port?}]，"
+        "只收引用——ref 是路径/vault 引用，明文凭据值拒绝写入；空数组 = 清空）。"
         "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认同步。"
     ),
     "parameters": {
@@ -131,7 +133,8 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
                     "要写入的字段。v0.4 顶层可写：type/managed_by/endpoint/extra_ports/"
                     "log_paths/depends_on/depended_by/needs_review/version/notes/checks"
                     "（extra_ports/log_paths/depends_on 传数组，checks 传 "
-                    "[{action: verify, params: {url, expect: {http_status, body_contains}}}]）。"
+                    "[{action: verify, params: {url, expect: {http_status, body_contains}}}]）；"
+                    "host 行可写 credentials（引用数组，见上）。"
                     "其余标量键写入档案 snapshot.common（如 version）。"
                     "dict/list 复杂结构除上述白名单外会被拒绝（防嵌套污染）。"
                 ),
@@ -774,6 +777,60 @@ def _entity_env(topo: Dict[str, Any], entity: Dict[str, Any]) -> str:
     return _env_for_entity(topo, entity) or entity.get("env") or ""
 
 
+# YAPL 主框架阶段 C 补丁 2（OPS-DELTA #88）：topo_update 支持 host 行
+# credentials 数组更新（v0.4 结构 [{type: ssh_key|secret, ref, user?, port?}]）。
+# 只收引用（ref = 路径 / vault 引用 / 标识）——明文凭据值一律拒绝写入拓扑。
+_CREDENTIAL_TYPES = ("ssh_key", "secret")
+_CREDENTIAL_REF_RE = re.compile(r"[A-Za-z0-9._~/:\-]+")
+
+
+def _validate_credentials_update(value: Any) -> Optional[str]:
+    """v0.4 host credentials 数组校验；返回错误文案或 None。"""
+    if not isinstance(value, list):
+        return (
+            "updates['credentials'] 必须是数组（[{type: ssh_key|secret, ref, "
+            "user?, port?}]；空数组 = 清空该主机凭据）"
+        )
+    for i, item in enumerate(value):
+        if not isinstance(item, dict):
+            return f"updates['credentials'][{i}] 必须是对象（{{type, ref, user?, port?}}）"
+        bad = set(item) - {"type", "ref", "user", "port"}
+        if bad:
+            return (
+                f"updates['credentials'][{i}] 含未知键 {sorted(bad)}——只接受 "
+                "type/ref/user/port；ref 只收引用（路径/vault 引用），不接受"
+                "明文凭据字段"
+            )
+        ctype = item.get("type")
+        if ctype not in _CREDENTIAL_TYPES:
+            return (
+                f"updates['credentials'][{i}].type 必须是 "
+                f"ssh_key|secret（收到 {ctype!r}）"
+            )
+        ref = item.get("ref")
+        if not isinstance(ref, str) or not ref.strip():
+            return (
+                f"updates['credentials'][{i}].ref 必填——引用形态：路径 "
+                "（~/.ssh/id_rsa）/ vault 引用（vault:secret/db-pass）/ 标识"
+            )
+        ref = ref.strip()
+        if not _CREDENTIAL_REF_RE.fullmatch(ref):
+            return (
+                f"updates['credentials'][{i}].ref {ref!r} 不是合法引用"
+                "（只含字母数字 ._~/:-）——ref 只收引用不接受明文凭据值"
+                "（含空白/= 的疑似明文被拒）；凭据值走拓扑 credentials 引用面"
+            )
+        if "user" in item and (not isinstance(item["user"], str)
+                               or not item["user"].strip()):
+            return f"updates['credentials'][{i}].user 必须是字符串"
+        if "port" in item:
+            port = item["port"]
+            if isinstance(port, bool) or not isinstance(port, int) \
+                    or not (1 <= port <= 65535):
+                return f"updates['credentials'][{i}].port 必须是 1..65535 整数"
+    return None
+
+
 def topo_update(
     entity: str,
     updates: Dict[str, Any],
@@ -845,7 +902,15 @@ def topo_update(
 
     l2_updates: Dict[str, Any] = {}
     attrs_expanded = False
+    creds_request: Optional[List[Dict[str, Any]]] = None
+    if "credentials" in updates:
+        creds_err = _validate_credentials_update(updates["credentials"])
+        if creds_err:
+            return tool_error(creds_err)
+        creds_request = updates["credentials"]
     for key, value in updates.items():
+        if key == "credentials":
+            continue  # 已校验；写 topology.yaml host 行（循环后统一处理）
         if key == "attrs":
             # OPS-DELTA #33：调用方多包一层 attrs → 显式展开合并进顶层 attrs，
             # 不再静默写入 attrs.attrs 嵌套层（曾导致 20 个实体档案两层嵌套）。
@@ -933,6 +998,27 @@ def topo_update(
     if l2_warning:
         logger.warning("topo: %s（entity=%s）", l2_warning, entity)
 
+    if creds_request is not None:
+        host_row = next(
+            (h for h in (topo.get("hosts") or [])
+             if isinstance(h, dict) and h.get("name") == entity),
+            None,
+        )
+        if host_row is None:
+            return tool_error(
+                f"credentials 只挂在拓扑表 host 行——实体 {entity} 不是 host"
+                "（服务凭据走所属 host 的 credentials / vault 引用，不落服务行）"
+            )
+        host_row["credentials"] = creds_request
+        try:
+            topo["updated_at"] = _today()
+            _topology_path(home).write_text(
+                yaml.safe_dump(topo, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            return tool_error(f"写入 topology.yaml（credentials）失败: {exc}")
+
     audit = {
         "entity": entity,
         "env": env_name,
@@ -941,6 +1027,11 @@ def topo_update(
         "source": _SOURCE_AGENT,
         "last_verified": _today(),
     }
+    if creds_request is not None:
+        audit["credentials_updated"] = True
+        audit["credentials_refs"] = [
+            str(c.get("ref")) for c in creds_request
+        ]
     if attrs_expanded:
         audit["note"] = "updates 含 attrs 键：字段键直接传，不需要包 attrs 层；已自动展开合并。"
     if l2_updates:

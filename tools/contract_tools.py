@@ -37,6 +37,24 @@ _TOPO_KINDS = ("service", "host", "cluster", "host_group")
 _ERROR_CODES = ("entity_not_found", "execution_failed",
                 "invalid_params", "unknown")
 
+# 凭据纪律（设计 13.2，OPS-DELTA #88）：契约 params 不支持密码/密钥类参数——
+# 参数名含 password/passwd/secret/token/key/api_key/private_key/access_key/
+# credential/auth_key/pwd 等词（大小写不敏感；复合名如 ssh_key/api_token/
+# db_password 也拒，`_` 视作词边界）；凭据走拓扑 credentials / secret 引用，
+# 工具只引用实体，生成代码零凭据接触。
+_CREDENTIAL_NAME_PATTERNS = (
+    "password", "passwd", "secret", "token", "key", "api[_-]?key",
+    "private[_-]?key", "access[_-]?key", "credential", "auth[_-]?key", "pwd",
+)
+_CREDENTIAL_PARAM_RE = re.compile(
+    r"(?i)(?:^|[^a-z0-9])(" + "|".join(_CREDENTIAL_NAME_PATTERNS) + r")(?:$|[^a-z0-9])"
+)
+# 值形态疑似凭据（default）：赋值式 password=…/token: … 或 PEM 私钥块。
+_PLAINTEXT_CRED_VALUE_RE = re.compile(
+    r"(?i)(password|passwd|secret|token|api[_-]?key|credential)"
+    r"\s*[=:]\s*\S+|-----BEGIN [A-Z0-9 ]*PRIVATE KEY"
+)
+
 _warned_ignored_contracts: Set[str] = set()
 
 
@@ -188,6 +206,22 @@ def validate_contract(data: Dict[str, Any], name: str,
                 or any(ch.isspace() for ch in pname):
             raise ValueError(
                 f"contract {name} params 键必须是空白分隔的非空字符串参数名"
+            )
+        if _CREDENTIAL_PARAM_RE.search(pname):
+            raise ValueError(
+                f"contract {name} params.{pname} 是凭据类参数名"
+                "（password/secret/token/key/api_key/private_key/credential "
+                "命名或疑似凭据，含复合名如 ssh_key/api_token）——契约 params "
+                "不支持凭据参数（设计 13.2 凭据纪律：凭据走拓扑 credentials / "
+                "secret 引用，工具只引用实体，生成代码零凭据接触）；请删除该"
+                "参数或改用 topo_ref 引用目标实体"
+            )
+        default = pspec.get("default")
+        if isinstance(default, str) and _PLAINTEXT_CRED_VALUE_RE.search(default):
+            raise ValueError(
+                f"contract {name} params.{pname} 的默认值疑似凭据明文"
+                "（password=…/token:…/PEM 私钥块）——凭据不落契约；凭据走拓扑 "
+                "credentials / secret 引用（设计 13.2）"
             )
         _validate_type_spec(pspec, f"contract {name} params.{pname}")
 

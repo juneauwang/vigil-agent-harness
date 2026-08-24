@@ -351,6 +351,12 @@ def _build_cells(actions_: List[str], *, execute: set, approve: set,
     """按档位集合构造单环境 {action: level}。缺集合覆盖的兜底 execute。"""
     cells: Dict[str, str] = {}
     for act in actions_:
+        if act == "runbook":
+            # YAPL 主框架阶段 C（OPS-DELTA #88）：runbook 第 24 动作不进入矩阵
+            # setup 四模板——子 runbook 引用步骤查 runbook 动作档位，matrix.yaml
+            # 未配 = 漏配默认 approve（保守，yapl-design.md §13.6）；手动
+            # ``vigil matrix set runbook <env> <level>`` 仍可显式配置档位。
+            continue
         if act in required:
             cells[act] = LEVEL_REQUIRED
         elif act in approve:

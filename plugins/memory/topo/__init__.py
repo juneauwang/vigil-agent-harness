@@ -30,6 +30,20 @@ _BEHAVIOR_CONSTRAINT = (
     "跨环境操作默认拒绝。"
 )
 
+# 运维 CLI 命令索引（dogfood §F 教训：不索引 → LLM 人肉推理空耗 40K token）。
+# 随 TOPO 段注入：LLM 会话里知道这些是现成命令/工具路径，直接 terminal 执行
+# 或调工具，不自行实现/推理。本批至少覆盖 contract compile/list + topo-discover
+# + topo-update + matrix show 四个（完整运维 CLI 清单后续 dogfood 补）。
+# 注：topo-update 无 CLI 子命令（现成路径 = topo_update 工具，表单更新不编辑
+# topology.yaml），索引如实标注工具路径，避免误导 LLM 找不存在的命令。
+_CLI_COMMAND_INDEX = (
+    "运维 CLI 命令索引（现成命令/路径，直接执行，不自行实现/推理）: "
+    "vigil topo-discover（拓扑发现）；vigil contract compile <name> / "
+    "vigil contract list（契约编译/注册表）；vigil matrix show（操作矩阵）；"
+    "拓扑表单更新走 topo_update 工具（不编辑 topology.yaml）；runbook 编排走 "
+    "runbook_create / runbook_execute 工具"
+)
+
 
 def _load_ops_config() -> Dict[str, Any]:
     try:
@@ -178,6 +192,7 @@ def render_topo_block(home: Path, max_lines: int = 45) -> str:
 
     lines.append("")
     lines.append(_BEHAVIOR_CONSTRAINT)
+    lines.append(_CLI_COMMAND_INDEX)
 
     block = "\n".join(lines)
     if len(lines) > max_lines:
