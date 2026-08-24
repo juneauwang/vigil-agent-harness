@@ -5379,6 +5379,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
         追加新服务、保留手动实体；systemd 无端口服务留在 pending_review 不入表），
         落盘前打印将要写入的清单并 y/N 确认（默认 N；--yes 跳过）。凭据复用
         askpass/vault 机制，密码明文不进 argv/命令串/日志。
+        注意：会话内不支持 --sudo-password（凭据纪律：密码不进 LLM 会话参数）；
+        root-only 探测项需在 CLI 层跑 vigil topo-discover --sudo-password
+        或预配拓扑 credential。
         """
         from hermes_constants import get_hermes_home
         from tools.topo_discovery import (
