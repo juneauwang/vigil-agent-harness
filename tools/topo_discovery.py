@@ -303,7 +303,8 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
             env["SSH_ASKPASS_REQUIRE"] = "force"
             env.setdefault("DISPLAY", ":0")
         try:
-            proc = subprocess.run(argv, capture_output=True, text=True,
+            proc = subprocess.run(argv, capture_output=True,
+                                  text=True, encoding='utf-8', errors='replace',
                                   timeout=_SSH_TIMEOUT_S, env=env, input=sudo_stdin)
         except subprocess.TimeoutExpired as exc:
             raise DiscoveryError(f"SSH 连接 {user}@{host} 超时（{_SSH_TIMEOUT_S}s）") from exc
@@ -353,8 +354,10 @@ def _build_local_runner(sudo_password_file: Optional[Path] = None) -> Callable[[
             sudo_stdin = _askpass_output(sudo_password_file) + "\n"
             run_cmd = f"sudo -S -p '' {cmd}"
         try:
-            proc = subprocess.run(run_cmd, capture_output=True, text=True,
-                                  timeout=_SSH_TIMEOUT_S, shell=True, input=sudo_stdin)
+            proc = subprocess.run(run_cmd, capture_output=True,
+                                  text=True, encoding='utf-8', errors='replace',
+                                  timeout=_SSH_TIMEOUT_S, shell=True,
+                                  input=sudo_stdin)
         except subprocess.TimeoutExpired as exc:
             raise DiscoveryError(f"本地命令执行超时（{_SSH_TIMEOUT_S}s）：{cmd}") from exc
         except OSError as exc:
@@ -378,7 +381,8 @@ def _askpass_output(askpass_file: Path) -> str:
     """执行 askpass 脚本并返回密码明文（仅注入 stdin，不进 argv/日志）。"""
     try:
         proc = subprocess.run(["/bin/sh", str(askpass_file)], capture_output=True,
-                              text=True, timeout=10)
+                              text=True, encoding='utf-8', errors='replace',
+                              timeout=10, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired as exc:
         raise DiscoveryError("读取保险箱凭据超时（askpass）") from exc
     except OSError as exc:

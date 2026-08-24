@@ -4148,3 +4148,58 @@
     收敛结果见本批交付报告：除 YAPL 2 文件（单独报告）外 0 失败。
 - **状态**：独立 commit 分组（fix(tests) 主体 + fix(core) 生产代码 + README
   Windows 安装指引）。
+
+### 85. subprocess 安全规范批次（2026-08-24，batch70 —— YAPL 2 检查修复）
+
+- **背景**：batch69 全量回归（scripts/run_tests.sh 逐文件隔离）暴露 YAPL 检查
+  2 例失败：`tests/scripts/test_footgun_subprocess_encoding.py`（footgun 规则：
+  本仓库 subprocess 调用一律显式 `text=True, encoding='utf-8', errors='replace'`
+  同行，按源行扫描）与 `tests/tools/test_subprocess_stdin_guard.py`（subprocess
+  调用无 stdin 注入用途时一律显式 `stdin=subprocess.DEVNULL`）命中
+  `tools/runbook_exec.py` / `tools/sudo_tool.py` / `tools/topo_discovery.py`
+  的 subprocess 调用点。batch69 按硬约束未碰 YAPL 核心、单独报告留人工决定；
+  本批（batch70）用户拍板确认为真实安全规范问题，修复 3 个工具文件，仍不碰
+  YAPL 核心与测试本体（footgun 规则不动）。开发在 branch v1.0
+  （vigil-agent），发布基线 vigil-agent-release 不动。
+- **怎么改**（只动 3 个文件内的 subprocess 调用点，同文件同类缺陷一并修；
+  无 input 注入的调用统一补 `stdin=subprocess.DEVNULL`，编码三件套与
+  `text=True` 保持同一源行——footgun 规则按行扫描，跨行会被判 miss）：
+  - `tools/runbook_exec.py`：`_exec_local`（474）本地命令执行、
+    `_exec_transfer` 的 scp 执行（604）、`_exec_script_asset` 的 bash 脚本
+    执行（672）——均补 DEVNULL + 编码三件套。
+  - `tools/sudo_tool.py`：`_run_local_sudo`（247，sudo -A + SUDO_ASKPASS
+    认证流）、`_ssh_run`（305，ssh 远端命令）、`_scp`（357，scp 上传）——
+    均补 DEVNULL + 编码三件套。
+  - `tools/topo_discovery.py`：ssh 远端执行（306）与本地 sudo -S（356）——
+    两处是 **sudo 密码 stdin 注入点，`input=sudo_stdin` 保留不动**（注入语义
+    不得削弱），仅补编码三件套；`_askpass_output`（380，askpass 脚本读取
+    密码明文）无注入用途——补 DEVNULL + 编码三件套。
+- **为什么保留 `input=`**：`tools/sudo_tool.py` 无 input（密码走
+  SUDO_ASKPASS 环境）；`tools/topo_discovery.py` 两处 sudo 以
+  `input=sudo_stdin` 注入密码，DEVNULL 会截断认证导致 sudo 失败——按任务书
+  约束"sudo 密码注入语义不得削弱"，只补显式编码不碰注入路径。
+- **回归面**：2 个 YAPL gate 测试全绿（12 passed：footgun 规则 0 hits +
+  stdin guard 全绿）；回归套件 1（17 文件 388 passed：test_sudo_exec /
+  test_sudo_stdin_guard_sources / test_askpass_interception /
+  test_batch40_askpass_narrow / test_ssh_auth_breaker / test_runbook_exec /
+  test_batch59_runbook_exec_api / test_command_guards / test_approval /
+  test_batch47_sudo_approval / test_sudo_clarify_flow / test_topo_discovery /
+  test_topo_v4 / test_topo_status_sync / test_batch39_topo_sync /
+  test_topo_tools）；回归套件 2（15 文件 220 passed：runbook 系列 +
+  topo_slash 系列 + approval/cron 契约）。canonical 全量（约 30min）未跑，
+  以回归套件 + 实机通道实测为准。
+- **实测验证**（9131 服务已用新代码重启，VIGIL_DASHBOARD_SESSION_TOKEN 起
+  服务，令牌实测生效）：
+  - ssh 通道：`sudo_tool._ssh_run`（305，真实路径非 mock）连
+    39.106.217.32（ssh_key ~/.ssh/aliyun_nopass.pem）→
+    `hostname && uname -r` 返回 `node1 / 5.14.0-687.12.1.el9_8.0.1.x86_64`，
+    returncode 0。
+  - scp 通道：`_scp`（357）上传探针文件到 `/tmp/vigil-b70-scp-probe.txt`
+    → 远端 cat + 清理 returncode 0，内容回读正确。
+  - runbook 命令通道：临时只读 v2 runbook（query action, target dify）POST
+    `/api/runbook/executions` → exec_id `exec_20260824_0001`，SSE progress
+    step_done ok（`docker-nginx-1 Restarting (1) 4 seconds ago`）、
+    runbook_done ok（`duration_s 0.23, step_count 1`）；ledger 已落盘；
+    临时 runbook 文件已清理（不留在用户 runbooks 里）。
+- **状态**：独立 fix commit（本批 batch70），只含 3 个工具文件 +
+  OPS-DELTA.md 本条登记；YAPL 核心/测试本体未动。

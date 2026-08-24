@@ -244,8 +244,10 @@ def _run_local_sudo(command: str, cred: Dict[str, Any]) -> subprocess.CompletedP
         env = dict(os.environ)
         env["SUDO_ASKPASS"] = str(askpass)
         logger.debug("sudo_exec: local argv=%s (SUDO_ASKPASS=%s)", argv[0:2], askpass)
-        return subprocess.run(argv, capture_output=True, text=True,
-                              timeout=_EXEC_TIMEOUT_S, env=env)
+        return subprocess.run(argv, capture_output=True,
+                              text=True, encoding='utf-8', errors='replace',
+                              timeout=_EXEC_TIMEOUT_S, env=env,
+                              stdin=subprocess.DEVNULL)
     finally:
         if askpass is not None and cred_type == "vault":
             try:
@@ -302,8 +304,9 @@ def _ssh_run(ssh_argv: List[str], ssh_env: Dict[str, str], remote_cmd: str,
              timeout: int = _EXEC_TIMEOUT_S) -> subprocess.CompletedProcess:
     """``ssh <argv> "<remote_cmd>"``（argv 已含 user@host 目标）。"""
     _ssh_auth_breaker_guard(ssh_argv)
-    proc = subprocess.run(ssh_argv + [remote_cmd], capture_output=True, text=True,
-                          timeout=timeout, env=ssh_env)
+    proc = subprocess.run(ssh_argv + [remote_cmd], capture_output=True,
+                          text=True, encoding='utf-8', errors='replace',
+                          timeout=timeout, env=ssh_env, stdin=subprocess.DEVNULL)
     _ssh_auth_breaker_note(ssh_argv, proc)
     return proc
 
@@ -355,8 +358,10 @@ def _scp(ssh_argv: List[str], ssh_env: Dict[str, str], local: Path, dest: str) -
     """scp 上传（复用 ssh 的 key/askpass 认证 env；经共享熔断计数）。"""
     _ssh_auth_breaker_guard(ssh_argv)
     proc = subprocess.run(_scp_argv_from_ssh(ssh_argv, local, dest),
-                          capture_output=True, text=True,
-                          timeout=_PROVISION_TIMEOUT_S, env=ssh_env)
+                          capture_output=True,
+                          text=True, encoding='utf-8', errors='replace',
+                          timeout=_PROVISION_TIMEOUT_S, env=ssh_env,
+                          stdin=subprocess.DEVNULL)
     _ssh_auth_breaker_note(ssh_argv, proc)
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()

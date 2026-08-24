@@ -471,7 +471,9 @@ def _check_scheduled_exemption(data: Dict[str, Any]) -> Optional[str]:
 
 def _exec_local(argv: List[str], timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(argv, capture_output=True,
+                              text=True, encoding='utf-8', errors='replace',
+                              timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return {"exit_code": 1, "stdout": "", "stderr": f"执行超时（{timeout}s）",
                 "timed_out": True}
@@ -599,8 +601,10 @@ def _exec_transfer(home: Path, spec: Dict[str, Any],
     except Exception as exc:
         return {"exit_code": 1, "stdout": "", "stderr": f"scp 参数构造失败：{exc}"}
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout,
-                              env=env)
+        proc = subprocess.run(argv, capture_output=True,
+                              text=True, encoding='utf-8', errors='replace',
+                              timeout=timeout, env=env,
+                              stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return {"exit_code": 1, "stdout": "", "stderr": f"scp 超时（{timeout}s）",
                 "timed_out": True}
@@ -665,7 +669,9 @@ def _exec_script_asset(home: Path, spec: Dict[str, Any],
     args = [str(a) for a in (spec.get("args") or [])]
     argv = ["bash", str(script_path)] + args
     try:
-        proc = subprocess.run(argv, capture_output=True, text=True, timeout=timeout)
+        proc = subprocess.run(argv, capture_output=True,
+                              text=True, encoding='utf-8', errors='replace',
+                              timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
         return {"exit_code": 1, "stdout": "", "stderr": f"脚本执行超时（{timeout}s）",
                 "timed_out": True}
