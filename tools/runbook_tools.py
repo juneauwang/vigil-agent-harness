@@ -180,13 +180,13 @@ _PLAINTEXT_CRED_FLAG_RE = re.compile(r"(?i)(-u|--user)\s+([^\s<]+:[^\s]+)")
 _DEFAULT_LOAD_SCHEMA = {
     "name": "runbook_load",
     "description": (
-        "加载运维 runbook（程序层：结构化 YAML，含触发条件 + 步骤 + 命令 + 回滚）。"
-        "runbook 只支持 .yaml（schema v0.1），.md/其他格式不会被加载。"
+        "加载运维 runbook（程序层：结构化 YAML，含触发条件 + 步骤 + 回滚）。"
         "按 runbook 名精确加载，或按触发关键字/症状模糊匹配（省略参数时列出全部）。"
-        "L4 部署 checklist（kind=deploy, checklist=true）会附带当前阶段门状态。"
-        "本工具只返回内容，不执行任何命令——步骤里的命令由你通过终端执行，"
-        "逐条过权限矩阵（ops-agent-harness.md §3）。执行运维操作前，先 topo_query "
-        "确认目标实体在拓扑表中的身份和环境；跨环境操作默认拒绝。"
+        "**执行 runbook 请调用 runbook_execute 工具**（v0.2 声明式动作，命令由执行器生成，"
+        "LLM 永不接触命令语法）——本工具只返回规格内容，不要自己用 terminal 复现步骤；"
+        "v0.1 存量 runbook（commands 写死）不走 runbook_execute，按内容人工判断。"
+        "执行运维操作前，先 topo_query 确认目标实体在拓扑表中的身份和环境；"
+        "跨环境操作默认拒绝。"
     ),
     "parameters": {
         "type": "object",
