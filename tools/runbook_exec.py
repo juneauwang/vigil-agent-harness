@@ -819,8 +819,9 @@ def _runbook_targets(data: Dict[str, Any]) -> Set[str]:
 # expect 轮询策略（batch78，OPS-DELTA #93）
 # ---------------------------------------------------------------------------
 
-# 变更类动作：默认轮询等待就绪（2 分钟窗口——scale 后 pod 还在
-# ContainerCreating/拉镜像/过 readiness，kubectl rollout status --timeout 同理）。
+# 变更类动作：默认轮询等待就绪（batch79，OPS-DELTA #94：4 分钟窗口——
+# 2026-08-26 实测 pod Ready 需要 2-4 分钟（镜像拉取 + 启动 + readiness
+# probe），120s 偏短；expect.retry 显式声明仍可覆盖，含改短）。
 _EXPECT_CHANGE_ACTIONS = frozenset({
     "start", "stop", "restart", "reload", "enable", "disable", "reboot",
     "shutdown", "deploy", "rollback", "scale", "decommission", "backup",
@@ -831,7 +832,7 @@ _EXPECT_READONLY_ACTIONS = frozenset({
     "query", "fetch_log", "verify", "transfer_file", "run_script",
     "apply_config", "runbook",
 })
-_EXPECT_CHANGE_RETRY = (12, 10)   # attempts, interval(s)
+_EXPECT_CHANGE_RETRY = (24, 10)   # attempts, interval(s) = 4 分钟窗口
 _EXPECT_SINGLE_RETRY = (1, 0)
 
 
@@ -839,7 +840,7 @@ def _expect_retry_policy(action: str, expect: Dict[str, Any]) -> tuple:
     """expect 轮询策略：显式 retry 覆盖 > 动作类别默认 > 单次。
 
     ``expect.retry: {attempts, interval}`` → 按声明；``expect.retry: false``
-    → 单次（关闭轮询）；缺省 → 变更类 12×10s、只读类单次。
+    → 单次（关闭轮询）；缺省 → 变更类 24×10s（4 分钟）、只读类单次。
     """
     retry = expect.get("retry")
     if retry is False:
@@ -960,8 +961,9 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                 })
                 return entry
         # expect（§10.3）：声明式检查 + 断言。batch78（OPS-DELTA #93）：默认
-        # 轮询——变更类动作（scale/restart/…）等待就绪（12×10s 窗口），只读类
-        # 动作单次快查；expect.retry 显式覆盖（{attempts, interval} / false）。
+        # 轮询——变更类动作（scale/restart/…）等待就绪（默认 24×10s 窗口，
+        # batch79：pod Ready 实测需 2-4 分钟），只读类动作单次快查；
+        # expect.retry 显式覆盖（{attempts, interval} / false）。
         # 轮询只加等待不改命令内容；失败仍 fail-closed（最后一次结果入 error）。
         expect = step.get("expect")
         if expect:

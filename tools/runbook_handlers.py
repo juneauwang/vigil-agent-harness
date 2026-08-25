@@ -318,12 +318,32 @@ def _rollback(params: Dict[str, Any], target: Dict[str, Any],
     to = str(params.get("to") or "").strip()
     if mb == "kubectl":
         suffix = f" --to-revision={_q(to)}" if to else ""
+        if bool(params.get("force_undo")):
+            # force_undo: true（人工确认后）→ 跳过健康检查直接 undo。
+            return [{
+                "cmd": f"kubectl {_kube_ns(target)}rollout undo "
+                       f"deployment/{_q(name)}{suffix}",
+                "shell": False, "sudo": False,
+                "desc": f"kubectl rollout undo deployment/{name}"
+                        + (f" --to-revision={to}" if to else ""),
+            }]
+        # batch79（OPS-DELTA #94）：有条件 undo——rollback 语义是"回到已知良好
+        # 状态"，不是"回滚到上一个 revision"。修复步骤（prepare/scale/set
+        # resources）已产生新 revision 时，undo 会把修复冲掉（2026-08-26 实测：
+        # 补好 resources 的 template 被 undo 回滚到空 resources 版本 →
+        # Gatekeeper 拒 → 死循环）。先 rollout status 短超时健康检查：当前
+        # 健康 → 跳过 undo（记录"当前健康无需回滚"）；不健康才 undo。
+        # force_undo: true 跳过检查（人工确认后）。审批门不削弱——undo 仍走
+        # 矩阵 + 回滚步骤 force_confirmation。
         return [{
-            "cmd": f"kubectl {_kube_ns(target)}rollout undo "
-                   f"deployment/{_q(name)}{suffix}",
-            "shell": False, "sudo": False,
-            "desc": f"kubectl rollout undo deployment/{name}"
-                    + (f" --to-revision={to}" if to else ""),
+            "cmd": (
+                f"kubectl {_kube_ns(target)}rollout status deployment/"
+                f"{_q(name)} --timeout=5s && echo '当前健康无需回滚' || "
+                f"kubectl {_kube_ns(target)}rollout undo "
+                f"deployment/{_q(name)}{suffix}"
+            ),
+            "shell": True, "sudo": False,
+            "desc": f"rollback {name}（先 rollout status 健康检查，健康跳过 undo）",
         }]
     if mb == "docker_compose":
         project = _compose_project(target)
@@ -657,13 +677,44 @@ def generate_expect_check(expect: Dict[str, Any],
         if kind == "pod":
             # 默认查 pod（batch78，OPS-DELTA #93）：pod 名带随机后缀
             # （argocd-server-86678dcc97-n5cfx），不能 get pod/<name>——按
-            # label app=<name> 查；"1/1 Running" 是 pod 状态语义（READY/RUNNING
-            # 两列），deployment 的 READY 列是 "1/1 1 1"（ready/up-to-date/
-            # available），语义不同。
-            checks.append({"cmd": f"kubectl {_kube_ns(target)}get pods "
-                                  f"-l app={_q(obj)} -o wide",
-                           "shell": False, "sudo": False,
-                           "desc": f"kubectl get pods -l app={obj}"})
+            # label 查；"1/1 Running" 是 pod 状态语义（READY/RUNNING 两列），
+            # deployment 的 READY 列是 "1/1 1 1"（ready/up-to-date/available），
+            # 语义不同。batch79（OPS-DELTA #94）：label 不硬编码 app=——k8s
+            # 推荐 label（app.kubernetes.io/name）应用（argocd 等）没有 app=
+            # label，硬编码查询返回空 → expect 必败（2026-08-26 node1 实测）。
+            # pod 通道先读 deployment 的真实 selector（.spec.selector.
+            # matchLabels）再按真实 label 查 pod；selector 为空回退 app=<name>；
+            # 读取失败 fail-closed。expect.selector 显式覆盖（跳过读取），
+            # expect.label 兼容旧行为（app=<name>）。
+            selector = str(expect.get("selector") or "").strip()
+            if selector:
+                checks.append({"cmd": f"kubectl {_kube_ns(target)}get pods "
+                                      f"-l {selector} -o wide",
+                               "shell": False, "sudo": False,
+                               "desc": f"kubectl get pods -l {selector}"})
+                return checks
+            label = str(expect.get("label") or "").strip()
+            if label:
+                checks.append({"cmd": f"kubectl {_kube_ns(target)}get pods "
+                                      f"-l app={_q(label)} -o wide",
+                               "shell": False, "sudo": False,
+                               "desc": f"kubectl get pods -l app={label}"})
+                return checks
+            ns = _kube_ns(target)
+            # 两步合并成一条 bash 命令：selector 读取是中间产物，不进 expect
+            # body（expect 只取最终 stdout 的 pod 列表）。
+            checks.append({
+                "cmd": (
+                    f"S=$(kubectl {ns}get deployment/{_q(obj)} "
+                    f"-o jsonpath='{{.spec.selector.matchLabels}}') || "
+                    f"{{ echo \"无法读取 deployment {obj} selector\" >&2; "
+                    f"exit 1; }}; "
+                    f"[ -n \"$S\" ] || S={_q(f'app={obj}')}; "
+                    f"kubectl {ns}get pods -l \"$S\" -o wide"
+                ),
+                "shell": True, "sudo": False,
+                "desc": f"kubectl get pods -l <{obj} 真实 selector> -o wide",
+            })
             return checks
         if kind in ("deployment", "statefulset", "sts"):
             token = "sts" if kind in ("statefulset", "sts") else "deployment"

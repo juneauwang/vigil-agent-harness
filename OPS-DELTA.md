@@ -4760,3 +4760,76 @@
   存量测试文件适配 + 1 个新测试文件 + OPS-DELTA.md 本条登记；runbook 用例
   （~/.vigil/runbooks/argocd-full-stack-recovery.yaml）随本批同步，仓库无对应
   源故不在 commit 内。
+
+### 94. expect 检查三修——真实 selector / rollback 健康检查 / retry 24×10（2026-08-25/26，batch79）
+
+- **背景**（2026-08-26 实测，用户 node1 手动验证 + argocd-full-stack-recovery
+  第三次执行）：expect 检查与 rollback 的通用 bug 连环致死：
+  - 根因 1（expect label 硬编码）：`generate_expect_check` 的 pod 通道硬编码
+    `kubectl get pods -l app=<name> -o wide`。但 k8s 推荐 label
+    （app.kubernetes.io/name）应用（argocd 等）**没有 `app=` label** → 查询返回
+    空 → 响应体空 → expect 必败（用户实测：`get pods -l app=argocd-redis` 返回
+    "No resources found"，而真实 selector
+    `{"app.kubernetes.io/name":"argocd-redis"}` 查得到 Running pod）。
+  - 根因 2（rollback 破坏性）：`kubectl rollout undo` 回滚到**上一个 revision**。
+    修复步骤（prepare/scale）刚产生新 revision（resources 补好），undo 把修复
+    冲掉 → 之后全部 FailedCreate（Gatekeeper 拒）→ 死循环。
+  - 根因 3（retry 时长）：batch78 默认变更类 12×10s=120s，pod 实际需要
+    2-4 分钟才 Ready（镜像拉取 + 启动 + readiness），窗口偏短。
+- **任务 1——expect kubectl pod 通道读真实 selector（`tools/runbook_handlers.py`）**：
+  pod 通道改为一条 bash 命令两步走：先 `kubectl {ns}get deployment/{obj}
+  -o jsonpath='{.spec.selector.matchLabels}'` 读 deployment/sts 的真实
+  selector（sts 用 `get sts/{obj}`，kind 判断同现有逻辑），再用
+  `kubectl {ns}get pods -l "$S" -o wide` 按真实 label 查 pod
+  （shell=True，selector 中间产物通过子命令替换注入，不进 expect body——
+  expect 检查支持命令序列，runner 逐个执行但 evaluate_expect 只取 results[0]，
+  合并成单条 shell 命令保证最终 stdout 是 pod 列表）。selector 为空 → 回退
+  `app={name}` 并注明；**selector 读取失败 → exit 非 0 → fail-closed**
+  （stderr 报"无法读取 deployment {obj} selector"）。显式 `expect.selector`
+  直接用它（shell=False，跳过读取）；`expect.label` 保留兼容（app={label}
+  旧行为）。
+- **任务 2——rollback 条件 undo（`tools/runbook_handlers.py`，方案 A+C）**：
+  `_rollback` 的 kubectl 通道默认改为
+  `rollout status --timeout=5s && echo '当前健康无需回滚' || rollout undo`
+  （shell=True）——当前 revision 健康则不 undo（修复状态不被冲掉），不健康才
+  undo（回到已知良好状态）；显式 `force_undo: true` 跳过健康检查直接 undo
+  （shell=False）；`to` revision 保留在 undo 后缀。docker_compose 通道不变。
+  健康检查不削弱审批：undo 仍走矩阵门 + force_confirmation（batch78 强化）。
+- **任务 3——expect 默认 retry 加长（`tools/runbook_exec.py`）**：
+  变更类动作默认 attempts 12×10 → **24×10（240s = 4 分钟窗口）**；
+  工具描述 + skill expect retry 说明同步；`expect.retry` 显式声明仍覆盖
+  （含改短）；只读类保持单次。
+- **运行时数据（`~/.vigil`，仓库无源，不在 commit）**：
+  argocd-full-stack-recovery.yaml 全部 5 个 retry 块 attempts 12→24；
+  skills/vigil/runbook-authoring/SKILL.md 补：kubectl 查 pod 默认读真实
+  deployment selector（推荐 label 应用无需 `app=`）、`expect.selector` 可覆盖、
+  变更类默认轮询 24×10s、`retry: false` 关闭。
+- **新测试**（2 文件 12 例）：
+  ① tests/tools/test_batch79_expect_selector.py（7 例）——临时 bin/kubectl
+  fake（SCENARIO 环境变量）+ 真实 bash -c 执行生成的 shell 命令：两步读真实
+  selector（stdout 是 pod 列表、selector JSON 不进 body）、旧 `-l app=` 对
+  推荐 label 返回 No resources（对照）、`expect.selector` 覆盖、`expect.label`
+  兼容、selector 读失败 fail-closed（stderr 含"无法读取…"）、selector 空回退
+  app=、E2E（execute_runbook scale + expect 通过）；
+  ② tests/tools/test_batch79_rollback_safe.py（5 例）——fake kubectl 验证：
+  默认命令含健康检查、健康跳过 undo（无 rollout undo 调用）、不健康执行 undo、
+  force_undo 跳过检查、to=revision 保留。fake kubectl 输出为真实多空格列对齐，
+  断言用 re.sub(r"\s+", " ") 归一化。
+- **存量测试适配**：test_batch78_expect_fixes.py——retry 默认断言 12→24；
+  `test_kubectl_default_kind_is_pod` 改为断言真实 selector 命令（shell=True +
+  jsonpath + `get pods -l "$S" -o wide`）；`_probe_runner` 改按
+  `"jsonpath=" in cmd` 匹配。
+- **验收**：test_batch79_expect_selector.py 7 例 + test_batch79_rollback_safe.py
+  5 例全绿；E2E（temp VIGIL_HOME + prod 矩阵 execute + 真实
+  argocd-full-stack-recovery.yaml + mock runner）场景 A 全绿不触发回滚（9 次
+  expect 全部真实 selector 查到 Running，修复前 app= 必败）、场景 B
+  restore-redis 持续 ContainerCreating → rollback-all 触发且 rb 步骤命令全部
+  走健康检查（rollout status 先行，健康跳过 undo）→ 修复不被冲掉；回归
+  runbook 全家桶（test_runbook_*.py + batch73/76/78/79 + approval + matrix）
+  444 passed 零回归。
+- **状态**：独立 fix commit（batch79，1 个 commit），只含 tools/runbook_handlers.py、
+  tools/runbook_exec.py、tests/tools/test_batch78_expect_fixes.py、
+  tests/tools/test_batch79_expect_selector.py、
+  tests/tools/test_batch79_rollback_safe.py + OPS-DELTA.md 本条登记；runbook
+  用例与 skill（~/.vigil/runbooks、~/.vigil/skills）随本批同步，仓库无对应源
+  故不在 commit 内。

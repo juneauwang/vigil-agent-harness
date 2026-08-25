@@ -147,11 +147,14 @@ def _add_approved_markers(data):
 # ---------------------------------------------------------------------------
 
 def test_kubectl_default_kind_is_pod():
-    """expect 无 kind + "1/1 Running" → 查 pod（label app=，非 get pod/<name>）。"""
+    """expect 无 kind + "1/1 Running" → 查 pod：先读 deployment 真实 selector，
+    再按真实 label 查（batch79 起不再硬编码 app=）。"""
     ch = rh.generate_expect_check(
         {"target": "kubectl", "body_contains": "1/1 Running"}, _k8s_target())
-    assert "get pods -l app=argocd-server" in ch[0]["cmd"]
-    assert "-o wide" in ch[0]["cmd"]
+    assert ch[0]["shell"] is True
+    assert "get deployment/argocd-server" in ch[0]["cmd"]
+    assert "jsonpath='{.spec.selector.matchLabels}'" in ch[0]["cmd"]
+    assert 'get pods -l "$S" -o wide' in ch[0]["cmd"]
     assert "-n argocd" in ch[0]["cmd"]
 
 
@@ -198,7 +201,8 @@ def test_evaluate_pod_vs_deployment_semantics():
 def _probe_runner(probes, ok_after):
     """probe 调用 ok_after 次前返回 ContainerCreating，之后返回 Running。"""
     def runner(spec, target):
-        if "get pods -l app=" in (spec.get("cmd") or ""):
+        # batch79：pod 检查命令 = 读 deployment selector + 按真实 label 查 pod
+        if "jsonpath=" in (spec.get("cmd") or ""):
             probes.append(1)
             if len(probes) < ok_after:
                 return {"exit_code": 0,
@@ -233,7 +237,7 @@ def test_change_action_polls_until_ready(mhome, monkeypatch):
     assert res["result"] == "ok"
     step = res["steps"][0]
     assert step["expect"]["ok"] is True and step["expect"]["attempts"] == 4
-    assert step["expect"]["retry"] == {"attempts": 12, "interval": 10}
+    assert step["expect"]["retry"] == {"attempts": 24, "interval": 10}
 
 
 def test_readonly_action_single_attempt(mhome):
@@ -356,7 +360,7 @@ def test_scheduled_rollback_keeps_exemption(mhome, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_argocd_recovery_scale_expect_polls_pod(mhome, monkeypatch):
-    """restore-server 语义：kind=pod + retry 12×10，ContainerCreating→Running
+    """restore-server 语义：kind=pod + retry 24×10，ContainerCreating→Running
     序列 → 等待就绪不再误判（不触发 rollback）。"""
     monkeypatch.setattr("tools.runbook_exec.time.sleep", lambda s: None)
     probes = []
@@ -368,7 +372,7 @@ def test_argocd_recovery_scale_expect_polls_pod(mhome, monkeypatch):
              "action": "scale",
              "params": {"target": "argocd-server", "replicas": 1},
              "expect": {"target": "kubectl", "kind": "pod",
-                        "retry": {"attempts": 12, "interval": 10},
+                        "retry": {"attempts": 24, "interval": 10},
                         "body_contains": "1/1 Running"},
              "on_failure": {"rollback": "rollback-all"}},
         ],
