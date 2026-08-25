@@ -2120,7 +2120,11 @@ registry.register(
     toolset="runbook",
     schema=_DEFAULT_CREATE_SCHEMA,
     handler=_create_handler,
-    check_fn=check_runbook_requirements,
+    # batch76（OPS-DELTA #91）：runbook_create 必须始终可用——runbooks/ 为空
+    # 正是它该工作的时候（引导死锁：目录空 → 工具消失 → LLM 绕行直接写 YAML
+    # 文件绕过资产审批/三层校验器）。存在性门控只保留在 runbook_load /
+    # runbook_checkpoint（读/执行依赖存量数据）；create 内部同名保护（exists
+    # and not overwrite）+ _validate_runbook + 资产审批不受影响。
     emoji="📝",
     max_result_size_chars=30_000,
 )

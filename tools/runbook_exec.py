@@ -324,12 +324,37 @@ def resolve_target(home: Path, topo: Dict[str, Any],
         except Exception:
             pass
 
+    # managed_by 推断（batch76，OPS-DELTA #91）：实体档案/L2 服务行都可能缺
+    # managed_by（v0.3 存量 k8s 实体只写 type=k8s-service/k8s-deploy，无
+    # managed_by 字段；v0.4 发现写入也可能被同名合并跳过）。缺失时按运行时
+    # 快照/type 推断，保证 kubectl/docker/systemd 通道不丢。推断优先级：
+    # 显式 managed_by > snapshot.by_runtime 键（topo_discovery 写 by_runtime
+    # = {managed_by: 块}，键即发现期 managed_by）> type 映射（与 topo_discovery
+    # 写入对齐：k8s-*→kubectl、docker→docker、compose→docker_compose、
+    # systemd→systemd）> 空（未知 type 不瞎猜）。只补缺失，不覆盖显式值。
+    managed_by = str(entity.get("managed_by") or "").strip()
+    if not managed_by:
+        for runtime_key in ("kubectl", "docker_compose", "docker", "systemd"):
+            if runtime_key in by_runtime:
+                managed_by = runtime_key
+                break
+    if not managed_by:
+        etype = str(entity.get("type") or "")
+        if etype.startswith("k8s-") or etype in ("kubectl", "k8s"):
+            managed_by = "kubectl"
+        elif etype in ("docker", "container"):
+            managed_by = "docker"
+        elif etype in ("docker_compose", "compose"):
+            managed_by = "docker_compose"
+        elif etype in ("systemd", "service"):
+            managed_by = "systemd"
+
     return {
         "name": name,
         "type": "service" if entity.get("_host") else "host",
         "env": str(entity.get("env") or host_row.get("env") or ""),
         "cluster": str(entity.get("cluster") or host_row.get("cluster") or "default"),
-        "managed_by": str(entity.get("managed_by") or ""),
+        "managed_by": managed_by,
         "host": host_name,
         "endpoint": endpoint,
         "os": str(host_row.get("os") or ""),

@@ -4625,3 +4625,61 @@
 - **状态**：独立 feat commit（batch75，1 个 commit），只含 1 个样例文件 + 1 个
   工具文件（description）+ 1 个测试文件 + OPS-VERIFY.md + OPS-DELTA.md 本条
   登记；skill 运行时副本（~/.vigil）随本批同步，仓库无对应源故不在 commit 内。
+
+### 91. 执行器链路三件：managed_by 推断 + runbook_create 解除存在性门控 + skill 引导硬规则（2026-08-25，batch76）
+
+- **背景**（用户 dogfood 实证 2026-08-25 上午）：会话写"探查 argocd 状态并恢复"
+  v0.2 runbook（action: query/fetch_log/scale, target: argocd-server），暴露三个
+  递进问题：
+  - A 架构断层：argocd-server 实体档案与 L2 服务行都无 managed_by（v0.3 存量 k8s
+    实体只写 type=k8s-service，无 managed_by 字段；v0.4 发现写入的 managed_by 是
+    L2 服务行字段，但同名合并/旧数据可能缺）→ `runbook_exec._resolve_target` 返回
+    空 → `runbook_handlers` 退化为 "bare" → kubectl 通道丢失，query 退化成 ps aux、
+    scale/start 报 UnsupportedCommand。
+  - B 引导死锁：runbook_create/load/checkpoint 三工具全挂
+    `check_fn=check_runbook_requirements`（runbooks/ 有 yaml 才可用）→ 目录空时
+    runbook_create 根本不出现在 LLM 工具列表 → LLM 想创建 runbook 没工具可用 →
+    绕行直接写 YAML 文件（落盘成功但 0 个审批标记，绕过资产审批门 + 三层校验器）。
+  - C 引导不足：batch75 后 LLM 写 runbook 仍读 8 段 runbook_tools.py 源码——样例
+    用占位拓扑（k3s-prod/argocd）套不到真实拓扑，从源码反推校验规则陷入兔子洞。
+- **任务 1——执行器 managed_by 推断（`tools/runbook_exec.py`）**：`_resolve_target`
+  return dict 前加推断，优先级 **显式 managed_by > snapshot.by_runtime 键 >
+  type 映射 > 空**，只补缺失不覆盖显式值：
+  - by_runtime 键（kubectl/docker_compose/docker/systemd）——topo_discovery 写
+    `by_runtime = {managed_by: 块}`，键即发现期 managed_by，v0.4 数据 L2 缺字段
+    但 L3 快照在时最准；
+  - type 映射与 topo_discovery 写入对齐：`k8s-*`/kubectl/k8s → kubectl（v0.3 存量
+    k8s 实体 type=k8s-service/k8s-deploy）、docker/container → docker、
+    docker_compose/compose → docker_compose、systemd/service → systemd；
+  - 未知 type（app 等）→ 保持空串不瞎猜。集群/host_group 目标维持 ""（无 managed_by
+    概念）。核实结论：topo_discovery.py:1443 的 kubectl 写入路径本身执行且 L2 写盘
+    保留（只 pop `_host`），用户数据缺失是 v0.3 存量写入格式没有该字段——执行器侧
+    推断是系统级修复，覆盖新旧两代数据。
+- **任务 2——runbook_create 解除存在性门控（`tools/runbook_tools.py`）**：
+  `runbook_create` 注册去掉 `check_fn=check_runbook_requirements`（工具始终在 LLM
+  工具列表——目录空正是它该工作的时候）；`runbook_load`/`runbook_checkpoint`/
+  `runbook_execute` 保留门控不动（读/执行依赖存量数据，空目录工具不出现合理）。
+  安全不削弱：create 内部 `exists and not overwrite` 同名保护、`_validate_runbook`
+  三层校验、v0.2 资产审批门（approve/矩阵/凭据纪律）全部保留，`_create_handler`
+  不直接调 check_fn，去掉注册门控不影响内部检查。
+- **任务 3——skill 两条硬规则（`~/.vigil/skills/vigil/runbook-authoring/SKILL.md`
+  运行时副本，仓库无对应源）**："创建/重写流程"一节顶部加两条：① target 必须
+  topo_query 拿到真实实体名（样例/ops_samples 是占位拓扑，用真实名替换，别照抄
+  别编）；② 校验规则本 skill 已写全、禁止读源码（不确定语法直接 runbook_create 试，
+  报错信息自带修复指引，不读 tools/runbook_tools.py 反推）。
+- **新测试**（tests/tools/）：
+  - `test_batch76_managed_by_infer.py`（5 例）：type=k8s-service → kubectl、
+    type=docker → docker、显式 managed_by=systemd 不被覆盖、未知 type=app → 空、
+    L3 快照 by_runtime.kubectl → kubectl；
+  - `test_batch76_create_always_available.py`（4 例）：空 runbooks/ → runbook_create
+    在 LLM 工具列表 + runbook_load 门控隐藏；非空目录 → 三工具全在；空目录
+    runbook_load 调用报无数据 + create 注册无 check_fn。
+- **验收**：两个新测试文件 9 例全绿；回归 runbook 全家桶（test_runbook_*.py +
+  test_batch76_*.py）171 passed、test_runbook_exec/tools/topo_discovery/create/
+  batch74 147 passed 零回归；E2E 实测（模拟 LLM 视角：空 runbooks/ → create 工具
+  可见 → 创建 v0.2 argocd-check-restart → approvals.mode=smart + 矩阵 execute →
+  资产审批通过落盘带 approved_at/approved_by/approved_version → resolve_target
+  (argocd-server) = managed_by kubectl）；skill 两条硬规则 grep 在场。
+- **状态**：独立 feat commit（batch76，1 个 commit），只含 2 个工具文件 + 2 个新
+  测试文件 + OPS-DELTA.md 本条登记；skill 运行时副本（~/.vigil）随本批同步，仓库
+  无对应源故不在 commit 内。
