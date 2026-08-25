@@ -18,6 +18,7 @@ import yaml
 
 import hermes_cli.config as hc
 from tools.runbook_tools import (
+    _validate_runbook,
     check_runbook_requirements,
     runbook_checkpoint,
     runbook_load,
@@ -25,6 +26,8 @@ from tools.runbook_tools import (
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SAMPLE_RUNBOOKS = PROJECT_ROOT / "hermes_cli" / "ops_samples" / "runbooks"
+SAMPLE_DIR_TOPOLOGY = PROJECT_ROOT / "hermes_cli" / "ops_samples" / "topology.yaml"
+SAMPLE_SERVICES = PROJECT_ROOT / "hermes_cli" / "ops_samples" / "services"
 
 
 @pytest.fixture
@@ -81,9 +84,40 @@ def test_load_by_trigger_query(rb_home):
 
 def test_load_list(rb_home):
     result = _load(runbook_load(home=rb_home))
-    assert result["count"] == 3
+    assert result["count"] == 4
     names = {r["name"] for r in result["runbooks"]}
-    assert names == {"harbor-restart", "gateway-svc-restart", "deploy-gateway-svc"}
+    assert names == {
+        "harbor-restart", "gateway-svc-restart", "deploy-gateway-svc",
+        "argocd-server-check-restart",
+    }
+
+
+def test_v02_sample_validates_against_ops_topo(tmp_path, monkeypatch):
+    """batch75：ops_samples 新增的 v0.2 样例必须能过分层校验 + load 回读。
+
+    用 ops_samples 的 topology/services 铺 home（模拟新装种子环境），引用层
+    （cluster k3s-prod + 服务 argocd 必须存在）一并验证。
+    """
+    home = tmp_path / "seed"
+    (home / "runbooks").mkdir(parents=True)
+    (home / "services").mkdir(parents=True)
+    shutil.copy2(SAMPLE_DIR_TOPOLOGY, home / "topology.yaml")
+    for p in sorted(SAMPLE_SERVICES.glob("*.yaml")):
+        shutil.copy2(p, home / "services" / p.name)
+    src = SAMPLE_RUNBOOKS / "argocd-server-check-restart.yaml"
+    shutil.copy2(src, home / "runbooks" / src.name)
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    hc._LOAD_CONFIG_CACHE.clear()
+    try:
+        data = yaml.safe_load(src.read_text(encoding="utf-8"))
+        _validate_runbook(data, "argocd-server-check-restart", home)
+        loaded = _load(runbook_load(runbook="argocd-server-check-restart", home=home))
+        assert loaded["name"] == "argocd-server-check-restart"
+        assert loaded["version"] == 2
+        assert "v0.2 runbook" in loaded["note"]
+        assert all("action" in s for s in loaded["steps"])
+    finally:
+        hc._LOAD_CONFIG_CACHE.clear()
 
 
 def test_load_unknown_and_empty_dir(tmp_path, monkeypatch):

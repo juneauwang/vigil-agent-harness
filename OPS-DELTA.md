@@ -4574,3 +4574,54 @@
 - **状态**：独立 feat commit（batch74，1 个 commit），只含 3 个工具文件 + 6 个
   存量测试文件适配 + 1 个存量测试顺修（test_approval_interrupt）+ 3 个新测试
   文件 + OPS-DELTA.md 本条登记。
+
+### 90. v0.2 runbook 编写引导三件套（skill + 样例 + 工具描述）（2026-08-25，batch75）
+
+- **背景**：batch74 强制 v0.2 后 LLM 不会写 v0.2 runbook——它加载的
+  runbook-authoring skill 内容还是 v0.1 时代（明写 "schema v0.1"、教 steps 用
+  commands）、ops_samples 的 3 个样例全是 v0.1 commands 格式、tools list 里也
+  没有 v0.2 完整示例，最终产出 v0.1 → 被 batch74 拒绝。根因：强制校验是"守门"，
+  但没有"指路"材料。本批 = 三件套同步更新，给 LLM 和用户"看着示例写出正确 v0.2"。
+  开发在 branch v1.0（vigil-agent），发布基线不动；禁止读 ~/.hermes。
+- **任务 1——runbook-authoring skill 重写为 v0.2**：文件
+  `~/.vigil/skills/vigil/runbook-authoring/SKILL.md`（运行时副本，开发仓库无对应
+  源——已确认 skills/ 与 optional-skills/ 均无 runbook-authoring，差异记本条目）。
+  改动：
+  - 首段 "schema v0.1" → "schema v0.2 声明式动作"，注明 v0.1 commands 格式会被
+    拒绝、仅供 overwrite 存量文件；
+  - "runbook_create 参数要点"整段替换为 v0.2 语法：顶层结构 YAML（version/kind/
+    env/triggers/clusters/steps/rollback）+ 24 动作词表 + 必填 params 表（照
+    `_ACTION_CONTRACTS`）+ 校验器规则（expect 是对象不是字符串、target 必须拓扑
+    实体、triggers/schedule 互斥、无 permission 字段）；
+  - 删掉 "SSH 命令形态" 与 commands_if_needed 等 v0.1 条目，换为"执行用
+    runbook_execute，命令由执行器生成，LLM 永不接触命令语法"；
+  - 保留触发场景、重写流程（load → topo_query → session_search → create
+    overwrite）、坑（重写保留已确认触发词）、checklist 门控；
+  - 新增"完整示例"块（指向 ops_samples 的 v0.2 样例）。
+- **任务 2——ops_samples 新增 v0.2 样例**：`hermes_cli/ops_samples/runbooks/
+  argocd-server-check-restart.yaml`（argocd-server 状态探查与恢复：query 前置 →
+  fetch_log 探查 → scale 恢复，Gatekeeper require-pod-limits 坑写进 note +
+  on_failure: stop，rollback 仅人工预案）。文件命名与 name 字段一致（校验器
+  name-filename 一致性要求；任务书草案的 `-v02` 后缀会破坏 load-by-name，故用
+  干净名）。target/cluster 对齐 ops_samples 种子拓扑（k3s-prod 集群、argocd
+  服务，样例环境实体；任务书草案的 beijing_aliyun/argocd-server 是用户真实集群，
+  样例统一用占位拓扑并在注释注明"target 需 topo_query 确认"）。任务书草案里的
+  expect 字符串形态不符合校验器（expect 必须是 {target: 检查通道, 谓词} 对象），
+  全部改为对象形态。直调 `_validate_runbook_v2` + runbook_load 通过（含引用层）。
+- **任务 3——runbook_create description 补 v0.2 完整示例**：`_DEFAULT_CREATE_SCHEMA`
+  description 末尾追加精简完整示例（name/title/version/kind/env/triggers/steps
+  restart + expect 对象 + rollback，一行 JSON 形态控制 token），并注明"target
+  必须是拓扑表实体名，先 topo_query 确认"。
+- **存量测试适配**：test_runbook_tools `test_load_list` 3 → 4 个样例（新样例进
+  rb_home 列表）；新增 `test_v02_sample_validates_against_ops_topo`（铺 ops 拓扑
+  + 服务 + v0.2 样例 → `_validate_runbook` + load 回读断言 v0.2）；OPS-VERIFY.md
+  手测脚本样例数 3 → 4。
+- **验收**：skill 无 "schema v0.1" 残留、v0.2 语法完整（顶层结构 + 动作表 +
+  示例）；样例 `_validate_runbook_v2` 直调通过；description 含 v0.2 示例；
+  pytest runbook 全家桶 + ops_init/ops_first_install 178 例全绿，宽回归 542
+  passed / 9 skipped；实测（模拟 LLM 视角：读 skill + 样例 + description → 写
+  argocd v0.2 runbook）→ runbook_create created 落盘 + runbook_load 回读
+  version:2。
+- **状态**：独立 feat commit（batch75，1 个 commit），只含 1 个样例文件 + 1 个
+  工具文件（description）+ 1 个测试文件 + OPS-VERIFY.md + OPS-DELTA.md 本条
+  登记；skill 运行时副本（~/.vigil）随本批同步，仓库无对应源故不在 commit 内。

@@ -1,0 +1,58 @@
+# argocd-server-check-restart —— 程序层：事故处理 runbook（schema v0.2，声明式动作）
+# v0.2 语法：steps 用 action+params（命令彻底消失，执行器生成命令），target 引用拓扑表实体。
+# 样例值请按实际核对：target/cluster 实体名需 topo_query 确认（本样例对齐 ops_samples
+# 拓扑：集群 k3s-prod、服务 argocd，namespace=argocd）。
+name: argocd-server-check-restart
+title: "argocd-server 状态探查与恢复（k3s-prod，含 Gatekeeper 坑）"
+version: 2
+kind: incident
+env: prod
+clusters:
+  - k3s-prod
+triggers:
+  - "argocd-server down"
+  - "argocd-server 未运行"
+  - "argocd-server 状态检查"
+  - "argocd UI 打不开"
+summary: "探查 k3s-prod 的 argocd-server（namespace=argocd）状态；未运行时 scale 恢复，含 Gatekeeper require-pod-limits 拦截处置。"
+steps:
+  - id: preflight
+    title: 前置确认（拓扑与执行位置）
+    action: query
+    params:
+      pattern: argocd
+    expect:
+      target: kubectl
+      body_contains: "argocd"
+    note: "kubectl 在 node1（control-plane）上执行，SSH 凭据见拓扑表 credential；target 需 topo_query 确认实际实体名。"
+  - id: check
+    title: 探查 argocd-server 状态
+    action: fetch_log
+    params:
+      target: argocd
+      lines: 20
+    expect:
+      target: kubectl
+      body_contains: "1/1 Running"
+    on_failure: continue
+    note: "若 replicas=0 或 CrashLoopBackOff/Pending → 继续恢复步骤。"
+  - id: restore
+    title: 恢复（replicas=0 时拉起）
+    action: scale
+    params:
+      target: argocd
+      replicas: 1
+    expect:
+      target: kubectl
+      body_contains: "1/1 Running"
+    on_failure: stop
+    note: "若 FailedCreate 报 validation.gatekeeper.sh / require-pod-limits（2026-08-24 实测）→ 先 kubectl set resources 补 limits=500m/512Mi + requests=250m/256Mi 再拉起。"
+rollback:
+  - name: rollback-main
+    steps:
+      - id: rb1
+        title: 回滚（仅人工，L3 命令 prod 矩阵拒绝自动执行）
+        action: rollback
+        params:
+          target: argocd
+    note: "kubectl rollout undo 属 L3，prod 被权限矩阵拒绝自动执行——本预案只保证命令可查、可审计。"

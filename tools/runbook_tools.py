@@ -271,6 +271,12 @@ _DEFAULT_CREATE_SCHEMA = {
         "用户说'沉淀/记录/保存为 runbook'时应调用本工具。v0.1 命令一律拒绝明文"
         "密码/token——用 <vault:path/field> 占位符（执行时从保险箱读取注入）。同名已存在需 "
         "overwrite=true 才覆盖。"
+        "v0.2 完整示例：{name: svc-restart, title: 重启服务, version: 2, kind: incident, "
+        "env: prod, triggers: [\"svc down\"], clusters: [], host_groups: [], hosts: [], "
+        "steps: [{id: s1, title: 重启, action: restart, params: {target: <拓扑实体>}, "
+        "expect: {target: kubectl, body_contains: \"1/1 Running\"}}], "
+        "rollback: [{name: rb, steps: [{id: r1, title: 回滚, action: rollback, "
+        "params: {target: <拓扑实体>}}]}]}——target 必须是拓扑表实体名，先 topo_query 确认。"
     ),
     "parameters": {
         "type": "object",

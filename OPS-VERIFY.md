@@ -150,8 +150,9 @@ VIGIL_HOME=$HOME/.vigil/profiles/ops .venv/bin/python -c \
 
 重新 `vigil -p ops chat`，依次验证：
 
-1. **列表**：问「列出可用的 runbook」。**预期**：`runbook_load` 返回 3 个——
-   `harbor-restart`、`gateway-svc-restart`（事故）+ `deploy-gateway-svc`（L4 部署 checklist）。
+1. **列表**：问「列出可用的 runbook」。**预期**：`runbook_load` 返回 4 个——
+   `harbor-restart`、`gateway-svc-restart`（事故）+ `deploy-gateway-svc`（L4 部署 checklist）
+   + `argocd-server-check-restart`（schema v0.2 声明式动作样例，batch75）。
 2. **按触发关键字加载**：说「harbor 健康检查失败，按 runbook 处理」。**预期**：agent
    加载 `harbor-restart`，按 诊断 → 重启（L2，prod 弹审批，选拒绝即可）→ 真实验证 推进。
 3. **L4 部署 checklist 阶段门**：说「按 runbook 发布 gateway-svc」。**预期**：
