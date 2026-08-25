@@ -390,6 +390,23 @@ class TestExecutionEngine:
         assert _is_local_endpoint("10.203.0.9", svc.get("host")) is False
         assert _is_local_endpoint("10.203.0.9:5003", svc.get("host")) is False
 
+    def test_remote_host_with_own_ip_endpoint_not_local(self, mhome):
+        """远端主机 endpoint == 自身 IP（host_name 同值）必须判 remote——不能因
+        endpoint==host_name 误判本地（2026-08-25 实测：阿里云 39.106.217.32
+        endpoint==host_name，旧代码 `e == host_name → local` 导致 kubectl 命令
+        在本机执行，runbook 执行器全部走错机器 "timed out waiting for the
+        condition"）。本机身份只认 hostname/网卡 IP，不认拓扑 host_name。"""
+        from tools.runbook_exec import _is_local_endpoint
+        # 远端公网 IP 作 endpoint 且 host_name 同名 → 不是本机身份 → remote
+        assert _is_local_endpoint("39.106.217.32", "39.106.217.32") is False
+        assert _is_local_endpoint("8.140.60.44", "8.140.60.44") is False
+        # 带端口形态同样判 remote
+        assert _is_local_endpoint("39.106.217.32:22", "39.106.217.32") is False
+        # 本机身份（hostname/网卡 IP/localhost）不受影响，仍判 local
+        import socket
+        assert _is_local_endpoint(socket.gethostname(), "anything") is True
+        assert _is_local_endpoint("127.0.0.1", "anything") is True
+
     def test_approval_execute_level_passes(self, mhome):
         res = execute_runbook(_rb(), home=mhome, runner=_ok_runner())
         assert res["result"] == "ok"  # t1 矩阵 local 全 execute

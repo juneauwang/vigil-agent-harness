@@ -181,8 +181,10 @@ def _is_local_endpoint(endpoint: Any, host_name: str) -> bool:
     e = str(endpoint or "").strip()
     if not e or e in ("localhost", "127.0.0.1", "::1"):
         return True
-    if e == host_name:
-        return True
+    # 只比本机身份（hostname/DNS/网卡 IP）——不能和拓扑 host_name 比！
+    # （2026-08-25 实测：阿里云主机 endpoint=39.106.217.32 == host_name，
+    # 旧代码 `e == host_name → local` 误判本地，kubectl 命令在本机跑导致
+    # "timed out waiting for the condition"，runbook 执行器全部走错机器。）
     if e in _local_host_names():
         return True
     # endpoint 带端口（host:port，如 LAPTOP-T2JA2ERE:5003）→ 剥端口再比对本机
@@ -191,8 +193,6 @@ def _is_local_endpoint(endpoint: Any, host_name: str) -> bool:
     host_part = e.rsplit(":", 1)[0] if e.rsplit(":", 1)[-1].isdigit() else e
     host_part = host_part.strip("[]")
     if host_part in ("localhost", "127.0.0.1", "::1"):
-        return True
-    if host_part == host_name:
         return True
     if host_part in _local_host_names():
         return True
