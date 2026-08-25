@@ -1424,8 +1424,10 @@ def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
     payload["checklist_state"] = _checklist_state_for(home, name) if _is_checklist_runbook(rb) else None
     if _is_v2_runbook(rb):
         payload["note"] = (
-            "v0.2 runbook（声明式动作，无命令）：执行器在 P4 实现，当前仅可创建/"
-            "校验/预览；步骤动作由执行器按 action × target 类型 × managed_by 生成命令。"
+            "v0.2 runbook（声明式动作，无命令）：执行请调 runbook_execute 工具——"
+            "执行器按 action × target 类型 × managed_by 生成命令、过矩阵审批门、"
+            "检查 expect（变更动作默认轮询等待就绪）。本工具只返回规格内容，"
+            "不要自己用 terminal 复现步骤。"
         )
     else:
         payload["note"] = (
@@ -2044,8 +2046,8 @@ def runbook_create(
             "steps": len(steps),
             "note": (
                 ("已创建/更新 runbook（schema v0.2，声明式动作，已过资产审批）。"
-                 "预审标记 approved_at/approved_by/approved_version 已落盘（P4 执行豁免）。"
-                 "执行器在 P4 实现；runbook_load 可加载。")
+                 "预审标记 approved_at/approved_by/approved_version 已落盘（定时执行豁免）。"
+                 "执行请调 runbook_execute 工具（执行器生成命令、过矩阵审批、检查 expect）。")
                 if v2_style else
                 ("已创建/更新 runbook（schema v0.1）。runbook_load 可加载；"
                  "若意图是行为约束，触发词已写入 triggers。")
