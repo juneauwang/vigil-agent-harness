@@ -735,7 +735,11 @@ def evaluate_expect(expect: Dict[str, Any], results: List[Dict[str, Any]]) -> tu
     if "body_contains" in expect:
         needle = str(expect["body_contains"])
         body = str(first.get("stdout") or "")
-        if needle not in body:
+        # kubectl 列对齐是多空格（视觉格式非内容语义）——归一化空白后匹配，
+        # 否则 body_contains "1/1 Running" 永远匹配不上真实输出
+        # "argocd-server-...   1/1     Running   0  37s"（2026-08-25 实测）。
+        norm = lambda s: " ".join(s.split())
+        if norm(needle) not in norm(body):
             return False, f"body_contains 期望包含 {needle!r}，响应体未命中（{body[:200]}）"
     contains = expect.get("contains")
     if isinstance(contains, dict):

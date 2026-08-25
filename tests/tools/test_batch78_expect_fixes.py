@@ -182,6 +182,10 @@ def test_evaluate_pod_vs_deployment_semantics():
     pod = [{"exit_code": 0,
             "stdout": "argocd-server-86678dcc97-n5cfx 1/1 Running 0 37s"}]
     assert rh.evaluate_expect({"body_contains": "1/1 Running"}, pod)[0] is True
+    # 真实 kubectl 输出是多空格对齐列（视觉格式）——归一化后仍命中（batch78 补丁）
+    real_pod = [{"exit_code": 0,
+                 "stdout": "argocd-server-86678dcc97-n5cfx   1/1     Running   0     37s     10.42.1.2   node1"}]
+    assert rh.evaluate_expect({"body_contains": "1/1 Running"}, real_pod)[0] is True
     dep = [{"exit_code": 0, "stdout": "argocd-server 1/1 1 1 22d"}]
     assert rh.evaluate_expect({"body_contains": "1/1 Running"}, dep)[0] is False
     assert rh.evaluate_expect({"body_contains": "1/1"}, dep)[0] is True
