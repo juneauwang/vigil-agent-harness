@@ -442,24 +442,34 @@ def substitute_params(params: Any, step_values: Dict[str, Dict[str, Any]],
 # 审批门（§11.1/11.5）
 # ---------------------------------------------------------------------------
 
-def _step_approval(home: Path, env: str, action: str, desc: str) -> Optional[str]:
+def _step_approval(home: Path, env: str, action: str, desc: str,
+                   *, force_confirmation: bool = False) -> Optional[str]:
     """交互执行审批门：矩阵档位 execute → 放行；approve → 审批；required →
-    强制人工（覆盖 approvals.mode，无 allowlist）。返回 None = 放行。"""
+    强制人工（覆盖 approvals.mode，无 allowlist）。
+
+    ``force_confirmation=True``（batch78，OPS-DELTA #93）：回滚步骤强制人工
+    确认——即使矩阵档位是 execute（非 required）也要求确认，覆盖
+    approvals.mode=smart 的自动批准；require_confirmation 语义 = 不提供
+    session/永久 allowlist，每次都弹人工确认。返回 None = 放行。
+    """
     from tools.approval import request_ops_approval
     from tools.matrix_data import get_level, load_matrix_or_empty
     level = get_level(load_matrix_or_empty(home), env, action)["level"]
-    if level == "execute":
+    if level == "execute" and not force_confirmation:
         return None
     required = level == "required"
+    confirmed = required or bool(force_confirmation)
     decision = {
         "action": "approve",
         "grade": "L4" if required else "L2",
         "env": env,
-        "require_confirmation": required,
+        "require_confirmation": confirmed,
         "description": (
             f"操作矩阵 {action}@{env} 档位"
             + ("=强制人工（{approve: required}，不 smart 不 allowlist）"
-               if required else "=approve（交互审批）")
+               if required else
+               ("=execute（回滚步骤强制人工确认覆盖）"
+                if force_confirmation else "=approve（交互审批）"))
         ),
     }
     res = request_ops_approval(desc or action, decision)
@@ -770,7 +780,8 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
     entry = _run_one_step_impl(step, env=env, home=home, step_values=step_values,
                                trigger_ctx=trigger_ctx, runner=runner,
                                approve=approve, where=where, scope=scope,
-                               scheduled=scheduled, exec_id=exec_id, depth=depth)
+                               phase=phase, scheduled=scheduled,
+                               exec_id=exec_id, depth=depth)
     if emit is not None:
         emit("step_done" if entry.get("ok") else "step_failed", {
             "step_id": step_id,
@@ -804,6 +815,47 @@ def _runbook_targets(data: Dict[str, Any]) -> Set[str]:
     return targets
 
 
+# ---------------------------------------------------------------------------
+# expect 轮询策略（batch78，OPS-DELTA #93）
+# ---------------------------------------------------------------------------
+
+# 变更类动作：默认轮询等待就绪（2 分钟窗口——scale 后 pod 还在
+# ContainerCreating/拉镜像/过 readiness，kubectl rollout status --timeout 同理）。
+_EXPECT_CHANGE_ACTIONS = frozenset({
+    "start", "stop", "restart", "reload", "enable", "disable", "reboot",
+    "shutdown", "deploy", "rollback", "scale", "decommission", "backup",
+    "restore", "install", "upgrade", "remove",
+})
+# 只读类动作：默认单次（快查，失败即失败——fetch_log 拿到的日志不因等待而变）。
+_EXPECT_READONLY_ACTIONS = frozenset({
+    "query", "fetch_log", "verify", "transfer_file", "run_script",
+    "apply_config", "runbook",
+})
+_EXPECT_CHANGE_RETRY = (12, 10)   # attempts, interval(s)
+_EXPECT_SINGLE_RETRY = (1, 0)
+
+
+def _expect_retry_policy(action: str, expect: Dict[str, Any]) -> tuple:
+    """expect 轮询策略：显式 retry 覆盖 > 动作类别默认 > 单次。
+
+    ``expect.retry: {attempts, interval}`` → 按声明；``expect.retry: false``
+    → 单次（关闭轮询）；缺省 → 变更类 12×10s、只读类单次。
+    """
+    retry = expect.get("retry")
+    if retry is False:
+        return _EXPECT_SINGLE_RETRY
+    if isinstance(retry, dict):
+        try:
+            attempts = int(retry.get("attempts") or 0)
+            interval = int(retry.get("interval") or 0)
+        except (TypeError, ValueError):
+            return _EXPECT_SINGLE_RETRY
+        return max(1, attempts), max(0, interval)
+    if action in _EXPECT_CHANGE_ACTIONS:
+        return _EXPECT_CHANGE_RETRY
+    return _EXPECT_SINGLE_RETRY
+
+
 def _step_target_label(step: Dict[str, Any],
                        entry: Optional[Dict[str, Any]] = None) -> str:
     """步骤 target 展示：优先已解析实体名（name），否则原始 params.target。"""
@@ -832,9 +884,10 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                        step_values: Dict[str, Dict[str, Any]],
                        trigger_ctx: Dict[str, Any],
                        runner: Callable[[Dict[str, Any], Dict[str, Any]], Dict[str, Any]],
-                       approve: Callable[[str, str, str], Optional[str]],
+                       approve: Callable[..., Optional[str]],
                        where: str,
                        scope: Optional[Dict[str, Any]] = None,
+                       phase: str = "runbook",
                        scheduled: bool = False,
                        exec_id: Optional[str] = None,
                        depth: int = 0) -> Dict[str, Any]:
@@ -868,7 +921,22 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
             entry["target"] = {"name": target.get("name"), "type": target.get("type"),
                                "env": target.get("env"), "host": target.get("host"),
                                "managed_by": target.get("managed_by")}
-        approve_err = approve(env, action, f"{ctx} {action} {params.get('target', '')}")
+        # 审批门（batch78，OPS-DELTA #93）：rollback 场景步骤强制人工确认——
+        # 防用户对"恢复性"操作惯性批准（rollout undo 是 L3 高风险操作，实证
+        # expect 误判触发回滚且被批准）。desc 加 ⚠ 回滚前缀 + force_confirmation
+        # 覆盖 approvals.mode=smart 自动批准；scheduled 豁免语义不变（_approve
+        # 在 scheduled 下直接放行，force 不生效）。
+        approve_desc = f"{ctx} {action} {params.get('target', '')}"
+        force_confirmation = False
+        if phase == "rollback":
+            scene = ""
+            m = re.match(r"rollback\[([^\]]*)\]", where or "")
+            if m:
+                scene = m.group(1)
+            approve_desc = f"⚠ 回滚（rollback 场景 {scene or '（默认）'}）: {approve_desc}"
+            force_confirmation = True
+        approve_err = approve(env, action, approve_desc,
+                              force_confirmation=force_confirmation)
         if approve_err:
             entry.update({"status": "blocked", "ok": False, "error": approve_err})
             return entry
@@ -891,17 +959,38 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                                    4000),
                 })
                 return entry
-        # expect（§10.3）：声明式检查 + 断言
+        # expect（§10.3）：声明式检查 + 断言。batch78（OPS-DELTA #93）：默认
+        # 轮询——变更类动作（scale/restart/…）等待就绪（12×10s 窗口），只读类
+        # 动作单次快查；expect.retry 显式覆盖（{attempts, interval} / false）。
+        # 轮询只加等待不改命令内容；失败仍 fail-closed（最后一次结果入 error）。
         expect = step.get("expect")
         if expect:
             expect_specs = generate_expect_check(expect, target)
-            check_results = [runner(s, target) for s in expect_specs]
-            ok, detail = evaluate_expect(expect, check_results)
+            attempts, interval = _expect_retry_policy(action, expect)
+            check_results: List[Dict[str, Any]] = []
+            ok, detail = False, ""
+            for attempt in range(1, attempts + 1):
+                check_results = [runner(s, target) for s in expect_specs]
+                ok, detail = evaluate_expect(expect, check_results)
+                if ok:
+                    detail = f"第 {attempt}/{attempts} 次尝试通过: {detail}"
+                    break
+                if attempt < attempts:
+                    time.sleep(interval)
             detail = _clip(detail or "", 2000)
-            entry["expect"] = {"ok": ok, "detail": detail}
+            entry["expect"] = {
+                "ok": ok,
+                "detail": detail,
+                "attempts": attempt,
+                "retry": {"attempts": attempts, "interval": interval},
+            }
             if not ok:
-                entry.update({"status": "failed", "ok": False,
-                              "error": _clip(f"expect 未通过: {detail}", 4000)})
+                entry.update({
+                    "status": "failed", "ok": False,
+                    "error": _clip(
+                        f"expect 未通过（{attempts} 次尝试均失败，"
+                        f"最后一次: {detail}）", 4000),
+                })
                 return entry
         entry["status"] = "ok"
         entry["ok"] = True
@@ -1440,10 +1529,12 @@ def execute_runbook(
                 return runner(spec, target)
             return _run_spec(home, target, spec)
 
-        def _approve(step_env: str, action: str, desc: str) -> Optional[str]:
+        def _approve(step_env: str, action: str, desc: str,
+                     *, force_confirmation: bool = False) -> Optional[str]:
             if scheduled:
                 return None  # 定时豁免：已预审 runbook 跳过逐次审批（§11.4）
-            return _step_approval(home, step_env, action, desc)
+            return _step_approval(home, step_env, action, desc,
+                                  force_confirmation=force_confirmation)
 
         step_values: Dict[str, Dict[str, Any]] = {}
         t0 = time.time()

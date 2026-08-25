@@ -299,14 +299,22 @@ class TestExecutionEngine:
         res = execute_runbook(v1, home=mhome, runner=_ok_runner())
         assert res["result"] == "error" and "v0.1" in res["error"]
 
-    def test_variable_substitution_cross_step(self, mhome):
+    def test_variable_substitution_cross_step(self, mhome, monkeypatch):
         data = _rb()
         data["rollback"][0]["steps"][0]["params"]["from"] = "{{ steps.backup.params.dest }}"
         def bad_apply(spec, target):
             if "sed" in json.dumps(spec):
                 return {"exit_code": 1, "stdout": "", "stderr": "sed failed"}
             return {"exit_code": 0, "stdout": "200", "stderr": ""}
-        res = execute_runbook(data, home=mhome, runner=bad_apply)
+        # batch78（OPS-DELTA #93）：回滚步骤强制人工确认——测试走审批回调放行。
+        monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
+        from tools import terminal_tool
+        terminal_tool.set_approval_callback(
+            lambda command, description, **k: "once")
+        try:
+            res = execute_runbook(data, home=mhome, runner=bad_apply)
+        finally:
+            terminal_tool.set_approval_callback(None)
         rb_step = res["steps"][-1]["steps"][0]
         assert res["result"] == "rolled_back"
         assert rb_step["params"]["from"] == "/backup/nginx/config/latest"
@@ -429,14 +437,22 @@ class TestExecutionEngine:
         assert res["result"] == "failed"
         assert [s["status"] for s in res["steps"]] == ["failed", "failed"]
 
-    def test_on_failure_rollback_terminates(self, mhome):
+    def test_on_failure_rollback_terminates(self, mhome, monkeypatch):
         calls = []
         def bad_apply(spec, target):
             calls.append(spec)
             if "sed" in json.dumps(spec):
                 return {"exit_code": 1, "stdout": "", "stderr": "sed failed"}
             return {"exit_code": 0, "stdout": "200", "stderr": ""}
-        res = execute_runbook(_rb(), home=mhome, runner=bad_apply)
+        # batch78（OPS-DELTA #93）：回滚步骤强制人工确认——测试走审批回调放行。
+        monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
+        from tools import terminal_tool
+        terminal_tool.set_approval_callback(
+            lambda command, description, **k: "once")
+        try:
+            res = execute_runbook(_rb(), home=mhome, runner=bad_apply)
+        finally:
+            terminal_tool.set_approval_callback(None)
         assert res["result"] == "rolled_back" and res["rolled_back"] is True
         rb_block = res["steps"][-1]
         assert rb_block["id"] == "__rollback__" and rb_block["steps"][0]["id"] == "rb-restore"

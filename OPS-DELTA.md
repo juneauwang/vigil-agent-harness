@@ -4683,3 +4683,80 @@
 - **状态**：独立 feat commit（batch76，1 个 commit），只含 2 个工具文件 + 2 个新
   测试文件 + OPS-DELTA.md 本条登记；skill 运行时副本（~/.vigil）随本批同步，仓库
   无对应源故不在 commit 内。
+
+### 93. 执行器 expect 检查四修——通道语义 / 默认轮询 / 显式覆盖 / rollback 审批强化（2026-08-25，batch78）
+
+- **背景**（2026-08-25 实测，runbook_execute 真实执行 argocd-full-stack-recovery）：
+  执行器跑通（7 个审批门、远端 kubectl 触达），但 expect 检查连环误判：
+  - ① 通道语义错：expect `{target: kubectl, body_contains: "1/1 Running"}` 生成的
+    检查命令是 `kubectl get deployment/<obj> -o wide`——deployment 的 READY 列
+    格式是 "1/1 1 1"（ready/up-to-date/available），不是 "1/1 Running"（那是 pod
+    格式）。任何 runbook 写 "1/1 Running" 配默认 kind 都必失败。
+  - ② 零重试：expect 检查只跑一次，失败立即 failed——scale 后 pod 还在
+    ContainerCreating/拉镜像/过 readiness 就判失败（kubectl rollout status 有
+    --timeout=120s 就是为这个）。
+  - ③ 误判触发回滚：restore-server 的 expect 误判失败 → on_failure
+    {rollback: rollback-all} → rollout undo 真执行（prod！）。审批弹窗虽标了
+    rollback[...] 前缀，但用户惯性批准"恢复性"操作——回滚步骤的审批强度与正常
+    步骤相同，未区分。
+- **任务 1——kubectl 检查通道默认查 pod（`tools/runbook_handlers.py`）**：
+  `generate_expect_check` 的 kubectl 分支默认 kind 改 **pod**（"1/1 Running" 是
+  pod 语义，pod 状态是最终真相）；命令按 kind 区分：pod（默认）→
+  `kubectl {ns}get pods -l app={obj} -o wide`（pod 名带随机后缀，按 label 查）、
+  deployment → `get deployment/{obj} -o wide`（保持现状）、statefulset/sts →
+  `get sts/{obj} -o wide`、其他 kind → UnsupportedCommand 报错引导
+  （可用值: pod/deployment/statefulset）。
+- **任务 2——expect 默认轮询 + 显式覆盖（`tools/runbook_exec.py`）**：
+  `_run_one_step_impl` 的 expect 段加轮询：变更类动作
+  （start/stop/restart/reload/enable/disable/reboot/shutdown/deploy/rollback/
+  scale/decommission/backup/restore/install/upgrade/remove）默认
+  attempts=12×interval=10（2 分钟窗口，幂等等待就绪）；只读类动作
+  （query/fetch_log/verify/transfer_file/run_script/apply_config/runbook）默认
+  单次快查。`expect.retry: {attempts, interval}` 显式覆盖（优先级高于默认）；
+  `expect.retry: false` 关闭轮询；缺省按动作类别。每次结果记录
+  （expect.attempts + detail 注明"第 N/M 次尝试通过"）；全败 →
+  status=failed + error 含"N 次尝试均失败，最后一次: ..."。轮询只加等待不改
+  命令内容；失败仍 fail-closed。sleep 用 time.sleep（同步路径，交互可中断）。
+- **任务 3——rollback 步骤审批强化（`tools/runbook_exec.py`）**：
+  防用户对"恢复性"操作惯性批准（rollout undo 是 L3 高风险操作，实证 expect
+  误判触发 undo 且被批准）。`_run_one_step_impl` 加 phase 参数：phase=="rollback"
+  时 desc 前缀加 `"⚠ 回滚（rollback 场景 {name}）: "` 并传
+  force_confirmation=True；`_step_approval` 增加 `force_confirmation` 参数
+  （True 时 decision["require_confirmation"]=True，无视矩阵档位，覆盖
+  approvals.mode=smart 的自动批准；require_confirmation 语义 = 不提供
+  session/永久 allowlist，每次都弹人工确认）。rollback 场景执行路径
+  （_run_rollback_scenario 传 phase="rollback"）自动带 force，不用 runbook 声明。
+  scheduled 豁免语义不变：核实 _run_steps_loop 在 scheduled 下同样会回滚，
+  但 _approve 的 scheduled 短路先于 force 生效——仅交互路径加强，定时路径仍
+  走资产审批豁免。
+- **任务 4——argocd-full-stack-recovery 用例同步（`~/.vigil/runbooks/` 运行时
+  数据，仓库无对应源）**：preflight/check-server/check-repo/check-controller/
+  restore-server 的 expect 全部显式加 `kind: pod`（不依赖默认值，语义清晰）；
+  restore-server 加 `retry: {attempts: 12, interval: 10}`（scale 后 pod 拉起
+  要时间，显式声明）。
+- **新测试**（tests/tools/test_batch78_expect_fixes.py，15 例，四组）：
+  ① 通道语义——无 kind → `get pods -l app=`、deployment/sts 命令、bogus kind
+  拒绝、evaluate 的 pod/deployment 语义差异（"1/1 Running" 命中 pod 输出、
+  不命中 deployment "1/1 1 1"）；② 轮询——变更类默认轮询第 4 次通过
+  （attempts=4，retry 12×10）、只读类单次、retry 显式封顶 2 次、retry:false
+  关轮询、全败报"3 次尝试均失败，最后一次"；③ 回滚审批——rollback 步骤
+  request_ops_approval 收到 require_confirmation=True + desc 含 ⚠ 回滚、
+  正常步骤 approve 档位不强制、force 覆盖 execute 档位、scheduled 仍豁免；
+  ④ 用例——restore-server 语义（kind=pod + retry 12×10，
+  ContainerCreating→Running 序列）不再误判回滚。
+- **存量测试适配**：回滚步骤强制审批是有意行为变更——test_runbook_exec 的
+  `test_variable_substitution_cross_step` / `test_on_failure_rollback_terminates`
+  与 test_batch73_yapl_stage_c 的 `test_sub_failure_child_on_failure_first` /
+  `test_parent_rollback_linkage` 原假设回滚步骤免审批执行，改为走审批回调放行
+  （VIGIL_INTERACTIVE=1 + approval_callback "once"），断言语义不变。
+- **验收**：test_batch78_expect_fixes.py 15 例全绿；回归 runbook 全家桶
+  （test_runbook_*.py + batch73/76/78）186 passed 零回归；实测
+  generate_expect_check(kubectl, "1/1 Running") → `get pods -l app=` 查 pod、
+  mock 轮询第 4 次通过 expect ok、rollback 场景审批 require_confirmation=True；
+  E2E 加载真实 argocd-full-stack-recovery.yaml（temp VIGIL_HOME + prod 矩阵
+  execute + mock runner 模拟 ContainerCreating→Running）→ 5 个 expect 全走
+  pod 通道、restore-server 第 4 次尝试通过、result ok 不触发回滚。
+- **状态**：独立 feat commit（batch78，1 个 commit），只含 2 个工具文件 + 2 个
+  存量测试文件适配 + 1 个新测试文件 + OPS-DELTA.md 本条登记；runbook 用例
+  （~/.vigil/runbooks/argocd-full-stack-recovery.yaml）随本批同步，仓库无对应
+  源故不在 commit 内。

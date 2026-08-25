@@ -653,11 +653,29 @@ def generate_expect_check(expect: Dict[str, Any],
         return checks
     if channel == "kubectl":
         obj = str(expect.get("object") or target.get("name") or "")
-        kind = str(expect.get("kind") or "deployment")
-        checks.append({"cmd": f"kubectl {_kube_ns(target)}get {_q(kind)}/{_q(obj)} "
-                              f"-o wide", "shell": False, "sudo": False,
-                       "desc": f"kubectl get {kind}/{obj}"})
-        return checks
+        kind = str(expect.get("kind") or "pod")
+        if kind == "pod":
+            # 默认查 pod（batch78，OPS-DELTA #93）：pod 名带随机后缀
+            # （argocd-server-86678dcc97-n5cfx），不能 get pod/<name>——按
+            # label app=<name> 查；"1/1 Running" 是 pod 状态语义（READY/RUNNING
+            # 两列），deployment 的 READY 列是 "1/1 1 1"（ready/up-to-date/
+            # available），语义不同。
+            checks.append({"cmd": f"kubectl {_kube_ns(target)}get pods "
+                                  f"-l app={_q(obj)} -o wide",
+                           "shell": False, "sudo": False,
+                           "desc": f"kubectl get pods -l app={obj}"})
+            return checks
+        if kind in ("deployment", "statefulset", "sts"):
+            token = "sts" if kind in ("statefulset", "sts") else "deployment"
+            checks.append({"cmd": f"kubectl {_kube_ns(target)}get "
+                                  f"{token}/{_q(obj)} -o wide",
+                           "shell": False, "sudo": False,
+                           "desc": f"kubectl get {token}/{obj}"})
+            return checks
+        raise UnsupportedCommand(
+            f"expect.kind={kind!r} 未覆盖——kubectl 检查通道支持 "
+            "pod/deployment/statefulset(sts)"
+        )
     if channel == "pm2":
         obj = str(expect.get("object") or target.get("name") or "")
         checks.append({"cmd": f"pm2 describe {_q(obj)}", "shell": False,

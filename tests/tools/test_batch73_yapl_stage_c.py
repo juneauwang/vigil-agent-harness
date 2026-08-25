@@ -372,7 +372,7 @@ class TestExecutorNested:
         assert "BLOCKED" in res["steps"][0]["error"] or "denied" in res["steps"][0]["error"]
         assert denied
 
-    def test_sub_failure_child_on_failure_first(self, stage_home):
+    def test_sub_failure_child_on_failure_first(self, stage_home, monkeypatch):
         # 子失败：子的 on_failure（rollback）先生效——子自己回滚；子最终失败 →
         # 父引用步骤视为失败 → 父 on_failure stop → 父 failed（父不回滚父步骤）。
         _write_rb(stage_home, {"name": "child", "title": "Child", "version": 2,
@@ -396,7 +396,14 @@ class TestExecutorNested:
             if "boom" in json.dumps(spec):
                 return {"exit_code": 1, "stdout": "", "stderr": "boom"}
             return {"exit_code": 0, "stdout": "ok", "stderr": ""}
-        res = execute_runbook(parent, home=stage_home, runner=_selective)
+        # batch78（OPS-DELTA #93）：回滚步骤强制人工确认——测试走审批回调放行。
+        monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
+        terminal_tool.set_approval_callback(
+            lambda command, description, **k: "once")
+        try:
+            res = execute_runbook(parent, home=stage_home, runner=_selective)
+        finally:
+            terminal_tool.set_approval_callback(None)
         assert res["result"] == "failed"
         rb_step = res["steps"][1]
         assert rb_step["status"] == "failed"
@@ -409,7 +416,7 @@ class TestExecutorNested:
         # 父 stop：p2 不执行
         assert "p2" not in [s["id"] for s in res["steps"]]
 
-    def test_parent_rollback_linkage(self, stage_home):
+    def test_parent_rollback_linkage(self, stage_home, monkeypatch):
         # 父 on_failure: rollback → 子失败后父引用步骤失败 → 父自己的 rollback
         # 场景处理父已完成的其他步骤（子已完成步骤由子自己的回滚处理）。
         _write_rb(stage_home, {"name": "child", "title": "Child", "version": 2,
@@ -428,7 +435,14 @@ class TestExecutorNested:
             if "boom" in json.dumps(spec):
                 return {"exit_code": 1, "stdout": "", "stderr": "boom"}
             return {"exit_code": 0, "stdout": "ok", "stderr": ""}
-        res = execute_runbook(parent, home=stage_home, runner=_selective)
+        # batch78（OPS-DELTA #93）：回滚步骤强制人工确认——测试走审批回调放行。
+        monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
+        terminal_tool.set_approval_callback(
+            lambda command, description, **k: "once")
+        try:
+            res = execute_runbook(parent, home=stage_home, runner=_selective)
+        finally:
+            terminal_tool.set_approval_callback(None)
         assert res["result"] == "rolled_back"
         assert res["rolled_back"] is True
         last = res["steps"][-1]
