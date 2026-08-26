@@ -20,6 +20,10 @@ matrix.yaml——双矩阵统一）。本模块保留被其他模块引用的环
 - execute → 返回 None（交回原有检查，直接执行）；approve → 返回
   {"action": "approve", ...} 走现有审批门（approvals.mode smart/manual）；
   {approve: required} → require_confirmation=True 强制人工（覆盖 mode）。
+- batch80（OPS-DELTA #95）执行器绕行后门收口：prod 环境 + 变更类动作
+  （非只读）→ 强制 require_confirmation=True（覆盖 smart 自动批），防 LLM
+  回退 terminal 用裸命令绕过 runbook 执行器矩阵裁决；unknown/只读/非 prod
+  不额外强制（行为边界见 check_ops_command_permission）。
 - 动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
 - 动作漏配（矩阵没配该 action×env）→ get_level 默认 approve（保守）。
 
@@ -203,6 +207,38 @@ def _active_role() -> str:
     return str(config.get("role") or _active_env() or "").strip().lower()
 
 
+# batch80（OPS-DELTA #95）：prod 变更强制人工确认的动作集合。与 runbook 执行器
+# （tools/runbook_exec.py）的 _EXPECT_CHANGE_ACTIONS 同款"变更 vs 只读"划分，
+# 另把 apply_config / runbook 也纳入——prod 语义里改配置与嵌套 runbook 同样是
+# 变更。unknown 不在集合内 → 不强制（识别不出可能是 ls/echo 等无害命令被误判）。
+_MUTATING_ACTIONS: frozenset = frozenset({
+    "start", "stop", "restart", "reload", "enable", "disable", "reboot",
+    "shutdown", "deploy", "rollback", "scale", "decommission", "backup",
+    "restore", "apply_config", "install", "upgrade", "remove", "runbook",
+})
+
+
+def _is_mutating_action(action_name: str) -> bool:
+    """变更类动作判定（prod 强制人工门用）：动作词表内 → True。
+
+    只读（query/fetch_log/verify/transfer_file/run_script）不在集合内；
+    unknown 不在集合内 → False（不误伤无害命令）。
+    """
+    return str(action_name or "").strip() in _MUTATING_ACTIONS
+
+
+def _is_prod_env(env: str) -> bool:
+    """prod 档位判定（batch80 强制人工门用）：档位映射 == prod。
+
+    复用 _map_env_tier（uat→prod 等老自定义名同样视为 prod——权限语义不放松，
+    与 env_tier 计算同款）。
+    """
+    try:
+        return _map_env_tier(env, _load_ops_config()) == "prod"
+    except Exception:
+        return False
+
+
 def _matrix_env_for(env: str, matrix_data: Dict[str, Any]) -> str:
     """矩阵 env 名解析：精确名优先；未配置 → 档位映射名（uat→prod、staging→dev、
     老自定义名按 isolation/role 推导——更严不更松）；仍无 → 原样返回（get_level
@@ -221,20 +257,26 @@ def _matrix_env_for(env: str, matrix_data: Dict[str, Any]) -> str:
 
 def _matrix_description(command: str, action_name: str, level: str, env: str,
                         primary: Dict[str, Any],
-                        classification: Dict[str, Any]) -> str:
+                        classification: Dict[str, Any],
+                        prod_hardgate: bool = False) -> str:
     """审批展示文案：动作 × env 档位 / unknown 保守提示 / 链式取保守说明。"""
     from tools import matrix_data as _md
     chain = classification.get("chain") or None
-    if action_name == "unknown":
+    if level == _md.LEVEL_REQUIRED:
+        desc = (
+            f"⚠ 操作矩阵强制人工确认（{action_name} × {env} = "
+            "{approve: required}，覆盖 approvals.mode）"
+        )
+    elif prod_hardgate:
+        desc = (
+            f"⚠ prod 变更强制人工确认（{action_name} × {env}）：terminal 裸命令"
+            "不得绕过 runbook 执行器矩阵裁决（OPS-DELTA #95）"
+        )
+    elif action_name == "unknown":
         desc = (
             f"⚠ 未能识别命令意图（unknown）：{command} 不在操作分类规则表内，"
             "矩阵漏配 → 按保守审批处理（默认 approve 走审批门）；"
             "可在 OPS-DELTA 登记新规则。"
-        )
-    elif level == _md.LEVEL_REQUIRED:
-        desc = (
-            f"⚠ 操作矩阵强制人工确认（{action_name} × {env} = "
-            "{approve: required}，覆盖 approvals.mode）"
         )
     else:
         desc = f"操作矩阵 {action_name} × {env} 判定为需要审批（approve）"
@@ -265,6 +307,9 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
       execute → 返回 None（交回原有检查，直接执行）；
       approve → 返回 {"action": "approve", ...} 走现有审批门（smart/manual）；
       {approve: required} → require_confirmation=True 强制人工（覆盖 mode）。
+      prod 环境 + 变更类动作（非只读）→ 额外强制 require_confirmation=True
+      （batch80，OPS-DELTA #95：执行器绕行后门收口——execute/approve 档位在
+      prod 变更时也升到人工确认，覆盖 smart 自动批）。
     动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
 
     Args:
@@ -330,12 +375,27 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
             best = (weight, level, action, cand)
     _weight, level, action_name, primary = best
 
-    if level == _md.LEVEL_EXECUTE:
+    # batch80（OPS-DELTA #95）：执行器绕行后门收口——prod 环境 + 变更类动作
+    # （非只读）→ 强制人工确认（require_confirmation=True 覆盖 smart 自动批，
+    # approval.py 的 _ops_confirmation_required 机制现成）。防 LLM 回退
+    # terminal 用裸命令绕过 runbook 执行器矩阵裁决（2026-08-26 实证：kubectl
+    # scale / set resources 不在黑名单 → smart 自动批 = 矩阵后门）。
+    # 行为边界：非 prod 完全不变（execute 放行、approve 走 smart）；prod +
+    # 只读动作不变（诊断不阻）；unknown 不强制（无害命令不误伤）；矩阵已
+    # {approve: required} 保持。只把"prod + 变更"从 smart 升到人工，不放松
+    # 任何现有门。
+    env_tier = _map_env_tier(env, _load_ops_config())
+    prod_change_hardgate = env_tier == "prod" and _is_mutating_action(action_name)
+
+    if level == _md.LEVEL_EXECUTE and not prod_change_hardgate:
         return None  # 直接执行（交回原有检查）
 
     require_confirmation = level == _md.LEVEL_REQUIRED
+    if not require_confirmation:
+        require_confirmation = prod_change_hardgate
     description = _matrix_description(
         command, action_name, level, env, primary, classification,
+        prod_hardgate=prod_change_hardgate,
     )
     return {
         "action": "approve",
@@ -343,7 +403,7 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         "rule": str(primary.get("rule") or "").strip() or None,
         "note": str(primary.get("note") or "").strip() or None,
         "env": env,
-        "env_tier": _map_env_tier(env, _load_ops_config()),
+        "env_tier": env_tier,
         "role": _active_role(),
         "level": level,
         "require_confirmation": require_confirmation,

@@ -41,7 +41,7 @@ def _write_matrix(home, matrix: dict) -> None:
 @pytest.fixture
 def tmatrix(tmp_path, monkeypatch):
     """隔离 VIGIL_HOME + config（env + approvals.mode）+ 定制矩阵。"""
-    approval_module.set_current_session_key(SESSION)
+    _session_token = approval_module.set_current_session_key(SESSION)
 
     def _activate(env="prod", *, mode="manual", matrix=None, extra_cfg=""):
         if matrix is None:
@@ -67,6 +67,7 @@ def tmatrix(tmp_path, monkeypatch):
     hc._LOAD_CONFIG_CACHE.clear()
     approval_module.clear_session(SESSION)
     approval_module._permanent_approved.clear()
+    approval_module.reset_current_session_key(_session_token)
     from tools import ops_permissions as _op
     _op._WARNED_ENVS.clear()
 
@@ -117,8 +118,13 @@ def test_pipe_query_passes_directly(tmatrix):
 
 
 def test_approve_level_rides_smart_approval(tmatrix, monkeypatch):
-    """矩阵 approve（restart × prod）→ smart 判 approve 可自动放行（非 required）。"""
-    tmatrix("prod", mode="smart")
+    """矩阵 approve 档 → smart 判 approve 可自动放行（非 required）。
+
+    batch80（OPS-DELTA #95）起 prod 变更动作一律强制人工（见
+    test_batch80_prod_change_hardgate），approve 档 smart 自动放行语义在非 prod
+    （dev）验证。
+    """
+    tmatrix("dev", mode="smart")
     _ask_env(monkeypatch)
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
@@ -238,8 +244,12 @@ def test_ansible_inventory_guard_still_blocks_before_matrix(tmatrix):
 
 
 def test_chain_takes_strictest_matrix_level(tmatrix, monkeypatch):
-    """链式取保守：query(execute) && restart(approve) → 按 restart 走审批。"""
-    tmatrix("prod", mode="smart")
+    """链式取保守：query(execute) && restart(approve) → 按 restart 走审批。
+
+    batch80 起 prod 变更动作强制人工，approve 档 smart 自动放行的链式语义在
+    dev 验证；prod 验证 required 覆盖 smart（不变）。
+    """
+    tmatrix("dev", mode="smart")
     _ask_env(monkeypatch)
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
     result = approval_module.check_all_command_guards(

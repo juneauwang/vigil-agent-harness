@@ -4833,3 +4833,63 @@
   tests/tools/test_batch79_rollback_safe.py + OPS-DELTA.md 本条登记；runbook
   用例与 skill（~/.vigil/runbooks、~/.vigil/skills）随本批同步，仓库无对应源
   故不在 commit 内。
+
+### 95. terminal prod 变更强制人工审批——执行器绕行后门收口（2026-08-25/26，batch80）
+
+- **背景**（用户定案，todo -4）：runbook/生成器失败后 LLM 回退 terminal 裸命令，
+  terminal 是黑名单模式（hardline/tirith/审批门）无动作白名单——新增风险命令
+  （kubectl delete namespace / set resources 等）不在黑名单即放行（smart 可自动
+  批），等于执行器矩阵的后门。实证（2026-08-26）：LLM 手动恢复 argocd 时
+  `kubectl scale` + `kubectl set resources` 均通过 terminal 审批（不在黑名单 +
+  smart 自动批）——但这类操作本应是 runbook 动作（scale 是白名单动作），回退后
+  绕过了"该动作在 prod 该不该做"的矩阵裁决。三层修法：① 软约束 skill 已加
+  （batch77 ✅）；② 代码：terminal 对 prod 变更类命令强制人工审批（本次）；
+  ③ 架构级：terminal 检测命令命中 runbook 注册表 → 拒绝并引导 runbook_execute
+  （远期）。
+- **任务——ops_permissions prod 变更强制人工（`tools/ops_permissions.py`）**：
+  `check_ops_command_permission` 在 require_confirmation 计算处加一层：prod 档位
+  （`_map_env_tier == "prod"`，uat→prod 老名同款）**且** 变更类动作
+  （`_is_mutating_action`，与 runbook_exec 的 `_EXPECT_CHANGE_ACTIONS` 同款
+  "变更 vs 只读"划分，另把 apply_config/runbook 也纳入——prod 语义里改配置与
+  嵌套 runbook 同样是变更）→ `require_confirmation=True`（覆盖 approvals.mode
+  smart 自动批，approval.py 的 `_ops_confirmation_required` 机制现成：smart 判
+  approve 也降级为人工确认）。矩阵 execute 档在 prod 变更时也不再直接放行——
+  返回 approve 决策（level 如实保留 execute，硬门在 require_confirmation 字段）。
+  审批文案区分：required 档 / prod 变更硬门 / unknown / 普通 approve 四种。
+- **行为边界（防误伤）**：非 prod（local/test/dev）完全不变——execute 放行、
+  approve 走 smart；prod + 只读动作（query/fetch_log/verify/transfer_file/
+  run_script）不变——诊断不阻；unknown 动作不强制（可能是 ls/echo 等无害命令
+  被误判）；矩阵已 {approve: required} 保持；矩阵未初始化路径 prod 档原本就
+  门控，保持。只把"prod + 变更"从 smart 升到人工，不放松任何现有门（undo 等
+  无条件层顺序不动）。
+- **新测试**（tests/tools/test_batch80_prod_change_hardgate.py，10 例）：
+  ① 单元——prod+scale（矩阵 execute 档）→ require_confirmation=True 且
+  level=execute、prod+restart（approve 档）→ True、prod+query / fetch_log
+  （只读）→ False、dev/test+scale → False（非 prod 不变）、prod+unknown →
+  False、prod+scale 矩阵 required → True（原有语义）、prod 变更矩阵漏配默认
+  approve → 仍强制（漏配不放松）、prod 只读矩阵 execute → 仍直接放行（None）；
+  ② E2E——approval 门收到 require_confirmation=True 的 prod 变更 → smart
+  approve 被降级为人工（mock _smart_approve 返回 approve 不自动放行，走 CLI
+  人工回调 user_approved=True，弹窗文案含"prod 变更强制人工确认"）。
+- **存量测试适配**（新语义是有意收口）：test_ops_permissions.py 的
+  test_action_missing_from_matrix_defaults_approve 改 dev（prod 变更漏配现在
+  强制人工，dev 保留"漏配默认 approve"语义）；test_terminal_matrix.py 的
+  test_approve_level_rides_smart_approval / test_chain_takes_strictest_matrix_
+  level 的 approve 档 smart 自动放行语义改在 dev 验证（prod 变更已收口）；
+  test_ops_permissions_guard.py 的 test_custom_env_role_prod_approves_l2 改为
+  自定义 env 精确名只读（query）smart 可批 + prod 变更（install）硬门强制人工
+  双断言。另修 tmatrix/guard_env fixture 的 session key contextvar 泄漏
+  （setup 设了没 reset，测试顺序相关失败）。
+- **验收**：test_batch80_prod_change_hardgate.py 10 例全绿；实测 prod+scale →
+  require_confirmation=True、prod+query → False、test+scale → False；E2E smart
+  approve 对 prod 变更降级为人工确认（mock 验证）；回归 ops_permissions /
+  command_guards / approval / matrix / terminal_matrix / ops_permissions_guard /
+  sudo_approval 219 passed 零回归；更宽回归（approval/matrix/guard/runbook/
+  sudo/terminal 全相关集）1011 passed——唯一失败 test_hardline_blocklist::
+  test_sudo_stdin_guard_detects_without_password 是先于本批的顺序污染（审批
+  测试完成人工确认会登记 __user_authorized__ 内存态，影响后续 sudo stdin guard
+  三态判定；用纯存量测试组合可复现，与本批改动无关，本批新测试已自带清理）。
+- **状态**：独立 fix commit（batch80，1 个 commit），只含 tools/ops_permissions.py、
+  tests/tools/test_batch80_prod_change_hardgate.py、tests/tools/test_ops_permissions.py、
+  tests/tools/test_terminal_matrix.py、tests/tools/test_ops_permissions_guard.py +
+  OPS-DELTA.md 本条登记。

@@ -103,7 +103,7 @@ def _write_matrix(home, matrix=None) -> None:
 
 @pytest.fixture
 def guard_env(tmp_path, monkeypatch):
-    approval_module.set_current_session_key(SESSION)
+    _session_token = approval_module.set_current_session_key(SESSION)
 
     def _activate(env="prod", *, enabled=True, environments=None, matrix=None):
         env_yaml = ""
@@ -144,6 +144,7 @@ def guard_env(tmp_path, monkeypatch):
     hc._LOAD_CONFIG_CACHE.clear()
     approval_module.clear_session(SESSION)
     approval_module._permanent_approved.clear()
+    approval_module.reset_current_session_key(_session_token)
     with approval_module._lock:
         approval_module._gateway_queues.pop(SESSION, None)
         approval_module._gateway_notify_cbs.pop(SESSION, None)
@@ -331,17 +332,29 @@ def test_custom_env_role_prod_unknown_still_approve(guard_env):
 
 
 def test_custom_env_role_prod_approves_l2(guard_env, monkeypatch):
-    """自定义 env bare_metal_prod → 矩阵精确名：install=approve → smart 可判。"""
+    """自定义 env bare_metal_prod → 矩阵精确名：只读 approve 档 smart 可判；
+    prod 变更动作（install）另走 batch80 硬门强制人工（不 smart 自动批）。"""
     guard_env("bare_metal_prod", environments=[
         {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
-    ])
+    ], matrix={"bare_metal_prod": {"query": "approve", "install": "approve"}})
     _ask_env(monkeypatch)
     monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
-    result = approval_module.check_all_command_guards("pip install requests", "local")
+    result = approval_module.check_all_command_guards("docker ps", "local")
     assert result["approved"] is True
-    assert result["smart_approved"] is True
+    assert result["smart_approved"] is True  # 只读 approve 档 smart 可自动放行
+
+    # prod 变更（install）→ 硬门强制人工：smart 判 approve 也不自动放行
+    _register_gateway_auto_approve()
+    try:
+        result = approval_module.check_all_command_guards("pip install requests", "local")
+        assert result["approved"] is True
+        assert result.get("user_approved") is True
+        assert result.get("smart_approved") is None
+    finally:
+        with approval_module._lock:
+            approval_module._gateway_notify_cbs.pop(SESSION, None)
 
 
 def test_custom_env_role_test_executes(guard_env):
