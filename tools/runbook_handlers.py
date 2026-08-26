@@ -707,9 +707,12 @@ def generate_expect_check(expect: Dict[str, Any],
                 "cmd": (
                     f"S=$(kubectl {ns}get deployment/{_q(obj)} "
                     f"-o jsonpath='{{.spec.selector.matchLabels}}') || "
-                    f"{{ echo \"无法读取 deployment {obj} selector\" >&2; "
-                    f"exit 1; }}; "
+                    f"{{ echo \"无法读取 deployment {obj} selector\" >&2; exit 1; }}; "
                     f"[ -n \"$S\" ] || S={_q(f'app={obj}')}; "
+                    f"if [ \"$S\" != {_q(f'app={obj}')} ]; then "
+                    f"S=$(printf '%s' \"$S\" | python3 -c 'import sys,json; "
+                    f"d=json.load(sys.stdin); "
+                    f"print(\" \".join(f\"{{k}}={{v}}\" for k,v in d.items()))'); fi; "
                     f"kubectl {ns}get pods -l \"$S\" -o wide"
                 ),
                 "shell": True, "sudo": False,
