@@ -574,6 +574,31 @@ export function stateFromHistory(
         reasoning: step?.text ?? "",
       };
     });
+    // 批八十二：历史审批/clarify 卡恢复（服务端已折叠进本气泡；状态以落库
+    // 快照 + 服务端覆盖为准，前端只做类型归一 + 步骤同步）。
+    const approvals: ChatApprovalCard[] = (m.approvals ?? []).map((a) => ({
+      approvalId: String(a.approval_id ?? ""),
+      command: String(a.command ?? ""),
+      description: String(a.description ?? ""),
+      env: String(a.env ?? ""),
+      grade: a.grade != null ? String(a.grade) : undefined,
+      timeoutAt: a.timeout_at != null ? String(a.timeout_at) : null,
+      status:
+        a.status === "approved" || a.status === "denied" || a.status === "error"
+          ? a.status
+          : "pending",
+    }));
+    const clarifies: ChatClarifyCard[] = (m.clarifies ?? []).map((c) => ({
+      clarifyId: String(c.clarify_id ?? ""),
+      question: String(c.question ?? ""),
+      choices: Array.isArray(c.choices) ? c.choices.map(String) : null,
+      multiSelect: Boolean(c.multi_select),
+      timeoutAt: c.timeout_at != null ? String(c.timeout_at) : null,
+      status:
+        c.status === "answered" || c.status === "timed_out" || c.status === "error"
+          ? c.status
+          : "pending",
+    }));
     return {
       id,
       role: "assistant",
@@ -581,13 +606,37 @@ export function stateFromHistory(
       reasoning: typeof rawReasoning === "string" ? rawReasoning : "",
       streaming: false,
       tools,
-      approvals: [],
-      clarifies: [],
-      steps: tools.map((t) => ({
-        kind: "tool" as const,
-        ref: t.id,
-        status: t.ok === false ? ("failed" as const) : ("done" as const),
-      })),
+      approvals,
+      clarifies,
+      steps: [
+        ...tools.map((t) => ({
+          kind: "tool" as const,
+          ref: t.id,
+          status: t.ok === false ? ("failed" as const) : ("done" as const),
+        })),
+        ...approvals.map((a) => ({
+          kind: "approval" as const,
+          ref: a.approvalId,
+          status: a.status === "approved"
+            ? ("approved" as const)
+            : a.status === "denied"
+              ? ("denied" as const)
+              : a.status === "error"
+                ? ("failed" as const)
+                : ("pending" as const),
+        })),
+        ...clarifies.map((c) => ({
+          kind: "clarify" as const,
+          ref: c.clarifyId,
+          status: c.status === "answered"
+            ? ("answered" as const)
+            : c.status === "timed_out"
+              ? ("timed_out" as const)
+              : c.status === "error"
+                ? ("failed" as const)
+                : ("pending" as const),
+        })),
+      ],
     };
   });
   return { messages, busy: Boolean(busy), nextId, activeMessageId: null, contextWarning: null };

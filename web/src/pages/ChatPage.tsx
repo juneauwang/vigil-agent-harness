@@ -19,6 +19,7 @@ import {
   ListOrdered,
   Coins,
 } from "lucide-react";
+import { useSearchParams } from "react-router";
 import { api, ApiError } from "@/lib/api";
 import type { ChatContextUsage, ChatModelOption, ChatSessionSummary, ChatUsageResponse, UsageAnalyticsResponse } from "@/lib/api";
 import {
@@ -826,6 +827,24 @@ function UsagePanel({
 }
 
 export default function ChatPage() {
+  // 批八十二：activeId 随 URL ?sid= 持久化（刷新/切回原会话；replace 不污染
+  // 历史栈；卸载时清参，其他页面不受影响）。
+  const [searchParams, setSearchParams] = useSearchParams();
+  const syncSid = useCallback(
+    (sid: string | null) => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          if (sid) next.set("sid", sid);
+          else next.delete("sid");
+          return next;
+        },
+        { replace: true },
+      );
+    },
+    [setSearchParams],
+  );
+
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   // 批三十三：会话状态分槽——每个会话独立消息列表 + busy/SSE 状态（按
@@ -911,6 +930,7 @@ export default function ChatPage() {
         const resp = await api.createChatSession(model, entry?.provider);
         const sid = resp.chat_session_id;
         setActiveId(sid);
+        syncSid(sid);
         loadedRef.current.add(sid);
         setStates((prev) => ({ ...prev, [sid]: createChatState() }));
         setModelSelections((prev) => ({
@@ -924,7 +944,7 @@ export default function ChatPage() {
         setBusyAction(false);
       }
     },
-    [refreshSessions, modelOptions],
+    [refreshSessions, modelOptions, syncSid],
   );
 
   // 初始化：拉可选模型目录 + 列活会话；无则新建。
@@ -944,12 +964,19 @@ export default function ChatPage() {
         trackSessions(list);
         setSessions(list);
         if (list.length > 0) {
-          setActiveId(list[0].id);
+          // 批八十二：URL sid 优先（存在且在列表内）；无效/缺失 → 回退列表首个，
+          // 并同步 URL 让地址栏与实看会话一致（静默，不报错）。
+          const urlSid = searchParams.get("sid");
+          const target =
+            urlSid && list.some((s) => s.id === urlSid) ? urlSid : list[0].id;
+          setActiveId(target);
+          if (target !== urlSid) syncSid(target);
         } else {
           try {
             const created = await api.createChatSession();
             if (!alive) return;
             setActiveId(created.chat_session_id);
+            syncSid(created.chat_session_id);
             setSessions([{ id: created.chat_session_id, title: "", created_at: "", busy: false }]);
           } catch (e) {
             if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -965,6 +992,9 @@ export default function ChatPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // 批八十二：离开 /chat 页（卸载）→ 清理 sid 参数。
+  useEffect(() => () => syncSid(null), [syncSid]);
 
   // 切到无缓存的会话 → 拉历史恢复现场（1a：切页/切回消息完整）。
   useEffect(() => {
@@ -1217,10 +1247,11 @@ export default function ChatPage() {
       // 切走：abort 旧会话 SSE（后台 turn 继续跑，切回由轮询恢复现场）。
       if (activeId) abortRefs.current[activeId]?.abort();
       setActiveId(id);
+      syncSid(id);
       setError(null);
       setStopWarning(null);
     },
-    [activeId],
+    [activeId, syncSid],
   );
 
   const toggleTool = useCallback(

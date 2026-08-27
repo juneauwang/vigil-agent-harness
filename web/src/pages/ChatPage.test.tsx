@@ -2,6 +2,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { MemoryRouter } from "react-router";
 import ChatPage from "./ChatPage";
 import { api } from "@/lib/api";
 import type { ChatSessionSummary, ChatHistoryMessage } from "@/lib/api";
@@ -84,6 +85,7 @@ async function mountWith(
   sessions: ChatSessionSummary[],
   busySessionId?: string,
   historyFor?: (id: string) => ChatHistoryMessage[],
+  initialEntry = "/chat",
 ) {
   const busy = new Set(busySessionId ? [busySessionId] : sessions.filter((s) => s.busy).map((s) => s.id));
   apiMock.getModels.mockResolvedValue(MODELS);
@@ -120,7 +122,11 @@ async function mountWith(
     period_days: 30,
   });
   await act(async () => {
-    root.render(<ChatPage />);
+    root.render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <ChatPage />
+      </MemoryRouter>,
+    );
   });
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
@@ -610,7 +616,11 @@ describe("批六十四 chat 用量面板", () => {
     apiMock.createChatSession.mockRejectedValue(new Error("backend down"));
     apiMock.getUsageAnalytics.mockResolvedValue({ daily: [], totals: {}, period_days: 30 });
     await act(async () => {
-      root.render(<ChatPage />);
+      root.render(
+        <MemoryRouter initialEntries={["/chat"]}>
+          <ChatPage />
+        </MemoryRouter>,
+      );
     });
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -631,5 +641,21 @@ describe("批六十四 chat 用量面板", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     expect(apiMock.getChatUsage).toHaveBeenCalledWith("B");
+  });
+
+  it("URL sid 存在且在列表内 → 刷新回到该会话", async () => {
+    await mountWith([SESSION_A, SESSION_B], undefined, undefined, "/chat?sid=B");
+    // 初始 activeId = B（不是列表首个 A）：B 空闲 → 输入可用。
+    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    expect(input.disabled).toBe(false);
+    const sel = sessionSelect();
+    expect(sel.value).toBe("B");
+  });
+
+  it("URL sid 无效/已清 → 静默回退列表首个，不报错", async () => {
+    await mountWith([SESSION_A, SESSION_B], undefined, undefined, "/chat?sid=GONE");
+    const sel = sessionSelect();
+    expect(sel.value).toBe("A");
+    expect(container.textContent).not.toContain("error");
   });
 });

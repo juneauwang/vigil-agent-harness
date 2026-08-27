@@ -501,6 +501,25 @@ export interface ChatHistoryMessage {
     tool_id?: string | null;
   }[];
   timestamp?: number | null;
+  /** 批八十二：历史审批卡（服务端折叠进 assistant 气泡；刷新/切回恢复）。 */
+  approvals?: {
+    approval_id: string;
+    command: string;
+    description: string;
+    env: string;
+    grade?: string | null;
+    timeout_at?: string | null;
+    status: "pending" | "approved" | "denied" | "error";
+  }[];
+  /** 批八十二：历史 clarify 卡。 */
+  clarifies?: {
+    clarify_id: string;
+    question: string;
+    choices: string[] | null;
+    multi_select: boolean;
+    timeout_at?: string | null;
+    status: "pending" | "answered" | "timed_out" | "error";
+  }[];
 }
 
 export interface ChatHistoryResponse {

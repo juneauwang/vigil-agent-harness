@@ -4967,3 +4967,67 @@
   hermes_state_common.py、agent/conversation_loop.py、run_agent.py、web/src/lib/
   api.ts、web/src/lib/chat.ts、web/src/pages/ChatPage.tsx、tests/tools/
   test_batch81_context_usage.py + OPS-DELTA.md 本条登记。
+
+### 97. 多 session 并发 UI 状态丢失——审批/clarify 卡持久化 + activeId 持久化（batch82）
+
+- **背景**（2026-08-27 用户 dogfood 报告，难复现但根因代码实锤）：CHAT UI 多
+  session 并发——A 干活中开 B，B 产生审批卡/clarify 卡不跟随最新消息出现在最
+  下方；刷新页面后审批栏/clarify 不再渲染，且刷新后停在不同会话（"不是同一个"）。
+  4 个现象 → 3 个根因：① 审批/clarify 卡是 SSE 流内瞬态事件（
+  `chat:approval_pending` / `chat:clarify_pending` 只推送不落库），历史端点
+  `_history_to_view_messages` 无 approvals/clarifies 字段、前端 `stateFromHistory`
+  硬编码空数组 → 刷新/切回（switchSession abort 旧 SSE + 轮询重拉历史）卡片
+  丢失（审批 pending 数据其实还在后端全局注册表，但对话流内卡片上下文丢了）；
+  ② `setActiveId(list[0].id)` 且 activeId 无 URL/localStorage 持久化 → 刷新回
+  "最近活动"会话不一定是刷新前看的；③ 切回滚动，随①自然解决（卡片恢复后随
+  消息流）。
+- **任务 1——审批/clarify 卡持久化（核心）**：
+  - **1a 落库**：`_approval_callback_factory`/`_clarify_callback_factory` 推送点
+    后把卡片快照落 SessionDB（自定义 role `approval`/`clarify`，content=JSON：
+    approval 含 approval_id/command/description/env/action/timeout_at/status=
+    pending；clarify = entry.view() 原样）。落库失败仅 debug 日志（不阻断审批
+    流程）。**喂模型零污染**：`_load_conversation_history` 新增 `include_cards`
+    参数（默认 False），approval/clarify 行与 session_meta 同款过滤——OpenAI
+    协议只认 system/user/assistant/tool，未知 role 进 API 会 400；历史展示端点
+    传 `include_cards=True` 保留卡行。gateway 防线同收：`_build_gateway_agent_
+    history` 的 role 跳过集合加入 approval/clarify（gateway 恢复会话也走通用
+    入口 get_messages_as_conversation）。
+  - **1b 历史端点输出**：`_history_to_view_messages` 把卡行折叠进"卡创建时的活动
+    assistant 气泡"（= 卡行前最近创建的 assistant 气泡，对齐 SSE 流式
+    activeAssistant 挂接；卡前无 assistant → 挂下一个 assistant，仍无 → 独立
+    assistant 气泡）。状态以当前实际为准：审批卡查 tools.approval
+    `get_web_approval` 覆盖（运行中准确；服务重启后注册表空 → 快照 pending +
+    前端 approvalIsTimedOut 超时兜底）；clarify 卡查 `session.clarify_outcomes`
+    （新增登记表：应答→answered、超时→timed_out；重启后空 → 快照 pending）。
+    输出字段对齐前端卡片结构（approvals/clarifies 数组 + 空数组补全）。
+  - **1c 前端恢复**：`stateFromHistory` 从历史消息的 approvals/clarifies 恢复
+    卡片 + 对应 steps（kind approval/clarify，status 同步 pending/approved/
+    denied/answered/timed_out/failed）；ChatMessage 结构零改动。
+  - **1d 状态一致性**：既有全局 pub/sub（subscribeApprovalResolved →
+    markApprovalResolvedInSessions）覆盖运行期裁决回写，持久化恢复的卡片按
+    approvalId 匹配同样受覆盖，无需新增。
+- **任务 2——activeId URL 持久化**（web ChatPage）：`/chat?sid=<session_id>`
+  （react-router useSearchParams，`setSearchParams(..., {replace:true})` 不污染
+  历史栈）。初始化先读 URL sid——存在且在会话列表内 → 用它；无效/已清 → 静默
+  回退 list[0] 并同步 URL 归一（不报错）。switchSession/createSession 同步 URL；
+  组件卸载清理 sid 参数（其他页面不受影响）。刷新（浏览器重载不跑 React 卸载
+  清理）→ URL sid 保留 → 回到刷新前看的会话。
+- **新测试**（tests/tools/test_batch82_cards_persist.py，10 例）：落库两例
+  （approval 回调批准解除阻塞验证行 + clarify 回调应答登记终态）；过滤一例
+  （默认剔除 approval/clarify/session_meta、include_cards 保留、快照 JSON 可
+  解析）；视图折叠三例（折叠进活动 assistant / 尾部无 assistant 独立气泡 / 卡
+  前无 assistant 挂下一气泡）；状态覆盖两例（注册表 approve → 视图 approved；
+  clarify_outcomes answered/未登记 pending 兜底）；gateway 防线一例；端点字段
+  零破坏一例（/api/chat/sessions/{id}/messages 仍含 id/role/content/tools，
+  卡行折叠进 approvals/clarifies）。前端 ChatPage.test.tsx 新增 2 例（URL sid
+  有效回到该会话 / 无效回退 list[0] 不报错），测试挂 MemoryRouter。
+- **验收**：新测试 10 例 + 前端 2 例全绿；回归 tests/hermes_cli/ 批 31/33/36/
+  38/41/42/49 + tests/tools/test_batch81 + gateway 历史过滤相关
+  （stale_confirmation_expiry / replay_entry_fields / message_timestamps /
+  auto_continue）86+29 例零回归；前端 `npm run typecheck` 通过 + chat/chatPage
+  vitest 60 例通过。附修一处笔误：clarify 回调 `entry.event.wait` 缩进误入
+  `if remaining <= 0` 死代码（会导致忙轮询），已复原。
+- **状态**：独立 fix commit（batch82，1 个 commit），只含 hermes_cli/chat_api.py、
+  gateway/run.py、web/src/lib/api.ts、web/src/lib/chat.ts、web/src/pages/
+  ChatPage.tsx、web/src/pages/ChatPage.test.tsx、tests/tools/
+  test_batch82_cards_persist.py + OPS-DELTA.md 本条登记。

@@ -155,6 +155,11 @@ class ChatSession:
     last_approval_outcome: Optional[str] = None
     # 批四十九：当前挂起的 web clarify（None = 无）。一次 turn 内至多一个。
     pending_clarify: Optional[_WebClarifyEntry] = None
+    # batch82（OPS-DELTA #97）：clarify 卡终态登记（clarify_id → answered/
+    # timed_out）。卡片落库快照是 pending，应答/超时发生在回调线程内；此表让
+    # 刷新/切回后历史视图仍能显示准确终态（服务重启后注册表空 → 回退快照 +
+    # 前端超时兜底）。
+    clarify_outcomes: Dict[str, str] = field(default_factory=dict)
     _turn_done: threading.Event = field(default_factory=threading.Event)
 
     def __post_init__(self) -> None:
@@ -271,11 +276,15 @@ def _load_conversation_history(
     *,
     repair_alternation: bool = True,
     include_row_ids: bool = False,
+    include_cards: bool = False,
 ) -> list:
     """跨 turn 上下文：从 SessionDB 重放已持久化消息（gateway 同款）。
 
     历史展示端点传 ``repair_alternation=False``（verbatim 转录，不合并/丢弃
     消息）+ ``include_row_ids=True``（稳定 id 作前端 React key）。
+    batch82：approval/clarify 卡行（自定义 role）默认过滤——喂模型的历史零污染
+    （OpenAI 消息协议只认 system/user/assistant/tool，未知 role 进 API 会 400）；
+    历史展示端点传 ``include_cards=True`` 保留卡行供前端恢复卡片。
     """
     if session.session_db is None:
         return []
@@ -285,22 +294,52 @@ def _load_conversation_history(
             repair_alternation=repair_alternation,
             include_row_ids=include_row_ids,
         )
-        return [m for m in history if m.get("role") != "session_meta"]
+        if include_cards:
+            return [m for m in history if m.get("role") != "session_meta"]
+        return [
+            m for m in history
+            if m.get("role") not in ("session_meta", "approval", "clarify")
+        ]
     except Exception:
         _log.debug("chat history reload failed", exc_info=True)
         return []
 
 
-def _history_to_view_messages(history: list) -> list:
+def _history_to_view_messages(history: list, session: Optional["ChatSession"] = None) -> list:
     """把 SessionDB 的 OpenAI 消息 dict 结构化为前端 ChatMessage 字段。
 
     返回消息列表（role/content/tools/timestamp，id 用行 id 保证稳定），内容
     全部过 redact（_redact_text 值级 + _preview 单行截断的展示预览）。tool
     调用（assistant.tool_calls）与紧随的 tool 结果行折叠进同一条 assistant
     气泡的 ``tools`` 数组（对齐 SSE 流式渲染的 ChatToolEvent）。
+
+    batch82 1b：approval/clarify 卡行（自定义 role，content=JSON 快照）按插入
+    顺序折叠进卡创建时"活动"的 assistant 气泡（= 卡行前最近创建的 assistant
+    气泡，对齐 SSE 流式 activeAssistant 挂接——流式时卡片挂在正在流式的那条
+    assistant 上，不是卡后的下一条）；卡行前无 assistant 可挂 → 挂 pending 等
+    下一个 assistant，仍无 → 独立 assistant 气泡。状态以当前实际为准：审批卡
+    查 tools.approval 注册表（运行中准确；服务重启后注册表空 → 快照 pending +
+    前端 approvalIsTimedOut 超时兜底）；clarify 卡查 session.clarify_outcomes
+    （应答/超时登记；重启后空 → 快照 pending）。
     """
     view: List[Dict[str, Any]] = []
     pending_tools: List[Dict[str, Any]] = []
+    pending_cards: List[Dict[str, Any]] = []
+
+    def _attach_card(bubble: Dict[str, Any], kind: str, card: Dict[str, Any]) -> None:
+        key = "approvals" if kind == "approval" else "clarifies"
+        bubble.setdefault(key, []).append(card)
+
+    def _attach_cards(bubble: Dict[str, Any]) -> None:
+        nonlocal pending_cards
+        if not pending_cards:
+            bubble.setdefault("approvals", [])
+            bubble.setdefault("clarifies", [])
+            return
+        for c in pending_cards:
+            _attach_card(bubble, c["kind"], c["data"])
+        pending_cards = []
+
     for msg in history:
         role = msg.get("role")
         msg_id = msg.get("_row_id")
@@ -310,6 +349,8 @@ def _history_to_view_messages(history: list) -> list:
                 "role": "user",
                 "content": _redact_text(msg.get("content") or ""),
                 "tools": [],
+                "approvals": [],
+                "clarifies": [],
                 "timestamp": msg.get("timestamp"),
             })
         elif role == "assistant":
@@ -339,7 +380,7 @@ def _history_to_view_messages(history: list) -> list:
                 ]
                 if len(tc_ids) == 1 and tc_ids[0]:
                     reasoning_view = {"steps": [{"tool_id": tc_ids[0], "text": reasoning_text}]}
-            view.append({
+            bubble = {
                 "id": msg_id if msg_id is not None else len(view) + 1,
                 "role": "assistant",
                 "content": _redact_text(msg.get("content") or ""),
@@ -348,8 +389,56 @@ def _history_to_view_messages(history: list) -> list:
                 "reasoning": reasoning_view,
                 "tools": tools,
                 "timestamp": msg.get("timestamp"),
-            })
+            }
+            _attach_cards(bubble)
+            view.append(bubble)
             pending_tools = tools
+        elif role in ("approval", "clarify"):
+            # batch82 1b：卡行 → 折叠进下一 assistant 气泡（先解析快照 JSON）。
+            try:
+                card = json.loads(msg.get("content") or "{}")
+                if not isinstance(card, dict):
+                    card = {}
+            except (json.JSONDecodeError, TypeError):
+                card = {}
+            if role == "approval":
+                _aid = str(card.get("approval_id") or "")
+                if _aid:
+                    try:
+                        from tools.approval import get_web_approval
+                        av = get_web_approval(_aid)
+                        if av:
+                            # 注册表为准：approved/denied 直接覆盖；pending/
+                            # timeout（wait 语义命令保持 pending）保持 pending +
+                            # timeout_at 由前端超时兜底。
+                            _st = str(av.get("status") or "pending")
+                            if _st in ("approved", "denied", "pending"):
+                                card["status"] = _st
+                            card["timeout_at"] = av.get("timeout_at") or card.get("timeout_at")
+                            card["command"] = av.get("command") or card.get("command")
+                            card["description"] = av.get("description") or card.get("description")
+                            card["env"] = av.get("env") or card.get("env")
+                    except Exception:
+                        _log.debug("chat approval card live-status lookup failed", exc_info=True)
+                # 快照 status 兜底（落库快照恒 pending；注册表覆盖失败/为空 →
+                # 保持 pending，前端 approvalIsTimedOut 超时显示兜底）。
+                card.setdefault("status", "pending")
+                card_kind = "approval"
+            else:
+                _cid = str(card.get("clarify_id") or "")
+                if _cid and session is not None:
+                    _outcome = (getattr(session, "clarify_outcomes", None) or {}).get(_cid)
+                    if _outcome in ("answered", "timed_out"):
+                        card["status"] = _outcome
+                # 快照（entry.view()）本身无 status → 未登记终态时兜底 pending。
+                card.setdefault("status", "pending")
+                card_kind = "clarify"
+            # 折叠目标：卡行前最近创建的 assistant 气泡（流式时卡挂的"活动"
+            # 气泡，历史重放顺序等价）；无 → 挂 pending 等下一个 assistant。
+            if view and view[-1].get("role") == "assistant":
+                _attach_card(view[-1], card_kind, card)
+            else:
+                pending_cards.append({"kind": card_kind, "data": card})
         elif role == "tool":
             content = _preview(msg.get("content") or "")
             name = str(msg.get("tool_name") or "")
@@ -393,6 +482,18 @@ def _history_to_view_messages(history: list) -> list:
     for t in pending_tools:
         if t.get("output_summary") is None:
             t["output_summary"] = ""
+    if pending_cards:
+        # 卡行之后没有 assistant 气泡（turn 在卡片处中断）→ 独立 assistant 气泡。
+        bubble = {
+            "id": len(view) + 1,
+            "role": "assistant",
+            "content": "",
+            "reasoning": "",
+            "tools": [],
+            "timestamp": None,
+        }
+        _attach_cards(bubble)
+        view.append(bubble)
     return view
 
 
@@ -440,6 +541,26 @@ def _approval_callback_factory(session: "ChatSession", queue: asyncio.Queue, loo
             "action": action,
             "timeout_at": (av or {}).get("timeout_at"),
         })
+        # batch82 1a：审批卡快照落 SessionDB（role='approval'，content=JSON）。
+        # 卡片是 SSE 流内瞬态事件，不落库则刷新/切回后从历史恢复时消失；
+        # 喂模型的 history 由 _load_conversation_history 过滤，不进模型上下文。
+        try:
+            if session.session_db is not None:
+                session.session_db.append_message(
+                    _live_session_id(session),
+                    "approval",
+                    content=json.dumps({
+                        "approval_id": approval_id,
+                        "command": redacted_command,
+                        "description": _redact_text(description or ""),
+                        "env": env,
+                        "action": action,
+                        "timeout_at": (av or {}).get("timeout_at"),
+                        "status": "pending",
+                    }, ensure_ascii=False),
+                )
+        except Exception:
+            _log.debug("chat approval card persist skipped", exc_info=True)
         remaining = _approval_remaining_seconds(av)
         if remaining is not None and remaining <= 0:
             session.last_approval_outcome = "approval_timeout"
@@ -517,6 +638,17 @@ def _clarify_callback_factory(session: "ChatSession", queue: asyncio.Queue, loop
             "session_id": session.chat_session_id,
             **entry.view(),
         })
+        # batch82 1a：clarify 卡快照落 SessionDB（role='clarify'）——刷新/切回
+        # 从历史恢复；喂模型的 history 由 _load_conversation_history 过滤。
+        try:
+            if session.session_db is not None:
+                session.session_db.append_message(
+                    _live_session_id(session),
+                    "clarify",
+                    content=json.dumps(entry.view(), ensure_ascii=False),
+                )
+        except Exception:
+            _log.debug("chat clarify card persist skipped", exc_info=True)
         # 等应答：1s 切片轮询 deadline（对齐 gateway wait_for_response 的
         # 分片语义；web 无 activity watchdog，分片只为超时及时返回）。
         while entry.response is None and not entry.event.is_set():
@@ -529,8 +661,12 @@ def _clarify_callback_factory(session: "ChatSession", queue: asyncio.Queue, loop
             entry.event.wait(timeout=min(1.0, remaining))
         session.pending_clarify = None
         if entry.response is not None:
+            # batch82 1b：登记终态，历史视图恢复时覆盖快照（服务重启后注册表
+            # 空 → 回退快照 pending + 前端超时兜底）。
+            session.clarify_outcomes[entry.clarify_id] = "answered"
             return entry.response
         minutes = max(1, int(timeout_s / 60))
+        session.clarify_outcomes[entry.clarify_id] = "timed_out"
         return f"[user did not respond within {minutes}m]"
 
     return _cb
@@ -1260,8 +1396,13 @@ async def chat_session_messages(chat_session_id: str):
             status_code=404,
             content={"error": {"code": "not_found", "message": f"会话不存在: {chat_session_id}"}},
         )
-    history = _load_conversation_history(session, repair_alternation=False, include_row_ids=True)
-    messages = _history_to_view_messages(history)
+    history = _load_conversation_history(
+        session,
+        repair_alternation=False,
+        include_row_ids=True,
+        include_cards=True,
+    )
+    messages = _history_to_view_messages(history, session=session)
     return {
         "chat_session_id": chat_session_id,
         "messages": messages,

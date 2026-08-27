@@ -1349,8 +1349,10 @@ def _build_gateway_agent_history(
             continue
 
         # Skip metadata entries (tool definitions, session info) -- these are
-        # for transcript logging, not for the LLM.
-        if role in {"session_meta",}:
+        # for transcript logging, not for the LLM. batch82：web chat 落库的
+        # approval/clarify 卡行（自定义 role）同属展示侧瞬态，禁进模型上下文
+        # （OpenAI 协议未知 role 会 400）。
+        if role in {"session_meta", "approval", "clarify"}:
             continue
 
         # Skip system messages -- the agent rebuilds its own system prompt.
