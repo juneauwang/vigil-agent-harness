@@ -426,6 +426,15 @@ export interface IncidentsResponse {
 
 // ── 批三十一契约：对话 Session（/api/chat/*）─────────────────────────────
 
+/** 批八十一：会话 context 使用率（used/limit/pct/model；用量或上限拿不到 →
+ * null，前端显示"—"，不瞎猜）。 */
+export interface ChatContextUsage {
+  used_tokens: number | null;
+  limit_tokens: number | null;
+  pct: number | null;
+  model?: string | null;
+}
+
 export interface ChatSessionSummary {
   id: string;
   title: string;
@@ -434,6 +443,8 @@ export interface ChatSessionSummary {
   last_message_preview?: string;
   /** 批四十一 §8：会话级模型（缺省 = 配置默认）。 */
   model?: string;
+  /** 批八十一：当前 context 用量（messages active=1 累计 + 模型上限三级解析）。 */
+  context_usage?: ChatContextUsage | null;
 }
 
 /** 批四十一 §8：可选模型目录项（GET /api/models，静态目录 + 配置默认，

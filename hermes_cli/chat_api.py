@@ -47,6 +47,17 @@ _SSE_HEADERS = {
 # 摘要/展示截断
 _PREVIEW_MAX = 120
 
+# batch81（OPS-DELTA #96）2a：turn 收尾落库的 ended 是正常多轮中间态（下轮
+# _ensure_session_running 复位 running）——允许继续；其余 end_reason 是外部
+# 终态（user_request/idle/daily/session_reset/agent_close/ws_orphan_reap
+# 等），会话行 ended 且 reason 不在本集合 → 拒绝 reopen。
+_TURN_FINALIZE_END_REASONS = frozenset({
+    "turn_complete", "error", "approval_timeout", "denied", "interrupted",
+})
+
+# batch81 2d：turn 前 context 用量 >= 该阈值 → 推 chat:context_warning。
+_CONTEXT_WARNING_THRESHOLD_PCT = 80
+
 
 def _now_iso_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -150,6 +161,29 @@ class ChatSession:
         self._turn_done.set()
 
     def view(self) -> dict:
+        # batch81（OPS-DELTA #96）：会话当前 context 用量（messages active=1
+        # token 累计 + 模型上限三级解析）；历史未计量行回退活会话的
+        # compressor.last_prompt_tokens（上次真实 API prompt tokens）；都拿
+        # 不到 → None（前端显示"—"）。
+        _usage = None
+        try:
+            from hermes_cli.session_context_usage import (
+                context_usage_for,
+                live_prompt_tokens,
+                session_used_tokens,
+            )
+            _session_db = getattr(self, "session_db", None)
+            _live = _live_session_id(self)
+            _used = session_used_tokens(_session_db, _live) if _session_db and _live else 0
+            if _used is None:
+                _used = live_prompt_tokens(self.agent)
+            if _used is not None or _live:
+                _usage = context_usage_for(
+                    self.model or getattr(self.agent, "model", None) or None,
+                    _used,
+                )
+        except Exception:
+            _usage = None
         return {
             "id": self.chat_session_id,
             "title": self.title,
@@ -157,6 +191,7 @@ class ChatSession:
             "busy": self.busy,
             "last_message_preview": self.title,
             "model": self.model,
+            "context_usage": _usage,
         }
 
 
@@ -541,10 +576,19 @@ def _finalize_turn_session(session: "ChatSession", *, interrupted: bool, failed:
 
     优先级：interrupt > 审批超时/拒绝 > failed/error > 正常结束。落库失败时
     SessionDB.finalize_session_row 内部兜底打 finalize_error，这里只记日志。
+
+    batch81（OPS-DELTA #96）：压缩后自检异常已把会话标记 needs_recovery——
+    那是引擎层的"需恢复"终态（提示重开），turn 收尾不得覆盖降级回 ended。
     """
     session_db = getattr(session, "session_db", None)
     if session_db is None:
         return
+    try:
+        _row = session_db.get_session(_live_session_id(session))
+        if _row and str(_row.get("status") or "") == "needs_recovery":
+            return
+    except Exception:
+        pass
     approval_outcome = getattr(session, "last_approval_outcome", None)
     if interrupted:
         status, reason = "interrupted", "interrupted"
@@ -566,6 +610,95 @@ def _finalize_turn_session(session: "ChatSession", *, interrupted: bool, failed:
             session.chat_session_id, status, reason,
             exc_info=True,
         )
+
+
+def _session_reopen_blocked(session: "ChatSession") -> Optional[str]:
+    """batch81 2a：会话行已是外部终态/需恢复 → 返回拒绝文案，否则 None。
+
+    事故（chat_13d3d58c）里 15:39 已 ended 的会话 17:16 仍可发消息，agent
+    循环状态陈旧（无重建）→ 压缩后挂死。turn 收尾落库的 ended（turn_complete/
+    error/approval_timeout/denied）与 interrupted 是正常多轮中间态，下轮
+    _ensure_session_running 会复位 running；外部终态（user_request/idle/
+    daily/session_reset/agent_close/ws_orphan_reap 等）与 needs_recovery
+    （压缩后自检异常，batch81 2c）一律拒绝，提示新开。
+    """
+    session_db = getattr(session, "session_db", None)
+    if session_db is None:
+        return None
+    try:
+        row = session_db.get_session(_live_session_id(session))
+    except Exception:
+        return None
+    if not row:
+        return None
+    status = str(row.get("status") or "")
+    reason = str(row.get("end_reason") or "")
+    if status == "needs_recovery":
+        return "会话状态异常需恢复，请新开会话"
+    if status == "ended" and reason not in _TURN_FINALIZE_END_REASONS:
+        return "会话已结束，请新开会话"
+    # 旧版行无 status 列（batch38 之前）：ended_at 已置 + 外部终态 reason 同样
+    # 拒绝；turn 收尾 reason 仍放行（正常多轮）。
+    if not status and row.get("ended_at") and reason not in _TURN_FINALIZE_END_REASONS:
+        return "会话已结束，请新开会话"
+    return None
+
+
+def _friendly_turn_error(exc: Exception) -> str:
+    """batch81 2b：模型挂起/超时 → 友好文案（stale 检测器抛 TimeoutError /
+    RuntimeError "consecutive stale attempts"，httpx 超时同族）。其余错误保持
+    原始类型+信息，便于排查。"""
+    name = type(exc).__name__
+    text = f"{name}: {exc}"
+    if isinstance(exc, TimeoutError):
+        return "模型响应超时，已中止（可重试或新开会话）"
+    _stale_markers = (
+        "stale", "timed out", "timeout", "no response", "unresponsive",
+        "readtimeout", "connecttimeout", "writetimeout", "pooltimeout",
+    )
+    if any(m in text.lower() for m in _stale_markers):
+        return "模型响应超时，已中止（可重试或新开会话）"
+    return text
+
+
+def _try_push_context_warning(session: "ChatSession", message: str, push_fn) -> None:
+    """batch81 2d：turn 前检查会话 context 用量，>=80% 推 chat:context_warning。
+
+    用量取 messages active=1 的 token_count 累计（未计量回退活会话的
+    compressor.last_prompt_tokens——上次真实 API prompt tokens），加新消息
+    粗略估算（~3 字符/token 保守值）；limit 与 UI 同一解析（config 显式 >
+    内置表）。推事件不改对话流——前端展示横幅 + 建议新开。
+    """
+    try:
+        from hermes_cli.session_context_usage import (
+            live_prompt_tokens,
+            resolve_model_context_limit,
+            session_used_tokens,
+        )
+        model = session.model or getattr(session.agent, "model", None) or None
+        limit = resolve_model_context_limit(model)
+        if not limit:
+            return
+        used = session_used_tokens(session.session_db, _live_session_id(session))
+        if used is None:
+            used = live_prompt_tokens(session.agent)
+        if used is None:
+            return
+        used += max(1, len(message) // 3)
+        pct = round(used * 100 / limit)
+        if pct >= _CONTEXT_WARNING_THRESHOLD_PCT:
+            push_fn({
+                "type": "chat:context_warning",
+                "pct": pct,
+                "message": (
+                    f"⚠ context 已用 {pct}%（{used:,}/{limit:,} tokens），"
+                    "建议新开会话避免卡死"
+                ),
+            })
+    except Exception:
+        _log.debug("chat context warning check failed", exc_info=True)
+
+
 def _run_chat_turn(
     session: "ChatSession",
     message: str,
@@ -609,6 +742,8 @@ def _run_chat_turn(
         if not session.title:
             session.title = _preview(message, 60)
             session.last_activity_at = time.time()
+        # batch81 2d：context 用量 >=80% 时在 turn 起点推警告（不阻断对话）。
+        _try_push_context_warning(session, message, _push)
         _ensure_session_running(session)
 
         def _stream_cb(text: str) -> None:
@@ -687,7 +822,8 @@ def _run_chat_turn(
             _flush_reasoning()
             _push({
                 "type": "chat:error",
-                "message": f"{type(exc).__name__}: {exc}",
+                # batch81 2b：模型挂起/超时映射友好文案（可重试或新开会话）。
+                "message": _friendly_turn_error(exc),
             })
             return
 
@@ -1158,6 +1294,16 @@ async def chat_message(chat_session_id: str, payload: Dict[str, Any] = Body(defa
         return JSONResponse(
             status_code=400,
             content={"error": {"code": "invalid_request", "message": "message 必填"}},
+        )
+    # batch81 2a：ended 会话 reopen 收口——外部终态/需恢复一律拒绝（事故里
+    # 已 ended 会话仍可发消息 → agent 循环陈旧 → 压缩后挂死）。turn 收尾
+    # 中间态（turn_complete/error/approval_timeout/denied/interrupted）允许
+    # 继续，下轮 _ensure_session_running 复位 running。
+    _reopen_blocked = _session_reopen_blocked(session)
+    if _reopen_blocked:
+        return JSONResponse(
+            status_code=409,
+            content={"error": {"code": "session_ended", "message": _reopen_blocked}},
         )
     with _CHAT_LOCK:
         if session.busy:

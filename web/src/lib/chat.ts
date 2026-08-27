@@ -96,6 +96,8 @@ export interface ChatTurnState {
   busy: boolean;
   nextId: number;
   activeMessageId: number | null;
+  /** 批八十一：引擎层 context >=80% 提示（chat:context_warning；新回合清除）。 */
+  contextWarning: string | null;
 }
 
 /** 批三十八 §AW：审批卡是否已超时（timeout_at 过期且仍 pending）。 */
@@ -121,7 +123,7 @@ export function clarifyIsTimedOut(
 }
 
 export function createChatState(): ChatTurnState {
-  return { messages: [], busy: false, nextId: 1, activeMessageId: null };
+  return { messages: [], busy: false, nextId: 1, activeMessageId: null, contextWarning: null };
 }
 
 /** 当前正在接收增量的事件（chat:delta 归并目标）。 */
@@ -394,6 +396,13 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     return next;
   }
 
+  // 批八十一：引擎层 context 用量 >=80% 主动提示（不阻断对话流；横幅 +
+  // "建议新开会话"按钮，直到下一回合清除）。
+  if (ev.type === "chat:context_warning") {
+    next.contextWarning = String(data.message ?? "");
+    return next;
+  }
+
   return next;
 }
 
@@ -403,6 +412,7 @@ export function pushUserMessage(state: ChatTurnState, text: string): ChatTurnSta
     ...state,
     busy: true,
     activeMessageId: null,
+    contextWarning: null,
     nextId: state.nextId + 1,
     messages: [
       ...state.messages,
@@ -580,7 +590,7 @@ export function stateFromHistory(
       })),
     };
   });
-  return { messages, busy: Boolean(busy), nextId, activeMessageId: null };
+  return { messages, busy: Boolean(busy), nextId, activeMessageId: null, contextWarning: null };
 }
 
 /** 批四十二 §BH：跨会话审批裁决回写——只重建含该审批卡的状态槽（全局弹窗/

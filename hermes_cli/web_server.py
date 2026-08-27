@@ -4927,6 +4927,26 @@ async def ui_sessions_list(
                 _row.get("status"), ended_at=_row.get("ended_at")
             )
         )
+    # batch81（OPS-DELTA #96）：会话行追加 context_usage——messages active=1 的
+    # token_count 累计（当前 context 用量）+ 模型上限三级解析（config 显式 >
+    # 内置表 > None）。既有字段零变化，只追加；用量算不出 → 前端显示"—"。
+    try:
+        from hermes_cli.session_context_usage import (
+            context_usage_for,
+            session_used_tokens,
+        )
+        _ctx_db = _open_session_db_for_profile(profile, read_only=True)
+        try:
+            for _row in sessions:
+                _sid = str(_row.get("session_id") or _row.get("id") or "")
+                _model = _row.get("model")
+                _used = session_used_tokens(_ctx_db, _sid) if _sid else 0
+                _row["context_usage"] = context_usage_for(_model, _used)
+        finally:
+            _ctx_db.close()
+    except Exception:
+        # 用量解析失败不破坏列表（既有字段照常返回）。
+        _log.debug("context_usage enrichment failed for /api/sessions", exc_info=True)
     total = data.get("total") or len(sessions)
     return {
         "sessions": _redact_tree(sessions),

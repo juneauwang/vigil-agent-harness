@@ -155,6 +155,7 @@ from agent.message_content import flatten_message_text
 from agent.session_activity import ActivityProvenance
 from agent.model_metadata import (
     estimate_request_tokens_rough,  # noqa: F401  # re-exported for tests that mock.patch("run_agent.estimate_request_tokens_rough")
+    estimate_messages_tokens_rough,
     is_local_endpoint,
 )
 from agent.usage_pricing import normalize_usage
@@ -2242,6 +2243,16 @@ class AIAgent:
                         content = _rs(content, force=True, credential_values=True)
                     except Exception:
                         pass
+                # batch81（OPS-DELTA #96）：逐条写 token_count 估算——此前该列
+                # 从未被写入（全 NULL），web 会话列表/引擎 >80% 提示都读它。
+                # 用 conversation_loop preflight 同款粗估（memoized：同对象
+                # 在 preflight 已 fingerprint 过，此处只是缓存命中）。
+                _row_token_count = 0
+                try:
+                    if role in ("user", "assistant", "tool"):
+                        _row_token_count = estimate_messages_tokens_rough([msg])
+                except Exception:
+                    _row_token_count = 0
                 _batch_rows.append({
                     "role": role,
                     "content": content,
@@ -2265,6 +2276,7 @@ class AIAgent:
                         else msg.get("display_kind")
                     ),
                     "display_metadata": msg.get("display_metadata"),
+                    "token_count": _row_token_count,
                 })
                 _batch_msgs.append(msg)
             # One transaction for the whole turn's new rows (typically 3-8

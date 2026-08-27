@@ -999,6 +999,50 @@ def _compression_deferred_result(
     }
 
 
+def _verify_post_compression_messages(agent, messages, *, site: str) -> None:
+    """batch81（OPS-DELTA #96）2c：压缩后消息列表轻量自检。
+
+    compress_context 的契约是返回 ``(compressed_messages, new_system_prompt)``，
+    正常结果/abort 返回原列表/锁跳过都非空且含 user 回合（system prompt 是独立
+    变量，不进 messages 列表——这里不要求 system）。返回空列表、非列表、或全无
+    user/assistant 回合说明压缩后状态错乱——继续带着这个 context 调 API 正是
+    事故（chat_13d3d58c）"压缩→挂起→无感知"的根因一半。此处落
+    ``needs_recovery`` 终态（UI 提示重开）并抛明确错误，禁止静默继续。
+    """
+    ok = (
+        isinstance(messages, list)
+        and len(messages) > 0
+        and any(
+            isinstance(m, dict) and m.get("role") in ("user", "assistant")
+            for m in messages
+        )
+    )
+    if ok:
+        return
+    _shape = (
+        f"list[{len(messages)}]" if isinstance(messages, list)
+        else type(messages).__name__
+    )
+    logger.error(
+        "Post-compression self-check failed (site=%s, session=%s, shape=%s): "
+        "compressed messages missing system/user or not a list — marking "
+        "session needs_recovery instead of continuing with a broken context",
+        site, getattr(agent, "session_id", None), _shape,
+    )
+    try:
+        if getattr(agent, "_session_db", None) is not None and getattr(
+            agent, "session_id", None
+        ):
+            agent._session_db.set_session_status(
+                agent.session_id, "needs_recovery"
+            )
+    except Exception:
+        logger.debug("needs_recovery status write failed", exc_info=True)
+    raise RuntimeError(
+        "context compaction 后会话状态异常（压缩结果不完整），已标记需恢复——请新开会话"
+    )
+
+
 def _rewrite_system_content_blocks(system_message: dict, effective: str) -> bool:
     """Rewrite a cache-decorated system message in place, keeping its blocks.
 
@@ -2108,6 +2152,8 @@ def run_conversation(
                 approx_tokens=request_pressure_tokens,
                 task_id=effective_task_id,
             )
+            # batch81 2c：压缩后自检（空/非列表/缺 user/assistant 回合 → needs_recovery）。
+            _verify_post_compression_messages(agent, messages, site="pre_api")
             if messages is _pre_api_input and compression_skipped_due_to_lock(agent):
                 # #69870 lock-skip: another path holds this session's
                 # compression lock, so this pass no-oped. That is a temporary
@@ -4477,6 +4523,8 @@ def run_conversation(
                             approx_tokens=estimate_request_tokens_rough(api_messages, tools=agent.tools or None),
                             task_id=effective_task_id,
                         )
+                        # batch81 2c：压缩后自检（空/非列表/缺 user/assistant 回合 → needs_recovery）。
+                        _verify_post_compression_messages(agent, messages, site="retry_413")
                         conversation_history = conversation_history_after_compression(
                             agent, messages, conversation_history
                         )
@@ -4736,6 +4784,8 @@ def run_conversation(
                         approx_tokens=estimate_request_tokens_rough(api_messages, tools=agent.tools or None),
                         task_id=effective_task_id,
                     )
+                    # batch81 2c：压缩后自检（空/非列表/缺 user/assistant 回合 → needs_recovery）。
+                    _verify_post_compression_messages(agent, messages, site="overflow_413")
                     if messages is _overflow_input and compression_skipped_due_to_lock(agent):
                         # #69870 lock-skip: the provider proved the request
                         # does not fit, but this compression pass no-oped only
@@ -4883,6 +4933,8 @@ def run_conversation(
                                 approx_tokens=request_input_estimate,
                                 task_id=effective_task_id,
                             )
+                            # batch81 2c：压缩后自检（空/非列表/缺 user/assistant 回合 → needs_recovery）。
+                            _verify_post_compression_messages(agent, messages, site="output_cap")
                             if messages is _overflow_input and compression_skipped_due_to_lock(agent):
                                 compression_attempts -= 1
                                 agent._persist_session(messages, conversation_history)
@@ -5037,6 +5089,8 @@ def run_conversation(
                         approx_tokens=estimate_request_tokens_rough(api_messages, tools=agent.tools or None),
                         task_id=effective_task_id,
                     )
+                    # batch81 2c：压缩后自检（空/非列表/缺 user/assistant 回合 → needs_recovery）。
+                    _verify_post_compression_messages(agent, messages, site="forced_overflow")
                     if messages is _overflow_input and compression_skipped_due_to_lock(agent):
                         # #69870 lock-skip: the provider proved the request
                         # does not fit, but this compression pass no-oped only
@@ -6593,6 +6647,8 @@ def run_conversation(
                         approx_tokens=_real_tokens,
                         task_id=effective_task_id,
                     )
+                    # batch81 2c：压缩后自检（空/非列表/缺 user/assistant 回合 → needs_recovery）。
+                    _verify_post_compression_messages(agent, messages, site="post_tool")
                     if (
                         messages is _post_tool_input
                         and compression_skipped_due_to_lock(agent)

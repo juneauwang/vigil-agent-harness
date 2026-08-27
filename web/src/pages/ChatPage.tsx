@@ -20,7 +20,7 @@ import {
   Coins,
 } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { ChatModelOption, ChatSessionSummary, ChatUsageResponse, UsageAnalyticsResponse } from "@/lib/api";
+import type { ChatContextUsage, ChatModelOption, ChatSessionSummary, ChatUsageResponse, UsageAnalyticsResponse } from "@/lib/api";
 import {
   approvalIsTimedOut,
   applyChatEvent,
@@ -697,6 +697,23 @@ function formatTokens(n: number | null | undefined): string {
   return Number.isFinite(v) ? v.toLocaleString() : "0";
 }
 
+/** 批八十一：context 用量紧凑格式（37K / 131K；拿不到 → "—"）。 */
+function formatCompactTokens(n: number | null | undefined): string {
+  const v = Number(n ?? 0);
+  if (!Number.isFinite(v) || v < 0) return "—";
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `${Math.round(v / 1_000)}K`;
+  return String(v);
+}
+
+function contextUsageLabel(u: ChatContextUsage | null | undefined): string {
+  if (!u || u.used_tokens === null || u.used_tokens === undefined) return "—";
+  if (u.limit_tokens) {
+    return `${formatCompactTokens(u.used_tokens)} / ${formatCompactTokens(u.limit_tokens)}`;
+  }
+  return formatCompactTokens(u.used_tokens);
+}
+
 function formatCost(cost: number | null | undefined, currency: string | null | undefined): string | null {
   const v = Number(cost);
   if (cost === null || cost === undefined || !Number.isFinite(v)) return null;
@@ -840,6 +857,12 @@ export default function ChatPage() {
   const activeState = (activeId && states[activeId]) || createChatState();
   // 有效 busy：本地槽位 busy 或注册表快照 busy（§7：busi指示不依赖消息流）。
   const activeBusy = activeBusyOf(activeId, states, busyMap);
+  // 批八十一：当前会话 context 用量（>80% 变色 + 建议新开）。
+  const activeUsage = activeId
+    ? (sessions.find((s) => s.id === activeId)?.context_usage ?? null)
+    : null;
+  const usagePct = activeUsage?.pct ?? null;
+  const usageHot = usagePct !== null && usagePct > 80;
 
   const trackSessions = useCallback((list: ChatSessionSummary[]) => {
     const map: Record<string, boolean> = {};
@@ -1277,6 +1300,33 @@ export default function ChatPage() {
               </option>
             ))}
           </select>
+          {activeUsage && (
+            <span
+              title={
+                usagePct !== null
+                  ? `context 已用 ${usagePct}%${usageHot ? "，接近上限建议新开会话" : ""}`
+                  : "context 用量未知"
+              }
+              className={`inline-flex h-8 items-center rounded border px-2 font-mono text-[11px] ${
+                usageHot
+                  ? "border-orange-500/60 bg-orange-500/10 text-orange-600 dark:text-orange-400"
+                  : "border-[var(--vigil-border)] bg-[var(--vigil-card)] text-[var(--vigil-muted)]"
+              }`}
+            >
+              {contextUsageLabel(activeUsage)}
+            </span>
+          )}
+          {usageHot && (
+            <button
+              type="button"
+              onClick={() => void createSession(modelSelections[activeId ?? ""] ?? undefined)}
+              disabled={busyAction}
+              title="context 接近上限，建议新开会话"
+              className="vigil-btn h-8 whitespace-nowrap border border-orange-500/60 bg-orange-500/10 text-xs text-orange-600 hover:bg-orange-500/20 dark:text-orange-400"
+            >
+              <MessageSquarePlus className="size-3.5" /> 建议新开
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setUsageOpen((v) => !v)}
@@ -1333,6 +1383,21 @@ export default function ChatPage() {
             className="shrink-0 underline"
           >
             重试
+          </button>
+        </div>
+      )}
+
+      {activeState.contextWarning && (
+        <div className="mb-2 flex items-center gap-2 rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+          <ShieldAlert className="size-4 shrink-0" />
+          <span className="min-w-0 flex-1">{activeState.contextWarning}</span>
+          <button
+            type="button"
+            onClick={() => void createSession(modelSelections[activeId ?? ""] ?? undefined)}
+            disabled={busyAction}
+            className="shrink-0 underline"
+          >
+            新开会话
           </button>
         </div>
       )}

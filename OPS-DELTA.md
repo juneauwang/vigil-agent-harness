@@ -4893,3 +4893,77 @@
   tests/tools/test_batch80_prod_change_hardgate.py、tests/tools/test_ops_permissions.py、
   tests/tools/test_terminal_matrix.py、tests/tools/test_ops_permissions_guard.py +
   OPS-DELTA.md 本条登记。
+
+### 96. 会话 context 使用率可见 + 生命周期健壮性（UI/引擎双层，batch81）
+
+- **背景**（2026-08-26 事故复盘，chat_13d3d58c 卡死实证）：17:16 在 15:39 已
+  ended 的旧会话继续发消息（UI 允许，无阻止）→ 17:18 第 3 次 CONTEXT COMPACTION
+  （main 129 次调用、累计 input 8,910,931 tokens、Qwen3.5-397B 131K 上限）→
+  17:19 压缩后继续调用 → 模型挂起、无返回无超时兜底 → 永久卡死；17:26 新会话秒回。
+  两因素：① 压缩后状态错乱仍继续调用（根因一半）；② ended 会话 reopen 状态机缺陷
+  + 模型调用挂起无感知（另一半）。需求：卡死前能看到 context 接近上限主动开新会话；
+  不再出现"压缩→挂起→无感知"路径。
+- **任务 1——context 使用率可见（`hermes_cli/session_context_usage.py` 新建共享
+  模块 + web_server + chat_api + web 前端）**：
+  - `/api/sessions` 会话行追加 `context_usage: {used_tokens, limit_tokens, pct,
+    model}`（只追加，既有 session_id/last_activity_at/running 零变化，桌面侧
+    SessionInfo 旧消费方不破）。used_tokens 口径：messages 表 active=1 的
+    token_count 累计（compaction 归档行 active=0 不计，是"当前活 context"而非
+    session_model_usage 的累计 API 用量）；**token_count 列此前从未被写入（全
+    NULL）——本批在 run_agent `_flush_messages_to_session_db` 逐条补写估算值**
+    （conversation_loop preflight 同款 `estimate_messages_tokens_rough`，
+    memoized，增量成本可忽略）。历史未计量行（有消息但 token_count NULL）返回
+    used_tokens=null（前端显示"—"，不把满 context 误显示成 0）；真空会话返回 0。
+  - limit_tokens 三级解析（纯本地、不探测网络，列表页要快）：config 显式
+    `model.context_length` > 内置默认表（agent.model_metadata.DEFAULT_CONTEXT_
+    LENGTHS，最长键子串匹配）> None（pct=null → 前端"—"）。活会话（web chat
+    注册表）另有 compressor.last_prompt_tokens（上次真实 API prompt tokens，
+    CLI 状态栏同源）兜底，压缩后 -1 哨兵按未计量处理。
+  - `/api/chat/sessions` 的 ChatSession.view() 同步追加 context_usage（DB 计量
+    优先，未计量回退活会话 compressor）。
+  - 前端（web/）：会话下拉旁显示当前会话 `37K / 131K` 徽标（pct>80 橙红变色 +
+    tooltip"context 接近上限，建议新开会话" + "建议新开"按钮调现有新建会话入口；
+    拿不到显示"—"）；SSE 新增 `chat:context_warning` 事件 → 横幅 + 新开会话按钮。
+- **任务 2——引擎层防挂死（2a/2b/2c/2d）**：
+  - **2a ended 会话 reopen 收口**（chat_api `chat_message`）：发消息前查会话行——
+    status=needs_recovery 或 status=ended 且 end_reason 不在 turn 收尾集合
+    （turn_complete/error/approval_timeout/denied/interrupted）→ 409
+    session_ended"会话已结束，请新开会话"。turn 收尾中间态是正常多轮（下轮
+    `_ensure_session_running` 复位 running），不误伤。
+  - **2b 模型挂起超时友好文案**（chat_api `_friendly_turn_error`）：既有 stale
+    检测器（流式 `_stream_stale_timeout` + 非流式 `_compute_non_stream_stale_
+    timeout`，reasoning 有 `get_reasoning_stale_timeout_floor` 兜底不误杀长思考）
+    已能 abort，本批只补用户侧文案：TimeoutError / stale / timeout / no response /
+    unresponsive / httpx 超时族 → "模型响应超时，已中止（可重试或新开会话）"；
+    其余错误保持原始类型+信息。
+  - **2c 压缩后状态自检**（conversation_loop 全部 6 个 `_compress_context` 调用
+    点插桩 `_verify_post_compression_messages`）：返回非空列表且含 user/assistant
+    回合为正常（system prompt 是独立变量不进 messages）；空/非列表/全无回合 →
+    会话落 **needs_recovery**（新终态常量，hermes_state_common
+    `SESSION_STATUS_NEEDS_RECOVERY` 入 SESSION_LIFECYCLE_STATUSES；chat 的
+    turn 收尾 `_finalize_turn_session` 检测到该状态不再覆盖降级回 ended）并抛明确
+    错误"已标记需恢复——请新开会话"（web chat 侧变成 chat:error 可见），禁止带
+    错乱 context 继续调 API。锁跳过/压缩 abort 返回原列表 → 通过，不误伤。
+  - **2d context >=80% 主动提示**（chat_api `_try_push_context_warning`，turn
+    起点）：用量 = messages active=1 token 累计（未计量回退活会话
+    last_prompt_tokens）+ 新消息粗估（~3 字符/token），limit 与 UI 同一解析；
+    >=80% 推 `chat:context_warning` 事件（不阻断对话，前端横幅 + 建议新开）。
+- **新测试**（tests/tools/test_batch81_context_usage.py，22 例）：
+  /api/sessions context_usage 四例（内置表 131072 / config 显式 100000 / 未知
+  模型 None / 未计量 used=null）+ 既有字段零变化一例；/api/chat/sessions view
+  活会话兜底 + DB 计量优先两例；2a 三例（外部终态拒绝 409 / turn_complete 可
+  续 / needs_recovery 拒绝）；2b 三例（TimeoutError / stale streak / 其他错误
+  保持原文）；2d 两例（>=80% 推警告 / 低用量不推）；2c 五例（通过 / 空 /
+  缺 user / 非列表 → needs_recovery + finalize 保留）；token_count 口径两例
+  （session_used_tokens 计量/未计量/空 + run_agent flush 落库写 token_count）。
+- **验收**：新测试 22 例全绿；回归 tests/hermes_cli/ 全量（含 web_server /
+  chat_api 批 31/33/36/38/41/42/49/64、hermes_state status/append_batch）零回归；
+  run_agent 压缩全家桶（413 / lock_defer / preflight_cap_e2e / post_tool_cap /
+  abort_state_reset / boundary 等）+ flush/持久化（identity / clarify_redaction /
+  tool_call_incremental / session_activity）零回归；前端 `npm run typecheck` 通过
+  + chat/chatPage vitest 57 例通过。
+- **状态**：独立 fix commit（batch81，1 个 commit），只含 hermes_cli/
+  session_context_usage.py（新）、hermes_cli/chat_api.py、hermes_cli/web_server.py、
+  hermes_state_common.py、agent/conversation_loop.py、run_agent.py、web/src/lib/
+  api.ts、web/src/lib/chat.ts、web/src/pages/ChatPage.tsx、tests/tools/
+  test_batch81_context_usage.py + OPS-DELTA.md 本条登记。

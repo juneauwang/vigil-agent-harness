@@ -131,6 +131,15 @@ describe("chat 流式渲染状态机（批三十一）", () => {
     expect(chatInputDisabled(s)).toBe(false);
   });
 
+  it("批八十一 chat:context_warning 置横幅、新回合清除", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:context_warning", { message: "⚠ context 已用 92%" }));
+    expect(s.contextWarning).toBe("⚠ context 已用 92%");
+    expect(chatInputDisabled(s)).toBe(false); // 不阻断对话流
+    s = pushUserMessage(s, "hi");
+    expect(s.contextWarning).toBeNull();
+  });
+
   it("无 active 消息时 delta 自动创建 assistant 气泡", () => {
     let s = createChatState();
     s = pushUserMessage(s, "hi");
