@@ -214,8 +214,9 @@ class TestTemplates:
 
     def test_template2_small_team(self, mhome):
         t = md.template_matrix("template2")
-        assert t["envs"] == ["local", "dev", "prod"]
+        assert t["envs"] == ["local", "test", "dev", "prod"]
         local = t["matrix"]["local"]
+        test = t["matrix"]["test"]
         dev = t["matrix"]["dev"]
         prod = t["matrix"]["prod"]
 
@@ -234,6 +235,9 @@ class TestTemplates:
         }
         assert all(l == "execute" for a, l in dev.items() if a not in dev_approve)
 
+        # test = dev 档（batch83 任务 4：模板补 test 段，档位参考 dev）
+        assert test == dev
+
         # prod：execute 仅查询 3；approve = apply_config/backup/transfer_file/
         # enable/disable；其余 15 个强制人工
         prod_execute = {a for a, l in prod.items() if l == "execute"}
@@ -250,9 +254,10 @@ class TestTemplates:
 
     def test_template3_medium_team(self, mhome):
         t3 = md.template_matrix("template3")
-        assert t3["envs"] == ["local", "uat", "dev", "prod"]
+        assert t3["envs"] == ["local", "test", "uat", "dev", "prod"]
         t2 = md.template_matrix("template2")
         assert t3["matrix"]["local"] == t2["matrix"]["local"]
+        assert t3["matrix"]["test"] == t2["matrix"]["test"]
         assert t3["matrix"]["uat"] == t2["matrix"]["dev"]
         assert t3["matrix"]["dev"] == t2["matrix"]["prod"]
         prod = t3["matrix"]["prod"]

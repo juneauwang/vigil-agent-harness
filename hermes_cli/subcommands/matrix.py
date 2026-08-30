@@ -64,7 +64,7 @@ def build_matrix_parser(subparsers, *, cmd_matrix: Callable) -> None:
         help="用 setup 模板生成 matrix.yaml（模板 1/2/3/4）",
         description=(
             "生成操作矩阵（~/.vigil/matrix.yaml）。模板 1 单人本地 / 模板 2 小团队"
-            "（local/dev/prod）/ 模板 3 中型团队（local/uat/dev/prod）/ 模板 4 自定义"
+            "（local/test/dev/prod）/ 模板 3 中型团队（local/test/uat/dev/prod）/ 模板 4 自定义"
             "（三步级联多选）。已存在时报错（安全资产防误覆盖），--force 可重建。"
         ),
     )

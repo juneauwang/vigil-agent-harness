@@ -5031,7 +5031,7 @@
   gateway/run.py、web/src/lib/api.ts、web/src/lib/chat.ts、web/src/pages/
   ChatPage.tsx、web/src/pages/ChatPage.test.tsx、tests/tools/
   test_batch82_cards_persist.py + OPS-DELTA.md 本条登记。
-### 98. 操作裁决目标化——分类器补齐 + 目标解析层 + 矩阵按目标实体 env 裁决（batch83，3 个 commit）
+### 98. 操作裁决目标化——分类器补齐 + 目标解析层 + 矩阵按目标实体 env 裁决 + 模板补 test 段 / ops-init 铺矩阵（batch83，4 个 commit）
 
 - **背景**（2026-08-30 用户 dogfood 报告，按严重度）：① 矩阵绕过——分类器漏配
   （action_classifier 只有 apt/pip/dnf/docker/helm 规则，无 npm/pnpm/yarn/cargo/
@@ -5089,11 +5089,28 @@
   可解析，prod/test 各走各档，45 例全绿）+ test_ops_permissions.py /
   test_ops_permissions_guard.py / test_terminal_matrix.py /
   test_batch80_prod_change_hardgate.py / test_change_command_coverage.py 同步更新。
+- **任务 4——模板补 test 段 + ops-init 铺矩阵**（commit 4）：四模板补 test 行
+  （template2/3 的 _TEMPLATE_ENVS 与 template4 级联循环都加 test，档位参考 dev；
+  TEMPLATE_LABELS / CLI matrix init 文案 / 前端 MatrixPage 描述同步）；ops-init
+  docstring "Files written" 声称写 permission matrix 但实写缺文件 → 显式
+  ``vigil ops-init`` 路径新增 _write_sample_matrix（template2 落盘 matrix.yaml，
+  幂等不覆盖用户改动）。**关键约束**：矩阵写入不放 seed_ops_samples（首装铺设
+  共享路径）——首装 default profile 必须保持矩阵未初始化（OPS-DELTA #76 惰性：
+  matrix.yaml 缺失 + 非 prod 会话 env → 交回原检查直接放行，echo/ls 等普通命令
+  不进审批门）；否则任何首装路径（含 pytest 每测试的临时 VIGIL_HOME）一加载
+  config 就铺出矩阵，terminal 未知命令全被 "unknown → approve → 无人在场
+  fail-closed" 拦死（实测 30 例终端测试回归）。测试：test_matrix.py
+  TestTemplates 更新（test=dev 档断言）+ test_ops_init.py 新增
+  test_init_seeds_permission_matrix（E2E 铺矩阵 + 幂等）+ test_env_command.py /
+  test_ops_init.py 的 rm 断言按 batch83 语义更新（rm→remove 高危变更 → 本机未
+  登记拓扑 → deny；unknown 语义改用 git push 验证）。
 - **验收**：任务 1-3 各自单测 + 相关批回归全绿；验收场景 a-e 结论：a ✓（test 会话
   ssh prod-host 高危变更按 prod 矩阵裁决）、b ✓（dev install required 强制人工）、
-  c ✓（本机 rm -f 按实体 env 裁决；未登记 → deny，c 的"补 test 段后完整判定"由
-  任务 4 test 行补全）、d ✓（ssh 未登记主机 → deny）、e ✓（只读命令零影响）。
-- **状态**：3 个独立 fix commit（batch83，commit 1 分类器 / commit 2 目标解析 /
-  commit 3 矩阵裁决），只含 tools/action_classifier.py、tools/target_resolve.py、
-  tools/ops_permissions.py、tools/approval.py、tests/tools/ 相关用例 +
-  OPS-DELTA.md 本条登记。
+  c ✓（本机 rm -f 按实体 env 矩阵裁决，test 段已补全：本机实体 env=test 走 test
+  行；未登记 → deny）、d ✓（ssh 未登记主机 → deny）、e ✓（只读命令零影响）。
+- **状态**：4 个独立 fix commit（batch83，commit 1 分类器 / commit 2 目标解析 /
+  commit 3 矩阵裁决 / commit 4 模板补 test 段 + ops-init 铺矩阵），只含
+  tools/action_classifier.py、tools/target_resolve.py、tools/ops_permissions.py、
+  tools/approval.py、tools/matrix_data.py、hermes_cli/ops_init.py、
+  hermes_cli/subcommands/matrix.py、web/src/pages/MatrixPage.tsx、tests/ 相关用例
+  + OPS-DELTA.md 本条登记。

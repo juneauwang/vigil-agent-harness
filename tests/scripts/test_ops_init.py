@@ -146,6 +146,27 @@ def test_init_creates_profile_config_and_topology(ops_home):
     assert ts_load().enabled == "off"
 
 
+def test_init_seeds_permission_matrix(tmp_path):
+    """batch83 任务 4：ops-init 铺 matrix.yaml（template2 local/test/dev/prod），
+    docstring "Files written" 与实写对齐；幂等（重跑不覆盖用户改动）。"""
+    root = tmp_path / "hermes-root"
+    proc = _run_init(root, "--no-alias", entry="script")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    home = root / "profiles" / "ops"
+    matrix_path = home / "matrix.yaml"
+    assert matrix_path.is_file()
+    data = yaml.safe_load(matrix_path.read_text(encoding="utf-8"))
+    assert data["base_template"] == "template2"
+    assert set(data["matrix"]) == {"local", "test", "dev", "prod"}
+    assert data["matrix"]["test"] == data["matrix"]["dev"]  # test = dev 档
+
+    # 用户改过的矩阵，重跑不覆盖
+    matrix_path.write_text("custom: true\n", encoding="utf-8")
+    proc = _run_init(root, "--no-alias", entry="script")
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert matrix_path.read_text(encoding="utf-8") == "custom: true\n"
+
+
 @pytest.mark.parametrize("entry", ENTRIES)
 def test_init_idempotent_and_force(tmp_path, entry):
     root = tmp_path / "hermes-root"
@@ -229,9 +250,15 @@ def test_env_flag_custom_env_maps_to_tier(tmp_path, monkeypatch):
     prod = next(d for d in env_defs if d["name"] == "prod")
     assert prod["role"] == "prod" and prod["isolation"] == "strict"
 
-    # 操作矩阵按映射后的档位判定（YAPL P5：unknown → 默认 approve；restart →
-    # prod 矩阵 required）。home 无 matrix.yaml → 空矩阵默认 approve 保守。
+    # 操作矩阵按映射后的档位判定（batch83 起：rm → remove 高危变更，本机未登记
+    # 样例拓扑 → 目标解析 deny；unknown 命令 → 默认 approve；restart → prod 矩阵
+    # 档位）。matrix.yaml 由 ops-init 铺入（template2，任务 4）。
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["not-in-topology"])
     decision = check_ops_command_permission("rm -rf /var/log")
+    assert decision is not None and decision["action"] == "deny"
+    assert decision["target_deny"] is True
+    decision = check_ops_command_permission("git push origin main")
     assert decision is not None and decision["action"] == "approve"
     decision = check_ops_command_permission("systemctl restart myapp")
     assert decision is not None and decision["action"] == "approve"
@@ -247,9 +274,13 @@ def test_env_flag_legacy_uat_maps_prod_tier(tmp_path, monkeypatch):
     monkeypatch.setenv("VIGIL_HOME", str(home))
     perms = _load_permissions(home)
     assert perms["env"] == "prod" and perms["role"] == "prod"
-    # 权限判定 = prod 档语义（YAPL P5：unknown → 默认 approve；restart → 矩阵
-    # 判定，env_tier 映射 prod）。
-    unknown = check_ops_command_permission("rm -rf /var/log")
+    # 权限判定 = prod 档语义（batch83 起：rm → remove 高危变更，本机未登记拓扑 →
+    # deny；unknown → 默认 approve；restart → 矩阵判定，env_tier 映射 prod）。
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["not-in-topology"])
+    denied = check_ops_command_permission("rm -rf /var/log")
+    assert denied is not None and denied["action"] == "deny" and denied["target_deny"] is True
+    unknown = check_ops_command_permission("git push origin main")
     assert unknown is not None and unknown["action"] == "approve" and unknown["env_tier"] == "prod"
     approve = check_ops_command_permission("systemctl restart myapp")
     assert approve is not None and approve["action"] == "approve" and approve["env_tier"] == "prod"

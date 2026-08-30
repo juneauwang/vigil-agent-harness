@@ -116,8 +116,9 @@ def test_env_switch_updates_config_active_env_and_banner(env_home):
     assert _active_env() == "bare_metal_prod"
     # banner ENV badge 数据源随切换更新
     assert banner._load_banner_state()["env"] == "bare_metal_prod"
-    # 操作矩阵按自定义 env 名判定（YAPL P5：unknown 动作 → 默认 approve 保守）
-    decision = check_ops_command_permission("rm -rf /var/log")
+    # 操作矩阵按自定义 env 名判定（YAPL P5：unknown 动作 → 默认 approve 保守；
+    # batch83 起 rm 归 remove 高危变更 → 目标解析，unknown 语义用 git push 验证）
+    decision = check_ops_command_permission("git push origin main")
     assert decision is not None and decision["action"] == "approve"
     assert decision["env"] == "bare_metal_prod"
 
@@ -137,8 +138,9 @@ def test_env_unknown_env_errors_and_keeps_current(env_home):
     assert "未定义环境" in out
     assert "bare_metal_prod" in out  # 报错列出可用项
     assert _active_env() == "test"
-    # test 档：unknown 动作 → 默认 approve（矩阵语义，非 deny）
-    decision = check_ops_command_permission("rm -rf /var/log")
+    # test 档：unknown 动作 → 默认 approve（矩阵语义，非 deny；batch83 起
+    # rm → remove 高危变更走目标解析，unknown 语义用 git push 验证）
+    decision = check_ops_command_permission("git push origin main")
     assert decision is not None and decision["action"] == "approve"
 
 

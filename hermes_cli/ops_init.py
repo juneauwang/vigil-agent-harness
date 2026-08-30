@@ -30,6 +30,7 @@ Files written (inside the Vigil root, default ``~/.vigil``; override with
     <root>/profiles/ops/entities/*.yaml      # L3 命名：entities/{cluster}__{host}__{name}.yaml
     <root>/profiles/ops/hardware/*.yaml      # 硬件层：静态规格 + controller 枚举
     <root>/profiles/ops/runbooks/*.yaml
+    <root>/profiles/ops/matrix.yaml          # 权限矩阵（template2：local/test/dev/prod）
 
 Idempotent: an existing profile / config.yaml / topology.yaml is left
 untouched unless ``--force`` is passed.  Nothing outside the Vigil root is
@@ -273,6 +274,26 @@ def _seed_samples(profile_dir: Path, force: bool) -> bool:
     return seed_ops_samples(profile_dir, force=force, report=print)
 
 
+def _write_sample_matrix(profile_dir: Path, force: bool) -> None:
+    """Write the sample permission matrix (template2: local/test/dev/prod).
+
+    只在显式 ``vigil ops-init`` 路径写（docstring "Files written" 与实写对齐，
+    OPS-DELTA #98 任务 4）——不放进 seed_ops_samples：那是首装铺设共享路径，
+    首装 default profile 必须保持矩阵未初始化（OPS-DELTA #76 惰性：matrix.yaml
+    缺失 + 非 prod 会话 env → 交回原检查直接放行，echo/ls 等普通命令不进审批
+    门）；ops-init 是显式初始化，铺入后矩阵全量 P5 语义（env=test 安全默认，
+    test 行 execute 放行常规操作）。幂等：已存在且非 force 跳过（用户改过的
+    矩阵不覆盖）。
+    """
+    from tools.matrix_data import init_matrix
+    matrix_dst = profile_dir / "matrix.yaml"
+    if matrix_dst.exists() and not force:
+        print(f"· matrix.yaml 已存在，跳过（--force 覆盖）：{matrix_dst}")
+        return
+    init_matrix("template2", home=profile_dir, force=True)
+    print(f"· 写入 matrix.yaml（template2：local/test/dev/prod）：{matrix_dst}")
+
+
 def _warn_topology_env_sync(profile_dir: Path, env: str) -> None:
     """拓扑 environments 段与 config 的 env 定义同源（不一致以 config 为准）。
 
@@ -323,6 +344,7 @@ def run(root: Path, env: str = "test", force: bool = False, no_alias: bool = Fal
 
     _write_config(profile_dir, env, force)
     _seed_samples(profile_dir, force)
+    _write_sample_matrix(profile_dir, force)
     _warn_topology_env_sync(profile_dir, env)
 
     if not no_alias:

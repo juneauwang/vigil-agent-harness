@@ -96,8 +96,8 @@ TEMPLATE_NAMES = ("template1", "template2", "template3", "template4")
 # 模板展示名（CLI/UI 用）。
 TEMPLATE_LABELS = {
     "template1": "单人本地项目",
-    "template2": "小团队（local/dev/prod）",
-    "template3": "中型团队（local/uat/dev/prod）",
+    "template2": "小团队（local/test/dev/prod）",
+    "template3": "中型团队（local/test/uat/dev/prod）",
     "template4": "自定义（级联多选）",
 }
 
@@ -377,9 +377,11 @@ def _template1_cells(actions_: List[str]) -> Dict[str, str]:
 
 
 def _template2_cells(actions_: List[str], env: str) -> Dict[str, str]:
-    """模板 2 小团队（local/dev/prod）单环境档位。"""
+    """模板 2 小团队（local/test/dev/prod）单环境档位。"""
     if env == "local":
         return _template1_cells(actions_)
+    if env == "test":
+        return _template2_cells(actions_, "dev")
     if env == "dev":
         return _build_cells(
             actions_,
@@ -394,14 +396,16 @@ def _template2_cells(actions_: List[str], env: str) -> Dict[str, str]:
             approve=set(_T2_PROD_APPROVE),
             required=set(_T2_PROD_REQUIRED),
         )
-    raise ValueError(f"模板 2 只支持 local/dev/prod，收到 {env!r}")
+    raise ValueError(f"模板 2 只支持 local/test/dev/prod，收到 {env!r}")
 
 
 def _template3_cells(actions_: List[str], env: str) -> Dict[str, str]:
-    """模板 3 中型团队（local/uat/dev/prod）：uat=模板2dev、dev=模板2prod、
+    """模板 3 中型团队（local/test/uat/dev/prod）：test/uat=模板2dev、dev=模板2prod、
     prod 最高限制（execute 仅查询 3，其余全部强制人工）。"""
     if env == "local":
         return _template1_cells(actions_)
+    if env == "test":
+        return _template2_cells(actions_, "dev")
     if env == "uat":
         return _template2_cells(actions_, "dev")
     if env == "dev":
@@ -413,13 +417,13 @@ def _template3_cells(actions_: List[str], env: str) -> Dict[str, str]:
             approve=set(),
             required=set(actions_) - set(_T2_PROD_EXECUTE),
         )
-    raise ValueError(f"模板 3 只支持 local/uat/dev/prod，收到 {env!r}")
+    raise ValueError(f"模板 3 只支持 local/test/uat/dev/prod，收到 {env!r}")
 
 
 _TEMPLATE_ENVS = {
     "template1": ("local",),
-    "template2": ("local", "dev", "prod"),
-    "template3": ("local", "uat", "dev", "prod"),
+    "template2": ("local", "test", "dev", "prod"),
+    "template3": ("local", "test", "uat", "dev", "prod"),
 }
 
 
@@ -465,12 +469,12 @@ def template_matrix(template: str, actions_: Optional[List[str]] = None,
                 "（已选的从后续选项移除）。"
             )
         matrix: Dict[str, Dict[str, str]] = {}
-        for env in ("local", "dev", "prod"):
+        for env in ("local", "test", "dev", "prod"):
             matrix[env] = _build_cells(
                 acts, execute=execute_set, approve=approve_set,
                 required=set(acts) - execute_set - approve_set,
             )
-        return {"matrix": matrix, "envs": ["local", "dev", "prod"]}
+        return {"matrix": matrix, "envs": ["local", "test", "dev", "prod"]}
 
     envs = _TEMPLATE_ENVS[template]
     matrix = {env: template_cells(template, env, acts) for env in envs}

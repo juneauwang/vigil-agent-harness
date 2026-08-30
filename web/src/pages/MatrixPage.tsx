@@ -31,8 +31,8 @@ const LEVEL_COLORS: Record<MatrixLevel, string> = {
 
 const TEMPLATES: Array<{ id: string; label: string; desc: string }> = [
   { id: "template1", label: "模板 1 · 单人", desc: "local，execute 全部，仅高危 4 需审批" },
-  { id: "template2", label: "模板 2 · 小团队", desc: "local / dev / prod 严格度阶梯" },
-  { id: "template3", label: "模板 3 · 中型", desc: "local / uat / dev / prod，prod 最高限制" },
+  { id: "template2", label: "模板 2 · 小团队", desc: "local / test / dev / prod 严格度阶梯" },
+  { id: "template3", label: "模板 3 · 中型", desc: "local / test / uat / dev / prod，prod 最高限制" },
   { id: "template4", label: "模板 4 · 自定义", desc: "三步级联多选（execute → approve → 其余 required）" },
 ];
 
