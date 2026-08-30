@@ -70,6 +70,21 @@ def prod_env(tmp_path, monkeypatch):
         "ops:\n  permissions:\n    enabled: true\n    env: prod\n    role: operator\n",
         encoding="utf-8",
     )
+    # batch83（OPS-DELTA #98）：高危变更（kubectl delete/scale、docker rm、
+    # helm uninstall 等）按目标实体裁决——铺拓扑表：k3s-prod 集群 + 本机
+    # workstation（env=prod，docker/helm 本地命令解析到它）。
+    (tmp_path / "topology.yaml").write_text(
+        "version: 4\n"
+        "environments:\n"
+        "  - {name: prod, isolation: strict, role: prod}\n"
+        "clusters:\n"
+        "  - {name: k3s-prod, env: prod, type: k3s, endpoint: \"https://203.0.113.15:6443\"}\n"
+        "hosts:\n"
+        "  - {name: workstation, type: host, env: prod, endpoint: \"192.168.1.50\"}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["workstation"])
     (tmp_path / "matrix.yaml").write_text(yaml.safe_dump({
         "schema_version": 1,
         "updated_at": "2026-08-23T00:00:00+08:00",

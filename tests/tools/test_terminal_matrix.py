@@ -43,6 +43,19 @@ def tmatrix(tmp_path, monkeypatch):
     """隔离 VIGIL_HOME + config（env + approvals.mode）+ 定制矩阵。"""
     _session_token = approval_module.set_current_session_key(SESSION)
 
+    # batch83：高危变更（reboot 等）按目标实体裁决——铺拓扑表（本机 workstation
+    # env=prod）并注入本机身份，使 systemctl reboot 落到 prod 矩阵行。
+    (tmp_path / "topology.yaml").write_text(
+        "version: 1\n"
+        "environments:\n"
+        "  - {name: prod, isolation: strict, role: prod, core_entities: [workstation]}\n"
+        "core_entities:\n"
+        "  - {name: workstation, type: host, env: prod, endpoint: \"192.168.1.50\"}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["workstation"])
+
     def _activate(env="prod", *, mode="manual", matrix=None, extra_cfg=""):
         if matrix is None:
             matrix = {"prod": {"query": "execute", "restart": "approve",

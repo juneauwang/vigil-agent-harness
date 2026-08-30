@@ -41,6 +41,15 @@ core_entities:
   - {name: node1, type: k8s-node, env: prod, endpoint: "203.0.113.10", detail: entities/node1.yaml}
   - {name: node2, type: k8s-node, env: prod, detail: entities/node2.yaml}
   - {name: test-web, type: service, env: test, detail: entities/test-web.yaml}
+  - {name: workstation, type: host, env: prod, endpoint: "192.168.1.50", detail: entities/workstation.yaml}
+"""
+
+WORKSTATION_YAML = """\
+name: workstation
+type: host
+env: prod
+attrs:
+  internal_ip: 192.168.1.50
 """
 
 NODE2_YAML = """\
@@ -132,8 +141,14 @@ def guard_env(tmp_path, monkeypatch):
         (tmp_path / "entities").mkdir(exist_ok=True)
         (tmp_path / "entities" / "node2.yaml").write_text(NODE2_YAML, encoding="utf-8")
         (tmp_path / "entities" / "test-web.yaml").write_text(TESTWEB_YAML, encoding="utf-8")
+        (tmp_path / "entities" / "workstation.yaml").write_text(
+            WORKSTATION_YAML, encoding="utf-8")
         _write_matrix(tmp_path, matrix=matrix)
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        # batch83：本机身份注入——本机命令（pip install / rm 等）解析到本机实体
+        # workstation（env=prod），走 prod 矩阵。
+        monkeypatch.setattr(
+            "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         hc._LOAD_CONFIG_CACHE.clear()
         approval_module._YOLO_MODE_FROZEN = False
         approval_module.clear_session(SESSION)
@@ -324,7 +339,8 @@ def test_custom_env_role_prod_unknown_still_approve(guard_env):
         {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
         {"name": "local", "isolation": "relaxed", "role": "test"},
     ])
-    result = approval_module.check_all_command_guards("rm -rf /var/log", "local")
+    # batch83：rm 已归 remove（高危变更），用 mv 保持 unknown 语义断言
+    result = approval_module.check_all_command_guards("mv a.txt b.txt", "local")
     assert result["approved"] is False  # 无人在场 fail-closed
     assert result["ops_matrix"]["action"] == "approve"
     assert result["ops_matrix"]["action_name"] == "unknown"
@@ -381,7 +397,9 @@ def test_matrix_default_enabled_without_enabled_key(guard_env):
     """OPS-DELTA #1：矩阵默认启用——config 只写 env 不写 enabled 也按矩阵判定。"""
     guard_env("prod", enabled=None)
     result = approval_module.check_all_command_guards("rm -rf /var/log", "local")
-    assert result["approved"] is False  # unknown → approve → 无人在场 fail-closed
+    # batch83：rm → remove（高危变更）→ 本机 workstation (prod) → prod remove
+    # required → 无人在场 fail-closed
+    assert result["approved"] is False
     assert result["ops_matrix"]["action"] == "approve"
     assert result["ops_matrix"]["env"] == "prod"
 
@@ -389,6 +407,8 @@ def test_matrix_default_enabled_without_enabled_key(guard_env):
 def test_matrix_inert_without_env(guard_env):
     """矩阵默认启用但未配置 env（非 ops profile）→ 惰性，不改变既有判定。"""
     guard_env("", enabled=None)
-    result = approval_module.check_all_command_guards("rm -rf /var/log", "local")
+    # batch83：高危变更（rm→remove）按目标实体裁决，不再随会话 env 惰性；
+    # 惰性语义用只读命令验证（query 无目标解析、env 空 → 交回原检查）。
+    result = approval_module.check_all_command_guards("docker ps", "local")
     assert result["approved"] is True
     assert "ops_matrix" not in result

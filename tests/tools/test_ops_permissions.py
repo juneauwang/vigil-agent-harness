@@ -147,12 +147,25 @@ def test_chain_takes_strictest_matrix_level(perm_env):
 
 
 def test_ssh_controlled_channel_note(perm_env):
-    """ssh → run_script 走矩阵 + 受控通道 note（§八待办收口）。"""
-    perm_env("prod", matrix=T2)
+    """ssh → run_script 走矩阵 + 受控通道 note（§八待办收口）。
+
+    batch83（OPS-DELTA #98）起 ssh 受控通道强制目标解析：拓扑表登记目标主机
+    才放行到矩阵（未登记 → deny）。本例铺 node1（203.0.113.10, prod）。
+    """
+    home = perm_env("prod", matrix=T2)
+    (home / "topology.yaml").write_text(
+        "version: 1\n"
+        "environments:\n"
+        "  - {name: prod, isolation: strict, role: prod, core_entities: [node1]}\n"
+        "core_entities:\n"
+        "  - {name: node1, type: host, env: prod, endpoint: \"203.0.113.10\"}\n",
+        encoding="utf-8",
+    )
     decision = check_ops_command_permission("ssh root@203.0.113.10 'df -h'")
     assert decision is not None
     assert decision["action_name"] == "run_script"
     assert decision["level"] == "required"
+    assert decision["env"] == "prod"
     assert "vssh/拓扑凭据受控通道" in decision["description"]
 
 

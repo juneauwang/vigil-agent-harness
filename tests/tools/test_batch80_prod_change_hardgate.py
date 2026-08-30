@@ -53,6 +53,21 @@ def _cfg(tmp_path, env, *, enabled=True, extra="", matrix=None) -> str:
 def perm_env(tmp_path, monkeypatch):
     def _activate(env, *, enabled=True, extra="", matrix=None):
         _cfg(tmp_path, env, enabled=enabled, extra=extra, matrix=matrix)
+        # batch83（OPS-DELTA #98）：kubectl 高危变更（scale/delete）按目标集群
+        # 实体裁决——铺 k3s-prod/k3s-dev/k3s-test 三集群，命令用 --context 选集群。
+        (tmp_path / "topology.yaml").write_text(
+            "version: 4\n"
+            "environments:\n"
+            "  - {name: prod, isolation: strict, role: prod}\n"
+            "  - {name: dev, isolation: relaxed, role: dev}\n"
+            "  - {name: test, isolation: relaxed, role: test}\n"
+            "clusters:\n"
+            "  - {name: k3s-prod, env: prod, type: k3s, endpoint: \"https://203.0.113.15:6443\"}\n"
+            "  - {name: k3s-dev, env: dev, type: k3s, endpoint: \"https://203.0.113.25:6443\"}\n"
+            "  - {name: k3s-test, env: test, type: k3s, endpoint: \"https://203.0.113.35:6443\"}\n"
+            "hosts: []\n",
+            encoding="utf-8",
+        )
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         hc._LOAD_CONFIG_CACHE.clear()
         return tmp_path
@@ -82,7 +97,7 @@ def test_prod_scale_execute_level_forces_confirmation(perm_env):
     require_confirmation——execute/approve 档在 prod 变更时升到人工确认）。"""
     perm_env("prod", matrix=M)
     decision = check_ops_command_permission(
-        "kubectl scale deployment/argocd-server --replicas=3")
+        "kubectl --context k3s-prod scale deployment/argocd-server --replicas=3")
     assert decision is not None
     assert decision["action"] == "approve"
     assert decision["action_name"] == "scale"
@@ -125,7 +140,7 @@ def test_dev_and_test_scale_not_forced(perm_env):
     """test/dev + scale → 非 prod 完全不变（approve 走 smart，不强制）。"""
     perm_env("dev", matrix=M)
     decision = check_ops_command_permission(
-        "kubectl scale deployment/argocd-server --replicas=3")
+        "kubectl --context k3s-dev scale deployment/argocd-server --replicas=3")
     assert decision is not None
     assert decision["action_name"] == "scale"
     assert decision["level"] == "approve"
@@ -133,7 +148,7 @@ def test_dev_and_test_scale_not_forced(perm_env):
 
     perm_env("test", matrix=M)
     decision = check_ops_command_permission(
-        "kubectl scale deployment/argocd-server --replicas=3")
+        "kubectl --context k3s-test scale deployment/argocd-server --replicas=3")
     assert decision is not None
     assert decision["action_name"] == "scale"
     assert decision["require_confirmation"] is False
@@ -154,7 +169,7 @@ def test_prod_scale_matrix_required_still_true(perm_env):
     """prod + scale 且矩阵 {approve: required} → 本来就强制（原有语义保持）。"""
     perm_env("prod", matrix={"prod": {"scale": {"approve": "required"}}})
     decision = check_ops_command_permission(
-        "kubectl scale deployment/argocd-server --replicas=3")
+        "kubectl --context k3s-prod scale deployment/argocd-server --replicas=3")
     assert decision is not None
     assert decision["level"] == "required"
     assert decision["require_confirmation"] is True
@@ -163,7 +178,8 @@ def test_prod_scale_matrix_required_still_true(perm_env):
 def test_prod_missing_cell_mutating_forced(perm_env):
     """prod + 变更动作矩阵漏配（默认 approve）→ 硬门仍强制（漏配不放松）。"""
     perm_env("prod", matrix={"prod": {"query": "execute"}})
-    decision = check_ops_command_permission("kubectl delete pod nginx-x")
+    decision = check_ops_command_permission(
+        "kubectl --context k3s-prod delete pod nginx-x")
     assert decision is not None
     assert decision["action_name"] == "decommission"
     assert decision["level"] == "approve"
@@ -206,7 +222,7 @@ def test_e2e_smart_approve_downgraded_to_manual_for_prod_change(perm_env, monkey
     token = ap.set_hermes_interactive_context(True)
     try:
         result = ap.check_all_command_guards(
-            "kubectl scale deployment/argocd-server --replicas=3", "local",
+            "kubectl --context k3s-prod scale deployment/argocd-server --replicas=3", "local",
             approval_callback=_cb)
     finally:
         ap.reset_hermes_interactive_context(token)

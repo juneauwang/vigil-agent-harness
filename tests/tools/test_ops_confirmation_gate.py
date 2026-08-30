@@ -62,6 +62,29 @@ def _write_matrix(home) -> None:
     }, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
+def _write_topology(home, env) -> None:
+    """batch83：高危变更目标解析需要拓扑表（kubectl → 单集群；docker/helm/本机
+    → workstation host）。env 跟随会话 env，让 prod/test 矩阵各走各的档。"""
+    (home / "topology.yaml").write_text(yaml.safe_dump({
+        "version": 4,
+        "environments": [
+            {"name": "local", "isolation": "relaxed", "role": "local"},
+            {"name": "test", "isolation": "relaxed", "role": "test"},
+            {"name": "dev", "isolation": "relaxed", "role": "dev"},
+            {"name": "uat", "isolation": "relaxed", "role": "uat"},
+            {"name": "prod", "isolation": "strict", "role": "prod"},
+        ],
+        "clusters": [
+            {"name": f"k3s-{env}", "env": env, "type": "k3s",
+             "endpoint": "https://203.0.113.15:6443"},
+        ],
+        "hosts": [
+            {"name": "workstation", "type": "host", "env": env,
+             "endpoint": "192.168.1.50"},
+        ],
+    }, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+
 def _cfg(tmp_path, env, *, enabled=True) -> None:
     (tmp_path / "config.yaml").write_text(
         "ops:\n"
@@ -72,6 +95,7 @@ def _cfg(tmp_path, env, *, enabled=True) -> None:
         encoding="utf-8",
     )
     _write_matrix(tmp_path)
+    _write_topology(tmp_path, env)
 
 
 @pytest.fixture
@@ -79,6 +103,10 @@ def perm_env(tmp_path, monkeypatch):
     def _activate(env, *, enabled=True):
         _cfg(tmp_path, env, enabled=enabled)
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        # batch83：本机（docker/helm/裸变更命令的目标）登记为 workstation，
+        # 否则高危变更目标解析失败 → deny，测不到矩阵档位。
+        monkeypatch.setattr(
+            "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         hc._LOAD_CONFIG_CACHE.clear()
         return tmp_path
 
@@ -184,7 +212,7 @@ def test_non_required_approve_in_prod_not_gated(perm_env):
     """prod 下非 required 档 approve（scp → transfer_file / git push → unknown）
     → require_confirmation=false（不是强制确认门）。"""
     perm_env("prod")
-    for cmd in ("scp a.txt ops@h:/tmp", "git push origin main"):
+    for cmd in ("scp a.txt ops@workstation:/tmp", "git push origin main"):
         result = check_ops_command_permission(cmd)
         assert result is not None, cmd
         assert result["require_confirmation"] is False, cmd

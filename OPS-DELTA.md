@@ -5031,3 +5031,69 @@
   gateway/run.py、web/src/lib/api.ts、web/src/lib/chat.ts、web/src/pages/
   ChatPage.tsx、web/src/pages/ChatPage.test.tsx、tests/tools/
   test_batch82_cards_persist.py + OPS-DELTA.md 本条登记。
+### 98. 操作裁决目标化——分类器补齐 + 目标解析层 + 矩阵按目标实体 env 裁决（batch83，3 个 commit）
+
+- **背景**（2026-08-30 用户 dogfood 报告，按严重度）：① 矩阵绕过——分类器漏配
+  （action_classifier 只有 apt/pip/dnf/docker/helm 规则，无 npm/pnpm/yarn/cargo/
+  go/uv/brew），unknown → 矩阵漏配默认 approve → smart 自动批直接放行（dev 矩阵
+  install 已设 {approve: required}，npm install -g codex 仍直接执行）；② 矩阵无
+  test 段（template4 只铺 local/dev/prod），env=test 时矩阵整体失效；③ 硬门只按
+  会话 env 判、不解析目标实体 env——test 会话 rm -f 静默删掉 3 台 prod 主机实体
+  （用户下令但机制零拦截）；④ 正向发现：oneshot/RPC 会话无审批人时 unknown
+  fail-closed 全拦，交互会话 smart 审批是薄弱点。
+- **根因（代码实锤）**：① _DEFAULT_RULES 只有 6 个包管理器、无现代包管理器 →
+  ACTION_UNKNOWN（rank 11）→ 矩阵漏配默认 approve；② 四模板只铺 local/dev/prod，
+  env=test 无行；③ 矩阵 env 维度 = 会话声明 env（ops.permissions.env / /env），
+  不是操作目标实体的 env——"这个操作作用于谁"才是矩阵该问的，目标实体在拓扑表
+  有自己的 env。
+- **设计定案**：① 矩阵 env 维度来源改为**目标实体（拓扑表）**，链路：执行请求 →
+  classifier 动作枚举 → 变更类动作强制目标解析 → 实体 env → 查矩阵；② **解析不出
+  实体 = deny（目标解析层硬拦截，先于查矩阵）**——confirm 在交互会话会被 smart 自
+  动批绕过（本次 npm 逃逸的机制），deny 才成立；矩阵本身仍无 deny 档（execute /
+  approve / {approve: required} 三档不变）；③ 只读动作（query/fetch_log/verify）
+  不强制解析（ls/cat/grep 天然无目标实体，不误伤）；④ 首批高危变更动作强制解析
+  （install/remove/decommission/reboot/scale + kubectl delete 类），低危变更
+  （start/stop/restart/reload/upgrade 等）首批暂用会话 env 裁决（过渡态，dogfood
+  看误伤率后定档）；⑤ 会话声明 env 不参与任何裁决，本机未登记拓扑 = 解析失败 →
+  拒绝（无"本机默认 dev"兜底）。
+- **任务 1——分类器规则补齐**（commit 1）：_DEFAULT_RULES 补 npm/pnpm/yarn/cargo/
+  go/uv/brew install/uninstall/upgrade 规则 + 通用 install/uninstall/upgrade 兜底
+  正则（防"新包管理器漏配 → unknown 逃逸矩阵"同类洞）+ rm 族归 remove（rm -f 删实
+  体实证）；补 _normalize_kubectl：kubectl 全局 flag（--context/-n/--kubeconfig/
+  --server/--as 等）插在 kubectl 与 verb 之间导致规则失配 → 漏配 unknown（batch83
+  同类洞），所有非 flag token 按原序提前、值型 flag 与其值留在原地、复合 verb
+  （rollout restart）保持邻接。测试：test_action_classifier.py 补 6 例 flag 归一 +
+  既有 79 例。
+- **任务 2——目标解析层**（commit 2，tools/target_resolve.py）：ssh/scp/sftp/rsync
+  的 user@host/裸 IP → host 实体；kubectl --context/--namespace/--kubeconfig →
+  cluster 实体（未指定且唯一集群 → 该集群，多集群无法确定 → 失败）；docker -H/
+  --context/context → host 实体（unix:///本地 socket → 本机 host）；ansible -i
+  inventory 主机组 → 实体集合（集合内 env 一致才裁决，跨环境/含拓扑表外主机 →
+  失败）；无目标参数 → 本机 host 实体（主机名/网卡 IP 匹配）；本机未登记拓扑 =
+  解析失败。返回 resolved / failed 两态（失败携带修复指引：先 topo_query 查实体
+  名，或用 topo_update/topo-discover 登记）。测试 23 例（ssh/kubectl/docker/
+  ansible/本机/未登记主机）。
+- **任务 3——矩阵裁决目标化**（commit 3，核心改造）：check_ops_command_permission
+  高危变更动作强制 resolve_required_target → 实体 env 驱动矩阵（会话声明 env 零参
+  与）→ 正常 approve/required 裁决 + target_label/target_entity 透出（审批提示带
+  "目标: workstation (dev)"）；解析失败 → deny 决策（action=deny，先于矩阵查询）。
+  approval.check_all_command_guards 新增 deny 分支：ops_decision 算出后立即返回
+  ops_target_deny=True（先于 _has_human/yolo/mode=off/永久 allowlist fail-closed
+  分支——解析不出目标实体就没有可裁决的环境，任何旁路都不得放行）；sudo_tool 已
+  按 action==deny 消费（tool_error）。矩阵仍 3 档无 deny。测试：tests/tools/
+  test_batch83_target_adjudication.py 8 例（验收场景 a-e 逐条实测：a ssh prod-host
+  高危变更 test 会话按 prod 矩阵裁决；b 本机 dev npm install -g → dev required 人工
+  确认不是 smart 自动批，E2E 验证 smart approve 被降级；c 本机 rm -f 按实体 env，
+  未登记 → deny；d ssh 未登记主机 → deny；e 只读命令不触发解析正常执行；yolo/mode
+  =off 不能放行 deny）+ test_ops_confirmation_gate.py 补拓扑 fixture（高危命令目标
+  可解析，prod/test 各走各档，45 例全绿）+ test_ops_permissions.py /
+  test_ops_permissions_guard.py / test_terminal_matrix.py /
+  test_batch80_prod_change_hardgate.py / test_change_command_coverage.py 同步更新。
+- **验收**：任务 1-3 各自单测 + 相关批回归全绿；验收场景 a-e 结论：a ✓（test 会话
+  ssh prod-host 高危变更按 prod 矩阵裁决）、b ✓（dev install required 强制人工）、
+  c ✓（本机 rm -f 按实体 env 裁决；未登记 → deny，c 的"补 test 段后完整判定"由
+  任务 4 test 行补全）、d ✓（ssh 未登记主机 → deny）、e ✓（只读命令零影响）。
+- **状态**：3 个独立 fix commit（batch83，commit 1 分类器 / commit 2 目标解析 /
+  commit 3 矩阵裁决），只含 tools/action_classifier.py、tools/target_resolve.py、
+  tools/ops_permissions.py、tools/approval.py、tests/tools/ 相关用例 +
+  OPS-DELTA.md 本条登记。

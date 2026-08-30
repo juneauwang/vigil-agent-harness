@@ -49,6 +49,14 @@ RULES = [
     ("kubectl describe deploy app", "query", "kubectl.query"),
     ("kubectl logs -f deploy/app", "fetch_log", "kubectl.logs"),
     ("kubectl top nodes", "query", "kubectl.query"),
+    # kubectl 全局 flag 夹在 kubectl 与 verb 之间（batch83 同类洞：规则按
+    # "kubectl <verb>" 匹配，flag 插队会失配 → unknown 逃逸矩阵）
+    ("kubectl --context prod delete pod web-1", "decommission", "kubectl.delete"),
+    ("kubectl --context=prod delete pod web-1", "decommission", "kubectl.delete"),
+    ("kubectl -n prod scale deploy/app --replicas=5", "scale", "kubectl.scale"),
+    ("kubectl --kubeconfig /tmp/kubeconfig delete deploy x", "decommission", "kubectl.delete"),
+    ("kubectl --server https://203.0.113.1:6443 get pods", "query", "kubectl.query"),
+    ("kubectl --as admin -n prod rollout restart deploy/app", "restart", "kubectl.rollout_restart"),
     # systemctl / service
     ("systemctl restart myapp", "restart", "systemctl.restart"),
     ("systemctl start myapp", "start", "systemctl.start"),

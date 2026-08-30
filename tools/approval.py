@@ -4309,6 +4309,22 @@ def check_all_command_guards(command: str, env_type: str,
     except Exception as _ops_exc:
         logger.debug("Ops permission matrix check failed: %s", _ops_exc)
     if ops_decision is not None:
+        # batch83（OPS-DELTA #98）：高危变更目标解析失败 → 硬拒绝。目标解析层
+        # deny 先于矩阵查询，也先于 yolo / mode=off / 永久 allowlist / 无人在场
+        # fail-closed 分支——解析不出目标实体（未登记拓扑/无法提取）就没有可
+        # 裁决的环境，任何旁路都不得放行。矩阵本身仍无 deny 档（deny 是解析层
+        # 的档位，sudo_tool 同款消费）。
+        if ops_decision.get("action") == "deny":
+            logger.warning(
+                "Ops target resolution deny: %s (command: %s)",
+                ops_decision.get("description"), command[:200],
+            )
+            return {
+                "approved": False,
+                "ops_matrix": ops_decision,
+                "ops_target_deny": True,
+                "message": f"BLOCKED: {ops_decision['description']}",
+            }
         # 矩阵无 deny（classifier 不产出 deny，保守 = approve 不是拒绝）；硬底线 /
         # sudo stdin / 用户 deny / ansible inventory guard 等无条件层都在本检查之前。
         _has_human = (
@@ -4320,6 +4336,8 @@ def check_all_command_guards(command: str, env_type: str,
             # No human present (cron/batch/non-interactive): an approval
             # requirement fails closed.
             target_note = f" 目标: {target['label']};" if target else ""
+            if not target and ops_decision.get("target_label"):
+                target_note = f" 目标: {ops_decision['target_label']};"
             return {
                 "approved": False,
                 "ops_matrix": ops_decision,
@@ -4502,6 +4520,9 @@ def check_all_command_guards(command: str, env_type: str,
         ops_desc = ops_decision["description"]
         if target:
             ops_desc = f"{ops_desc} 目标: {target['label']}"
+        elif ops_decision.get("target_label"):
+            # batch83：高危变更按目标实体裁决——审批提示带目标实体（本机/远端）。
+            ops_desc = f"{ops_desc} 目标: {ops_decision['target_label']}"
         if _ops_confirmation_required:
             # 强制确认门：每次都走人工确认，会话/永久 allowlist 不能跳过。
             warnings.append((ops_key, ops_desc, False))

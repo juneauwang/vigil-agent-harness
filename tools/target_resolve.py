@@ -389,9 +389,11 @@ def resolve_required_target(command: str, *,
             "vigil ops-init 铺拓扑数据，或 topo_query 确认拓扑表可读。"
         )
     entities = _all_core_entities(topo, home)
-    if not entities:
+    clusters = [c for c in (topo.get("clusters") or [])
+                if isinstance(c, dict) and c.get("name")]
+    if not entities and not clusters:
         return _failed(
-            "拓扑表为空（无任何实体）——先 topo_query / topo_update 登记实体后再执行。"
+            "拓扑表为空（无任何实体/集群）——先 topo_query / topo_update 登记实体后再执行。"
         )
 
     from tools.ops_target import _host_candidates, _match_entity

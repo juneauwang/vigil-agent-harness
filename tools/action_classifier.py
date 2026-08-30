@@ -36,6 +36,17 @@ ACTION_UNKNOWN = "unknown"
 _CHAIN_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;)\s*|\n+")
 _PIPE_SPLIT_RE = re.compile(r"\s*\|\s*")
 
+# kubectl 全局 flag 值集合（verb 提取用）：这些 flag 后跟一个值 token，
+# 其余布尔/带 = 的 flag 不消耗下一个 token。
+_KUBECTL_VALUE_FLAGS = frozenset({
+    "-n", "-s", "-u",
+    "--namespace", "--context", "--kube-context", "--kubeconfig",
+    "--server", "--user", "--cluster", "--token", "--as", "--as-group",
+    "--request-timeout", "--cache-dir", "--certificate-authority",
+    "--client-certificate", "--client-key",
+})
+_KUBECTL_HEAD_RE = re.compile(r"^kubectl\b(.*)$", re.IGNORECASE)
+
 # sudo/doas 前缀剥离：sudo [-i] [-u user] [-E] [-H] <command>。取值 flag
 # （-u/-p/-C/-D/-g/-R/-r/-t/-T/-U）多剥一个值 token；布尔 flag（-i/-H/-E/-n
 # 等）只剥自身，避免把真实命令误吞成 flag 值（sudo -i docker ps → docker ps）。
@@ -302,12 +313,45 @@ def _main_command(segment: str) -> str:
     return _PIPE_SPLIT_RE.split(segment, maxsplit=1)[0].strip()
 
 
+def _normalize_kubectl(segment: str) -> str:
+    """kubectl [全局 flag] <verb> [全局 flag] ... → 非 flag token 全部提前。
+
+    规则表按 ``kubectl <verb>`` 匹配；全局 flag（--context/-n/--kubeconfig 等）
+    插在 kubectl 与 verb 之间会让规则失配 → 漏配 unknown 逃逸矩阵（batch83 同
+    类洞：``kubectl --context prod scale ...`` 不在黑名单 → smart 自动批）。把
+    所有非 flag token 按原序提前、不删任何 token（--context k3s-prod scale →
+    scale --context k3s-prod），复合 verb（rollout restart）也保持邻接；非
+    kubectl 命令原样返回。
+    """
+    m = _KUBECTL_HEAD_RE.match(segment)
+    if not m:
+        return segment
+    tokens = m.group(1).split()
+    verbs: List[str] = []
+    rest: List[str] = []
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if not tok.startswith("-"):
+            verbs.append(tok)
+            i += 1
+        elif "=" not in tok and tok in _KUBECTL_VALUE_FLAGS and i + 1 < len(tokens):
+            # 值型 flag：flag 与其值 token 都留在原地（--context k3s-prod）
+            rest.extend((tok, tokens[i + 1]))
+            i += 2
+        else:
+            rest.append(tok)
+            i += 1
+    if not verbs:
+        return segment
+    return "kubectl " + " ".join(verbs + rest)
+
 def classify_single(command: str) -> Dict[str, Any]:
     """单条命令（无链式操作符）→ {action, rule, note}；识别不出 → unknown。"""
     s = _strip_sudo_prefix(_main_command(command))
     if not s:
         return {"action": ACTION_UNKNOWN, "rule": None, "note": _UNKNOWN_NOTE}
-    lowered = s.lower()
+    lowered = _normalize_kubectl(s).lower()
     for pattern, action, rule_id, note in compiled_rules():
         if pattern.search(lowered):
             return {"action": action, "rule": rule_id, "note": note}

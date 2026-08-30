@@ -310,6 +310,12 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
       prod 环境 + 变更类动作（非只读）→ 额外强制 require_confirmation=True
       （batch80，OPS-DELTA #95：执行器绕行后门收口——execute/approve 档位在
       prod 变更时也升到人工确认，覆盖 smart 自动批）。
+    batch83（OPS-DELTA #98）目标化裁决：高危变更动作（install/remove/
+    decommission/reboot/scale + kubectl delete 类）与 ssh 族受控通道执行前
+    强制目标解析（tools/target_resolve.py）——解析出实体 → 实体 env 查矩阵
+    （会话声明 env 零参与）；解析失败 → 返回 deny（目标解析层硬拦截，先于
+    矩阵查询；矩阵本身仍无 deny 档）。低危变更与只读动作维持原判（target_env
+    或会话 env；只读不解析）。
     动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
 
     Args:
@@ -321,18 +327,14 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         None  — gate disabled / env 未配置 / 矩阵档位 execute（交回原有检查）。
         dict  — {"action": "approve", "action_name", "rule", "note", "env",
                  "env_tier", "role", "level", "require_confirmation",
-                 "description", "classification"}。
+                 "description", "classification"}；高危目标解析失败 →
+                 {"action": "deny", ...}（approval.py / sudo_tool 消费为拒绝）。
     """
     if not isinstance(command, str) or not command.strip():
         return None
     config = _load_config()
     if config.get("enabled", True) is False:
         return None  # 显式关闭（向后兼容）；缺省默认启用
-
-    env = (target_env or _active_env()).strip().lower()
-    if not env:
-        # 无会话 env 且无目标级 env → 矩阵无可判定环境，交回原检查（热路径零额外开销）。
-        return None
 
     from tools import matrix_data as _md
 
@@ -346,16 +348,44 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     # 缺失仍按空矩阵 approve 门控，P4 既有，非本批回归面）。
     if not _md.matrix_path().is_file():
         ops_config = _load_ops_config()
-        env_def = _raw_env_definition(env, ops_config)
+        probe_env = (target_env or _active_env()).strip().lower()
+        env_def = _raw_env_definition(probe_env, ops_config)
         role = str((env_def or {}).get("role") or "").strip().lower()
-        is_prod = role == "prod" if role else _map_env_tier(env, ops_config) == "prod"
+        is_prod = role == "prod" if role else _map_env_tier(probe_env, ops_config) == "prod"
         if not is_prod:
             return None
 
     from tools.action_classifier import classify_command
+    from tools.target_resolve import (
+        TARGET_RESOLVED,
+        command_target_required,
+        resolve_required_target,
+    )
 
     classification = classify_command(command)
     candidates = classification.get("chain") or [classification]
+    actions = {str(c.get("action") or "") for c in candidates}
+
+    # batch83（OPS-DELTA #98）：高危变更动作 / ssh 族受控通道 → 强制目标解析。
+    # 解析出实体 → 实体 env 查矩阵（会话声明 env 不参与高危变更裁决）；解析
+    # 失败 → deny（目标解析层硬拦截，发生在查矩阵之前；矩阵本身仍无 deny 档，
+    # deny 是解析层的档位，与矩阵 execute/approve/required 三档不冲突）。
+    target_label = None
+    target_entity = None
+    if command_target_required(actions, command):
+        target = resolve_required_target(command)
+        if target.get("status") != TARGET_RESOLVED:
+            return _target_deny_decision(command, classification, target)
+        env = str(target.get("env") or "").strip().lower()
+        target_label = target.get("label")
+        target_entity = target.get("entity")
+        if not env:
+            return None
+    else:
+        env = (target_env or _active_env()).strip().lower()
+        if not env:
+            # 无会话 env 且无目标级 env → 矩阵无可判定环境，交回原检查（热路径零额外开销）。
+            return None
 
     matrix = _md.load_matrix_or_empty()
     resolved_env = _matrix_env_for(env, matrix)
@@ -397,7 +427,7 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         command, action_name, level, env, primary, classification,
         prod_hardgate=prod_change_hardgate,
     )
-    return {
+    result = {
         "action": "approve",
         "action_name": action_name,
         "rule": str(primary.get("rule") or "").strip() or None,
@@ -409,4 +439,40 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         "require_confirmation": require_confirmation,
         "description": description,
         "classification": classification,
+    }
+    if target_label:
+        result["target_label"] = target_label
+        result["target_entity"] = target_entity
+    return result
+
+
+def _target_deny_decision(command: str, classification: Dict[str, Any],
+                          target: Dict[str, Any]) -> Dict[str, Any]:
+    """batch83 目标解析失败 → deny（先于矩阵的硬拦截；矩阵本身仍无 deny 档）。
+
+    交互会话里 confirm 会被 smart 自动批绕过（本次 npm 逃逸的机制），deny 才
+    成立：解析不出目标实体 = 拒绝执行，错误信息带修复指引（先 topo_query 查
+    实体名）。sudo_tool 已按 ``action == "deny"`` 消费（tool_error），
+    approval.py 在本批同步加 deny 分支（先于 yolo/mode=off 旁路）。
+    """
+    action_name = str(classification.get("action") or "unknown")
+    reason = str(target.get("reason") or "目标实体未解析/不在拓扑表")
+    return {
+        "action": "deny",
+        "action_name": action_name,
+        "rule": str(classification.get("rule") or "").strip() or None,
+        "note": str(classification.get("note") or "").strip() or None,
+        "env": None,
+        "env_tier": None,
+        "role": _active_role(),
+        "level": None,
+        "require_confirmation": False,
+        "description": (
+            f"⛔ 高危变更目标未解析，操作已拒绝（{action_name} × 目标解析失败）："
+            f"{reason}。矩阵按目标实体 env 裁决，解析不出实体 = deny（目标解析层"
+            "硬拦截，先于矩阵）；修复指引：先 topo_query 查目标实体名（主机名/"
+            "别名/IP/集群上下文），或用 topo_update 登记后再执行。"
+        ),
+        "classification": classification,
+        "target_deny": True,
     }
