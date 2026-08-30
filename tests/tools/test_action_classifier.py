@@ -71,6 +71,49 @@ RULES = [
     ("yum remove httpd", "remove", "dnf.remove"),
     ("dnf upgrade", "upgrade", "dnf.upgrade"),
     ("pip install requests", "install", "pip.install"),
+    # 现代包管理器（batch83：防"新包管理器漏配 → unknown 逃逸矩阵"）
+    ("npm install -g codex", "install", "npm.install"),
+    ("npm i -g codex", "install", "npm.install"),
+    ("npm uninstall -g codex", "remove", "npm.remove"),
+    ("npm remove codex", "remove", "npm.remove"),
+    ("npm rm codex", "remove", "npm.remove"),
+    ("npm update -g", "upgrade", "npm.upgrade"),
+    ("pnpm install", "install", "pnpm.install"),
+    ("pnpm add lodash", "install", "pnpm.install"),
+    ("pnpm remove lodash", "remove", "pnpm.remove"),
+    ("pnpm update -D", "upgrade", "pnpm.upgrade"),
+    ("yarn add react", "install", "yarn.install"),
+    ("yarn install --frozen-lockfile", "install", "yarn.install"),
+    ("yarn remove lodash", "remove", "yarn.remove"),
+    ("yarn upgrade react", "upgrade", "yarn.upgrade"),
+    ("cargo install ripgrep", "install", "cargo.install"),
+    ("cargo uninstall ripgrep", "remove", "cargo.remove"),
+    ("cargo update", "upgrade", "cargo.update"),
+    ("go install golang.org/x/tools/gopls@latest", "install", "go.install"),
+    ("go get github.com/foo/bar", "install", "go.get"),
+    ("go get -u github.com/foo/bar", "upgrade", "go.get_upgrade"),
+    ("uv pip install requests", "install", "uv.install"),
+    ("uv add fastapi", "install", "uv.install"),
+    ("uv tool install ruff", "install", "uv.install"),
+    ("uv pip uninstall requests", "remove", "uv.remove"),
+    ("uv remove fastapi", "remove", "uv.remove"),
+    ("uv tool uninstall ruff", "remove", "uv.remove"),
+    ("uv tool upgrade ruff", "upgrade", "uv.upgrade"),
+    ("uv sync --upgrade", "upgrade", "uv.upgrade"),
+    ("brew install htop", "install", "brew.install"),
+    ("brew uninstall htop", "remove", "brew.remove"),
+    ("brew remove htop", "remove", "brew.remove"),
+    ("brew upgrade htop", "upgrade", "brew.upgrade"),
+    # 通用兜底（新包管理器漏配也能命中，不再逃逸 unknown）
+    ("gem install rails", "install", "pkg.generic_install"),
+    ("make install", "install", "pkg.generic_install"),
+    ("flatpak uninstall org.foo.App", "remove", "pkg.generic_remove"),
+    ("snap remove foo", "remove", "pkg.generic_remove"),
+    ("snap upgrade foo", "upgrade", "pkg.generic_upgrade"),
+    # rm 族 → remove（batch83 高危变更目标解析覆盖）
+    ("rm -rf /var/log", "remove", "fs.remove"),
+    ("rm file.txt", "remove", "fs.remove"),
+    ("rm -f /tmp/a /tmp/b", "remove", "fs.remove"),
     # pm2
     ("pm2 restart app", "restart", "pm2.restart"),
     ("pm2 start app", "start", "pm2.start"),
@@ -140,13 +183,18 @@ def test_chain_takes_conservative_action():
     assert [c["action"] for c in result["chain"]] == ["query", "restart"]
     assert result["action"] == "restart"  # 静态保守序：restart > query
 
-    result = classify_command("systemctl restart nginx; rm -rf /data")
+    result = classify_command("systemctl restart nginx; mv /data /backup")
     assert [c["action"] for c in result["chain"]] == ["restart", "unknown"]
     assert result["action"] == "unknown"  # unknown 最保守
 
     result = classify_command("kubectl get pods || kubectl delete pod x")
     assert result["action"] == "decommission"
     assert [c["action"] for c in result["chain"]] == ["query", "decommission"]
+
+    # rm 已归 remove（batch83）：链式里 remove 比 restart 更保守
+    result = classify_command("systemctl restart nginx; rm -rf /data")
+    assert [c["action"] for c in result["chain"]] == ["restart", "remove"]
+    assert result["action"] == "remove"
 
 
 def test_chain_segments_respect_pipes():

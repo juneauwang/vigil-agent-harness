@@ -122,6 +122,30 @@ _DEFAULT_RULES: List[Tuple[str, str, str, str]] = [
     (r"service\s+[^\s]+\s+start\b", "start", "service.start", ""),
     (r"service\s+[^\s]+\s+stop\b", "stop", "service.stop", ""),
     (r"service\s+[^\s]+\s+reload\b", "reload", "service.reload", ""),
+    # ---- 现代包管理器（batch83：npm/pnpm/yarn/cargo/go/uv/brew，防"新包管理器
+    # 漏配 → unknown 逃逸矩阵"同类洞；长模式先、具体规则先于通用兜底）----
+    (r"\bnpm\s+(?:install|i)\b", "install", "npm.install", ""),
+    (r"\bnpm\s+(?:uninstall|remove|rm)\b", "remove", "npm.remove", ""),
+    (r"\bnpm\s+(?:update|upgrade)\b", "upgrade", "npm.upgrade", ""),
+    (r"\bpnpm\s+(?:install|add|i)\b", "install", "pnpm.install", ""),
+    (r"\bpnpm\s+(?:uninstall|remove|rm)\b", "remove", "pnpm.remove", ""),
+    (r"\bpnpm\s+(?:update|upgrade)\b", "upgrade", "pnpm.upgrade", ""),
+    (r"\byarn\s+(?:install|add)\b", "install", "yarn.install", ""),
+    (r"\byarn\s+remove\b", "remove", "yarn.remove", ""),
+    (r"\byarn\s+(?:upgrade|up)\b", "upgrade", "yarn.upgrade", ""),
+    (r"\bcargo\s+install\b", "install", "cargo.install", ""),
+    (r"\bcargo\s+uninstall\b", "remove", "cargo.remove", ""),
+    (r"\bcargo\s+update\b", "upgrade", "cargo.update", ""),
+    (r"\bgo\s+install\b", "install", "go.install", ""),
+    (r"\bgo\s+get\s+-u\b", "upgrade", "go.get_upgrade", ""),
+    (r"\bgo\s+get\b", "install", "go.get", ""),
+    (r"\buv\s+(?:pip\s+install|tool\s+install|add)\b", "install", "uv.install", ""),
+    (r"\buv\s+(?:pip\s+uninstall|tool\s+uninstall|remove)\b", "remove", "uv.remove", ""),
+    (r"\buv\s+(?:pip\s+upgrade|tool\s+upgrade|upgrade|sync\s+--upgrade)\b",
+     "upgrade", "uv.upgrade", ""),
+    (r"\bbrew\s+install\b", "install", "brew.install", ""),
+    (r"\bbrew\s+(?:uninstall|remove)\b", "remove", "brew.remove", ""),
+    (r"\bbrew\s+upgrade\b", "upgrade", "brew.upgrade", ""),
     # ---- 包管理 ----
     (r"\b(?:apt|apt-get)\s+install\b", "install", "apt.install", ""),
     (r"\b(?:apt|apt-get)\s+(?:remove|purge)\b", "remove", "apt.remove", ""),
@@ -165,6 +189,17 @@ _DEFAULT_RULES: List[Tuple[str, str, str, str]] = [
     # ---- 主机生命周期 ----
     (r"\breboot\b", "reboot", "host.reboot", ""),
     (r"\bshutdown\b", "shutdown", "host.shutdown", ""),
+    # ---- 文件删除（rm 族 → remove；batch83 高危变更目标解析覆盖）----
+    (r"\brm\b", "remove", "fs.remove",
+     "rm 删除文件/目录（remove 语义，高危变更目标解析覆盖）"),
+    # ---- 通用包管理兜底（batch83：避免再出现"新包管理器漏配 → unknown 逃逸"
+    # 同类洞）。必须放在所有具体规则之后（长模式/具体规则先于兜底命中）。----
+    (r"\b[a-z][a-z0-9_.+-]*\s+install\b", "install", "pkg.generic_install",
+     "通用包管理 install 兜底（防新包管理器漏配）"),
+    (r"\b[a-z][a-z0-9_.+-]*\s+(?:uninstall|remove)\b", "remove", "pkg.generic_remove",
+     "通用包管理 uninstall/remove 兜底"),
+    (r"\b[a-z][a-z0-9_.+-]*\s+upgrade\b", "upgrade", "pkg.generic_upgrade",
+     "通用包管理 upgrade 兜底"),
 ]
 
 _UNKNOWN_NOTE = "未能识别命令意图，按保守审批处理；可在 OPS-DELTA 登记新规则"
