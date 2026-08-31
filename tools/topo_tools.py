@@ -468,6 +468,57 @@ def topology_entity_count(home: Optional[Path] = None) -> int:
     return len(_all_core_entities(topo, home))
 
 
+def topo_reset(home: Optional[Path] = None) -> Dict[str, Any]:
+    """清空全部拓扑数据，回到未初始化状态（OPS-DELTA #101，batch85）。
+
+    删除 topology.yaml + entities/ + services/ + hosts/（v0.3 兼容）+ hardware/
+    等拓扑相关文件/目录——从 0 重建拓扑不再需要 rm 拓扑文件（rm 会被目标解析
+    deny 拦死，初始化死锁）。破坏性操作：调用方（CLI/API）负责交互确认 + 审计
+    记录；命令直接操作文件，不走 terminal 命令裁决（正规入口，同 topo_update
+    语义）。命名语义：与 vigil matrix reset（回退模板）不同——topo reset =
+    清空到未初始化，reset 后 topo_query 返回空/未初始化。
+
+    Returns:
+        ``{"ok": True, "removed": [...], "hosts": n, "clusters": n, "entities": n}``
+        或 ``{"ok": False, "error": ...}``。目录先清、topology.yaml 最后删——
+        任一目录删除失败时 topology.yaml 仍在，系统不处于半清空态。
+    """
+    import shutil
+
+    from tools.ops_data_home import resolve_ops_data_home
+    home = resolve_ops_data_home(home or _hermes_home(), _TOPO_FILENAME)
+    topo = load_topology(home)
+    counts = {
+        "hosts": len([h for h in (topo.get("hosts") or []) if isinstance(h, dict)])
+        if topo else 0,
+        "clusters": len([c for c in (topo.get("clusters") or []) if isinstance(c, dict)])
+        if topo else 0,
+        "entities": topology_entity_count(home),
+    }
+    targets = [
+        home / _ENTITIES_DIRNAME,
+        home / _SERVICES_DIRNAME,
+        home / _HOSTS_DIRNAME,
+        home / _HARDWARE_DIRNAME,
+        _topology_path(home),
+    ]
+    removed: List[str] = []
+    for path in targets:
+        if path.is_dir():
+            try:
+                shutil.rmtree(path)
+            except OSError as exc:
+                return {"ok": False, "error": f"清空拓扑失败：{path}（{exc}）"}
+            removed.append(path.name)
+        elif path.is_file():
+            try:
+                path.unlink()
+            except OSError as exc:
+                return {"ok": False, "error": f"清空拓扑失败：{path}（{exc}）"}
+            removed.append(path.name)
+    return {"ok": True, "removed": removed, **counts}
+
+
 def _resolve_entity_detail(home: Path, entity: Dict[str, Any]) -> Optional[Path]:
     """Layer-2 path for an entity: explicit ``detail`` field, else entities/<name>.yaml."""
     detail = entity.get("detail")

@@ -24,6 +24,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
     api: {
       ...actual.api,
       getTopology: vi.fn(),
+      resetTopology: vi.fn(),
     },
   };
 });
@@ -117,5 +118,76 @@ describe("批次四十五 冗余总览卡片删除（§BC）", () => {
     expect(text).toContain("prometheus");
     // v0.4：量规显示服务依赖连线数（取代 key_paths 关键链路）
     expect(text).toContain("条服务依赖连线");
+  });
+});
+
+// 批八十五（OPS-DELTA #101）：清空拓扑入口（按钮 + 确认对话框 + reset API）。
+describe("批八十五 清空拓扑入口", () => {
+  async function mountPage() {
+    vi.mocked(api.getTopology).mockResolvedValue({ ok: true, data: VIEW, error: "" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <TopologyPage />
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    return { container, root };
+  }
+
+  it("确认对话框确认后调用 reset API 并显示未初始化提示", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const resetMock = vi.mocked(api.resetTopology).mockResolvedValue({
+      ok: true,
+      data: {
+        ok: true,
+        removed: ["entities", "services", "topology.yaml"],
+        hosts: 1,
+        clusters: 1,
+        entities: 2,
+      },
+      error: "",
+    });
+    const { container, root } = await mountPage();
+    try {
+      const btn = [...container.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === "清空拓扑",
+      );
+      expect(btn).toBeTruthy();
+      await act(async () => {
+        btn!.click();
+      });
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(resetMock).toHaveBeenCalledTimes(1);
+      expect(container.textContent ?? "").toContain("拓扑已清空（未初始化）");
+    } finally {
+      root.unmount();
+      container.remove();
+      confirmSpy.mockRestore();
+    }
+  });
+
+  it("取消确认则不调用 reset API", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const resetMock = vi.mocked(api.resetTopology).mockClear();
+    const { container, root } = await mountPage();
+    try {
+      const btn = [...container.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === "清空拓扑",
+      );
+      await act(async () => {
+        btn!.click();
+      });
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(resetMock).not.toHaveBeenCalled();
+    } finally {
+      root.unmount();
+      container.remove();
+      confirmSpy.mockRestore();
+    }
   });
 });

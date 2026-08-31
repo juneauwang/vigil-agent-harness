@@ -9,6 +9,7 @@ import {
   Network,
   Search,
   Server,
+  Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "@/lib/api";
@@ -274,6 +275,7 @@ export default function TopologyPage() {
   const [filter, setFilter] = useState<StatusFilterId>("all");
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
+  const [resetting, setResetting] = useState(false);
   // 批四十九：图 ↔ 表联动——图中点选节点 → 列表滚动到该行；列表点行 →
   // 图中高亮节点（TopologyGraph focusedName）。
   const [focused, setFocused] = useState<string | null>(null);
@@ -342,6 +344,29 @@ export default function TopologyPage() {
     }
     return n;
   }, [view]);
+
+  /** 批八十五：清空全部拓扑数据（破坏性；确认对话框 + 审计由后端负责）。 */
+  const handleReset = async () => {
+    if (!view) return;
+    const ok = window.confirm(
+      `将清空全部拓扑数据（${view.hosts.length} 主机 / ${view.clusters.length} 集群 + 服务/实体目录），回到未初始化状态。此操作不可撤销，确认？`,
+    );
+    if (!ok) return;
+    setResetting(true);
+    try {
+      const resp = await api.resetTopology();
+      if (resp.ok) {
+        setView(null);
+        setError("拓扑已清空（未初始化）。重新登记：vigil topo-discover。");
+      } else {
+        setError(typeof resp.error === "string" ? resp.error : "拓扑清空失败");
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setResetting(false);
+    }
+  };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -412,6 +437,19 @@ export default function TopologyPage() {
               className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
             />
           </div>
+
+          {/* 批八十五：清空拓扑入口（破坏性，确认对话框） */}
+          <button
+            type="button"
+            onClick={() => void handleReset()}
+            disabled={resetting}
+            className="vigil-btn h-8 gap-1 px-2.5 text-xs"
+            aria-label="清空拓扑"
+            title="清空全部拓扑数据（回到未初始化；与 vigil matrix reset 回退模板不同）"
+          >
+            <Trash2 className="size-3.5" />
+            {resetting ? "清空中…" : "清空拓扑"}
+          </button>
         </div>
       </div>
 

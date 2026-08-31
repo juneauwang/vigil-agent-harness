@@ -4653,6 +4653,13 @@ def cmd_topo_export(args):
     return topo_export_run(args)
 
 
+def cmd_topo_reset(args):
+    """清空全部拓扑数据，回到未初始化（vigil topo reset，交互确认 + 审计）。"""
+    from hermes_cli.subcommands.topo_export import run_reset as topo_reset_run
+
+    return topo_reset_run(args)
+
+
 def cmd_matrix(args):
     """操作矩阵管理（vigil matrix init/show/set/edit/reset，YAPL §11.7）。"""
     from hermes_cli.subcommands.matrix import run as matrix_run
@@ -12867,7 +12874,8 @@ def main():
     # topo-discover command  (parser built in hermes_cli/subcommands/topo_discover.py)
     # =========================================================================
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
-    build_topo_export_parser(subparsers, cmd_topo_export=cmd_topo_export)
+    build_topo_export_parser(subparsers, cmd_topo_export=cmd_topo_export,
+                             cmd_topo_reset=cmd_topo_reset)
     build_matrix_parser(subparsers, cmd_matrix=cmd_matrix)
     build_contract_parser(subparsers, cmd_contract=cmd_contract)
     build_vssh_parser(subparsers, cmd_vssh=cmd_vssh)

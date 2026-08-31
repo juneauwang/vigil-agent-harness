@@ -3520,6 +3520,62 @@ async def get_ops_topology():
     return {"ok": True, "data": view}
 
 
+@app.post("/api/topology/reset")
+async def reset_ops_topology(payload: Dict[str, Any] = Body(default_factory=dict),
+                             request: Request = None):
+    """Ops dashboard: 清空全部拓扑数据（OPS-DELTA #101，batch85）。
+
+    破坏性操作（人工操作，修改即审计）：body 必须显式 ``{confirm: true}``；
+    清空 topology.yaml + entities/ + services/ + hosts/ + hardware/，回到未
+    初始化状态（从 0 重建拓扑的正规入口——rm 拓扑文件会被目标解析 deny 拦死）。
+    审计事件（type=topo_reset, source=ui）落 trajectory（/api/audit/events
+    可查）。命名语义：与 /api/matrix/init（生成模板）不同——topo reset = 清空
+    到未初始化。
+    """
+    _require_token(request)
+    if not bool((payload or {}).get("confirm")):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                "topology reset 是破坏性操作——需要显式 confirm: true 确认。",
+            ),
+        )
+    from tools.topo_tools import topo_reset
+
+    def _reset() -> dict:
+        return topo_reset()
+
+    result = await run_in_threadpool(_reset)
+    if not result.get("ok"):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("reset_failed", result.get("error") or "拓扑清空失败"),
+        )
+    try:
+        from agent.trajectory import record_event
+        record_event(
+            type="topo_reset",
+            session_id="topo-ui",
+            tool="topology",
+            action="reset",
+            result=(f"清空 {result.get('hosts', 0)} 主机 / {result.get('clusters', 0)} "
+                    f"集群 / {result.get('entities', 0)} 实体"),
+            approval="",
+            meta={
+                "source": "ui",
+                "operator": "dashboard",
+                "removed": result.get("removed") or [],
+                "hosts": result.get("hosts", 0),
+                "clusters": result.get("clusters", 0),
+                "entities": result.get("entities", 0),
+            },
+        )
+    except Exception:
+        _log.exception("topology UI reset audit event failed")
+    return {"ok": True, "data": result}
+
+
 @app.get("/api/runbooks")
 async def get_ops_runbooks():
     """Ops dashboard: read-only runbook list（元数据，不含步骤命令）。"""

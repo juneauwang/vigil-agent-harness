@@ -296,3 +296,50 @@ def test_health_reports_uptime_seconds(client):
     assert body["ok"] is True
     assert isinstance(body.get("uptime_seconds"), int)
     assert body["uptime_seconds"] >= 0
+
+
+# ---------------------------------------------------------------------------
+# 批八十五（OPS-DELTA #101）—— POST /api/topology/reset（清空拓扑，破坏性）
+# ---------------------------------------------------------------------------
+
+def test_topology_reset_requires_explicit_confirm(client, ops_home):
+    """无 confirm: true → 400（破坏性操作不静默执行）。"""
+    resp = client.post("/api/topology/reset", json={})
+    assert resp.status_code == 400
+    assert "confirm" in resp.json()["error"]["message"]
+    assert (ops_home / "topology.yaml").is_file(), "未确认不得清空"
+
+
+def test_topology_reset_clears_and_audits(client, ops_home, monkeypatch):
+    """confirm: true → 清空全部拓扑数据（拓扑文件删除、非拓扑保留）+ 审计。"""
+    events = []
+    monkeypatch.setattr("agent.trajectory.record_event",
+                        lambda **kw: events.append(kw))
+    resp = client.post("/api/topology/reset", json={"confirm": True})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["hosts"] == 1
+    assert data["clusters"] == 1
+    assert not (ops_home / "topology.yaml").exists()
+    assert not (ops_home / "hosts").exists()
+    assert not (ops_home / "entities").exists()
+    assert not (ops_home / "services").exists()
+    # 非拓扑数据保留
+    assert (ops_home / "runbooks" / "harbor-restart.yaml").is_file()
+    assert events, "reset 必须写审计记录"
+    ev = events[-1]
+    assert ev["type"] == "topo_reset"
+    assert ev["meta"]["source"] == "ui"
+    assert "topology.yaml" in ev["meta"]["removed"]
+
+
+def test_topology_reset_idempotent_empty(client, tmp_path, monkeypatch):
+    """无拓扑数据时 reset 幂等成功（0 计数）。"""
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+    resp = client.post("/api/topology/reset", json={"confirm": True})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["ok"] is True
+    assert data["hosts"] == 0 and data["clusters"] == 0 and data["entities"] == 0

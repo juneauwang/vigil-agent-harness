@@ -1,4 +1,4 @@
-"""``vigil topo export`` —— 拓扑表 HTML 可视化导出。
+"""``vigil topo export`` / ``vigil topo reset`` —— 拓扑表可视化导出 + 清空入口。
 
 把三层拓扑（topology.yaml + hosts/*.yaml + 可选 entities/*.yaml）渲染成单个
 **自包含** HTML 文件（零 CDN / 零 JS 库，内联 CSS+JS，file:// 直接打开）：
@@ -17,6 +17,12 @@ endpoint/role/status 等非敏感字段。测试用 grep 断言 ref 路径永不
 
 约束：不碰 conversation_loop / prompt 缓存 / 压缩；不新增环境变量；只改
 本文件 + main.py 注册 + 对应测试。
+
+``vigil topo reset``（OPS-DELTA #101，batch85）：清空全部拓扑数据（topology.yaml
++ entities/ + services/ + hosts/ + hardware/，回到未初始化状态）——从 0 重建
+拓扑的正规入口（rm 拓扑文件会被目标解析 deny 拦死）。破坏性操作：交互确认
+（y/N）+ 审计记录；命令直接操作文件，不走 terminal 命令裁决。命名语义：与
+``vigil matrix reset``（回退模板）不同——topo reset = 清空到未初始化。
 """
 
 from __future__ import annotations
@@ -824,18 +830,100 @@ def run(args) -> int:
     return 0
 
 
-def build_topo_export_parser(subparsers, *, cmd_topo_export: Callable) -> None:
+def run_reset(args) -> int:
+    """``vigil topo reset``：清空全部拓扑数据（回到未初始化状态）。
+
+    破坏性操作：交互确认（提示将清空 N 个实体/主机，y/N）+ 审计记录（谁/何时/
+    清空，复用 trajectory）；命令直接操作文件，不走 terminal 命令裁决（正规
+    入口，同 topo_update 语义）。reset 后 topo_query 返回空/未初始化，后续按
+    "矩阵必须存在/目标解析"正常流程（从 vigil topo-discover 重新登记）。
+    """
+    try:
+        from hermes_constants import get_hermes_home
+        home = Path(get_hermes_home())
+    except Exception as exc:
+        print(f"✗ 无法解析 Vigil 数据根：{exc}", file=sys.stderr)
+        return 2
+    from tools.topo_tools import load_topology, topo_reset, topology_entity_count
+
+    topo = load_topology(home)
+    if topo is None:
+        print("拓扑表不存在或为空——已处于未初始化状态，无需 reset。")
+        return 0
+    counts = {
+        "hosts": len([h for h in (topo.get("hosts") or []) if isinstance(h, dict)]),
+        "clusters": len([c for c in (topo.get("clusters") or []) if isinstance(c, dict)]),
+        "entities": topology_entity_count(home),
+    }
+    if not getattr(args, "yes", False):
+        try:
+            answer = input(
+                f"⚠️ 将清空全部拓扑数据（{counts['hosts']} 主机 / "
+                f"{counts['clusters']} 集群 / {counts['entities']} 实体 + 拓扑目录），"
+                "回到未初始化状态。确认？[y/N] "
+            )
+        except EOFError:
+            print("已取消（无交互输入）。", file=sys.stderr)
+            return 1
+        if str(answer).strip().lower() not in ("y", "yes"):
+            print("已取消。", file=sys.stderr)
+            return 1
+
+    result = topo_reset(home)
+    if not result.get("ok"):
+        print(f"✗ {result.get('error') or '拓扑清空失败'}", file=sys.stderr)
+        return 2
+    _audit_topo_reset(result)
+    removed = "、".join(result.get("removed") or [])
+    print(
+        f"✓ 拓扑已清空（{result.get('hosts', 0)} 主机 / {result.get('clusters', 0)} "
+        f"集群 / {result.get('entities', 0)} 实体；删除 {removed}），回到未初始化"
+        "状态（已审计）。后续从 vigil topo-discover 重新登记。"
+    )
+    return 0
+
+
+def _audit_topo_reset(result: Dict[str, Any]) -> None:
+    """清空即审计（best-effort：失败只记日志，绝不阻断清空）。"""
+    try:
+        import getpass
+        from agent.trajectory import record_event
+        record_event(
+            type="topo_reset",
+            session_id="topo-cli",
+            tool="topology",
+            action="reset",
+            result=(f"清空 {result.get('hosts', 0)} 主机 / {result.get('clusters', 0)} "
+                    f"集群 / {result.get('entities', 0)} 实体"),
+            approval="",
+            meta={
+                "source": "cli",
+                "operator": getpass.getuser(),
+                "removed": result.get("removed") or [],
+                "hosts": result.get("hosts", 0),
+                "clusters": result.get("clusters", 0),
+                "entities": result.get("entities", 0),
+            },
+        )
+    except Exception:
+        import logging
+        logging.getLogger(__name__).debug("topo reset audit event failed", exc_info=True)
+
+
+def build_topo_export_parser(subparsers, *, cmd_topo_export: Callable,
+                             cmd_topo_reset: Callable) -> None:
     """Attach the ``topo`` command (with its ``export`` action) to ``subparsers``."""
     topo_parser = subparsers.add_parser(
         "topo",
-        help="拓扑表可视化：导出 HTML 视图（vigil topo export --html）",
+        help="拓扑表：导出 HTML 视图（vigil topo export）或清空重建（vigil topo reset）",
         description=(
-            "拓扑表可视化：把三层拓扑（topology.yaml + hosts/*.yaml + "
-            "entities/*.yaml）渲染成单个自包含 HTML 文件（零 CDN / 零 JS 库，"
-            "离线可开）。用法：vigil topo export --html [-o 输出路径]。"
+            "拓扑表管理：export 把三层拓扑渲染成单个自包含 HTML 文件（零 CDN / "
+            "零 JS 库，离线可开）；reset 清空全部拓扑数据回到未初始化（从 0 重建"
+            "拓扑的正规入口，交互确认 + 审计）。用法：vigil topo export [-o 输出"
+            "路径] / vigil topo reset [--yes]。"
         ),
     )
-    topo_sub = topo_parser.add_subparsers(dest="topo_command", metavar="{export}")
+    topo_sub = topo_parser.add_subparsers(dest="topo_command", metavar="{export,reset}")
 
     export_parser = topo_sub.add_parser(
         "export",
@@ -857,6 +945,24 @@ def build_topo_export_parser(subparsers, *, cmd_topo_export: Callable) -> None:
     )
     export_parser.set_defaults(func=cmd_topo_export)
 
+    reset_parser = topo_sub.add_parser(
+        "reset",
+        help="清空全部拓扑数据（回到未初始化；与 vigil matrix reset 回退模板不同）",
+        description=(
+            "清空全部拓扑数据（topology.yaml + entities/ + services/ + hosts/ + "
+            "hardware/ 等拓扑相关文件，回到未初始化状态）。破坏性操作：交互确认"
+            "（y/N）+ 审计记录；命令直接操作文件，不走 terminal 命令裁决（正规"
+            "入口，同 topo_update 语义）。命名语义：与 vigil matrix reset（回退"
+            "模板）不同——topo reset = 清空到未初始化。reset 后 topo_query 返回"
+            "空/未初始化，从 vigil topo-discover 重新登记。"
+        ),
+    )
+    reset_parser.add_argument(
+        "--yes", "-y", action="store_true",
+        help="跳过交互确认（脚本场景；交互使用不推荐）",
+    )
+    reset_parser.set_defaults(func=cmd_topo_reset)
+
     def _topo_help(_args) -> int:
         topo_parser.print_help()
         return 0
@@ -865,7 +971,12 @@ def build_topo_export_parser(subparsers, *, cmd_topo_export: Callable) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
-    """独立入口（测试/直接调用）：argv → Namespace → run。"""
+    """独立入口（测试/直接调用）：argv → Namespace → run（export/reset）。"""
+    argv = list(argv or [])
+    if argv and argv[0] == "reset":
+        from types import SimpleNamespace
+        yes = "-y" in argv or "--yes" in argv
+        return run_reset(SimpleNamespace(yes=yes))
     parser = argparse.ArgumentParser(
         prog="vigil topo export",
         description=(

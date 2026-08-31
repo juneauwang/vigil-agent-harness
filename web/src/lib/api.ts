@@ -143,6 +143,16 @@ export interface TopologyResponse {
   data?: TopologyView;
 }
 
+/** 批八十五：清空全部拓扑数据（POST /api/topology/reset）返回统计。 */
+export interface TopologyResetResult {
+  ok?: boolean;
+  error?: string;
+  removed?: string[];
+  hosts?: number;
+  clusters?: number;
+  entities?: number;
+}
+
 export interface RunbookSummary {
   name: string;
   title: string;
@@ -660,6 +670,12 @@ export interface MonitoringAlertsResponse {
 export const api = {
   // 第一批：拓扑 / runbook / 状态 / 健康
   getTopology: () => fetchJSON<TopologyResponse>("/api/topology"),
+  /** 批八十五：清空全部拓扑数据（破坏性；确认对话框由页面负责）。 */
+  resetTopology: () =>
+    fetchJSON<{ ok: boolean; data?: TopologyResetResult; error?: unknown }>(
+      "/api/topology/reset",
+      { method: "POST", body: JSON.stringify({ confirm: true }) },
+    ),
   getRunbooks: () => fetchJSON<RunbookListResponse>("/api/runbooks"),
   getRunbook: (name: string) =>
     fetchJSON<RunbookDetailResponse>(`/api/runbooks/${encodeURIComponent(name)}`),
