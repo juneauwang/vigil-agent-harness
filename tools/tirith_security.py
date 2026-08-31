@@ -17,7 +17,12 @@ PATH, provenance verification (GitHub Actions workflow signature) is also
 performed.  If cosign is not installed, the download proceeds with SHA-256
 verification only — still secure via HTTPS + checksum, just without supply
 chain provenance proof.  Installation runs in a background thread so startup
-never blocks.
+never blocks.  The download phase has a wall-clock total budget
+(_DOWNLOAD_TOTAL_TIMEOUT_S, default 30s) on top of the per-file 10s timeout —
+a slow direct GitHub connection cannot hang the caller across multiple files
+(OPS-DELTA #100: 4.4MB truncated download + checksums stall blocked terminal
+commands for 20+ minutes); on expiry the install fails fast as
+"download_failed" and the fail-open path allows the command through.
 """
 
 import hashlib
@@ -291,6 +296,22 @@ def _download_file(url: str, dest: str, timeout: int = 10):
         shutil.copyfileobj(resp, f)
 
 
+# 下载阶段总预算（OPS-DELTA #100）：单文件 10s 超时挡不住跨多文件累积挂起——
+# 直连 GitHub 慢时 archive + checksums（+ cosign 工件）逐文件重试/等待能拖 20+
+# 分钟，terminal 命令执行被阻塞。整个下载阶段墙钟上限，到期即弃 →
+# download_failed → fail-open 放行（tirith_fail_open: true 语义：扫描缺失警告
+# 即可，不阻塞命令执行）。
+_DOWNLOAD_TOTAL_TIMEOUT_S = 30
+
+
+def _raise_if_download_deadline_passed(deadline: float) -> None:
+    """下载阶段总预算到期检查：monotonic 墙钟超过截止点 → 抛 TimeoutError。"""
+    if time.monotonic() >= deadline:
+        raise TimeoutError(
+            f"tirith download total timeout exceeded ({_DOWNLOAD_TOTAL_TIMEOUT_S}s)"
+        )
+
+
 def _verify_cosign(checksums_path: str, sig_path: str, cert_path: str) -> bool | None:
     """Verify cosign provenance signature on checksums.txt.
 
@@ -414,9 +435,14 @@ def _install_tirith(*, log_failures: bool = True) -> tuple[str | None, str]:
         cert_path = os.path.join(tmpdir, "checksums.txt.pem")
 
         logger.info("tirith not found — downloading latest release for %s...", target)
+        # 下载阶段总预算（monotonic 墙钟）：到期后任何一次下载直接失败返回
+        # download_failed，不跨多文件挂起。
+        download_deadline = time.monotonic() + _DOWNLOAD_TOTAL_TIMEOUT_S
 
         try:
+            _raise_if_download_deadline_passed(download_deadline)
             _download_file(f"{base_url}/{archive_name}", archive_path)
+            _raise_if_download_deadline_passed(download_deadline)
             _download_file(f"{base_url}/checksums.txt", checksums_path)
         except Exception as exc:
             log("tirith download failed: %s", exc)
@@ -430,7 +456,9 @@ def _install_tirith(*, log_failures: bool = True) -> tuple[str | None, str]:
         cosign_verified = False
         if shutil.which("cosign"):
             try:
+                _raise_if_download_deadline_passed(download_deadline)
                 _download_file(f"{base_url}/checksums.txt.sig", sig_path)
+                _raise_if_download_deadline_passed(download_deadline)
                 _download_file(f"{base_url}/checksums.txt.pem", cert_path)
             except Exception as exc:
                 logger.info("cosign artifacts unavailable (%s), proceeding with SHA-256 only", exc)

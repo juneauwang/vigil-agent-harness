@@ -578,6 +578,84 @@ class TestInstallArchiveMemberValidation:
 
 
 # ---------------------------------------------------------------------------
+# 批八十四 — 下载阶段总超时（OPS-DELTA #100：直连 GitHub 慢不再阻塞命令执行）
+# ---------------------------------------------------------------------------
+
+class TestDownloadTotalTimeout:
+    @patch("tools.tirith_security._detect_target", return_value="aarch64-apple-darwin")
+    @patch("tools.tirith_security._download_file")
+    def test_download_phase_total_timeout_returns_download_failed(self, mock_dl, mock_target):
+        """下载阶段总预算耗尽 → _install_tirith 立即返回 download_failed
+        （不跨多文件逐文件挂起），供 fail-open 快速降级。"""
+        from tools.tirith_security import _install_tirith, _DOWNLOAD_TOTAL_TIMEOUT_S
+        # deadline 计算 + 主下载前检查（放行）→ 第二次检查时预算已耗尽
+        values = iter([0.0, 1.0, _DOWNLOAD_TOTAL_TIMEOUT_S + 1.0])
+        with patch("tools.tirith_security.time.monotonic",
+                   side_effect=lambda: next(values)):
+            path, reason = _install_tirith(log_failures=False)
+
+        assert path is None
+        assert reason == "download_failed"
+        # 预算内只完成一次下载即中止，没有继续等待第二个文件
+        assert mock_dl.call_count == 1
+
+    @patch("tools.tirith_security.tarfile.open")
+    @patch("tools.tirith_security._verify_checksum", return_value=True)
+    @patch("tools.tirith_security.shutil.which", return_value="/usr/bin/cosign")
+    @patch("tools.tirith_security._download_file")
+    @patch("tools.tirith_security._detect_target", return_value="aarch64-apple-darwin")
+    def test_download_deadline_bounds_cosign_phase(self, mock_target, mock_dl,
+                                                   mock_which, mock_checksum,
+                                                   mock_tarfile):
+        """cosign 工件下载同样受总预算约束——预算耗尽不再继续下载，退回 SHA-256
+        校验路径（archive + checksums 已就绪，安装仍可在预算内完成）。"""
+        from tools.tirith_security import _install_tirith, _DOWNLOAD_TOTAL_TIMEOUT_S
+        mock_tar = MagicMock()
+        mock_tar.__enter__ = MagicMock(return_value=mock_tar)
+        mock_tar.__exit__ = MagicMock(return_value=False)
+        mock_tar.getmembers.return_value = []
+        mock_tarfile.return_value = mock_tar
+
+        # deadline 计算 + 主下载两次检查（放行）→ cosign 首次检查时预算耗尽
+        values = iter([0.0, 1.0, 2.0, _DOWNLOAD_TOTAL_TIMEOUT_S + 1.0])
+        with patch("tools.tirith_security.time.monotonic",
+                   side_effect=lambda: next(values)):
+            path, reason = _install_tirith(log_failures=False)
+
+        assert mock_dl.call_count == 2  # archive + checksums，cosign 工件未再下载
+        assert path is None
+        assert reason == "binary_not_in_archive"
+        assert mock_checksum.called
+
+    @patch("tools.tirith_security._mark_install_failed")
+    @patch("tools.tirith_security._is_install_failed_on_disk", return_value=False)
+    @patch("tools.tirith_security._detect_target", return_value="aarch64-apple-darwin")
+    @patch("tools.tirith_security.subprocess.run")
+    @patch("tools.tirith_security._load_security_config")
+    def test_download_timeout_fail_open_allows_command(self, mock_cfg, mock_run,
+                                                       mock_target, mock_disk,
+                                                       mock_mark):
+        """E2E：下载总超时 → download_failed → fail_open 放行命令（扫描缺失
+        警告即可，不阻塞执行）。"""
+        from tools.tirith_security import check_command_security
+        mock_cfg.return_value = {"tirith_enabled": True, "tirith_path": "tirith",
+                                 "tirith_timeout": 5, "tirith_fail_open": True}
+        mock_run.side_effect = OSError(2, "No such file or directory")
+        _tirith_mod._resolved_path = None
+
+        with patch("tools.tirith_security.shutil.which", return_value=None), \
+             patch("tools.tirith_security._hermes_bin_dir", return_value="/nonexistent"), \
+             patch("tools.tirith_security._install_tirith",
+                   return_value=(None, "download_failed")) as mock_install:
+            result = check_command_security("echo hi")
+
+        assert result["action"] == "allow"
+        assert "unavailable" in result["summary"]
+        mock_install.assert_called_once()
+        _tirith_mod._resolved_path = None
+
+
+# ---------------------------------------------------------------------------
 # Background install / non-blocking startup (P2)
 # ---------------------------------------------------------------------------
 
