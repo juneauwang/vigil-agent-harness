@@ -266,13 +266,16 @@ def _breaker_key_from_argv(ssh_argv: List[str]) -> Tuple[str, str]:
 
 
 def _ssh_auth_breaker_guard(ssh_argv: List[str]) -> None:
-    """远端 ssh/scp 前熔断预检：该 host:user 已连续认证失败达上限 → 直接熔断。"""
+    """远端 ssh/scp 前熔断预检：该 host:user 已连续认证失败达上限（未过 TTL /
+    凭据未修正）→ 直接熔断。带 argv 凭据指纹（-i key 路径）——key 变化 = 用户
+    修正凭据 → 放行一次真实尝试（批八十四 OPS-DELTA #100 防死锁）。"""
     from tools.topo_discovery import (
         _ssh_auth_breaker_error,
         _ssh_auth_breaker_tripped,
+        _ssh_auth_cred_fingerprint,
     )
     host, user = _breaker_key_from_argv(ssh_argv)
-    if _ssh_auth_breaker_tripped(host, user):
+    if _ssh_auth_breaker_tripped(host, user, _ssh_auth_cred_fingerprint(ssh_argv)):
         raise RuntimeError(_ssh_auth_breaker_error(host, user))
 
 
@@ -290,11 +293,12 @@ def _ssh_auth_breaker_note(ssh_argv: List[str], proc: subprocess.CompletedProces
         _reset_ssh_auth_failures,
         _ssh_auth_breaker_error,
         _ssh_auth_breaker_tripped,
+        _ssh_auth_cred_fingerprint,
     )
     host, user = _breaker_key_from_argv(ssh_argv)
     if getattr(proc, "returncode", None) == 255 and _is_ssh_auth_failure(proc):
-        _record_ssh_auth_failure(host, user)
-        if _ssh_auth_breaker_tripped(host, user):
+        _record_ssh_auth_failure(host, user, _ssh_auth_cred_fingerprint(ssh_argv))
+        if _ssh_auth_breaker_tripped(host, user, _ssh_auth_cred_fingerprint(ssh_argv)):
             raise RuntimeError(_ssh_auth_breaker_error(host, user))
     else:
         _reset_ssh_auth_failures(host, user)

@@ -42,7 +42,13 @@ _SSH_TIMEOUT_S = 60
 # OpenSSH MaxAuthTries（默认 6）→ "Too many authentication failures" → 接下来
 # 几分钟 ssh 全部被拒（生产环境自伤）。会话级计数（进程内存 dict），host:user
 # 独立；失败 3 次熔断，返回可操作错误，不再自动重试。
+# 批八十四（OPS-DELTA #100）：熔断带 TTL（5 分钟）——tripped 后 guard 挡在真实
+# SSH 之前，计数永远没有机会靠成功清零 → 死锁（凭据修正后必须重启进程才恢复）。
+# TTL 过期自动放行一次真实尝试并清零计数（再次失败从 1 重新累计，连续 3 次仍
+# 熔断，防 MaxAuthTries 自伤语义保持）；凭据来源变化（key 换了）→ 立即视为显式
+# 修正重试放行。
 _SSH_AUTH_BREAKER_LIMIT = 3
+_SSH_AUTH_BREAKER_TTL_S = 300
 _SSH_AUTH_FAILURES: Dict[str, Dict[str, Any]] = {}
 _SSH_AUTH_LOCK = threading.Lock()
 _SSH_AUTH_FAILURE_HINTS = (
@@ -166,16 +172,29 @@ def _ssh_auth_key(host: str, user: str) -> str:
     return f"{user}@{host}"
 
 
+def _ssh_auth_cred_fingerprint(ssh_argv: List[str]) -> tuple:
+    """当前尝试的凭据指纹（ssh argv 中 ``-i`` key 路径元组，无 ``-i`` → 空元组）。
+
+    批八十四（OPS-DELTA #100）：熔断后显式修正重试检测——当前凭据与熔断时记录的
+    指纹不同（用户/agent 换了 key）→ 视为凭据已修正，放行一次真实尝试并重置计数。
+    指纹只取 key 路径（argv 可见）；askpass 通道（env 注入）靠 TTL 过期兜底。
+    """
+    return tuple(ssh_argv[i + 1] for i, v in enumerate(ssh_argv or []) if v == "-i")
+
+
 def _ssh_auth_failures(host: str, user: str) -> int:
     with _SSH_AUTH_LOCK:
         return int(_SSH_AUTH_FAILURES.get(_ssh_auth_key(host, user), {}).get("count", 0))
 
 
-def _record_ssh_auth_failure(host: str, user: str) -> None:
+def _record_ssh_auth_failure(host: str, user: str,
+                             cred_fingerprint: Optional[tuple] = None) -> None:
     with _SSH_AUTH_LOCK:
         entry = _SSH_AUTH_FAILURES.setdefault(_ssh_auth_key(host, user), {})
         entry["count"] = int(entry.get("count", 0)) + 1
         entry["ts"] = _dt.datetime.now().isoformat()
+        if cred_fingerprint is not None:
+            entry["cred"] = cred_fingerprint
 
 
 def _reset_ssh_auth_failures(host: str, user: str) -> None:
@@ -184,8 +203,49 @@ def _reset_ssh_auth_failures(host: str, user: str) -> None:
         _SSH_AUTH_FAILURES.pop(_ssh_auth_key(host, user), None)
 
 
-def _ssh_auth_breaker_tripped(host: str, user: str) -> bool:
-    return _ssh_auth_failures(host, user) >= _SSH_AUTH_BREAKER_LIMIT
+def _ssh_auth_breaker_expired(entry: Dict[str, Any]) -> bool:
+    """熔断 TTL 是否已过期（ts 为 ISO 时间戳；缺失/解析失败 → 未过期，fail-safe）。"""
+    ts = entry.get("ts")
+    if not ts:
+        return False
+    try:
+        t = _dt.datetime.fromisoformat(str(ts))
+    except (ValueError, TypeError):
+        return False
+    return (_dt.datetime.now() - t).total_seconds() > _SSH_AUTH_BREAKER_TTL_S
+
+
+def _ssh_auth_breaker_tripped(host: str, user: str,
+                              cred_fingerprint: Optional[tuple] = None) -> bool:
+    """熔断是否生效（连续失败 ≥3 且未过 TTL / 凭据未修正）。
+
+    批八十四（OPS-DELTA #100）防死锁两通道：
+    - **TTL 过期**（tripped 后 _SSH_AUTH_BREAKER_TTL_S 秒）：自动放行一次真实
+      尝试，计数清零重新累计（再次连续失败 3 次仍熔断，防 MaxAuthTries 自伤）；
+    - **凭据修正**：当前凭据指纹与熔断时记录的不同（key 换了）→ 立即放行一次
+      真实尝试并重置计数——不再需要重启进程才恢复。
+    两种放行都会先清零计数，成功路径照常清零；失败从 1 重新累计。
+    """
+    with _SSH_AUTH_LOCK:
+        entry = _SSH_AUTH_FAILURES.get(_ssh_auth_key(host, user))
+        if not entry:
+            return False
+        count = int(entry.get("count", 0))
+        if count < _SSH_AUTH_BREAKER_LIMIT:
+            return False
+        stored = entry.get("cred")
+        if stored is not None and cred_fingerprint is not None and stored != cred_fingerprint:
+            entry["count"] = 0
+            entry["cred"] = cred_fingerprint
+            entry.pop("forced", None)
+            entry["ts"] = _dt.datetime.now().isoformat()
+            return False
+        if _ssh_auth_breaker_expired(entry):
+            entry["count"] = 0
+            entry.pop("forced", None)
+            entry["ts"] = _dt.datetime.now().isoformat()
+            return False
+        return True
 
 
 def force_trip(host: str, user: str) -> None:
@@ -194,6 +254,8 @@ def force_trip(host: str, user: str) -> None:
     批次二十一 §AF 补丁 2 需求 2：用户纠正操作方向（新对话轮次明确否定当前
     尝试路径）＝ 停止信号。会话层检测到纠正信号后调用本函数，后续该 host:user
     的 runner/guard 入口直接熔断，不再自动重试（与自然触发 3 次失败同语义）。
+    批八十四：熔断态同样受 TTL 约束（_SSH_AUTH_BREAKER_TTL_S 后过期放行）——
+    用户后续显式重试不会永远被进程内存态锁死。
     """
     with _SSH_AUTH_LOCK:
         entry = _SSH_AUTH_FAILURES.setdefault(_ssh_auth_key(host, user), {})
@@ -235,6 +297,9 @@ def _ssh_auth_breaker_error(host: str, user: str) -> str:
         "验证凭据 2) 或补充拓扑表 credential 声明（vssh 或 topo credential）"
         "。请勿换用户名/换 key/翻 ~/.ssh/ 继续尝试（§Q/§AD/§AF 教训——这些行为"
         "会触发 sshd 限流锁 15 分钟）。3) 或询问用户提供正确凭据"
+        f"。熔断 {_SSH_AUTH_BREAKER_TTL_S // 60} 分钟后自动过期可重试；用户在"
+        "拓扑表修正凭据（更换 key）后，下一次重试会被放行一次（不会永远锁死，"
+        "批八十四）"
     )
 
 
@@ -266,11 +331,6 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
         )
 
     def run(cmd: str) -> ProbeResult:
-        # 熔断检查在 runner 调用前（agent 工具/自动探测路径）——该 host:user 已
-        # 连续认证失败达到上限，不再自动重试（§AD 细节 4：CLI 交互路径 vssh 不
-        # 经过本 runner，不计数不受影响）。
-        if _ssh_auth_breaker_tripped(host, user):
-            raise DiscoveryError(_ssh_auth_breaker_error(host, user))
         env = dict(os.environ)
         use_password_askpass = askpass_file is not None and askpass_file.is_file()
         use_key_passphrase = key_passphrase_file is not None and key_passphrase_file.is_file()
@@ -297,6 +357,12 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
         if key_path:
             argv += ["-i", str(key_path)]
         argv += [f"{user}@{host}", remote_cmd]
+        # 熔断检查在 runner 调用前（agent 工具/自动探测路径）——该 host:user 已
+        # 连续认证失败达到上限且未过 TTL / 凭据未修正，不再自动重试（§AD 细节 4：
+        # CLI 交互路径 vssh 不经过本 runner，不计数不受影响）。带凭据指纹：key
+        # 变化（用户修正凭据）→ 放行一次真实尝试（批八十四防死锁）。
+        if _ssh_auth_breaker_tripped(host, user, _ssh_auth_cred_fingerprint(argv)):
+            raise DiscoveryError(_ssh_auth_breaker_error(host, user))
         if use_password_askpass or use_key_passphrase:
             # 密码经 SSH_ASKPASS（0700 脚本读保险箱文件）注入，命令串/env 无明文。
             env["SSH_ASKPASS"] = str(key_passphrase_file if use_key_passphrase else askpass_file)
@@ -313,8 +379,8 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
         # 认证失败判定（批次十九：不只 exit 255——Too many / Permission denied ×2
         # 即限流或多 key 遍历信号）→ 计数，达上限熔断；任一认证失败都中止发现。
         if _is_ssh_auth_failure(proc):
-            _record_ssh_auth_failure(host, user)
-            if _ssh_auth_breaker_tripped(host, user):
+            _record_ssh_auth_failure(host, user, _ssh_auth_cred_fingerprint(argv))
+            if _ssh_auth_breaker_tripped(host, user, _ssh_auth_cred_fingerprint(argv)):
                 raise DiscoveryError(_ssh_auth_breaker_error(host, user))
             detail = (proc.stderr or proc.stdout or "").strip().splitlines()
             raise DiscoveryError(

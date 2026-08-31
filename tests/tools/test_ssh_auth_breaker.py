@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 from types import SimpleNamespace
 
 import pytest
@@ -24,6 +25,13 @@ def _reset_breaker():
 
 def _auth_fail(stderr: str = "Permission denied (publickey,password).") -> SimpleNamespace:
     return SimpleNamespace(returncode=255, stdout="", stderr=stderr)
+
+
+def _age_breaker_entry(host: str, user: str, seconds: float) -> None:
+    """把熔断条目的 ts 拨老 seconds 秒（模拟 TTL 过期）。"""
+    key = topodisc._ssh_auth_key(host, user)
+    entry = topodisc._SSH_AUTH_FAILURES.setdefault(key, {})
+    entry["ts"] = (_dt.datetime.now() - _dt.timedelta(seconds=seconds)).isoformat()
 
 
 def test_trips_after_three_failures_and_stops_calling_underlying(monkeypatch):
@@ -319,5 +327,105 @@ def test_force_trip_trips_sudo_tool_guard(monkeypatch):
         from tools.sudo_tool import _ssh_auth_breaker_guard
         with pytest.raises(RuntimeError, match="已停止自动重试"):
             _ssh_auth_breaker_guard(["ssh", "-p", "22", "ops@host-sudo"])
+    finally:
+        topodisc._SSH_AUTH_FAILURES.clear()
+
+
+# ---------------------------------------------------------------------------
+# 批八十四 — 熔断过期 + 凭据修正重试（OPS-DELTA #100 防死锁）
+# ---------------------------------------------------------------------------
+
+def test_breaker_immediate_retry_rejected_until_ttl(monkeypatch):
+    """验收 d+e：3 次失败熔断 → 立即重试被拒（不调用底层）；超过 TTL 后自动
+    放行一次真实 SSH 尝试（计数重新从 1 累计，不再需要重启进程）。"""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _auth_fail()
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = _build_ssh_runner("203.0.113.70", "root", key_path="/keys/test.pem")
+    for _ in range(3):
+        with pytest.raises(DiscoveryError, match="SSH 连接|认证失败"):
+            runner("uptime")
+    # d：熔断期内立即重试被拒，底层零调用
+    with pytest.raises(DiscoveryError, match="已停止自动重试"):
+        runner("uptime")
+    assert len(calls) == 3
+    # e：TTL 过期 → 放行真实尝试，再次失败只累计 1（重新计时）
+    _age_breaker_entry("203.0.113.70", "root",
+                       topodisc._SSH_AUTH_BREAKER_TTL_S + 1)
+    with pytest.raises(DiscoveryError, match="SSH 连接"):
+        runner("uptime")
+    assert len(calls) == 4
+    assert topodisc._ssh_auth_failures("203.0.113.70", "root") == 1
+
+
+def test_corrected_credentials_bypass_breaker_and_reset(monkeypatch):
+    """验收 f：修正凭据（换 key）→ 放行一次真实 SSH 尝试，成功后计数清零
+    （不再死锁，无需重启进程）。"""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if "/keys/correct.pem" in argv:
+            return SimpleNamespace(returncode=0, stdout="ok", stderr="")
+        return _auth_fail()
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner_bad = _build_ssh_runner("203.0.113.71", "root", key_path="/keys/bad.pem")
+    for _ in range(3):
+        with pytest.raises(DiscoveryError, match="SSH 连接|认证失败"):
+            runner_bad("uptime")
+    with pytest.raises(DiscoveryError, match="已停止自动重试"):
+        runner_bad("uptime")
+    assert len(calls) == 3
+    # 修正凭据（换 key）→ 真实 SSH 尝试 + 成功清零
+    runner_good = _build_ssh_runner("203.0.113.71", "root", key_path="/keys/correct.pem")
+    assert runner_good("uptime").ok is True
+    assert len(calls) == 4
+    assert topodisc._ssh_auth_failures("203.0.113.71", "root") == 0
+
+
+def test_failures_after_expiry_reaccumulate_and_retrip(monkeypatch):
+    """验收 g：过期放行后连续失败仍累计 3 次重新熔断（MaxAuthTries 防自伤不破）。"""
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        return _auth_fail()
+
+    monkeypatch.setattr(topodisc.subprocess, "run", fake_run)
+    runner = _build_ssh_runner("203.0.113.72", "root", key_path="/keys/test.pem")
+    for _ in range(3):
+        with pytest.raises(DiscoveryError):
+            runner("uptime")
+    _age_breaker_entry("203.0.113.72", "root",
+                       topodisc._SSH_AUTH_BREAKER_TTL_S + 1)
+    with pytest.raises(DiscoveryError, match="SSH 连接"):  # 过期放行后失败 1
+        runner("uptime")
+    with pytest.raises(DiscoveryError, match="SSH 连接"):  # 失败 2
+        runner("uptime")
+    with pytest.raises(DiscoveryError, match="认证失败 3/3"):  # 失败 3 → 再次熔断
+        runner("uptime")
+    with pytest.raises(DiscoveryError, match="已停止自动重试"):  # 又立即被拒
+        runner("uptime")
+    assert len(calls) == 6  # 3（首轮）+ 3（过期后重新累计）；熔断后的拒绝零调用
+
+
+def test_sudo_tool_guard_allows_corrected_key_retry():
+    """sudo_exec 远端路径共享计数：凭据修正（换 key）后 guard 放行并清零。"""
+    import tools.sudo_tool as sudo_tool
+
+    topodisc._record_ssh_auth_failure("host-fix", "ops", ("/keys/bad.pem",))
+    topodisc._record_ssh_auth_failure("host-fix", "ops", ("/keys/bad.pem",))
+    topodisc._record_ssh_auth_failure("host-fix", "ops", ("/keys/bad.pem",))
+    try:
+        with pytest.raises(RuntimeError, match="已停止自动重试"):
+            sudo_tool._ssh_auth_breaker_guard(["ssh", "-i", "/keys/bad.pem", "ops@host-fix"])
+        # 修正 key → 放行（不再 raise），计数清零
+        sudo_tool._ssh_auth_breaker_guard(["ssh", "-i", "/keys/good.pem", "ops@host-fix"])
+        assert topodisc._ssh_auth_failures("host-fix", "ops") == 0
     finally:
         topodisc._SSH_AUTH_FAILURES.clear()
