@@ -5175,3 +5175,43 @@
   tools/runbook_exec.py、tools/runbook_tools.py、hermes_cli/setup.py、
   hermes_cli/subcommands/setup.py、tests/conftest.py、tests/ 相关用例 +
   OPS-DELTA.md 本条登记。
+
+### 100. vssh 凭据复数兼容 + SSH 认证熔断死锁修复 + tirith 下载总超时（batch84，3 个 commit）
+
+- **背景**（2026-08-31 dogfood 实证）：用户从 0 重建拓扑后跑 runbook 远端恢复失败两处：
+  ① vssh `_resolve_topology_credential` 只读单数 `credential`，而 topo-discover 写入的是
+  复数 `credentials` 数组 → 凭据读不到 → SSH 认证失败（agent 曾手动为三台阿里云 host 补
+  单数字段作 workaround）；② 认证失败 3 次熔断后，guard 挡在真实 SSH 之前，计数是进程
+  内存态、无过期/无重置路径 → 凭据修正后必须重启 agent 进程才能恢复（死锁）。附带：
+  tirith 缺失自动从 GitHub 下载直连慢（4.4M 截断 + checksums 卡）→ terminal 命令执行被
+  阻塞 20+ 分钟。
+- **任务 1——vssh 凭据读取兼容复数 credentials**（commit 1，hermes_cli/subcommands/
+  vssh.py）：`_resolve_topology_credential` 解析顺序改为单数 `credential` 优先（老数据/
+  手写），无单数 → 复数 `credentials` 数组按 `type=ssh_key` 取第一条（ssh_key/vault 混排
+  时 ssh 场景取 ssh_key），数组无 ssh_key 取第一条 dict 兜底（vault/askpass 同一消费
+  契约）；返回结构保持消费端契约（type/ref/user/port）。测试 4 例：复数-only host/by-
+  endpoint、混排取 ssh_key、单数仍优先、askpass-only 兜底。真实验收：39.106.217.32
+  （/home/wpwang/.ssh/aliyun_nopass.pem root）复数-only / 单数-only / 真实拓扑删掉
+  workaround 单数字段三态均真实 SSH 成功（a/b/c ✓）。
+- **任务 2——认证熔断加过期/重置（死锁修复）**（commit 2，tools/topo_discovery.py +
+  tools/sudo_tool.py）：`_ssh_auth_breaker_tripped` 带凭据指纹（ssh argv `-i` key 路径
+  元组）+ TTL（`_SSH_AUTH_BREAKER_TTL_S=300s`）。两通道防死锁：① TTL 过期 → 清零计数
+  放行一次真实尝试，再次失败从 1 重新累计（连续 3 次仍熔断，防 MaxAuthTries 自伤语义
+  保持）；② 凭据指纹变化（用户修正 key）→ 立即放行一次真实尝试并重置计数。sudo_tool
+  `_ssh_auth_breaker_guard`/`_ssh_auth_breaker_note` 同步带指纹；`_build_ssh_runner.run`
+  带指纹（argv 构造提前于熔断检查）；force_trip 同样受 TTL 约束；熔断错误信息补过期/
+  修正重试指引。测试 4 例：d 立即重试仍拒、e TTL 过期真实 SSH、f 换 key 放行+清零
+  （runner 与 sudo_tool guard 双路径）、g 过期后连续失败重新熔断；既有 14 例（含 sudo
+  共享计数、force_trip）全绿。
+- **任务 3——tirith 自动下载加总超时**（commit 3，tools/tirith_security.py）：下载阶段
+  墙钟预算 `_DOWNLOAD_TOTAL_TIMEOUT_S=30s`（叠加单文件 10s 超时）——`_install_tirith`
+  下载阶段（archive + checksums + 可选 cosign 工件）每次下载前检查 monotonic 截止点，
+  预算耗尽即抛 TimeoutError → `download_failed` → fail-open 放行（tirith_fail_open:
+  true 语义：扫描缺失警告即可，不阻塞命令执行）；手动安装的 `$VIGIL_HOME/bin/tirith`
+  已存在时直接使用不触发下载（既有路径不变）。测试 3 例：总预算耗尽 → download_failed
+  不逐文件挂起、预算约束覆盖 cosign 工件阶段（退回 SHA-256 校验）、E2E 下载失败
+  fail-open 放行命令。
+- **状态**：3 个独立 fix commit（batch84），只含 hermes_cli/subcommands/vssh.py、
+  tools/topo_discovery.py、tools/sudo_tool.py、tools/tirith_security.py、tests/ 相关用例
+  + OPS-DELTA.md 本条登记。真实 SSH 验收 a-g：a/b/c 真实连接 39.106.217.32 ✓；
+  d-g 由 test_ssh_auth_breaker.py 新 4 例覆盖 ✓。
