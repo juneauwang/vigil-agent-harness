@@ -112,11 +112,16 @@ _DEFAULT_TOPO_SCHEMA = {
 _DEFAULT_TOPO_UPDATE_SCHEMA = {
     "name": "topo_update",
     "description": (
-        "更新拓扑表实体（v0.4：L2 服务行 + L3 档案）。自动携带 source=agent 与 "
-        "last_verified=今天；修改 PROD 环境实体前需要人工审批确认。"
+        "更新拓扑表实体（v0.4：L2 服务行 + L3 档案 + cluster 行 + host 行 "
+        "cluster）。自动携带 source=agent 与 last_verified=今天；修改 PROD 环境"
+        "实体前需要人工审批确认。"
         "L2 可写：type/managed_by/endpoint/extra_ports/log_paths/depends_on/needs_review；"
         "L3 可写：version/notes/checks（verify 检查列表）。"
-        "host 行可写 credentials 数组（[{type: ssh_key|secret, ref, user?, port?}]，"
+        "cluster 行可写：env/type/endpoint/host_groups/notes/provenance——改 env "
+        "是矩阵裁决依据（整个集群动作档位全变），强制人工审批；name（改名走 rename"
+        "全链路）/ source（系统维护诊断元数据）不可写。"
+        "host 行可写：cluster（把主机归入/移出集群）+ credentials 数组（"
+        "[{type: ssh_key|secret, ref, user?, port?}]，"
         "只收引用——ref 是路径/vault 引用，明文凭据值拒绝写入；空数组 = 清空）。"
         "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认同步。"
     ),
@@ -134,7 +139,9 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
                     "log_paths/depends_on/depended_by/needs_review/version/notes/checks"
                     "（extra_ports/log_paths/depends_on 传数组，checks 传 "
                     "[{action: verify, params: {url, expect: {http_status, body_contains}}}]）；"
-                    "host 行可写 credentials（引用数组，见上）。"
+                    "cluster 行可写 env/type/endpoint/host_groups/notes/provenance（env "
+                    "变更强制人工审批）；host 行可写 cluster（归入/移出集群）+ "
+                    "credentials（引用数组，见上）。"
                     "其余标量键写入档案 snapshot.common（如 version）。"
                     "dict/list 复杂结构除上述白名单外会被拒绝（防嵌套污染）。"
                 ),
@@ -805,6 +812,16 @@ def _env_for_entity(topo: Dict[str, Any], entity: Dict[str, Any]) -> Optional[st
     for env in topo.get("environments") or []:
         if entity.get("name") in (env.get("core_entities") or []):
             return env.get("name")
+    # 批八十五（OPS-DELTA #101）：cluster 的 env 是矩阵裁决依据——实体挂集群
+    # （host 行 cluster / 服务继承 host 的 cluster）时 cluster env 优先于实体
+    # 自身 env（改 cluster env = 整个集群动作档位全变；topo_update 写 host 行
+    # cluster = 移动主机跨档位）。
+    cluster_name = entity.get("cluster")
+    if cluster_name:
+        for cluster in topo.get("clusters") or []:
+            if isinstance(cluster, dict) and cluster.get("name") == cluster_name \
+                    and cluster.get("env"):
+                return cluster.get("env")
     if entity.get("env"):
         return entity.get("env")
     # 服务行未显式标 env 时，经 "服务 → 所属 host → env" 链路解析（OPS-DELTA #6）。
@@ -833,6 +850,15 @@ def _entity_env(topo: Dict[str, Any], entity: Dict[str, Any]) -> str:
 # 只收引用（ref = 路径 / vault 引用 / 标识）——明文凭据值一律拒绝写入拓扑。
 _CREDENTIAL_TYPES = ("ssh_key", "secret")
 _CREDENTIAL_REF_RE = re.compile(r"[A-Za-z0-9._~/:\-]+")
+
+
+# 批八十五（OPS-DELTA #101）：cluster 行可写白名单——env/type/endpoint/
+# host_groups/notes/provenance。name（改名走专门 rename 全链路，08-13 改名
+# 事故教训）/ source（discovered/manual，discover 写入的系统维护诊断元数据）
+# 不在白名单。
+_CLUSTER_UPDATE_FIELDS = frozenset(
+    {"env", "type", "endpoint", "host_groups", "notes", "provenance"}
+)
 
 
 def _validate_credentials_update(value: Any) -> Optional[str]:
@@ -882,6 +908,95 @@ def _validate_credentials_update(value: Any) -> Optional[str]:
     return None
 
 
+def _update_cluster_row(topo: Dict[str, Any], home: Path, entity: str,
+                        cluster_row: Dict[str, Any], updates: Dict[str, Any],
+                        reason: str) -> str:
+    """更新 topology.yaml 的 cluster 行（批八十五 OPS-DELTA #101）。
+
+    cluster 的 env 是矩阵裁决依据——改 env = 整个集群动作档位全变 → 强制人工
+    审批（require_confirmation，先于 PROD 档位）；其他字段按既有 PROD 档位
+    （_env_tier(env)==prod 时审批）。name/source 拒绝并说明原因；host_groups
+    只接受字符串数组。写 topology.yaml clusters 段（事实来源，无 L3 档案）。
+    """
+    bad = set(updates) - _CLUSTER_UPDATE_FIELDS
+    if bad:
+        hints = []
+        if "name" in bad:
+            hints.append(
+                "name 是实体标识——改名 = 引用全失联，走专门 rename 全链路流程，"
+                "不在 topo_update 白名单"
+            )
+        if "source" in bad:
+            hints.append(
+                "source 是系统自动维护的诊断元数据（discovered/manual），由 "
+                "discover 写入，人不维护，不在白名单"
+            )
+        return tool_error(
+            f"cluster 行只接受 {sorted(_CLUSTER_UPDATE_FIELDS)} 字段；"
+            f"收到 {sorted(bad)}。" + ("；".join(hints) or "")
+        )
+
+    from tools.approval import request_tool_approval
+    if "env" in updates:
+        approval = request_tool_approval(
+            "topo_update",
+            f"修改集群 {entity} 的 env（{cluster_row.get('env') or '?'} → "
+            f"{updates['env']}）——cluster env 是矩阵裁决依据，改 env = 整个集群"
+            "动作档位全变，需人工确认",
+            rule_key=f"topo_update:cluster-env:{entity}",
+        )
+        if not approval.get("approved"):
+            return tool_error(
+                approval.get("message") or f"集群 {entity} 的 env 变更未获审批，已取消。",
+                approved=False,
+            )
+    else:
+        from tools.topo_discovery import _env_tier
+        if _env_tier(str(cluster_row.get("env") or "")) == "prod":
+            approval = request_tool_approval(
+                "topo_update",
+                f"修改 PROD 拓扑集群 {entity}（{updates}）需要审批确认",
+                rule_key=f"topo_update:prod:{entity}",
+            )
+            if not approval.get("approved"):
+                return tool_error(
+                    approval.get("message") or "PROD 拓扑变更未获审批，已取消。",
+                    approved=False,
+                )
+
+    for key, value in updates.items():
+        if key == "host_groups":
+            if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+                return tool_error("updates['host_groups'] 必须是字符串数组（主机组列表）。")
+            cluster_row["host_groups"] = value
+            continue
+        if isinstance(value, (dict, list)):
+            return tool_error(
+                f"updates['{key}'] 不接受 dict/list 复杂结构（防嵌套污染档案）。"
+            )
+        cluster_row[key] = value
+
+    try:
+        topo["updated_at"] = _today()
+        _topology_path(home).write_text(
+            yaml.safe_dump(topo, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    except Exception as exc:
+        return tool_error(f"写入 topology.yaml（cluster {entity}）失败: {exc}")
+
+    audit = {
+        "entity": entity,
+        "type": "cluster",
+        "env": str(cluster_row.get("env") or ""),
+        "updates": updates,
+        "reason": reason,
+        "source": _SOURCE_AGENT,
+        "last_verified": _today(),
+    }
+    return json.dumps({"status": "updated", **audit}, ensure_ascii=False, indent=2)
+
+
 def topo_update(
     entity: str,
     updates: Dict[str, Any],
@@ -902,6 +1017,16 @@ def topo_update(
 
     if not isinstance(updates, dict) or not updates:
         return tool_error("updates 必须是非空对象。")
+
+    # 批八十五：cluster 实体（topology.yaml clusters 行）——矩阵裁决维度来源，
+    # 走专门白名单（6 字段，env 变更强制人工审批），不进通用实体档案路径。
+    cluster_row = next(
+        (c for c in (topo.get("clusters") or [])
+         if isinstance(c, dict) and c.get("name") == entity),
+        None,
+    )
+    if cluster_row is not None:
+        return _update_cluster_row(topo, home, entity, cluster_row, updates, reason)
 
     entities = _all_core_entities(topo, home)
     match = next((e for e in entities if e.get("name") == entity), None)
@@ -928,6 +1053,42 @@ def topo_update(
                 approval.get("message") or "PROD 拓扑变更未获审批，已取消。",
                 approved=False,
             )
+
+    # 批八十五：host 行 cluster 字段可写（把主机归入/移出集群）——写 topology.yaml
+    # host 行（事实来源），不进 L3 档案；从 updates 剥离避免落到档案。
+    host_row = next(
+        (h for h in (topo.get("hosts") or [])
+         if isinstance(h, dict) and h.get("name") == entity),
+        None,
+    )
+    if host_row is not None and "cluster" in updates:
+        cluster_val = updates["cluster"]
+        if not isinstance(cluster_val, str) or not cluster_val.strip():
+            return tool_error(
+                "updates['cluster'] 必须是字符串（集群名；空字符串不接受）。"
+            )
+        host_row["cluster"] = cluster_val
+        try:
+            topo["updated_at"] = _today()
+            _topology_path(home).write_text(
+                yaml.safe_dump(topo, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            return tool_error(f"写入 topology.yaml（host {entity} 的 cluster）失败: {exc}")
+        remaining = {k: v for k, v in updates.items() if k != "cluster"}
+        if not remaining:
+            audit = {
+                "entity": entity,
+                "env": env_name,
+                "updates": {"cluster": cluster_val},
+                "reason": reason,
+                "source": _SOURCE_AGENT,
+                "last_verified": _today(),
+                "host_cluster_updated": True,
+            }
+            return json.dumps({"status": "updated", **audit}, ensure_ascii=False, indent=2)
+        updates = remaining
 
     # v0.4 字段分流：L2 服务行字段 vs L3 档案顶层字段 vs snapshot.common 标量。
     _L2_UPDATE_FIELDS = frozenset(
