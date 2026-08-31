@@ -7,6 +7,8 @@ Modular wizard with independently-runnable sections:
   3. Agent Settings — iterations, compression, session reset
   4. Messaging Platforms — connect Telegram, Discord, etc.
   5. Tools — configure TTS, web search, image generation, etc.
+  6. Permission Matrix — generate matrix.yaml (security asset; a missing
+     matrix fails closed, so setup always produces one — OPS-DELTA #99)
 
 Config files are stored in ~/.vigil/ for easy access.
 """
@@ -400,6 +402,18 @@ def _print_setup_summary(config: dict, hermes_home):
         tool_status.append(("Vision (image analysis)", True, None))
     else:
         tool_status.append(("Vision (image analysis)", False, "run 'vigil setup' to configure"))
+
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 = 权限系统不可用（fail-closed），
+    # 汇总里明示矩阵状态，缺失时给修复指引（vigil setup matrix）。
+    try:
+        from tools.matrix_data import matrix_path
+        _matrix_ok = matrix_path(hermes_home).is_file()
+    except Exception:
+        _matrix_ok = False
+    tool_status.append(
+        ("Permission Matrix (matrix.yaml)", _matrix_ok,
+         "run 'vigil setup matrix'")
+    )
 
     tool_status.append(("Terminal/Commands", True, None))
     tool_status.append(("Task Planning (todo)", True, None))
@@ -2152,6 +2166,86 @@ def setup_telemetry(config: dict):
 
 
 # =============================================================================
+# Permission Matrix step（batch83-fix，OPS-DELTA #99）
+# =============================================================================
+
+def _print_matrix_overview(data: dict) -> None:
+    """展示矩阵概览：环境 × 高危动作档位（required/approve 计数 + 名单）。
+
+    纯展示（无 I/O 交互）——供 setup 步骤与幂等跳过共用。
+    """
+    matrix = data.get("matrix") or {}
+    if not matrix:
+        print_warning("矩阵为空（未配置任何环境）——请用 vigil matrix 配置。")
+        return
+    print()
+    print_info("矩阵概览（环境 × 高危动作档位）：")
+    for env, cells in matrix.items():
+        if not isinstance(cells, dict):
+            continue
+        required = sorted(a for a, lv in cells.items() if lv == "required")
+        approve = sorted(a for a, lv in cells.items() if lv == "approve")
+        execute = sorted(a for a, lv in cells.items() if lv == "execute")
+        parts = [f"{len(execute)} 直接执行"]
+        if approve:
+            parts.append(f"{len(approve)} 审批: {', '.join(approve)}")
+        if required:
+            parts.append(f"{len(required)} 强制人工: {', '.join(required)}")
+        print(f"   {color(env, Colors.CYAN)} — {'; '.join(parts)}")
+
+
+def setup_matrix(config: dict) -> None:
+    """配置权限矩阵：模板选择 → 生成 matrix.yaml 到数据根 → 概览。
+
+    batch83-fix（OPS-DELTA #99）：矩阵缺失 = 权限系统不可用（fail-closed，
+    任何命令都被"矩阵未初始化"拒绝），setup 必须保证 matrix.yaml 生成。
+    幂等：matrix.yaml 已存在则跳过（安全资产防误覆盖——用户改过的矩阵不
+    覆盖），只展示概览。生成走 matrix_data.init_matrix 直写，不经过权限
+    裁决，无自锁（setup 自身可跑完）。
+    """
+    from tools import matrix_data as _md
+    from hermes_constants import get_hermes_home
+
+    home = get_hermes_home()
+    path = _md.matrix_path(home)
+
+    print()
+    print_header("Permission Matrix (权限矩阵)")
+    print_info("矩阵按 动作 × 环境 裁决每条命令（execute / approve /")
+    print_info("{approve: required}）。它是安全资产（§11.7）——矩阵缺失时")
+    print_info("权限系统不可用、fail-closed 拒绝一切命令，因此 setup 保证生成。")
+
+    if path.is_file():
+        print_info(f"matrix.yaml 已存在（安全资产，不覆盖）：{path}")
+        try:
+            _print_matrix_overview(_md.load_matrix(home))
+        except Exception as exc:
+            print_warning(f"矩阵概览读取失败（不影响跳过）：{exc}")
+        return
+
+    templates = [
+        ("template1", "单人本地项目（1 环境 local，常规动作直接执行，高危 4 动作审批）"),
+        ("template2", "小团队（local/test/dev/prod 四档）——推荐默认"),
+        ("template3", "中型团队（local/test/uat/dev/prod，uat→prod 档更严）"),
+    ]
+    labels = [f"{_md.TEMPLATE_LABELS[t]}：{desc}" for t, desc in templates]
+    idx = prompt_choice(
+        "选择矩阵模板（严格度阶梯 §11.3；默认模板 2 小团队）？",
+        labels,
+        default=1,
+    )
+    template = templates[idx][0]
+    try:
+        data = _md.init_matrix(template, home=home)
+    except FileExistsError:
+        # 并发/重复运行竞态——已存在即视为幂等完成，不报错。
+        data = _md.load_matrix(home)
+        print_info(f"matrix.yaml 已存在（跳过生成）：{path}")
+    print_success(f"matrix.yaml 已生成（{template}）：{path}")
+    _print_matrix_overview(data)
+
+
+# =============================================================================
 # Post-Migration Section Skip Logic
 # =============================================================================
 
@@ -2561,6 +2655,7 @@ SETUP_SECTIONS = [
     ("tools", "Tools", setup_tools),
     ("telemetry", "Shared Metrics", setup_telemetry),
     ("agent", "Agent Settings", setup_agent_settings),
+    ("matrix", "Permission Matrix", setup_matrix),
 ]
 
 
@@ -2593,6 +2688,7 @@ def run_setup_wizard(args):
       vigil setup tools     — just tool configuration
       vigil setup telemetry — just local shared metrics
       vigil setup agent     — just agent settings
+      vigil setup matrix    — just the permission matrix (matrix.yaml)
     """
     from hermes_cli.config import is_managed, managed_error
     if is_managed():
@@ -2767,6 +2863,11 @@ def run_setup_wizard(args):
     if not (migration_ran and _skip_configured_section(config, "tools", "Tools")):
         setup_tools(config, first_install=not is_existing)
 
+    # Section 6: Permission Matrix — batch83-fix（OPS-DELTA #99）：矩阵缺失 =
+    # 权限系统不可用（fail-closed），setup 必须保证 matrix.yaml 生成。幂等
+    # （已存在跳过），首次安装 / 全量重配都会铺。
+    setup_matrix(config)
+
     # Save and show summary
     save_config(config)
     if _backup_path and _backup_path.exists():
@@ -2891,6 +2992,13 @@ def _run_blank_slate_setup(config: dict, hermes_home, is_existing: bool):
     print_success("Minimal baseline applied:")
     print_info("  Toolsets: file, terminal (everything else off)")
     print_info("  Compression, memory, checkpoints, smart routing: off")
+
+    # ── Step 4: Permission Matrix — batch83-fix（OPS-DELTA #99）：blank slate
+    # 保留默认 ops 权限（缺省启用）而 terminal 是强制开启的核心工具——矩阵
+    # 缺失 = 一切命令被 fail-closed 拒绝，minimal agent 直接不可用。无论
+    # 走"finish now"还是 walkthrough，矩阵都必须先生成。幂等：已存在跳过。
+    setup_matrix(config)
+    save_config(config)
 
     # ── The fork: stop here, or walk through enabling things ──
     print()
@@ -3022,6 +3130,13 @@ def _run_quick_setup(config: dict, hermes_home):
 
     print()
     print_header("Quick Setup — Missing Items Only")
+
+    # ── Permission Matrix（batch83-fix，OPS-DELTA #99）：矩阵缺失 = 权限系统
+    # 不可用（fail-closed），quick setup 同样保证 matrix.yaml 存在。放在缺项
+    # 检查之前——"Everything is configured" 快路径也必须满足矩阵存在。幂等：
+    # 已存在跳过。
+    setup_matrix(config)
+    save_config(config)
 
     # Check what's missing
     missing_required = [

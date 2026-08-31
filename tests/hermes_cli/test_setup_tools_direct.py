@@ -37,6 +37,9 @@ def test_quick_setup_never_asks_which_tools(quick_env, monkeypatch, capsys):
 
     monkeypatch.setattr(setup_mod, "prompt_checklist", fake_checklist)
     monkeypatch.setattr(setup_mod, "prompt", lambda *a, **kw: "")
+    # batch83-fix（OPS-DELTA #99）：quick setup 新增权限矩阵步骤（矩阵缺失 →
+    # fail-closed，quick 也保证 matrix.yaml 存在）——模板选择默认模板 2。
+    monkeypatch.setattr(setup_mod, "prompt_choice", lambda *a, **kw: 1)
 
     cfg = dict(DEFAULT_CONFIG)
     _run_quick_setup(cfg, quick_env)

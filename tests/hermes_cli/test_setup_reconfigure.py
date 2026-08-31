@@ -114,6 +114,8 @@ class TestExistingInstallDefault:
                 agent="hermes_cli.setup.setup_agent_settings",
                 gateway="hermes_cli.setup.setup_gateway",
                 tools="hermes_cli.setup.setup_tools",
+                # batch83-fix（OPS-DELTA #99）：权限矩阵段落并入全量重配流程。
+                matrix="hermes_cli.setup.setup_matrix",
             )
             from hermes_cli.setup import run_setup_wizard
             run_setup_wizard(args)
@@ -122,13 +124,14 @@ class TestExistingInstallDefault:
         m["prompt_choice"].assert_not_called()
         # Quick-setup path NOT taken.
         m["quick"].assert_not_called()
-        # Model/terminal/gateway/tools run; agent settings are no longer
-        # prompted on existing installs (they keep their tuned values).
+        # Model/terminal/gateway/tools/matrix run; agent settings are no
+        # longer prompted on existing installs (they keep their tuned values).
         m["model"].assert_called_once()
         m["terminal"].assert_called_once()
         m["agent"].assert_not_called()
         m["gateway"].assert_called_once()
         m["tools"].assert_called_once()
+        m["matrix"].assert_called_once()
 
 
 class TestQuickFlag:

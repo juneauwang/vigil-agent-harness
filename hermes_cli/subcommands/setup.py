@@ -19,7 +19,7 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
         help="Interactive setup wizard",
         description="Configure Vigil Agent with an interactive wizard. "
         "Run a specific section: "
-        "vigil setup model|tts|terminal|gateway|tools|telemetry|agent",
+        "vigil setup model|tts|terminal|gateway|tools|telemetry|agent|matrix",
     )
     setup_parser.add_argument(
         "section",
@@ -32,6 +32,7 @@ def build_setup_parser(subparsers, *, cmd_setup: Callable) -> None:
             "tools",
             "telemetry",
             "agent",
+            "matrix",
         ],
         default=None,
         help="Run a specific setup section instead of the full wizard",

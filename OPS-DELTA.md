@@ -5114,3 +5114,64 @@
   tools/approval.py、tools/matrix_data.py、hermes_cli/ops_init.py、
   hermes_cli/subcommands/matrix.py、web/src/pages/MatrixPage.tsx、tests/ 相关用例
   + OPS-DELTA.md 本条登记。
+
+### 99. 矩阵必须存在（去掉惰性放行）+ setup 加矩阵生成步骤（batch83-fix，2 个 commit）
+
+- **背景**（2026-08-30 batch83 验收发现 + 用户定案）：用户真实环境
+  /home/wpwang/.vigil 没有 matrix.yaml，ops_permissions.py 349-356 的惰性逻辑
+  （OPS-DELTA #76 回归修复）在矩阵缺失时对非 prod 会话直接 return None 放行——
+  它发生在 batch83 目标解析**之前**，dev/test 会话的高危变更（npm install /
+  kubectl delete 等）根本走不到目标解析和 deny，直接放行。Codex 测试全绿是因为
+  测试 fixture 都铺了 matrix.yaml，349 行不触发——测试环境 ≠ 真实环境。用户定案
+  （原话）："matrix 需要必须存在 vigil 才能工作 否则报错 而且 cli setup 里面
+  需要添加步骤"。即：矩阵是安全资产（§11.7），缺失 = 权限系统不可用 = 报错
+  （fail-closed），不是悄悄放行；setup 流程必须保证矩阵生成，setup 完 matrix.yaml
+  一定存在。
+- **任务 1——矩阵缺失 → deny（去掉惰性放行）**（commit 1，tools/ops_permissions.py
+  + tools/runbook_exec.py + tools/runbook_tools.py）：check_ops_command_permission
+  删掉 #76 惰性分支（矩阵缺失 + 非 prod → None），改为先 classify_command 再查
+  矩阵文件——缺失 → 返回与 _target_deny_decision 同构的 deny 决策
+  （{"action": "deny", "matrix_missing": True, ...}），description 带修复指引
+  （先跑 vigil setup / vigil ops-init 生成矩阵）；所有命令（含只读）统一
+  fail-closed。runbook 执行路径（_step_approval / _asset_approve_runbook）同步从
+  "矩阵缺失仍按空矩阵 approve 门控"（P4 既有）改为拒绝 + 修复指引——与 terminal
+  一致。**新增 ops_permissions_enabled() 共用开关**（缺省启用，显式
+  ops.permissions.enabled: false 关闭）：terminal 与 runbook 路径共用——显式关闭
+  时矩阵缺失不报错（交回 approvals.mode 语义），缺省启用时缺失 = 权限系统不可用
+  = deny/拒绝。**无自锁**：setup/ops-init 生成矩阵走 matrix_data.init_matrix
+  直写，不经过本裁决。测试：test_ops_permissions.py 新增矩阵缺失 deny 用例
+  （只读 ls / 高危 npm install / kubectl delete → deny + matrix_missing + 修复
+  指引；显式关闭 → None）+ test_runbook_exec.py / test_runbook_tools.py 新增
+  runbook 路径矩阵缺失拒绝用例（含显式关闭放行）。测试基建：tests/conftest.py
+  默认测试 home 写显式 ops.permissions.enabled: false 的最小 config（非 ops 测试
+  恢复"权限层惰性不参与"基线）；16 个受影响测试文件（approval / runbook / sudo /
+  terminal / cron / exec-api / trajectory / runtime-state）的 fixture 同步补
+  ops 关闭 config 或矩阵（按各自套件焦点：与权限矩阵无关的测权限层关闭；专测
+  审批链的铺矩阵）。
+- **任务 2——vigil setup 加矩阵生成步骤**（commit 2，hermes_cli/setup.py +
+  hermes_cli/subcommands/setup.py）：新增 setup_matrix 段落——模板选择（模板 1/2/3，
+  严格度阶梯 §11.3，默认模板 2 小团队 local/test/dev/prod）→
+  matrix_data.init_matrix 落盘 VIGIL_HOME 数据根 matrix.yaml → 展示矩阵概览
+  （环境 × 高危动作档位：execute/approve/required 计数 + 名单）。幂等：matrix.yaml
+  已存在 → 跳过（安全资产不覆盖用户改动）只展示概览。接入三条路径：全量 wizard
+  （Section 6，迁移跳过逻辑不适用——矩阵不来自 OpenClaw）、Blank Slate（fork 前
+  Step 4——blank slate 保留默认 ops 权限而 terminal 强制开启，矩阵缺失 = minimal
+  agent 直接不可用）、quick setup（缺项检查前——"Everything is configured" 快路径
+  也必须满足矩阵存在）；`vigil setup matrix` 单段落可跑（SETUP_SECTIONS + CLI
+  parser choices 同步）；_print_setup_summary 汇总加矩阵状态行。测试：
+  test_setup_matrix_step.py（默认模板 2 落盘 / 模板选择生效 / 已存在跳过不弹 /
+  parser 接受 matrix 段落）+ test_setup_reconfigure.py / test_setup_tools_direct.py
+  同步更新（全量重配含矩阵段落；quick setup 矩阵步骤 stub 模板选择）。
+- **验收**（2026-08-31 实测）：a ✓ 删除 matrix.yaml 后 check_ops_command_permission
+  （含只读 ls）→ deny + matrix_missing + 修复指引（非 None 放行）；b ✓ 矩阵缺失时
+  npm install -g codex / kubectl delete pod → 同样 deny（不静默放行，先于目标解析）；
+  c ✓ 完整 setup（全量 / blank slate 两分支 / quick）跑完 matrix.yaml 存在且内容
+  符合所选模板；d ✓ 矩阵存在后 test_batch83_target_adjudication.py 验收场景 a-e
+  全绿；e ✓ runbook 执行/资产审批在矩阵缺失时拒绝 + 修复指引（与 terminal 一致）。
+  真实环境只读验证：VIGIL_HOME=/home/wpwang/.vigil（config ops.permissions.enabled:
+  true、env test、无 matrix.yaml）→ check_ops_command_permission("ls") 返回 deny
+  + matrix_missing。
+- **状态**：2 个独立 fix commit（batch83-fix），只含 tools/ops_permissions.py、
+  tools/runbook_exec.py、tools/runbook_tools.py、hermes_cli/setup.py、
+  hermes_cli/subcommands/setup.py、tests/conftest.py、tests/ 相关用例 +
+  OPS-DELTA.md 本条登记。
