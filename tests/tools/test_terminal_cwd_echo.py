@@ -17,6 +17,12 @@ from tools.terminal_tool import terminal_tool
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny（fail-closed）。本套件测
+    # terminal cwd 回显，与权限矩阵无关——写显式 ops.permissions.enabled=false
+    # 的最小 config，避免 terminal 路径被"矩阵未初始化"提前拦截。
+    (tmp_path / ".vigil").mkdir(exist_ok=True)
+    (tmp_path / ".vigil" / "config.yaml").write_text(
+        "ops:\n  permissions:\n    enabled: false\n", encoding="utf-8")
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     return tmp_path
 

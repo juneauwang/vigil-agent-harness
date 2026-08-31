@@ -52,6 +52,11 @@ services:
 
 @pytest.fixture
 def topo_home(tmp_path, monkeypatch):
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny（fail-closed）。本套件测
+    # runtime_state 打点，与权限矩阵无关——显式关闭 ops 权限，避免 sudo 路径
+    # 被"矩阵未初始化"提前拦截。
+    (tmp_path / "config.yaml").write_text(
+        "ops:\n  permissions:\n    enabled: false\n", encoding="utf-8")
     (tmp_path / "topology.yaml").write_text(TOPOLOGY, encoding="utf-8")
     (tmp_path / "hosts").mkdir()
     (tmp_path / "hosts" / "node1.yaml").write_text(NODE1, encoding="utf-8")

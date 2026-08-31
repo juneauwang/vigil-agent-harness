@@ -21,6 +21,12 @@ from tools.sudo_tool import _sudo_exec_handler
 
 @pytest.fixture(autouse=True)
 def _isolation(tmp_path, monkeypatch):
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny（fail-closed）。本套件测
+    # sudo clarify 引导流，与权限矩阵无关——写显式 ops.permissions.enabled=false
+    # 的最小 config，避免 sudo 路径被"矩阵未初始化"提前拦截（sudo 经
+    # check_ops_command_permission 裁决，显式关闭后交回既有检查）。
+    (tmp_path / "config.yaml").write_text(
+        "ops:\n  permissions:\n    enabled: false\n", encoding="utf-8")
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     import hermes_cli.config as hc
     hc._LOAD_CONFIG_CACHE.clear()

@@ -54,11 +54,11 @@ def env_home(tmp_path, monkeypatch):
     _op._WARNED_ENVS.clear()
 
 
-def _cfg(home, env, *, extra="") -> None:
+def _cfg(home, env, *, extra="", enabled=True) -> None:
     (home / "config.yaml").write_text(
         "ops:\n"
         "  permissions:\n"
-        "    enabled: true\n"
+        f"    enabled: {str(enabled).lower()}\n"
         f"    env: {env}\n"
         "    role: operator\n"
         f"{extra}\n"
@@ -237,6 +237,8 @@ def test_exec_prod_unknown_defaults_approve_then_deny(client, env_home):
     """YAPL P5：iptables -F 不在规则表 → unknown → 默认 approve（矩阵无 deny）→
     needs_approval 弹窗；用户 deny → 终态 denied。"""
     _cfg(env_home, "prod")
+    _write_matrix(env_home, {"prod": {"query": "execute", "remove": "approve"}})
+
     r = client.post("/api/exec", json={"command": "iptables -F", "env": "prod"})
     assert r.status_code == 200, r.text
     body = r.json()
@@ -264,6 +266,8 @@ def test_exec_prod_unknown_defaults_approve_then_deny(client, env_home):
 def test_exec_prod_unknown_approval_chain(client, env_home):
     """echo（识别不出）→ unknown → 默认 approve → 审批弹窗；批准后执行。"""
     _cfg(env_home, "prod")
+    _write_matrix(env_home, {"prod": {"query": "execute", "remove": "approve"}})
+
     r = client.post("/api/exec", json={
         "command": "echo approval-gate-test", "env": "prod",
     })
@@ -328,6 +332,8 @@ def test_exec_prod_required_yolo_cannot_bypass(client, env_home):
 
 def test_exec_deny_chain(client, env_home):
     _cfg(env_home, "prod")
+    _write_matrix(env_home, {"prod": {"query": "execute", "remove": "approve"}})
+
     r = client.post("/api/exec", json={
         "command": "echo deny-gate-test", "env": "prod",
     })
@@ -454,7 +460,11 @@ def test_incidents_placeholder(client, env_home):
 
 
 def test_credential_zero_leak_all_endpoints(client, env_home):
-    _cfg(env_home, "test")
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny。本用例测凭据零泄露
+    # （echo 识别为 unknown → 默认 approve 走审批门，与矩阵无关）——显式关闭
+    # ops 权限，保持"命令直接执行"的断言焦点。
+    _cfg(env_home, "test", enabled=False)
+
     secret_cmd = (
         'echo "PASSWORD=hunter2"; echo "API_TOKEN=sk-abc123def456"; '
         "echo 'https://admin:s3cret-pw@example.com/x'"
@@ -483,6 +493,8 @@ def test_credential_zero_leak_all_endpoints(client, env_home):
 def test_credential_zero_leak_approvals_command(client, env_home):
     """审批条目 command 含疑似凭据先打码再展示。"""
     _cfg(env_home, "prod")
+    _write_matrix(env_home, {"prod": {"query": "execute", "remove": "approve"}})
+
     r = client.post("/api/exec", json={
         "command": "echo deploy.yaml --token=sk-abc123def456",
         "env": "prod",

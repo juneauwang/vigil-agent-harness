@@ -65,7 +65,7 @@ def v2_home(tmp_path, monkeypatch):
     # 与审批语义无关——显式 approvals.mode=off 绕过资产审批门（资产审批路径
     # 由 test_matrix.py 专测），保持 41 例 schema 断言专注不串味。
     (home / "config.yaml").write_text(
-        yaml.safe_dump({"approvals": {"mode": "off"}}, allow_unicode=True),
+        yaml.safe_dump({"approvals": {"mode": "off"}, "ops": {"permissions": {"enabled": False}}}, allow_unicode=True),
         encoding="utf-8",
     )
     (home / "topology.yaml").write_text(

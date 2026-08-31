@@ -71,6 +71,12 @@ def clean_env_cache():
 
 @pytest.fixture
 def isolated_home(tmp_path, monkeypatch):
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny（fail-closed）。本套件测
+    # terminal 密码提示转 clarify，与权限矩阵无关——显式关闭 ops 权限，避免
+    # terminal 路径被"矩阵未初始化"提前拦截。
+    (tmp_path / ".vigil").mkdir(exist_ok=True)
+    (tmp_path / ".vigil" / "config.yaml").write_text(
+        "ops:\n  permissions:\n    enabled: false\n", encoding="utf-8")
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path / ".vigil"))
     return tmp_path
 

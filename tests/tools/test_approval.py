@@ -1393,6 +1393,9 @@ class TestTirithImportErrorFailOpenPolicy:
         cfg = {
             "approvals": {"mode": "manual"},
             "security": {"tirith_enabled": enabled, "tirith_fail_open": fail_open},
+            # batch83-fix（OPS-DELTA #99）：本用例测 tirith import-error 策略，
+            # 与权限矩阵无关——显式关闭 ops 权限，避免矩阵缺失 → deny 提前拦截。
+            "ops": {"permissions": {"enabled": False}},
         }
         real_import = builtins.__import__
         with _patch("builtins.__import__", side_effect=self._make_failing_import(real_import)):
@@ -1412,6 +1415,7 @@ class TestTirithImportErrorFailOpenPolicy:
         cfg = {
             "approvals": {"mode": "manual"},
             "security": {"tirith_enabled": True, "tirith_fail_open": False},
+            "ops": {"permissions": {"enabled": False}},
         }
         calls = []
 
@@ -1499,7 +1503,7 @@ class TestApprovalPromptRedaction:
             'api_key = "sk-proj-abc123xyz4567890abcdef"\n'
             "print(api_key)"
         )
-        cfg = {"approvals": {"mode": "manual"}}
+        cfg = {"approvals": {"mode": "manual"}, "ops": {"permissions": {"enabled": False}}}
         with _patch("hermes_cli.config.load_config_readonly", return_value=cfg):
             with _patch("tools.approval._is_gateway_approval_context",
                         return_value=True):
@@ -1562,7 +1566,7 @@ class TestCliApprovalTimeoutClassifiedSeparately:
         mod._session_approved.clear()
         mod._permanent_approved.clear()
 
-        cfg = {"approvals": {"mode": "manual"}}
+        cfg = {"approvals": {"mode": "manual"}, "ops": {"permissions": {"enabled": False}}}
         with self._interactive_env():
             with _patch("hermes_cli.config.load_config_readonly", return_value=cfg):
                 result = mod.check_all_command_guards(
@@ -1586,7 +1590,7 @@ class TestCliApprovalTimeoutClassifiedSeparately:
         mod._session_approved.clear()
         mod._permanent_approved.clear()
 
-        cfg = {"approvals": {"mode": "manual"}}
+        cfg = {"approvals": {"mode": "manual"}, "ops": {"permissions": {"enabled": False}}}
         with self._interactive_env():
             with _patch("hermes_cli.config.load_config_readonly", return_value=cfg):
                 result = mod.check_all_command_guards(
@@ -1609,7 +1613,7 @@ class TestCliApprovalTimeoutClassifiedSeparately:
         mod._session_approved.clear()
         mod._permanent_approved.clear()
 
-        cfg = {"approvals": {"mode": "manual"}}
+        cfg = {"approvals": {"mode": "manual"}, "ops": {"permissions": {"enabled": False}}}
         with self._interactive_env():
             with _patch("hermes_cli.config.load_config_readonly", return_value=cfg):
                 result = mod.request_tool_approval(

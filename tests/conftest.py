@@ -442,6 +442,16 @@ def _hermetic_environment(tmp_path, monkeypatch):
     (fake_hermes_home / "cron").mkdir()
     (fake_hermes_home / "memories").mkdir()
     (fake_hermes_home / "skills").mkdir()
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny（fail-closed，去掉了 OPS-DELTA
+    # #76 惰性放行）。非 ops 测试的 home 没有 matrix.yaml，默认 config 又启用 ops
+    # 权限 → 任何命令都会被"矩阵未初始化"拦死。给默认测试 home 写一个显式
+    # ops.permissions.enabled=false 的最小 config：非 ops 测试恢复 batch83 前的
+    # "权限层惰性不参与"行为（tirith/危险命令层兜底不变）；专门测权限矩阵的测试
+    # 各自写自己的 config（enabled: true）+ matrix.yaml，覆盖本默认值。
+    (fake_hermes_home / "config.yaml").write_text(
+        "ops:\n  permissions:\n    enabled: false\n",
+        encoding="utf-8",
+    )
     monkeypatch.setenv("VIGIL_HOME", str(fake_hermes_home))
     monkeypatch.setenv("VIGIL_HOME", str(fake_hermes_home))
 

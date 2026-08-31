@@ -49,7 +49,7 @@ def v2_home(tmp_path, monkeypatch):
     (home / "runbooks").mkdir(parents=True)
     (home / "services").mkdir(parents=True)
     (home / "config.yaml").write_text(
-        yaml.safe_dump({"approvals": {"mode": "off"}}, allow_unicode=True),
+        yaml.safe_dump({"approvals": {"mode": "off"}, "ops": {"permissions": {"enabled": False}}}, allow_unicode=True),
         encoding="utf-8",
     )
     (home / "topology.yaml").write_text(

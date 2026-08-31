@@ -20,6 +20,11 @@ import agent.trajectory as trajectory_mod
 @pytest.fixture(autouse=True)
 def _isolate_trajectory(tmp_path, monkeypatch):
     """每个用例独立 VIGIL_HOME + 清空进程内轨迹状态。"""
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny（fail-closed）。本套件测
+    # 轨迹事件记录，与权限矩阵无关——显式关闭 ops 权限，避免 terminal 挂载点
+    # 被"矩阵未初始化"提前拦截。
+    (tmp_path / "config.yaml").write_text(
+        "ops:\n  permissions:\n    enabled: false\n", encoding="utf-8")
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     trajectory_mod.reset_trajectory_state_for_tests()
     yield tmp_path

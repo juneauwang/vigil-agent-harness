@@ -447,13 +447,24 @@ def _step_approval(home: Path, env: str, action: str, desc: str,
     """交互执行审批门：矩阵档位 execute → 放行；approve → 审批；required →
     强制人工（覆盖 approvals.mode，无 allowlist）。
 
+    batch83-fix（OPS-DELTA #99）：矩阵缺失 → 拒绝执行（与 terminal 一致——矩阵
+    缺失 = 权限系统不可用，fail-closed，不再按空矩阵 approve 门控放行）。
     ``force_confirmation=True``（batch78，OPS-DELTA #93）：回滚步骤强制人工
     确认——即使矩阵档位是 execute（非 required）也要求确认，覆盖
     approvals.mode=smart 的自动批准；require_confirmation 语义 = 不提供
     session/永久 allowlist，每次都弹人工确认。返回 None = 放行。
     """
     from tools.approval import request_ops_approval
-    from tools.matrix_data import get_level, load_matrix_or_empty
+    from tools.matrix_data import get_level, load_matrix_or_empty, matrix_path
+    from tools.ops_permissions import ops_permissions_enabled
+    # 显式 ops.permissions.enabled: false（权限系统关闭）→ 交回 approvals.mode
+    # 语义（与 terminal 一致）；缺省启用时矩阵缺失 = 权限系统不可用 → 拒绝。
+    if ops_permissions_enabled() and not matrix_path(home).is_file():
+        return (
+            "权限矩阵未初始化（matrix.yaml 缺失），runbook 执行已拒绝——矩阵是"
+            "权限裁决的前提（§11.7 安全资产），缺失 = 权限系统不可用（fail-closed）；"
+            "修复指引：先运行 vigil setup（或 vigil ops-init）生成矩阵后再执行。"
+        )
     level = get_level(load_matrix_or_empty(home), env, action)["level"]
     if level == "execute" and not force_confirmation:
         return None

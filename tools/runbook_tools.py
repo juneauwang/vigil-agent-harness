@@ -1794,10 +1794,20 @@ def _asset_approve_runbook(data: Dict[str, Any], name: str, home: Path,
       不需要人工在场；确定性智能，不引入 aux LLM）；
     - approvals.mode=off 且无强制人工 → 跳过（与全系统 mode=off 语义一致）；
     - 其余 → 人工门（fail-closed：无人在场 BLOCK，永不无人落盘）。
-    矩阵缺失 → 全部动作默认 approve（保守），不触发强制人工。
+    batch83-fix（OPS-DELTA #99）：矩阵缺失 → 拒绝（与 terminal 一致——矩阵缺失
+    = 权限系统不可用，fail-closed，不再按空矩阵 approve 门控放行）。
     """
     from tools.approval import request_asset_approval
-    from tools.matrix_data import get_level, load_matrix_or_empty
+    from tools.matrix_data import get_level, load_matrix_or_empty, matrix_path
+    from tools.ops_permissions import ops_permissions_enabled
+    # 显式 ops.permissions.enabled: false（权限系统关闭）→ 交回 approvals.mode
+    # 语义（与 terminal 一致）；缺省启用时矩阵缺失 = 权限系统不可用 → 拒绝。
+    if ops_permissions_enabled() and not matrix_path(home).is_file():
+        return False, {}, (
+            "权限矩阵未初始化（matrix.yaml 缺失），runbook 资产审批已拒绝——矩阵"
+            "是权限裁决的前提（§11.7 安全资产），缺失 = 权限系统不可用（fail-closed）；"
+            "修复指引：先运行 vigil setup（或 vigil ops-init）生成矩阵后再落盘。"
+        )
 
     acts = _runbook_v2_actions(data)
     matrix = load_matrix_or_empty(home)

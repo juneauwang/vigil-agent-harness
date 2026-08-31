@@ -691,3 +691,35 @@ class TestExecutionLock:
         assert out["a"]["result"] == "ok"
         release("exec_lock_t1")
         release("exec_lock_t2")
+
+
+class TestMatrixMissingRefusal:
+    """batch83-fix（OPS-DELTA #99）验收 e：runbook 执行路径矩阵缺失 → 报错/拒绝
+    （与 terminal 一致——矩阵缺失 = 权限系统不可用，fail-closed，不再按空矩阵
+    approve 门控放行）。"""
+
+    def test_step_approval_refuses_when_matrix_missing(self, mhome):
+        from tools.runbook_exec import _step_approval
+        # mhome fixture 铺了矩阵 t1——删掉它模拟"ops 启用但没跑 setup 铺矩阵"。
+        (mhome / "matrix.yaml").unlink()
+        err = _step_approval(mhome, "test", "restart", "重启 nginx")
+        assert err is not None
+        assert "matrix.yaml" in err
+        assert "vigil setup" in err
+
+    def test_step_approval_disabled_gate_skips_matrix_requirement(self, mhome):
+        from tools.runbook_exec import _step_approval
+        import hermes_cli.config as hc
+        (mhome / "config.yaml").write_text(
+            "ops:\n  permissions:\n    enabled: false\n"
+            "approvals:\n  mode: off\n",
+            encoding="utf-8",
+        )
+        hc._LOAD_CONFIG_CACHE.clear()
+        (mhome / "matrix.yaml").unlink()
+        err = _step_approval(mhome, "test", "restart", "重启 nginx")
+        # 权限系统显式关闭 → 矩阵缺失不触发"矩阵未初始化"拒绝（与 terminal 一致），
+        # 退回空矩阵 approve 门（无人在场仍 fail-closed BLOCK——这是审批门语义，
+        # 不是矩阵缺失语义，错误信息不含矩阵未初始化指引）。
+        assert err is None or "矩阵未初始化" not in err
+        hc._LOAD_CONFIG_CACHE.clear()

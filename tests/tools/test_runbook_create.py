@@ -28,7 +28,7 @@ def rb_home(tmp_path, monkeypatch):
     # batch74 强制 v0.2：本套件多数用例改走 v0.2 新建（过资产审批门）——
     # 显式 approvals.mode=off 绕过人工门，保持 create 机制断言专注不串味。
     (home / "config.yaml").write_text(
-        yaml.safe_dump({"approvals": {"mode": "off"}}, allow_unicode=True),
+        yaml.safe_dump({"approvals": {"mode": "off"}, "ops": {"permissions": {"enabled": False}}}, allow_unicode=True),
         encoding="utf-8",
     )
     for src in sorted(SAMPLE_RUNBOOKS.glob("*.yaml")):

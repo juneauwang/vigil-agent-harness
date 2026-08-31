@@ -330,7 +330,8 @@ class TestCronDenyModeAllGuards:
                        return_value=(False, None, None)),
             mock_patch("hermes_cli.config.load_config_readonly",
                        return_value={"security": {"tirith_enabled": True,
-                                                   "tirith_fail_open": False}}),
+                                                   "tirith_fail_open": False},
+                                     "ops": {"permissions": {"enabled": False}}}),
             mock_patch.object(builtins, "__import__", _blocked_import),
         ):
             result = check_all_command_guards("echo hi", "local")
@@ -361,7 +362,8 @@ class TestCronDenyModeAllGuards:
                        return_value=(False, None, None)),
             mock_patch("hermes_cli.config.load_config_readonly",
                        return_value={"security": {"tirith_enabled": True,
-                                                   "tirith_fail_open": True}}),
+                                                   "tirith_fail_open": True},
+                                     "ops": {"permissions": {"enabled": False}}}),
             mock_patch.object(builtins, "__import__", _blocked_import),
         ):
             result = check_all_command_guards("echo hi", "local")

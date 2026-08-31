@@ -383,3 +383,45 @@ def test_sibling_ops_profile_no_longer_fallback(tmp_path, monkeypatch):
         assert "runbooks 数据不存在" in result.get("error", "")
     finally:
         hc._LOAD_CONFIG_CACHE.clear()
+
+
+def test_asset_approve_refuses_when_matrix_missing(rb_home):
+    """batch83-fix（OPS-DELTA #99）验收 e：矩阵缺失 → runbook 资产审批拒绝
+    （fail-closed，与 terminal 一致）。"""
+    from tools.runbook_tools import _asset_approve_runbook
+    data = {
+        "runbook": "matrix-missing-check",
+        "title": "矩阵缺失验收",
+        "env": "test",
+        "kind": "incident",
+        "steps": [{"id": "s1", "title": "查询", "action": "query",
+                   "params": {"pattern": "nginx"}}],
+    }
+    ok, markers, err = _asset_approve_runbook(data, "matrix-missing-check",
+                                              rb_home, "test")
+    assert ok is False
+    assert markers == {}
+    assert "matrix.yaml" in err
+    assert "vigil setup" in err
+
+
+def test_asset_approve_disabled_gate_skips_matrix_requirement(rb_home):
+    """显式 ops.permissions.enabled: false + approvals.mode=off → 矩阵缺失不拒绝
+    （权限系统关闭，交回 mode 语义）。"""
+    from tools.runbook_tools import _asset_approve_runbook
+    _write_config(rb_home, {
+        "approvals": {"mode": "off"},
+        "ops": {"permissions": {"enabled": False}},
+    })
+    data = {
+        "runbook": "matrix-disabled-check",
+        "title": "权限关闭验收",
+        "env": "test",
+        "kind": "incident",
+        "steps": [{"id": "s1", "title": "查询", "action": "query",
+                   "params": {"pattern": "nginx"}}],
+    }
+    ok, markers, err = _asset_approve_runbook(data, "matrix-disabled-check",
+                                              rb_home, "test")
+    assert ok is True
+    assert err == ""

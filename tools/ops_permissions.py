@@ -26,6 +26,9 @@ matrix.yaml——双矩阵统一）。本模块保留被其他模块引用的环
   不额外强制（行为边界见 check_ops_command_permission）。
 - 动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
 - 动作漏配（矩阵没配该 action×env）→ get_level 默认 approve（保守）。
+- 矩阵缺失（matrix.yaml 不存在）→ deny（batch83-fix，OPS-DELTA #99）：矩阵是
+  权限裁决的前提（§11.7 安全资产），缺失 = 权限系统不可用 = 拒绝执行 + 修复指引
+  （先跑 vigil setup / ops-init 生成矩阵），fail-closed，所有命令（含只读）统一。
 
 配置（config.yaml，ops 块）:
     ops:
@@ -79,6 +82,18 @@ def _load_ops_config() -> Dict[str, Any]:
         return cfg.get("ops", {}) or {}
     except Exception:
         return {}
+
+
+def ops_permissions_enabled() -> bool:
+    """权限矩阵裁决是否启用：缺省默认启用（OPS-DELTA #1）；显式
+    ``ops.permissions.enabled: false`` 才关闭。
+
+    terminal（check_ops_command_permission）与 runbook 执行路径
+    （_step_approval / _asset_approve_runbook）共用同一开关——显式关闭 =
+    权限系统不参与（矩阵缺失不再报错，交回 approvals.mode 语义）；缺省启用时
+    矩阵缺失 = 权限系统不可用 = fail-closed 报错/deny（batch83-fix，OPS-DELTA #99）。
+    """
+    return _load_config().get("enabled", True) is not False
 
 
 def defined_environments(ops_config: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
@@ -332,37 +347,30 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     """
     if not isinstance(command, str) or not command.strip():
         return None
-    config = _load_config()
-    if config.get("enabled", True) is False:
+    if not ops_permissions_enabled():
         return None  # 显式关闭（向后兼容）；缺省默认启用
 
     from tools import matrix_data as _md
 
-    # 矩阵未初始化（matrix.yaml 不存在）→ 非 prod 档惰性（回归修复，OPS-DELTA
-    # #76）：P5 把 L1-L4 分级换成 classifier 后，unknown → 默认 approve 在矩阵
-    # 缺失时把 echo/ls/curl 等普通命令也弹进审批门，破坏 P4 基线（矩阵缺失 →
-    # 行 None → 非 prod 未分级命令交回原检查直接放行）。矩阵未初始化时只对
-    # prod 档门控（与 P4 B'/变更确认门一致：prod 档默认审批）；local/test/dev
-    # 交回原有检查（tirith / 危险命令层兜底）。矩阵一旦初始化（文件存在）→
-    # 全量 P5 语义（unknown → 默认 approve）。runbook 路径不受影响（其矩阵
-    # 缺失仍按空矩阵 approve 门控，P4 既有，非本批回归面）。
-    if not _md.matrix_path().is_file():
-        ops_config = _load_ops_config()
-        probe_env = (target_env or _active_env()).strip().lower()
-        env_def = _raw_env_definition(probe_env, ops_config)
-        role = str((env_def or {}).get("role") or "").strip().lower()
-        is_prod = role == "prod" if role else _map_env_tier(probe_env, ops_config) == "prod"
-        if not is_prod:
-            return None
-
     from tools.action_classifier import classify_command
+
+    classification = classify_command(command)
+
+    # batch83-fix（OPS-DELTA #99）：矩阵缺失 → deny（去掉 OPS-DELTA #76 惰性放行）。
+    # 矩阵是权限裁决的前提（§11.7 安全资产）：缺失 = 权限系统不可用 = 拒绝执行 +
+    # 修复指引（先跑 vigil setup / ops-init 生成 matrix.yaml），不是静默放行。
+    # batch83 验收实证：惰性放行发生在目标解析之前，dev/test 会话的高危变更
+    # （npm install / kubectl delete）根本走不到目标解析和 deny——矩阵缺失必须
+    # fail-closed，所有命令（含只读）统一。setup/ops-init 生成矩阵走
+    # matrix_data.init_matrix 直写，不经过本裁决，不构成自锁。
+    if not _md.matrix_path().is_file():
+        return _matrix_missing_deny(command, classification)
     from tools.target_resolve import (
         TARGET_RESOLVED,
         command_target_required,
         resolve_required_target,
     )
 
-    classification = classify_command(command)
     candidates = classification.get("chain") or [classification]
     actions = {str(c.get("action") or "") for c in candidates}
 
@@ -475,4 +483,36 @@ def _target_deny_decision(command: str, classification: Dict[str, Any],
         ),
         "classification": classification,
         "target_deny": True,
+    }
+
+
+def _matrix_missing_deny(command: str,
+                         classification: Dict[str, Any]) -> Dict[str, Any]:
+    """batch83-fix 矩阵缺失 → deny（去掉 OPS-DELTA #76 惰性放行）。
+
+    矩阵是权限裁决的前提：缺失 = 权限系统不可用，任何动作（含只读）都不放行。
+    返回形态与 ``_target_deny_decision`` 同构（action=deny），approval.py 的
+    deny 分支 / sudo_tool 同款消费（硬拦截，先于 yolo/mode=off 旁路）；错误
+    信息带修复指引（先跑 vigil setup 或 vigil ops-init 生成 matrix.yaml）。
+    setup/ops-init 自身生成矩阵走 matrix_data.init_matrix 直写，不经过本裁决。
+    """
+    action_name = str(classification.get("action") or "unknown")
+    return {
+        "action": "deny",
+        "action_name": action_name,
+        "rule": str(classification.get("rule") or "").strip() or None,
+        "note": str(classification.get("note") or "").strip() or None,
+        "env": None,
+        "env_tier": None,
+        "role": _active_role(),
+        "level": None,
+        "require_confirmation": False,
+        "description": (
+            f"⛔ 权限矩阵未初始化，操作已拒绝（{action_name} × 矩阵缺失）：matrix.yaml "
+            "不存在，权限裁决不可用。矩阵是安全资产（yapl-design.md §11.7），缺失时"
+            "任何动作都不放行（fail-closed，含只读命令）；修复指引：先运行 vigil "
+            "setup（或 vigil ops-init）生成矩阵后再执行。"
+        ),
+        "classification": classification,
+        "matrix_missing": True,
     }

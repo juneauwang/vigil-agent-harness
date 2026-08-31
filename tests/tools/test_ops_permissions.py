@@ -318,3 +318,37 @@ def test_sudo_prefix_routes_through_same_matrix(perm_env):
     assert decision is not None
     assert decision["action_name"] == "restart"
     assert decision["level"] == "required"
+
+
+def test_matrix_missing_denies_readonly(perm_env):
+    """batch83-fix（OPS-DELTA #99）验收 a：矩阵缺失 → 任何命令（含只读）都返回
+    deny（fail-closed），不再走 OPS-DELTA #76 惰性放行（None）；错误信息带
+    修复指引（先跑 vigil setup / ops-init）。"""
+    perm_env("test")  # enabled 缺省 true（_cfg 默认 enabled=True），不写 matrix.yaml
+    decision = check_ops_command_permission("ls -la")
+    assert decision is not None
+    assert decision["action"] == "deny"
+    assert decision["matrix_missing"] is True
+    assert "matrix.yaml" in decision["description"]
+    assert "vigil setup" in decision["description"]
+
+
+def test_matrix_missing_denies_high_risk_change(perm_env):
+    """batch83-fix（OPS-DELTA #99）验收 b：矩阵缺失时高危变更（npm install /
+    kubectl delete）同样 deny——不静默放行，也走不到目标解析（矩阵缺失先于
+    目标解析，这是 batch83 验收发现的原始漏洞点）。"""
+    perm_env("test")
+    for cmd in ("npm install -g codex", "kubectl delete pod myapp-0"):
+        decision = check_ops_command_permission(cmd)
+        assert decision is not None
+        assert decision["action"] == "deny"
+        assert decision["matrix_missing"] is True
+        assert decision["action_name"], cmd
+
+
+def test_matrix_missing_disabled_gate_returns_none(perm_env):
+    """显式 ops.permissions.enabled: false → 矩阵缺失不报错（权限系统关闭，
+    交回既有检查，与 terminal 一致）。"""
+    perm_env("test", enabled=False)  # 无 matrix.yaml
+    assert check_ops_command_permission("ls -la") is None
+    assert check_ops_command_permission("npm install -g codex") is None
