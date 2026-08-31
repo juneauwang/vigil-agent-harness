@@ -5215,3 +5215,53 @@
   tools/topo_discovery.py、tools/sudo_tool.py、tools/tirith_security.py、tests/ 相关用例
   + OPS-DELTA.md 本条登记。真实 SSH 验收 a-g：a/b/c 真实连接 39.106.217.32 ✓；
   d-g 由 test_ssh_auth_breaker.py 新 4 例覆盖 ✓。
+
+### 101. topo reset 命令（清空回到未初始化）+ topo_update 白名单扩展（cluster/host）（batch85，2 个 commit）
+
+- **背景**（2026-08-31 dogfood 实证 + 用户定案）：① 初始化死锁——本机未登记拓扑 →
+  高危变更目标解析失败 → deny（先于 yolo）→ 用户想"删样例拓扑重建"被锁死（删
+  topology.yaml 被"⛔ 高危变更目标未解析"拦），且无正规清理命令（vigil topo 只有
+  export）；② topo 正规入口缺口——topo_update 白名单只覆盖 L2 服务行 7 字段，
+  cluster 行、host 行 cluster 字段不可写 → agent 被迫"直接编辑 topology.yaml 的
+  最小例外"（08-31 实录：管理文件路径塞 cluster notes 字段）。定案：topo reset 命令
+  （清空语义：拓扑回到未初始化）+ UI/API 入口；topo_update 白名单扩展（cluster 行
+  6 字段 + host 行 cluster 字段）；初始化豁免**不做**（reset 命令 + deny 报错引导
+  已覆盖，豁免=安全洞）。
+- **任务 1——vigil topo reset 命令 + UI/API**（commit 1，tools/topo_tools.py +
+  hermes_cli/subcommands/topo_export.py + hermes_cli/main.py + hermes_cli/web_server.py
+  + web/）：`tools.topo_tools.topo_reset` 清空 topology.yaml + entities/ + services/
+  + hosts/（v0.3 兼容）+ hardware/ 回到未初始化（目录先清、topology.yaml 最后删——
+  任一删除失败不半清空；matrix.yaml/runbooks 等非拓扑文件保留）。CLI `vigil topo
+  reset`：交互确认 y/N（提示将清空 N 主机/集群/实体）+ `--yes` 脚本跳过 + 审计
+  （record_event type=topo_reset，谁/何时/清空）；命令直接操作文件不走 terminal
+  命令裁决（正规入口，同 topo_update 语义）；命名语义与 `vigil matrix reset`（回退
+  模板）区分：topo reset = 清空到未初始化。API `POST /api/topology/reset`：
+  _require_token + 显式 confirm:true + 审计（source=ui）。UI 拓扑页加"清空拓扑"
+  按钮 + 确认对话框。测试：核心 topo_reset（全清/保留非拓扑/空 home 幂等/query
+  未初始化）+ CLI（yes/交互 n 取消/交互 y/未初始化 noop/standalone）+ API（无
+  confirm 400/成功清空+审计/空 home 幂等）+ UI（确认后调用/取消不调用）。
+- **任务 2——topo_update 白名单扩展**（commit 2，tools/topo_tools.py）：cluster 行
+  可写 6 字段 env/type/endpoint/host_groups/notes/provenance（_update_cluster_row
+  直写 topology.yaml clusters 段）；host 行可写 cluster（归入/移出集群，写
+  topology.yaml host 行、不进 L3 档案）；name（改名走 rename 全链路，08-13 改名
+  事故教训）/ source（discover 写入的系统维护诊断元数据）拒绝并说明原因。高危字段：
+  cluster env 是矩阵裁决依据（改 env = 整集群动作档位全变）→ 强制人工审批
+  （request_tool_approval，rule_key topo_update:cluster-env:<name>，先于 PROD
+  档位）；其他字段按既有 PROD 档位。配套 `_env_for_entity` 语义对齐：实体挂集群时
+  cluster env 优先于实体自身 env（批八十三"目标实体 env 从拓扑表读"的实现补充——
+  cluster 行此前不在 env 解析路径，host 移集群 = 跨档位，改 cluster env = 整集群
+  动作档位全变）。工具 schema 文档同步。测试 16 例（tests/tools/
+  test_batch85_topo_cluster_update.py）：e 六字段写+读回、f env 审批拒绝不写/批准后
+  矩阵按新 env 裁决（ssh node2 高危变更 prod required → dev approve，目标实体 env
+  从 cluster 读）、g host 归集群/移出（PROD host 过审批门）、h name/source/未知
+  字段/host_groups 非数组拒绝、i L2 服务行白名单回归。
+- **验收**（2026-08-31 实测）：a ✓ `vigil topo reset` 清空（topology.yaml/entities
+  全清）+ 交互确认 + 审计；b ✓ reset 后 topo_query 返回空/未初始化；c ✓ UI 清空
+  按钮 + POST /api/topology/reset 成功 + 审计；d ✓ reset 后本机 topo-discover
+  可走通（未初始化状态重新登记不残留旧数据）；e ✓ cluster 六字段写+读回；f ✓ env
+  变更强制人工审批，批准后矩阵按新 env 裁决；g ✓ host cluster 归集群/移出成功；
+  h ✓ name/source 拒绝（rename / 系统维护说明）；i ✓ L2 服务行白名单回归全绿。
+- **状态**：2 个独立 commit（batch85），只含 tools/topo_tools.py、
+  hermes_cli/subcommands/topo_export.py、hermes_cli/main.py、hermes_cli/web_server.py、
+  web/src/lib/api.ts、web/src/pages/TopologyPage.tsx（+ .test.tsx）、tests/ 相关用例
+  + OPS-DELTA.md 本条登记。初始化豁免未做（reset + deny 引导已覆盖）。
