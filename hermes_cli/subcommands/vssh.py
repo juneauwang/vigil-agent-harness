@@ -2,7 +2,8 @@
 
 vault 安全凭据的交互 SSH：密码/passphrase 经保险箱 → SSH_ASKPASS 注入
 （复用 :mod:`tools.topo_discovery` 的 askpass 机制），命令串/argv/env 不出现
-明文；host 在拓扑表带 ``credential`` 引用时自动读取（ssh_key → ``-i``；
+明文；host 在拓扑表带 ``credential``（单数，老格式）或 ``credentials`` 数组
+（复数，topo-discover v0.4 原生形态）引用时自动读取（ssh_key → ``-i``；
 vault/askpass → 保险箱注入），无凭据回退 ssh-agent / ssh 交互。
 """
 
@@ -41,8 +42,28 @@ def _resolve_topology_credential(host: str, allow_fallback: bool = True) -> Opti
             name = str(row.get("name") or "").strip().lower()
             endpoint = str(row.get("endpoint") or "").strip().lower()
             if name == want or endpoint == want:
+                # 单数 credential 优先（老数据/手写）；无单数 → 复数 credentials
+                # 数组（topo-discover v0.4 原生形态，hosts 行
+                # ``credentials: [{type: ssh_key, ref, user, port}]``）——数组可能
+                # ssh_key/vault 混排，ssh 场景取 type=ssh_key 的第一条；数组里
+                # 无 ssh_key 时取第一条 dict 兜底（vault/askpass 也走同一消费
+                # 契约）。返回结构保持消费端契约（type/ref/user/port 与单数一致）。
                 cred = row.get("credential")
-                return dict(cred) if isinstance(cred, dict) else None
+                if isinstance(cred, dict):
+                    return dict(cred)
+                creds = row.get("credentials")
+                if isinstance(creds, list):
+                    first = None
+                    for c in creds:
+                        if not isinstance(c, dict):
+                            continue
+                        if first is None:
+                            first = dict(c)
+                        if str(c.get("type") or "").strip().lower() == "ssh_key":
+                            return dict(c)
+                    if first is not None:
+                        return first
+                return None
     except Exception:
         return None
     return None

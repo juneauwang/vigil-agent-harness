@@ -169,6 +169,92 @@ def test_resolve_topology_credential_missing(topo_home):
     assert _resolve_topology_credential("nope") is None
 
 
+def test_resolve_topology_credential_plural_credentials(topo_home):
+    """batch84（OPS-DELTA #100）：host 行只有复数 credentials（topo-discover
+    v0.4 原生形态）→ 解析出 ssh_key 凭据（结构契约与单数一致）。"""
+    (topo_home / "topology.yaml").write_text(
+        "version: 4\n"
+        "hosts:\n"
+        "  - name: aliyun-1\n"
+        "    endpoint: 39.106.217.32\n"
+        "    credentials:\n"
+        "      - type: ssh_key\n"
+        "        ref: /home/wpwang/.ssh/aliyun_nopass.pem\n"
+        "        user: root\n"
+        "        port: 22\n",
+        encoding="utf-8",
+    )
+    assert _resolve_topology_credential("aliyun-1") == {
+        "type": "ssh_key",
+        "ref": "/home/wpwang/.ssh/aliyun_nopass.pem",
+        "user": "root",
+        "port": 22,
+    }
+    # endpoint 匹配同样生效
+    assert _resolve_topology_credential("39.106.217.32")["type"] == "ssh_key"
+
+
+def test_resolve_topology_credential_plural_mixed_picks_ssh_key(topo_home):
+    """batch84：复数数组 ssh_key/vault 混排 → ssh 场景取 type=ssh_key 那条。"""
+    (topo_home / "topology.yaml").write_text(
+        "version: 4\n"
+        "hosts:\n"
+        "  - name: mixed\n"
+        "    endpoint: 10.0.0.9\n"
+        "    credentials:\n"
+        "      - type: vault\n"
+        "        ref: db-pass\n"
+        "      - type: ssh_key\n"
+        "        ref: /keys/mixed.pem\n"
+        "        user: root\n"
+        "        port: 22\n",
+        encoding="utf-8",
+    )
+    assert _resolve_topology_credential("mixed") == {
+        "type": "ssh_key", "ref": "/keys/mixed.pem", "user": "root", "port": 22,
+    }
+
+
+def test_resolve_topology_credential_singular_still_wins(topo_home):
+    """batch84 验收 b：单数 credential（老格式）优先——行为不变。"""
+    (topo_home / "topology.yaml").write_text(
+        "version: 4\n"
+        "hosts:\n"
+        "  - name: both\n"
+        "    endpoint: 10.0.0.10\n"
+        "    credential:\n"
+        "      type: ssh_key\n"
+        "      ref: /keys/single.pem\n"
+        "      user: root\n"
+        "    credentials:\n"
+        "      - type: ssh_key\n"
+        "        ref: /keys/plural.pem\n"
+        "        user: root\n",
+        encoding="utf-8",
+    )
+    assert _resolve_topology_credential("both") == {
+        "type": "ssh_key", "ref": "/keys/single.pem", "user": "root",
+    }
+
+
+def test_resolve_topology_credential_plural_askpass_fallback(topo_home):
+    """batch84：数组无 ssh_key（纯 askpass）→ 取第一条 dict 兜底（vault/askpass
+    走同一消费契约）。"""
+    (topo_home / "topology.yaml").write_text(
+        "version: 4\n"
+        "hosts:\n"
+        "  - name: pw-host\n"
+        "    endpoint: 10.0.0.11\n"
+        "    credentials:\n"
+        "      - type: askpass\n"
+        "        ref: /keys/ask.sh\n",
+        encoding="utf-8",
+    )
+    assert _resolve_topology_credential("pw-host") == {
+        "type": "askpass", "ref": "/keys/ask.sh",
+    }
+
+
 def test_resolve_topology_credential_no_topology(tmp_path, monkeypatch):
     """无拓扑文件 / 坏 YAML → None（不抛错）。"""
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
