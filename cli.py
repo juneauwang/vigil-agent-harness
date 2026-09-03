@@ -13814,7 +13814,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
     def _approval_callback(self, command: str, description: str,
                            *, allow_permanent: bool = True,
                            allow_session: bool = True,
-                           smart_denied: bool = False) -> str:
+                           smart_denied: bool = False,
+                           offer_learn: bool = False) -> str:
         """
         Prompt for dangerous command approval through the prompt_toolkit UI.
 
@@ -13854,6 +13855,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     allow_permanent=allow_permanent,
                     allow_session=allow_session,
                     smart_denied=smart_denied,
+                    offer_learn=offer_learn,
                 ),
                 "selected": 0,
                 "response_queue": response_queue,
@@ -13882,6 +13884,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                         "once": "allowed once",
                         "session": "allowed for session",
                         "always": "added to allowlist",
+                        "learn": "whitelisted (以后不再问)",
                         "deny": "denied",
                     }
                     self._persist_prompt_summary(
@@ -13921,7 +13924,8 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
 
     def _approval_choices(self, command: str, *, allow_permanent: bool = True,
                           allow_session: bool = True,
-                          smart_denied: bool = False) -> list[str]:
+                          smart_denied: bool = False,
+                          offer_learn: bool = False) -> list[str]:
         """Return approval choices for a dangerous command prompt."""
         if smart_denied:
             choices = ["once", "deny"]
@@ -13931,6 +13935,10 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                 choices.append("session")
             if allow_permanent:
                 choices.append("always")
+            if offer_learn:
+                # batch86：ops 自进化白名单候选——"以后这类只读命令不再询问"
+                # （本次批准 + user_opt_in 立即沉淀）。
+                choices.append("learn")
             choices.append("deny")
         if len(command) > 70:
             choices.append("view")
@@ -14035,6 +14043,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             "once": "Allow once",
             "session": "Allow for this session",
             "always": "Add to permanent allowlist",
+            "learn": "以后这类只读命令不再询问（自进化白名单 v0.1）",
             "deny": "Deny",
             "view": "Show full command",
         }

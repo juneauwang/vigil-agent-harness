@@ -2946,7 +2946,8 @@ def prompt_dangerous_approval(command: str, description: str,
                               allow_permanent: bool = True,
                               allow_session: bool = True,
                               approval_callback=None,
-                              *, smart_denied: bool = False) -> str:
+                              *, smart_denied: bool = False,
+                              offer_learn: bool = False) -> str:
     """Prompt the user to approve a dangerous command (CLI only).
 
     Args:
@@ -2958,13 +2959,20 @@ def prompt_dangerous_approval(command: str, description: str,
             also be ignored — only once/deny are meaningful there).
         smart_denied: When True, this is an owner override of a Smart DENY.
             Offer only one-operation approval or denial.
+        offer_learn: When True (ops 自进化白名单候选且非强制人工门，CLI 层),
+            offer a "learn" choice — approve once AND record the user opt-in
+            ("以后这类只读命令不用再问") so the command template sediments
+            into approval_memory immediately (batch86 OPS-DELTA #102).
         approval_callback: Optional callback registered by the CLI for
             prompt_toolkit integration. Signature:
             (command, description, *, allow_permanent=True,
-            allow_session=True, smart_denied=False) -> str. Legacy callback
-            signatures remain supported when ``smart_denied`` is false.
+            allow_session=True, smart_denied=False, offer_learn=False) -> str.
+            Legacy callback signatures remain supported when ``smart_denied``
+            is false.
 
-    Returns: 'once', 'session', 'always', 'deny', or 'timeout'.
+    Returns: 'once', 'session', 'always', 'learn', 'deny', or 'timeout'.
+        'learn' only when ``offer_learn`` was True — the caller treats it as
+        an approval plus user_opt_in signal.
         'timeout' means the prompt expired without a user response — the
         action must still be blocked (fail-closed), but callers should
         report it as "no response" rather than an explicit user denial.
@@ -2988,6 +2996,8 @@ def prompt_dangerous_approval(command: str, description: str,
             }
             if smart_denied:
                 callback_kwargs["smart_denied"] = True
+            if offer_learn:
+                callback_kwargs["offer_learn"] = True
             try:
                 return approval_callback(
                     display_command, display_description, **callback_kwargs
@@ -2996,13 +3006,19 @@ def prompt_dangerous_approval(command: str, description: str,
                 # Legacy callback registered before the allow_session contract
                 # existed: retry once without the new keyword so old callbacks
                 # keep working (documented "legacy signatures remain
-                # supported"). Any other TypeError still fails closed below.
+                # supported"). offer_learn is dropped the same way (batch86
+                # callbacks that predate the learn option). Any other
+                # TypeError still fails closed below.
                 if "allow_session" in callback_kwargs:
                     callback_kwargs.pop("allow_session")
-                    return approval_callback(
-                        display_command, display_description, **callback_kwargs
-                    )
-                raise
+                if "offer_learn" in callback_kwargs:
+                    callback_kwargs.pop("offer_learn")
+                # Retried once with the newer keywords dropped; if the legacy
+                # callback still raises (e.g. smart_denied unsupported), the
+                # exception propagates and the caller fails closed below.
+                return approval_callback(
+                    display_command, display_description, **callback_kwargs
+                )
         except Exception as e:
             logger.error("Approval callback failed: %s", e, exc_info=True)
             return "deny"
@@ -3054,6 +3070,9 @@ def prompt_dangerous_approval(command: str, description: str,
                 # prod confirmation gate / session+always both ineffective:
                 # only once/deny are meaningful (same shape as smart deny).
                 print(t("approval.choose_smart_deny"))
+            if offer_learn:
+                print("      (l)earn — 这类只读命令以后不再询问"
+                      "（写入命令级自进化白名单 v0.1）")
             print()
             sys.stdout.flush()
 
@@ -3117,6 +3136,9 @@ def prompt_dangerous_approval(command: str, description: str,
             if choice in {'o', 'once'}:
                 print(t("approval.allowed_once"))
                 return "once"
+            elif offer_learn and choice in {'l', 'learn'}:
+                print(t("approval.allowed_once"))
+                return "learn"
             elif choice in {'s', 'session'}:
                 if not allow_session:
                     print(t("approval.denied"))
@@ -3437,6 +3459,7 @@ def _run_approval_gate(
     autoapprove_log_prefix: str,
     fail_closed_when_no_human: bool = False,
     no_human_block_message: str = "",
+    offer_learn: bool = False,
 ) -> dict:
     """Shared human-approval gate for a flagged action (command or tool).
 
@@ -3609,6 +3632,9 @@ def _run_approval_gate(
                     "user_consent": False,
                 }
 
+            learn_opt_in = choice == "learn"
+            if learn_opt_in:
+                choice = "once"  # learn = 本次批准 + 用户 opt-in（scope 保 learn）
             if choice == "session":
                 approve_session(session_key, pattern_key)
             elif choice == "always":
@@ -3617,7 +3643,7 @@ def _run_approval_gate(
                 save_permanent_allowlist(_permanent_approved)
             _record_approval_trajectory(
                 "approved", command=display_target, description=description,
-                session_key=session_key, scope=choice,
+                session_key=session_key, scope="learn" if learn_opt_in else choice,
             )
             return {"approved": True, "message": None}
 
@@ -3657,12 +3683,14 @@ def _run_approval_gate(
         "requested", command=display_target, description=description,
         session_key=session_key,
     )
+    show_learn = bool(offer_learn) and is_cli
     choice = prompt_dangerous_approval(
         display_target,
         description,
         allow_permanent=allow_permanent,
         allow_session=allow_session,
         approval_callback=approval_callback,
+        offer_learn=show_learn,
     )
     _fire_approval_hook(
         "post_approval_response",
@@ -3712,6 +3740,9 @@ def _run_approval_gate(
             "user_consent": False,
         }
 
+    learn_opt_in = choice == "learn"
+    if learn_opt_in:
+        choice = "once"  # learn = 本次批准 + 用户 opt-in（scope 保 learn 信号）
     if choice == "session":
         approve_session(session_key, pattern_key)
     elif choice == "always":
@@ -3721,7 +3752,7 @@ def _run_approval_gate(
 
     _record_approval_trajectory(
         "approved", command=display_target, description=description,
-        session_key=session_key, scope=choice,
+        session_key=session_key, scope="learn" if learn_opt_in else choice,
     )
     return {"approved": True, "message": None}
 
@@ -3930,6 +3961,16 @@ def request_ops_approval(command: str, ops_decision: dict) -> dict:
     )
     allow_permanent = not require_confirmation
     allow_session = not require_confirmation
+    # batch86（OPS-DELTA #102）：归一化可沉淀的只读候选命令 + 非强制人工门 →
+    # CLI 审批给"以后不用问"（learn）选项——用户 opt-in 立即沉淀（user_opt_in，
+    # 不等 3 次）。合成目标（runbook 描述等）归一化 None → 不提供。
+    offer_learn = False
+    if allow_session:
+        try:
+            from tools.approval_memory import normalize_template
+            offer_learn = normalize_template(command) is not None
+        except Exception:
+            offer_learn = False
     return _run_approval_gate(
         pattern_key=pattern_key,
         description=description,
@@ -3937,6 +3978,7 @@ def request_ops_approval(command: str, ops_decision: dict) -> dict:
         approval_callback=None,  # 回退到 terminal_tool 每线程回调（CLI/web/gateway）
         allow_permanent=allow_permanent,
         allow_session=allow_session,
+        offer_learn=offer_learn,
         cron_deny_message=(
             f"BLOCKED: 提权命令 '{command}' 需要人工审批（{description}），"
             "但 cron 任务没有用户在场审批。请改用无需审批的替代命令；"
@@ -4813,6 +4855,23 @@ def check_all_command_guards(command: str, env_type: str,
         "requested", command=command, description=combined_desc,
         session_key=session_key,
     )
+    # batch86（OPS-DELTA #102）：纯 ops 审批（无 tirith/危险模式警告）+ 归一化
+    # 可沉淀只读命令 + 非强制人工门 → CLI 审批给"以后不用问"（learn）选项——
+    # 用户 opt-in 立即沉淀（user_opt_in，不等 3 次）。learn 只跳过 ops 矩阵档；
+    # tirith/危险模式等无条件层在每条命令执行前照跑，不受白名单影响。
+    offer_learn = bool(
+        not smart_denied_for_owner
+        and not _ops_confirmation_required
+        and has_ops
+        and not has_tirith
+        and not has_pattern
+    )
+    if offer_learn:
+        try:
+            from tools.approval_memory import normalize_template
+            offer_learn = normalize_template(command) is not None
+        except Exception:
+            offer_learn = False
     choice = prompt_dangerous_approval(
         command,
         combined_desc,
@@ -4820,6 +4879,7 @@ def check_all_command_guards(command: str, env_type: str,
         allow_session=not smart_denied_for_owner and not _ops_confirmation_required,
         smart_denied=smart_denied_for_owner,
         approval_callback=approval_callback,
+        offer_learn=offer_learn,
     )
     _fire_approval_hook(
         "post_approval_response",

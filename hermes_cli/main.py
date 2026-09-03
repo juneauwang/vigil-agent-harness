@@ -4985,6 +4985,17 @@ def cmd_security(args):
 
 def cmd_approvals(args):
     """Dispatch `vigil approvals <subcmd>`."""
+    sub = str(getattr(args, "approvals_command", "") or "").strip()
+    if sub in ("list", "forget", "export"):
+        # batch86（OPS-DELTA #102）：命令级自进化白名单管理（红线 3 可查看/
+        # 撤销/导出）——list/forget/export 走 approval_memory_cli；suggest
+        # （config.yaml command_allowlist 挖矿）保持原 approvals_suggest。
+        from hermes_cli.approval_memory_cli import run_approvals_memory_command
+
+        status = run_approvals_memory_command(args)
+        if status:
+            sys.exit(status)
+        return status
     from hermes_cli.approvals_suggest import approvals_command
 
     status = approvals_command(args)
