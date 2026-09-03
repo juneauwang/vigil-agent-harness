@@ -42,6 +42,12 @@ def _record_approval_trajectory(status, *, command, description,
     status ∈ requested / approved / denied / timeout。action 用 command 或
     description，record_event 内部强制 redact（凭据值不落轨迹）。任何失败只
     记日志，绝不干扰审批路径。
+
+    batch86（OPS-DELTA #102）：approved / denied 即**用户侧信号**——挂
+    approval_memory 沉淀（红线 1：只看用户批准，不只看执行成功；被拒过 →
+    banned 永不自动沉淀）。合成目标（plugin/asset 门 display_target）与不可
+    沉淀形态（动态参数/链式/黑名单）在 approval_memory.note_user_decision
+    内归一化过滤（返回 None 不记任何信号）。任何失败只记日志。
     """
     try:
         from agent.trajectory import record_event
@@ -54,6 +60,16 @@ def _record_approval_trajectory(status, *, command, description,
         )
     except Exception:
         logger.debug("approval trajectory event failed", exc_info=True)
+    try:
+        if status in ("approved", "denied") and isinstance(command, str) and command.strip():
+            from tools.approval_memory import note_user_decision
+            note_user_decision(
+                command, status,
+                scope=str((extra or {}).get("scope") or ""),
+                source_task=session_key or None,
+            )
+    except Exception:
+        logger.debug("approval memory note failed", exc_info=True)
 
 # Per-thread/per-task gateway session identity.
 # Gateway runs agent turns concurrently in executor threads, so reading a
