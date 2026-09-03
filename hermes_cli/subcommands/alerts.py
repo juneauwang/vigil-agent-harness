@@ -3,6 +3,8 @@
 Surface:
 - ``vigil alerts`` / ``vigil alerts list`` — 活跃告警 + 逐条 runbook 处置建议
   （匹配 runbook/置信度/匹配依据/次优；文本或 --json）。
+- ``vigil alerts history`` — 回看 triage 审计（runtime/alert_triage.jsonl，
+  dogfood 调触发词/阈值的数据来源）。
 """
 
 from __future__ import annotations
@@ -19,7 +21,8 @@ def build_alerts_parser(subparsers, *, cmd_alerts: Callable) -> None:
             "告警→runbook 处置建议：拉 Alertmanager 活跃告警，逐条匹配最可能的 "
             "runbook（triggers 触发词精确命中 > 模糊评分），显示 runbook/置信度/"
             "匹配依据与次优 SOP。匹配结果仅供建议，绝不自动执行——执行需人工确认后 "
-            "走 runbook_execute / Web 既有执行链（矩阵 + 审批门）。"
+            "走 runbook_execute / Web 既有执行链（矩阵 + 审批门）。`history` 回看 "
+            "triage 审计（每次调用一条，runtime/alert_triage.jsonl）。"
         ),
     )
     alerts_parser.add_argument(
@@ -43,5 +46,27 @@ def build_alerts_parser(subparsers, *, cmd_alerts: Callable) -> None:
         help="以 JSON 输出（机器可读）",
     )
     list_parser.set_defaults(func=cmd_alerts)
+
+    history_parser = sub.add_parser(
+        "history",
+        help="回看 triage 审计记录（runtime/alert_triage.jsonl）",
+        description=(
+            "回看每次 alert triage 调用落盘的审计（时间/告警数/匹配数 + 逐条："
+            "告警/是否命中/命中的 runbook/匹配方式/关键词）——dogfood 调触发词与"
+            "匹配阈值的数据来源，不是合规台账。"
+        ),
+    )
+    history_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="以 JSON 输出（机器可读）",
+    )
+    history_parser.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="最多显示条数（默认 20）",
+    )
+    history_parser.set_defaults(func=cmd_alerts)
 
     alerts_parser.set_defaults(func=cmd_alerts)

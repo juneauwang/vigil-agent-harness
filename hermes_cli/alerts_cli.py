@@ -1,7 +1,7 @@
 """``vigil alerts`` 运行逻辑（batch87，OPS-DELTA #103）。
 
 告警→runbook 处置建议闭环的 CLI 面：列出 Alertmanager 活跃告警 + 每条的建议
-（匹配 runbook/置信度/匹配依据/次优）。
+（匹配 runbook/置信度/匹配依据/次优），以及回看 triage 审计（history）。
 匹配器只产建议，执行 = 走既有 runbook_execute 全链（矩阵/审批门/审计）——CLI
 这里同样不提供执行入口（建议后由用户在 agent 会话/Web 确认执行）。
 """
@@ -82,6 +82,32 @@ def _run_list(args) -> int:
     return _STATUS_OK
 
 
+def _run_history(args) -> int:
+    from tools.alert_runbook import recent_alert_triage
+
+    limit = int(getattr(args, "limit", 20) or 20)
+    rows = recent_alert_triage(limit=limit)
+    if getattr(args, "json", False):
+        return _json_out(rows)
+    print(f"最近 triage 审计（runtime/alert_triage.jsonl）: {len(rows)} 条")
+    for row in rows:
+        print(
+            f"- {row.get('ts')} · 告警 {row.get('alert_count', 0)} 条"
+            f"（匹配 {row.get('matched_count', 0)}）"
+        )
+        for e in row.get("entries") or []:
+            hit = e.get("runbook") or "无匹配"
+            detail = (
+                f" → {hit}"
+                + (f"（{e.get('confidence')}/{e.get('matched_by')}）" if e.get("matched") else "")
+            )
+            print(f"    {e.get('alertname') or '?'} [{e.get('severity') or '?'}]{detail}")
+    return _STATUS_OK
+
+
 def run_alerts_command(args) -> int:
-    """`vigil alerts` 分发：默认/显式 list 列活跃告警 + 建议。"""
+    """`vigil alerts` 分发：默认/显式 list 列活跃告警 + 建议；history 回看审计。"""
+    sub = str(getattr(args, "alerts_command", "") or "").strip()
+    if sub == "history":
+        return _run_history(args)
     return _run_list(args)
