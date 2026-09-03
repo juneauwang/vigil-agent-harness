@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { Activity, AlertTriangle, Play, RefreshCw, Search, Server } from "lucide-react";
+import { Link } from "react-router";
+import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Search, Server, X } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
 import type {
+  AlertDisposition,
   MonitoringAlert,
   MonitoringHealthService,
   MonitoringSeries,
@@ -114,7 +116,63 @@ function SeriesRow({ series }: { series: MonitoringSeries }) {
   );
 }
 
-function AlertRow({ alert }: { alert: MonitoringAlert }) {
+function DispositionLine({ disp, onExecute }: {
+  disp: AlertDisposition | null | undefined;
+  onExecute: (d: AlertDisposition) => void;
+}) {
+  if (!disp || !disp.matched || !disp.runbook) {
+    return (
+      <div className="mt-1.5 rounded bg-[var(--vigil-muted-bg)] px-2 py-1 text-[11px] text-[var(--vigil-muted)]">
+        建议处置：无匹配 runbook
+      </div>
+    );
+  }
+  const confidence =
+    disp.confidence === "high"
+      ? { label: "high", cls: "bg-[var(--vigil-primary)] text-white" }
+      : { label: "medium", cls: "border border-[var(--vigil-primary)] text-[var(--vigil-primary)]" };
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded bg-[var(--vigil-muted-bg)] px-2 py-1">
+      <span className="text-[10px] text-[var(--vigil-muted)]">建议处置</span>
+      <Link
+        to={`/runbooks?name=${encodeURIComponent(disp.runbook)}`}
+        className="inline-flex items-center rounded bg-[var(--vigil-primary)] px-1.5 py-0.5 text-[11px] font-medium text-white hover:opacity-90"
+        title="在 Runbooks 页查看该 SOP"
+      >
+        {disp.runbook}
+      </Link>
+      <span
+        className={cn(
+          "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+          confidence.cls,
+        )}
+      >
+        {confidence.label}
+      </span>
+      <span className="rounded border border-[var(--vigil-border)] px-1 py-0.5 text-[10px] text-[var(--vigil-muted)]">
+        {disp.matched_by === "trigger" ? "触发词" : "模糊匹配"}
+      </span>
+      {disp.title && (
+        <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--vigil-muted)]">
+          {disp.title}
+        </span>
+      )}
+      <button
+        type="button"
+        className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[11px] text-[var(--vigil-text)] hover:border-[var(--vigil-primary)] hover:text-[var(--vigil-primary)]"
+        onClick={() => onExecute(disp)}
+        title="人工确认后走既有 runbook 执行链（矩阵/审批门）"
+      >
+        <Play className="size-3" /> 执行
+      </button>
+    </div>
+  );
+}
+
+function AlertRow({ alert, onExecute }: {
+  alert: MonitoringAlert;
+  onExecute: (d: AlertDisposition) => void;
+}) {
   const badge = severityBadge(alert.severity);
   return (
     <div className="flex items-start gap-3 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-3">
@@ -135,6 +193,7 @@ function AlertRow({ alert }: { alert: MonitoringAlert }) {
             .filter(Boolean)
             .join(" · ") || "—"}
         </div>
+        <DispositionLine disp={alert.disposition} onExecute={onExecute} />
       </div>
     </div>
   );
@@ -161,6 +220,11 @@ export default function MonitoringPage() {
   const [alerts, setAlerts] = useState<MonitoringAlert[]>([]);
   const [alertsError, setAlertsError] = useState<string | null>(null);
   const [alertsLoaded, setAlertsLoaded] = useState(false);
+  const [alertsMatched, setAlertsMatched] = useState(0);
+  // batch87：执行建议 = 人工确认后走既有 runbook 执行 API（矩阵/审批门）。
+  const [execTarget, setExecTarget] = useState<AlertDisposition | null>(null);
+  const [execRunning, setExecRunning] = useState(false);
+  const [execInfo, setExecInfo] = useState<string | null>(null);
 
   const loadHealth = useCallback((refresh: boolean) => {
     api
@@ -181,9 +245,10 @@ export default function MonitoringPage() {
 
   const loadAlerts = useCallback(() => {
     api
-      .getMonitoringAlerts()
+      .getMonitoringAlertsTriage()
       .then((resp) => {
         setAlerts(resp.data?.alerts ?? []);
+        setAlertsMatched(resp.data?.matched_count ?? 0);
         setAlertsError(null);
         setAlertsLoaded(true);
       })
@@ -235,6 +300,36 @@ export default function MonitoringPage() {
     queryError !== null &&
     (queryError.includes("未配置 Prometheus") ||
       queryError.includes("prometheus_unavailable"));
+
+  const confirmExecute = () => {
+    if (!execTarget?.runbook || execRunning) return;
+    setExecRunning(true);
+    setExecInfo(null);
+    const alert = alerts.find((a) => a.disposition === execTarget);
+    api
+      .runRunbook(execTarget.runbook, undefined, alert
+        ? {
+            alertname: alert.alertname,
+            severity: alert.severity,
+            instance: alert.instance ?? "",
+            summary: alert.summary ?? "",
+          }
+        : undefined)
+      .then((resp) => {
+        setExecTarget(null);
+        setExecRunning(false);
+        setExecInfo(
+          resp.ok
+            ? `已下发 ${execTarget.runbook} 执行（实时进度见 Runbooks 页）。`
+            : resp.error ?? "执行启动失败。",
+        );
+      })
+      .catch((e: unknown) => {
+        setExecTarget(null);
+        setExecRunning(false);
+        setExecInfo(errText(e));
+      });
+  };
 
   return (
     <div className="mx-auto w-full max-w-5xl">
@@ -439,6 +534,12 @@ export default function MonitoringPage() {
             {alertsLoaded && !alertsError && (
               <span className="rounded bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-[11px] text-[var(--vigil-muted)]">
                 {alerts.length} 条
+                {alertsMatched > 0 ? ` · ${alertsMatched} 条有处置建议` : ""}
+              </span>
+            )}
+            {execInfo && (
+              <span className="rounded bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-[11px] text-[var(--vigil-text)]">
+                {execInfo}
               </span>
             )}
           </div>
@@ -472,12 +573,58 @@ export default function MonitoringPage() {
                 <AlertRow
                   key={`${a.alertname}|${a.instance ?? ""}|${a.startsAt ?? idx}`}
                   alert={a}
+                  onExecute={(d) => setExecTarget(d)}
                 />
               ))}
             </div>
           )}
         </section>
       </div>
+      {execTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-5 shadow-lg">
+            <div className="flex items-center gap-2">
+              <Play className="size-4 text-[var(--vigil-primary)]" />
+              <h2 className="text-sm font-semibold">执行 runbook（告警处置建议）</h2>
+              <button
+                className="ml-auto rounded p-1 hover:bg-[var(--vigil-muted-bg)]"
+                onClick={() => setExecTarget(null)}
+                aria-label="关闭"
+                disabled={execRunning}
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+            <p className="mt-3 text-sm text-[var(--vigil-text)] opacity-80">
+              确认执行建议 SOP{" "}
+              <code className="font-mono">{execTarget.runbook}</code>？步骤按操作
+              矩阵逐次裁决（execute 直跑；approve / 强制人工 → 审批卡人工确认）。
+            </p>
+            <p className="mt-2 text-xs text-[var(--vigil-muted)]">
+              匹配依据：{execTarget.reason ?? execTarget.hint ?? "—"}
+            </p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                className="vigil-btn border border-[var(--vigil-border)] px-3 py-1 text-xs"
+                onClick={() => setExecTarget(null)}
+                disabled={execRunning}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                className="vigil-btn px-3 py-1 text-xs"
+                onClick={confirmExecute}
+                disabled={execRunning}
+              >
+                {execRunning ? <Loader2 className="mr-1 inline size-3.5 animate-spin" /> : null}
+                确认执行
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

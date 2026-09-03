@@ -447,6 +447,7 @@ from hermes_cli.subcommands.hooks import build_hooks_parser
 from hermes_cli.subcommands.doctor import build_doctor_parser
 from hermes_cli.subcommands.security import build_security_parser
 from hermes_cli.subcommands.approvals import build_approvals_parser
+from hermes_cli.subcommands.alerts import build_alerts_parser
 from hermes_cli.subcommands.dump import build_dump_parser
 from hermes_cli.subcommands.debug import build_debug_parser
 from hermes_cli.subcommands.backup import build_backup_parser
@@ -4999,6 +5000,16 @@ def cmd_approvals(args):
     from hermes_cli.approvals_suggest import approvals_command
 
     status = approvals_command(args)
+    if status:
+        sys.exit(status)
+    return status
+
+
+def cmd_alerts(args):
+    """Dispatch `vigil alerts <subcmd>`（list 默认 / history）。"""
+    from hermes_cli.alerts_cli import run_alerts_command
+
+    status = run_alerts_command(args)
     if status:
         sys.exit(status)
     return status
@@ -11957,6 +11968,11 @@ def main():
     # approvals command  (parser built in hermes_cli/subcommands/approvals.py)
     # =========================================================================
     build_approvals_parser(subparsers, cmd_approvals=cmd_approvals)
+
+    # =========================================================================
+    # alerts command  (parser built in hermes_cli/subcommands/alerts.py)
+    # =========================================================================
+    build_alerts_parser(subparsers, cmd_alerts=cmd_alerts)
 
     # =========================================================================
     # dump command  (parser built in hermes_cli/subcommands/dump.py)

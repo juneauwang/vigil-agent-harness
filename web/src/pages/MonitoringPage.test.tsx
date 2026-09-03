@@ -14,7 +14,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
       ...actual.api,
       getMonitoringHealth: vi.fn(),
       queryMonitoring: vi.fn(),
-      getMonitoringAlerts: vi.fn(),
+      getMonitoringAlertsTriage: vi.fn(),
+      runRunbook: vi.fn(),
     },
   };
 });
@@ -90,6 +91,8 @@ const ALERTS = {
   ok: true,
   data: {
     count: 1,
+    matched_count: 0,
+    unmatched_count: 1,
     alerts: [
       {
         alertname: "HighCPU",
@@ -97,6 +100,7 @@ const ALERTS = {
         instance: "node1:9100",
         startsAt: "2026-08-23T10:00:00Z",
         state: "active",
+        disposition: { matched: false },
       },
     ],
   },
@@ -139,7 +143,7 @@ beforeEach(() => {
 describe("MonitoringPage", () => {
   it("renders health summary + three-state badges", async () => {
     vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
-    vi.mocked(api.getMonitoringAlerts).mockResolvedValue(ALERTS as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
     const { container } = await renderPage();
 
     expect(api.getMonitoringHealth).toHaveBeenCalled();
@@ -161,7 +165,7 @@ describe("MonitoringPage", () => {
 
   it("status filter narrows the table", async () => {
     vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
-    vi.mocked(api.getMonitoringAlerts).mockResolvedValue({ ok: true, data: { count: 0, alerts: [] } } as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue({ ok: true, data: { count: 0, matched_count: 0, unmatched_count: 0, alerts: [] } } as never);
     const { container } = await renderPage();
 
     expect(container.textContent).toContain("web");
@@ -176,16 +180,16 @@ describe("MonitoringPage", () => {
 
   it("shows alerts with severity badge + empty state", async () => {
     vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
-    vi.mocked(api.getMonitoringAlerts).mockResolvedValue(ALERTS as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
     const { container } = await renderPage();
 
     expect(container.textContent).toContain("活跃告警");
     expect(container.textContent).toContain("HighCPU");
     expect(container.textContent).toContain("critical");
 
-    vi.mocked(api.getMonitoringAlerts).mockResolvedValue({
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue({
       ok: true,
-      data: { count: 0, alerts: [] },
+      data: { count: 0, matched_count: 0, unmatched_count: 0, alerts: [] },
     } as never);
     const { container: empty } = await renderPage();
     expect(empty.textContent).toContain("暂无活跃告警");
@@ -193,7 +197,7 @@ describe("MonitoringPage", () => {
 
   it("prometheus unconfigured shows guidance, health block still works", async () => {
     vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
-    vi.mocked(api.getMonitoringAlerts).mockResolvedValue(ALERTS as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
     vi.mocked(api.queryMonitoring).mockRejectedValue(
       new ApiError(
         "prometheus_unavailable",
@@ -212,7 +216,7 @@ describe("MonitoringPage", () => {
 
   it("query success renders series + sparkline", async () => {
     vi.mocked(api.getMonitoringHealth).mockResolvedValue(EMPTY_HEALTH as never);
-    vi.mocked(api.getMonitoringAlerts).mockResolvedValue({ ok: true, data: { count: 0, alerts: [] } } as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue({ ok: true, data: { count: 0, matched_count: 0, unmatched_count: 0, alerts: [] } } as never);
     vi.mocked(api.queryMonitoring).mockResolvedValue(QUERY_RESULT as never);
     const { container } = await renderPage();
 
@@ -224,7 +228,7 @@ describe("MonitoringPage", () => {
 
   it("health load failure shows error empty state", async () => {
     vi.mocked(api.getMonitoringHealth).mockRejectedValue(new ApiError("health_failed", "探测失败", 500));
-    vi.mocked(api.getMonitoringAlerts).mockResolvedValue({ ok: true, data: { count: 0, alerts: [] } } as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue({ ok: true, data: { count: 0, matched_count: 0, unmatched_count: 0, alerts: [] } } as never);
     const { container } = await renderPage();
 
     expect(container.textContent).toContain("健康数据加载失败");

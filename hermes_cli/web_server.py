@@ -4228,6 +4228,41 @@ async def get_monitoring_alerts(request: Request):
     return {"ok": True, "data": data}
 
 
+@app.get("/api/monitoring/alerts/triage")
+async def get_monitoring_alerts_triage(request: Request):
+    """活跃告警 + 逐条 runbook 处置建议（只读，batch87 OPS-DELTA #103）。
+
+    每条告警带 disposition（matched/runbook/confidence/matched_by/reason/
+    alternatives 或 matched=false + hint）——**仅供建议，绝不自动执行**：执行
+    走既有 runbook 执行 API（/api/runbook/executions，矩阵/审批门/审计）。
+    ops.prometheus.alertmanager 未配置 → 503 + 提示；上游失败 → 502。
+    每次调用落一条轻量审计（runtime/alert_triage.jsonl，best-effort）。
+    """
+    _require_token(request)
+    from hermes_cli.monitoring import (
+        MonitoringUnavailable,
+        MonitoringUpstreamError,
+    )
+    from tools.alert_runbook import triage_active_alerts
+
+    try:
+        data = await run_in_threadpool(triage_active_alerts)
+    except MonitoringUnavailable as exc:
+        return JSONResponse(
+            status_code=503, content=_api_error("alertmanager_unavailable", str(exc))
+        )
+    except MonitoringUpstreamError as exc:
+        return JSONResponse(
+            status_code=502, content=_api_error("alertmanager_upstream_error", str(exc))
+        )
+    except Exception as exc:
+        _log.exception("monitoring alerts triage failed")
+        return JSONResponse(
+            status_code=500, content=_api_error("alerts_triage_failed", str(exc))
+        )
+    return {"ok": True, "data": data}
+
+
 # ---------------------------------------------------------------------------
 # UI 壳第二批：执行/审批/审计 API（OPS-DELTA #47，契约见 vigil-exec-api-draft.md）
 # ---------------------------------------------------------------------------

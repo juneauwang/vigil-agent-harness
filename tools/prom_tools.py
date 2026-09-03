@@ -365,6 +365,40 @@ def check_prom_requirements() -> bool:
     return bool((cfg.get("endpoint") or "").strip())
 
 
+def alert_triage() -> str:
+    """活跃告警全景 + 逐条 runbook 处置建议（只读，绝不执行）。"""
+    from hermes_cli.monitoring import MonitoringUnavailable, MonitoringUpstreamError
+    from tools.alert_runbook import triage_active_alerts
+
+    try:
+        payload = triage_active_alerts()
+    except MonitoringUnavailable as exc:
+        return tool_error(str(exc))
+    except MonitoringUpstreamError as exc:
+        return tool_error(str(exc))
+
+    rows = []
+    for a in payload.get("alerts") or []:
+        disp = a.get("disposition") or {}
+        rows.append({
+            "alertname": a.get("alertname"),
+            "severity": a.get("severity"),
+            "instance": a.get("instance"),
+            "matched": bool(disp.get("matched")),
+            "runbook": disp.get("runbook"),
+            "confidence": disp.get("confidence"),
+            "matched_by": disp.get("matched_by"),
+            "matched_keyword": disp.get("matched_keyword"),
+            "reason": disp.get("reason") or disp.get("hint"),
+            "alternatives": disp.get("alternatives") or [],
+        })
+    return json.dumps({
+        "count": payload.get("count", 0),
+        "matched_count": payload.get("matched_count", 0),
+        "alerts": rows,
+    }, ensure_ascii=False, indent=2)
+
+
 # ---------------------------------------------------------------------------
 # Schemas + registry
 # ---------------------------------------------------------------------------
@@ -412,6 +446,23 @@ _DEFAULT_ALERT_SCHEMA = {
     },
 }
 
+_DEFAULT_TRIAGE_SCHEMA = {
+    "name": "alert_triage",
+    "description": (
+        "拉 Alertmanager 活跃告警并给出每条告警的 runbook 处置建议（只读，"
+        "ops.prometheus.alertmanager 配置后可用）。一次调用返回告警全景 + 建议："
+        "每条告警给 matched/runbook（处置 SOP 名）/confidence（high=触发词精确"
+        "命中，medium=模糊匹配）/matched_by/reason/alternatives（次优 SOP），"
+        "无匹配的告警也列出并提示可新建 runbook。匹配结果**仅供建议，绝不自动"
+        "执行任何 runbook**——执行需用户确认后调用 runbook_execute（走既有矩阵/"
+        "审批门/审计全链）。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
+
 
 def _query_handler(args: Dict[str, Any], **kwargs) -> str:
     return prom_query(
@@ -423,6 +474,10 @@ def _query_handler(args: Dict[str, Any], **kwargs) -> str:
 
 def _alert_handler(args: Dict[str, Any], **kwargs) -> str:
     return alert_query()
+
+
+def _triage_handler(args: Dict[str, Any], **kwargs) -> str:
+    return alert_triage()
 
 
 registry.register(
@@ -442,5 +497,15 @@ registry.register(
     handler=_alert_handler,
     check_fn=check_prom_requirements,
     emoji="🚨",
+    max_result_size_chars=30_000,
+)
+
+registry.register(
+    name="alert_triage",
+    toolset="prom",
+    schema=_DEFAULT_TRIAGE_SCHEMA,
+    handler=_triage_handler,
+    check_fn=check_prom_requirements,
+    emoji="🧭",
     max_result_size_chars=30_000,
 )

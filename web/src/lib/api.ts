@@ -658,11 +658,41 @@ export interface MonitoringAlert {
   labels?: Record<string, string>;
   startsAt?: string;
   state?: string;
+  /** Alertmanager annotations.summary（batch87 告警→runbook 匹配输入之一）。 */
+  summary?: string;
+  /** 处置建议（batch87：仅供建议，绝不自动执行；执行走既有确认流）。 */
+  disposition?: AlertDisposition | null;
+}
+
+export interface AlertDisposition {
+  matched: boolean;
+  runbook?: string;
+  title?: string;
+  kind?: string;
+  env?: string;
+  step_count?: number;
+  confidence?: "high" | "medium";
+  matched_by?: "trigger" | "fuzzy";
+  matched_keyword?: string | null;
+  reason?: string;
+  hint?: string;
+  alternatives?: Array<{ name: string; title?: string }>;
 }
 
 export interface MonitoringAlertsResponse {
   ok?: boolean;
   data?: { alerts: MonitoringAlert[]; count: number };
+}
+
+export interface MonitoringAlertsTriageResponse {
+  ok?: boolean;
+  data?: {
+    alerts: MonitoringAlert[];
+    count: number;
+    matched_count: number;
+    unmatched_count: number;
+    at?: string;
+  };
 }
 
 // ── API methods ────────────────────────────────────────────────────────────
@@ -815,6 +845,9 @@ export const api = {
     ),
   getMonitoringAlerts: () =>
     fetchJSON<MonitoringAlertsResponse>("/api/monitoring/alerts"),
+  /** batch87：活跃告警 + 逐条 runbook 处置建议（只读；执行走既有确认流）。 */
+  getMonitoringAlertsTriage: () =>
+    fetchJSON<MonitoringAlertsTriageResponse>("/api/monitoring/alerts/triage"),
 
   // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
   // approval_pending/done/error）
