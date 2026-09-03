@@ -420,11 +420,13 @@ def fetch_active_alerts() -> Dict[str, Any]:
         if str(status.get("state") or "").lower() == "resolved":
             continue
         labels = a.get("labels") or {}
+        annotations = a.get("annotations") or {}
         out.append({
             "alertname": str(labels.get("alertname") or a.get("name") or "未知告警"),
             "severity": str(labels.get("severity") or "info"),
             "instance": str(labels.get("instance") or ""),
             "labels": {str(k): str(v) for k, v in labels.items() if k != "alertname"},
+            "summary": str(annotations.get("summary") or "").strip(),
             "startsAt": a.get("startsAt") or "",
             "state": str(status.get("state") or ""),
         })
