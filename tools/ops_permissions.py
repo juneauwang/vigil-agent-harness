@@ -431,6 +431,21 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     require_confirmation = level == _md.LEVEL_REQUIRED
     if not require_confirmation:
         require_confirmation = prod_change_hardgate
+
+    # batch86（OPS-DELTA #102）：命令级自进化白名单——只对"矩阵档位 approve /
+    # unknown→approve"生效：矩阵 execute 档本就直接放行（上面已返回）；required
+    # 强制人工与 prod 变更硬门永不跳过（红线：高危门不放松）。归一化命中 active
+    # 模板 → 返回 None 直接执行（跳过审批门，交回原有检查）。链式/管道/动态参数/
+    # 黑名单形态 normalize=None 永不命中，永远走原判定；矩阵缺失 deny / 高危目标
+    # 解析 deny 等无条件层都在本检查之前，白名单不参与。读故障只少一次跳过
+    # （fail-open 于"少弹一次审批"，绝不 deny）。
+    if not require_confirmation:
+        try:
+            from tools.approval_memory import command_template_approved
+            if command_template_approved(command):
+                return None
+        except Exception:
+            logger.debug("approval_memory query failed; falling through", exc_info=True)
     description = _matrix_description(
         command, action_name, level, env, primary, classification,
         prod_hardgate=prod_change_hardgate,

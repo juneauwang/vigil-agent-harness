@@ -296,10 +296,14 @@ def test_target_prod_ssh_query_requires_confirmation_in_test_session(guard_env, 
 
 def test_no_target_keeps_session_env_behavior(guard_env, monkeypatch):
     """无目标命令 → 完全走会话 env：test 查询（docker ps）execute 放行；
-    ls 等识别不出的命令 → unknown → 默认 approve（无人在场 fail-closed，保守）。"""
+    ls 命中内置只读种子表 → 直接放行（batch86 OPS-DELTA #102：种子只读命令
+    lscpu/free/cat/ls 等不再弹审批——修复 08-31 裸只读命令漏配回归）；未登记
+    的 unknown 命令（lsblk）→ unknown → 默认 approve（无人在场 fail-closed，
+    保守——自进化白名单只补种子表漏项，未沉淀命令维持原判定）。"""
     guard_env("test")
     assert approval_module.check_all_command_guards("docker ps", "local")["approved"] is True
-    result = approval_module.check_all_command_guards("ls -la", "local")
+    assert approval_module.check_all_command_guards("ls -la", "local")["approved"] is True
+    result = approval_module.check_all_command_guards("lsblk", "local")
     assert result["approved"] is False
     assert result["ops_matrix"]["action_name"] == "unknown"
 

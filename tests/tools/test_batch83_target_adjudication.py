@@ -188,11 +188,16 @@ def test_d_ssh_unregistered_host_change_denied(t83):
 
 
 def test_e_readonly_commands_skip_target_resolution(t83):
-    """只读/无害命令不触发目标解析：拓扑缺失也不 deny，按矩阵只读格子走。"""
+    """只读/无害命令不触发目标解析：拓扑缺失也不 deny，按矩阵只读格子走。
+    batch86（OPS-DELTA #102）内置只读种子表后：ls/cat 等种子形态归一命中 →
+    直接放行（None，跳过审批门）；未登记只读形态（grep 带模式/路径操作数、
+    topo_query）仍走 unknown→approve 原判定——两者都不产生目标解析 deny。"""
     t83("test", topology=False)
     assert ck("docker ps") is None          # query × test = execute → 直接过
     assert ck("kubectl get pods") is None
-    for cmd in ("ls -la", "cat /etc/hosts", "grep -r foo /etc", "topo_query"):
+    assert ck("ls -la") is None             # 种子 ls：归一命中 → 直接执行
+    assert ck("cat /etc/hosts") is None     # 种子 cat 读形态 → 直接执行
+    for cmd in ("grep -r foo /etc", "topo_query"):
         decision = ck(cmd)
         assert decision is not None, cmd
         assert decision["action"] == "approve", cmd
