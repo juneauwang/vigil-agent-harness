@@ -234,4 +234,109 @@ describe("MonitoringPage", () => {
     expect(container.textContent).toContain("健康数据加载失败");
     expect(container.textContent).toContain("探测失败");
   });
+
+  // ── batch87（OPS-DELTA #103）：建议处置两态 + 执行走既有确认流 ─────────────
+
+  it("shows disposition for matched and unmatched alerts", async () => {
+    vi.mocked(api.getMonitoringHealth).mockResolvedValue(EMPTY_HEALTH as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue({
+      ok: true,
+      data: {
+        count: 2,
+        matched_count: 1,
+        unmatched_count: 1,
+        alerts: [
+          {
+            alertname: "Harbor healthcheck failed",
+            severity: "critical",
+            startsAt: "2026-08-23T10:00:00Z",
+            disposition: {
+              matched: true,
+              runbook: "harbor-restart",
+              title: "Harbor 服务异常恢复",
+              confidence: "high",
+              matched_by: "trigger",
+              matched_keyword: "harbor healthcheck failed",
+              alternatives: [],
+            },
+          },
+          {
+            alertname: "DiskFull",
+            severity: "warning",
+            startsAt: "2026-08-23T09:00:00Z",
+            disposition: { matched: false, hint: "无匹配 runbook" },
+          },
+        ],
+      },
+    } as never);
+    const { container } = await renderPage();
+    const text = container.textContent ?? "";
+    expect(text).toContain("harbor-restart");
+    expect(text).toContain("high");
+    expect(text).toContain("触发词");
+    expect(text).toContain("无匹配 runbook");
+    expect(container.querySelector('a[href="/runbooks?name=harbor-restart"]')).toBeTruthy();
+    expect(api.runRunbook).not.toHaveBeenCalled(); // l：渲染不自动执行
+  });
+
+  it("execute suggestion opens confirm then calls existing runbook API", async () => {
+    vi.mocked(api.getMonitoringHealth).mockResolvedValue(EMPTY_HEALTH as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue({
+      ok: true,
+      data: {
+        count: 1,
+        matched_count: 1,
+        unmatched_count: 0,
+        alerts: [
+          {
+            alertname: "Harbor healthcheck failed",
+            severity: "critical",
+            startsAt: "2026-08-23T10:00:00Z",
+            disposition: {
+              matched: true,
+              runbook: "harbor-restart",
+              confidence: "high",
+              matched_by: "trigger",
+              matched_keyword: "harbor healthcheck failed",
+              alternatives: [],
+            },
+          },
+        ],
+      },
+    } as never);
+    vi.mocked(api.runRunbook).mockResolvedValue({
+      ok: true,
+      data: { exec_id: "exec-1" },
+    } as never);
+    const { container } = await renderPage();
+
+    // 不点执行 → 零执行调用（l：建议不直通执行）。
+    expect(api.runRunbook).not.toHaveBeenCalled();
+
+    const alertSection = Array.from(container.querySelectorAll("section"))
+      .find((s) => s.textContent?.includes("建议处置"));
+    expect(alertSection).toBeTruthy();
+    const execBtn = Array.from(alertSection!.querySelectorAll("button"))
+      .find((b) => b.textContent?.includes("执行"));
+    expect(execBtn).toBeTruthy();
+    await act(async () => {
+      execBtn!.click();
+    });
+    expect(container.textContent).toContain("执行 runbook");
+    expect(container.textContent).toContain("确认执行");
+    expect(api.runRunbook).not.toHaveBeenCalled(); // 确认前不执行
+
+    const confirmBtn = Array.from(container.querySelectorAll("button"))
+      .find((b) => b.textContent?.trim() === "确认执行");
+    expect(confirmBtn).toBeTruthy();
+    await act(async () => {
+      confirmBtn!.click();
+    });
+    expect(api.runRunbook).toHaveBeenCalledWith(
+      "harbor-restart",
+      undefined,
+      expect.objectContaining({ alertname: "Harbor healthcheck failed" }),
+    );
+    expect(container.textContent).toContain("已下发");
+  });
 });

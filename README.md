@@ -59,7 +59,7 @@ Vigil 不做全自动修复——AI 代替运维决策还不是现在的正确�
 | **权限矩阵** | 操作矩阵（`matrix.yaml` + `vigil matrix`） | 动作 × 环境 → **执行 / 审批 / 拒绝** 三态裁决，无 deny（deny 诱发 LLM 绕行）。矩阵是唯一裁决者，覆盖 CLI/Web/定时/LLM 全部路径；高危动作覆盖缺口有仪表盘 |
 | **契约编译** | YAML 契约 → LLM 生成薄包装（`vigil contract compile`） | 给 LLM 加工具不写代码：写一份 YAML 契约（参数/返回/测试），编译管线在沙箱里自测、过内容审批后注册成工具。凭据纪律：契约参数拒绝密码/密钥类参数 |
 | **审计层** | 运行轨迹（`vigil trajectory` / Web 审计页） | append-only 事件级日志：谁在什么时间执行了什么命令、结果如何；可查询、可回放、可裁剪——运维审计合规的底账 |
-| **监控** | 健康探测 + PromQL 查询 + 告警快照（Web 监控页） | 拓扑实体健康探测（并发 + 缓存，不依赖 Prometheus 也能用），PromQL 兼容查询 + Alertmanager 告警汇总 |
+| **监控** | 健康探测 + PromQL 查询 + 告警快照 + 告警→runbook 处置建议（Web 监控页） | 拓扑实体健康探测（并发 + 缓存，不依赖 Prometheus 也能用），PromQL 兼容查询 + Alertmanager 告警汇总；活跃告警自动匹配处置 SOP——建议给人，人批准后走受控执行链 |
 | **用量透明** | token 用量面板 + 价格三级来源 | 当前会话/今天/30 天 token 与费用实时可见，价格手动覆盖 > 在线拉取 > 内置兜底，零网络依赖底线 |
 
 ## 和「人工 CMDB + RAG 文档」有什么不同
@@ -128,6 +128,23 @@ tirith/危险命令等无条件层每条命令执行前照跑。内置只读种�
 df/ps/... 共 18 个，冷启动起点，默认 active）顺带修复了"裸只读命令在 prod 弹
 审批"的漏配；`lsblk` 这类未登记只读命令仍先弹审批、批准 3 次后自进化。v0.1 的
 "以后不用问"opt-in 在 CLI 审批面提供（web/gateway 审批不喂自进化信号，保守）。
+
+### 告警处置闭环（batch87）：告警 → SOP 建议 → 人确认执行
+
+活跃告警进来自动匹配最可能的 runbook（Alertmanager 触发词精确命中 > 模糊评分，
+复用 runbook_load 同款评分器）：返回处置建议（runbook/置信度/匹配依据/次优 SOP），
+每条标注 `matched_by`（trigger/fuzzy）与命中关键词——透明，防误导。定位是**建议
+闭环，不是全自动修复**——AI 做发现/定位/建议，人做批准/否决：执行永远走既有
+runbook 执行链（操作矩阵逐动作裁决 + 审批门 + 审计），匹配器零直通通道。
+
+入口：`alert_triage`（agent 工具，一次调用拿"活跃告警全景 + 建议"，描述里写明
+"仅供建议、执行需用户确认后调 runbook_execute"）；Web 监控页告警行「建议处置」
+（有匹配 → runbook 名 + 置信徽标 + 查看/确认执行；无匹配 → 灰字提示）；CLI
+`vigil alerts`（列表，`--json` 机器可读）。每次 triage 调用落一条轻量审计
+`runtime/alert_triage.jsonl`（`vigil alerts history` 回看）——dogfood 调触发词
+与匹配阈值的数据来源。runbook 的 `triggers` 字段（含 v0.2 结构化
+`{alertname, severity}` 精确匹配）是命中依据；本闭环只做匹配建议、不改变既有
+执行/裁决语义（矩阵/审批门/高危门照旧）。
 
 ## 快速开始
 

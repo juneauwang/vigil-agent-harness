@@ -376,3 +376,112 @@ def test_alerts_upstream_error_502(env_home, client, monkeypatch):
     resp = client.get("/api/monitoring/alerts")
     assert resp.status_code == 502
     assert "refused" in resp.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# /api/monitoring/alerts/triage（batch87 OPS-DELTA #103：告警→runbook 处置建议）
+# ---------------------------------------------------------------------------
+
+HARBOR_RUNBOOK = """\
+name: harbor-restart
+title: Harbor 服务异常恢复
+kind: incident
+env: prod
+summary: harbor 健康检查失败时的标准恢复流程。
+triggers:
+  - harbor healthcheck failed
+steps:
+  - id: diagnose
+    title: 诊断
+    commands: ["docker ps --filter name=harbor"]
+"""
+
+
+def _write_triage_runbooks(home) -> None:
+    (home / "runbooks").mkdir()
+    (home / "runbooks" / "harbor-restart.yaml").write_text(HARBOR_RUNBOOK, encoding="utf-8")
+
+
+def _am_payload():
+    return [
+        {"status": {"state": "active"},
+         "labels": {"alertname": "Harbor healthcheck failed", "severity": "critical",
+                    "instance": "harbor:443"},
+         "annotations": {"summary": ""},
+         "startsAt": "2026-08-23T10:00:00Z"},
+        {"status": {"state": "active"},
+         "labels": {"alertname": "DiskFull", "severity": "warning",
+                    "instance": "worker-1"},
+         "annotations": {"summary": "disk full on worker"},
+         "startsAt": "2026-08-23T09:00:00Z"},
+    ]
+
+
+def test_triage_requires_token(env_home, client):
+    client.headers.pop(web_server._SESSION_HEADER_NAME, None)
+    resp = client.get("/api/monitoring/alerts/triage")
+    assert resp.status_code == 401
+
+
+def test_triage_unconfigured_alertmanager_503(env_home, client):
+    _write_cfg(env_home, alertmanager=False)
+    resp = client.get("/api/monitoring/alerts/triage")
+    assert resp.status_code == 503
+    assert "alertmanager_unavailable" == resp.json()["error"]["code"]
+
+
+def test_triage_structure_and_audit(env_home, client, monkeypatch):
+    _write_cfg(env_home)
+    _write_triage_runbooks(env_home)
+    from tools import prom_tools as pt
+
+    monkeypatch.setattr(pt, "_http_get", lambda url, params, auth: _fake_resp(200, _am_payload()))
+    resp = client.get("/api/monitoring/alerts/triage")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["count"] == 2
+    assert data["matched_count"] == 1
+    assert data["unmatched_count"] == 1
+    by_name = {a["alertname"]: a for a in data["alerts"]}
+    hit = by_name["Harbor healthcheck failed"]["disposition"]
+    assert hit["matched"] is True
+    assert hit["runbook"] == "harbor-restart"
+    assert hit["confidence"] == "high"
+    assert hit["matched_by"] == "trigger"
+    miss = by_name["DiskFull"]["disposition"]
+    assert miss["matched"] is False
+    assert "无匹配 runbook" in miss["hint"]
+    # 每次调用落一条审计（m/n）：runtime/alert_triage.jsonl 一条，可读。
+    audit = env_home / "runtime" / "alert_triage.jsonl"
+    assert audit.is_file()
+    rows = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines() if line]
+    assert len(rows) == 1
+    assert rows[0]["type"] == "alert_triage"
+    assert rows[0]["matched_count"] == 1
+
+
+def test_triage_readonly_no_runbook_execution(env_home, client, monkeypatch):
+    """l 验收：triage 只读——不产生 runbook 执行账本、不触碰执行链。"""
+    _write_cfg(env_home)
+    _write_triage_runbooks(env_home)
+    from tools import prom_tools as pt
+
+    monkeypatch.setattr(pt, "_http_get", lambda url, params, auth: _fake_resp(200, _am_payload()))
+    resp = client.get("/api/monitoring/alerts/triage")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["matched_count"] == 1
+    assert not (env_home / "runtime" / "runbook_executions.jsonl").exists()
+
+
+def test_triage_upstream_error_502(env_home, client, monkeypatch):
+    _write_cfg(env_home)
+    import httpx
+    from tools import prom_tools as pt
+
+    monkeypatch.setattr(
+        pt, "_http_get",
+        lambda url, params, auth: (_ for _ in ()).throw(httpx.ConnectError("refused")),
+    )
+    resp = client.get("/api/monitoring/alerts/triage")
+    assert resp.status_code == 502
+    assert "refused" in resp.json()["error"]["message"]
