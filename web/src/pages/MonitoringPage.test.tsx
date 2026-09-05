@@ -16,6 +16,8 @@ vi.mock("@/lib/api", async (importOriginal) => {
       queryMonitoring: vi.fn(),
       getMonitoringAlertsTriage: vi.fn(),
       runRunbook: vi.fn(),
+      getMonitoringConfig: vi.fn(),
+      saveMonitoringConfig: vi.fn(),
     },
   };
 });
@@ -338,5 +340,64 @@ describe("MonitoringPage", () => {
       expect.objectContaining({ alertname: "Harbor healthcheck failed" }),
     );
     expect(container.textContent).toContain("已下发");
+  });
+
+  it("健康数据加载中显示「获取中…」提示", async () => {
+    vi.mocked(api.getMonitoringHealth).mockReturnValue(
+      new Promise(() => {}) as never, // never resolves → stays in loading
+    );
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
+    const { container } = await renderPage();
+    expect(container.textContent).toContain("获取中");
+  });
+
+  it("设置面板：打开读取当前配置，保存调用 API", async () => {
+    vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
+    vi.mocked(api.getMonitoringConfig).mockResolvedValue({
+      ok: true,
+      data: { endpoint: "http://old:9090", alertmanager: "" },
+    } as never);
+    vi.mocked(api.saveMonitoringConfig).mockResolvedValue({
+      ok: true,
+      data: { endpoint: "http://new:9090", alertmanager: "" },
+    } as never);
+    const { container } = await renderPage();
+    const settingsBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("设置"),
+    )!;
+    expect(settingsBtn).toBeTruthy();
+    await act(async () => {
+      settingsBtn.click();
+    });
+    expect(container.textContent).toContain("监控集成设置");
+    // 打开时拉取当前值回填
+    await act(async () => {
+      await Promise.resolve();
+    });
+    const inputs = Array.from(container.querySelectorAll("input"));
+    expect(inputs.some((i) => (i as HTMLInputElement).value === "http://old:9090")).toBe(true);
+    // 改 endpoint 后保存
+    const endpointInput = inputs.find((i) => (i as HTMLInputElement).value === "http://old:9090") as HTMLInputElement;
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLInputElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setter.call(endpointInput, "http://new:9090");
+      endpointInput.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const form = container.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(api.saveMonitoringConfig).toHaveBeenCalledWith({
+      endpoint: "http://new:9090",
+      alertmanager: "",
+    });
+    expect(container.textContent).toContain("已保存");
   });
 });

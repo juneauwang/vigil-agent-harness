@@ -621,6 +621,15 @@ export interface MonitoringHealthService {
   }>;
 }
 
+export interface MonitoringConfigResponse {
+  ok?: boolean;
+  data?: {
+    endpoint?: string;
+    alertmanager?: string;
+  };
+  error?: { code?: string; message?: string };
+}
+
 export interface MonitoringHealthResponse {
   ok?: boolean;
   data?: {
@@ -837,6 +846,15 @@ export const api = {
     fetchJSON<MonitoringHealthResponse>(
       `/api/monitoring/health${refresh ? "?refresh=1" : ""}`,
     ),
+  // UI 监控集成设置（免手改 config.yaml）：读/写 ops.prometheus 段
+  getMonitoringConfig: () =>
+    fetchJSON<MonitoringConfigResponse>("/api/monitoring/config"),
+  saveMonitoringConfig: (cfg: { endpoint?: string; alertmanager?: string }) =>
+    fetchJSON<MonitoringConfigResponse>("/api/monitoring/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    }),
   queryMonitoring: (promql: string, duration?: string, step?: string) =>
     fetchJSON<MonitoringQueryResponse>(
       `/api/monitoring/query?${new URLSearchParams(

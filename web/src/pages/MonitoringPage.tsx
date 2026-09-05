@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
-import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Search, Server, X } from "lucide-react";
+import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Search, Server, Settings, X } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
 import type {
   AlertDisposition,
@@ -238,6 +238,56 @@ export default function MonitoringPage() {
   const [execTarget, setExecTarget] = useState<AlertDisposition | null>(null);
   const [execRunning, setExecRunning] = useState(false);
   const [execInfo, setExecInfo] = useState<string | null>(null);
+  // UI 监控集成设置（OPS-DELTA #107 配套：免手改 config.yaml）。
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [endpointDraft, setEndpointDraft] = useState("");
+  const [alertmanagerDraft, setAlertmanagerDraft] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
+  const [settingsErr, setSettingsErr] = useState<string | null>(null);
+
+  const openSettings = useCallback(async () => {
+    setSettingsOpen((v) => {
+      if (v) return v; // already open — keep drafts as-is
+      setSettingsErr(null);
+      setSettingsMsg(null);
+      void api
+        .getMonitoringConfig()
+        .then((resp) => {
+          setEndpointDraft(resp.data?.endpoint ?? "");
+          setAlertmanagerDraft(resp.data?.alertmanager ?? "");
+        })
+        .catch(() => setEndpointDraft(""));
+      return true;
+    });
+  }, []);
+
+  const saveSettings = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      const endpoint = endpointDraft.trim();
+      const alertmanager = alertmanagerDraft.trim();
+      setSettingsBusy(true);
+      setSettingsErr(null);
+      setSettingsMsg(null);
+      try {
+        const resp = await api.saveMonitoringConfig({ endpoint, alertmanager });
+        if (resp.error) {
+          setSettingsErr(bmsg(resp.error.message ?? resp.error.code ?? ""));
+        } else {
+          setSettingsMsg(t("monitoring.settingsSaved"));
+          setEndpointDraft(resp.data?.endpoint ?? endpoint);
+          setAlertmanagerDraft(resp.data?.alertmanager ?? alertmanager);
+        }
+      } catch (err) {
+        setSettingsErr(errText(err));
+      } finally {
+        setSettingsBusy(false);
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [endpointDraft, alertmanagerDraft, t],
+  );
 
   const loadHealth = useCallback((refresh: boolean) => {
     api
@@ -392,9 +442,80 @@ export default function MonitoringPage() {
             >
               <RefreshCw className="size-3" /> {t("common.refresh")}
             </button>
+            <button
+              type="button"
+              onClick={() => void openSettings()}
+              className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-2 py-1 text-[11px] text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+            >
+              <Settings className="size-3" /> {t("monitoring.settingsBtn")}
+            </button>
           </div>
 
-          {!healthLoaded ? null : healthError ? (
+          {settingsOpen && (
+            <div className="mb-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-3 text-xs shadow-[var(--vigil-shadow)]">
+              <div className="mb-2 font-medium">{t("monitoring.settingsTitle")}</div>
+              <form onSubmit={(e) => void saveSettings(e)} className="space-y-2">
+                <label className="block">
+                  <span className="mb-1 block text-[var(--vigil-muted)]">
+                    {t("monitoring.settingsEndpoint")}
+                  </span>
+                  <input
+                    value={endpointDraft}
+                    onChange={(e) => setEndpointDraft(e.target.value)}
+                    placeholder={t("monitoring.settingsEndpointPh")}
+                    spellCheck={false}
+                    className="h-8 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 text-xs text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-[var(--vigil-muted)]">
+                    {t("monitoring.settingsAlertmanager")}
+                  </span>
+                  <input
+                    value={alertmanagerDraft}
+                    onChange={(e) => setAlertmanagerDraft(e.target.value)}
+                    placeholder={t("monitoring.settingsAlertmanagerPh")}
+                    spellCheck={false}
+                    className="h-8 w-full rounded border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 text-xs text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
+                  />
+                </label>
+                {settingsErr ? (
+                  <div className="text-red-500">{settingsErr}</div>
+                ) : settingsMsg ? (
+                  <div className="text-emerald-500">{settingsMsg}</div>
+                ) : null}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    disabled={settingsBusy}
+                    className="vigil-btn inline-flex h-7 items-center gap-1 rounded border border-[var(--vigil-primary)]/40 px-2 text-[11px] text-[var(--vigil-primary)] disabled:opacity-50"
+                  >
+                    {settingsBusy ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : null}
+                    {t("monitoring.settingsSave")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSettingsOpen(false)}
+                    className="inline-flex h-7 items-center rounded px-2 text-[11px] text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+                  >
+                    {t("monitoring.settingsCancel")}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
+
+          {!healthLoaded ? (
+            <div className="flex items-center gap-2 py-8 text-sm text-[var(--vigil-muted)]">
+              <Loader2 className="size-4 animate-spin" />
+              {t("monitoring.healthLoading")}
+              <span className="text-xs text-[var(--vigil-muted)]/70">
+                {t("monitoring.healthLoadingDesc")}
+              </span>
+            </div>
+          ) : healthError ? (
             <EmptyState
               icon={<Activity className="size-6" />}
               title={t("monitoring.healthLoadFailedTitle")}

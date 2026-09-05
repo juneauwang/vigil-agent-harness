@@ -4195,6 +4195,65 @@ async def get_monitoring_query(request: Request, promql: str = "",
     return {"ok": True, "data": data}
 
 
+@app.get("/api/monitoring/config")
+async def get_monitoring_config(request: Request):
+    """监控集成配置（ops.prometheus 段，只读）——UI 设置入口的数据源。"""
+    _require_token(request)
+    from tools import prom_tools as pt
+
+    cfg = pt._prom_config()
+    return {
+        "ok": True,
+        "data": {
+            "endpoint": cfg.get("endpoint") or "",
+            "alertmanager": cfg.get("alertmanager") or "",
+        },
+    }
+
+
+@app.put("/api/monitoring/config")
+async def put_monitoring_config(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+):
+    """更新监控集成配置（ops.prometheus.endpoint / alertmanager）。
+
+    UI 设置入口——免手改 config.yaml：走 load_config → 改段 → save_config
+    （官方机制：默认值不落盘、带锁）。仅更新请求中出现的字段；地址需
+    http(s):// 前缀或空串（防脏值）。热生效：读取端每次请求读 config。
+    """
+    _require_token(request)
+    from hermes_cli.config import load_config, save_config
+
+    def _clean(val: object) -> str:
+        return str(val or "").strip().rstrip("/")
+
+    updates: Dict[str, str] = {}
+    if "endpoint" in payload:
+        updates["endpoint"] = _clean(payload.get("endpoint"))
+    if "alertmanager" in payload:
+        updates["alertmanager"] = _clean(payload.get("alertmanager"))
+    for name, val in updates.items():
+        if val and not val.startswith(("http://", "https://")):
+            return JSONResponse(
+                status_code=400,
+                content=_api_error(
+                    "invalid_url", f"{name} 需以 http(s):// 开头（或留空）"
+                ),
+            )
+    try:
+        cfg = load_config()
+        prom = cfg.setdefault("ops", {}).setdefault("prometheus", {})
+        prom.update(updates)
+        save_config(cfg)
+    except Exception as exc:
+        _log.exception("monitoring config save failed")
+        return JSONResponse(
+            status_code=500, content=_api_error("config_save_failed", str(exc))
+        )
+    return {"ok": True, "data": updates}
+
+
 @app.get("/api/monitoring/alerts")
 async def get_monitoring_alerts(request: Request):
     """Alertmanager /api/v2/alerts 活跃告警实时快照（只读）。
