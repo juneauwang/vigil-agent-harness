@@ -1,6 +1,6 @@
-"""OPS-DELTA #21 输出侧 — runbook <vault:...> 凭据引用描述化。
+"""OPS-DELTA #21 输出侧 — runbook <secret:...> 凭据引用描述化。
 
-验收点：runbook 含 <vault:path/field> 占位符 → runbook_load 返回内容不含
+验收点：runbook 含 <secret:path/field> 占位符 → runbook_load 返回内容不含
 明文；占位符以描述形态返回（agent 永远拿不到明文），并带 vault_refs 提示。
 """
 
@@ -32,8 +32,8 @@ RUNBOOK = {
             "id": "apply",
             "title": "更新 datasource",
             "commands": [
-                "curl -u admin:<vault:grafana/password> -X PUT https://grafana/api/datasources/1",
-                "kubectl patch cm grafana --from-literal=password=<vault:secrets/grafana>",
+                "curl -u admin:<secret:grafana/password> -X PUT https://grafana/api/datasources/1",
+                "kubectl patch cm grafana --from-literal=password=<secret:secrets/grafana>",
             ],
         },
     ],
@@ -57,15 +57,15 @@ def test_runbook_load_never_returns_plaintext_vault_refs(rb_home):
     payload = json.loads(runbook_load("rotate-creds"))
     dumped = json.dumps(payload, ensure_ascii=False)
     # 占位符描述化（不返回明文——占位符本身不含明文）
-    assert "<vault:grafana/password>" not in dumped
-    assert "<vault:secrets/grafana>" not in dumped
-    assert "vault:grafana/password" in dumped
+    assert "<secret:grafana/password>" not in dumped
+    assert "<secret:secrets/grafana>" not in dumped
+    assert "secret:grafana/password" in dumped
     assert payload["vault_refs"] == 2
     assert "凭据引用" in payload["note"]
-    # 任何命令里都不出现 <vault: 原始形态
+    # 任何命令里都不出现 <secret: 原始形态
     for step in payload["steps"]:
         for cmd in step.get("commands") or []:
-            assert "<vault:" not in cmd, cmd
+            assert "<secret:" not in cmd, cmd
 
 
 def test_runbook_without_vault_refs_unchanged(rb_home):

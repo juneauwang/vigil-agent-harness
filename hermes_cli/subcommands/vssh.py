@@ -1,10 +1,10 @@
 """``vigil vssh`` —— 常用运维命令第一块（OPS-DELTA #26 产品化）。
 
-vault 安全凭据的交互 SSH：密码/passphrase 经保险箱 → SSH_ASKPASS 注入
+secret 安全凭据的交互 SSH：密码/passphrase 经保险箱 → SSH_ASKPASS 注入
 （复用 :mod:`tools.topo_discovery` 的 askpass 机制），命令串/argv/env 不出现
 明文；host 在拓扑表带 ``credential``（单数，老格式）或 ``credentials`` 数组
 （复数，topo-discover v0.4 原生形态）引用时自动读取（ssh_key → ``-i``；
-vault/askpass → 保险箱注入），无凭据回退 ssh-agent / ssh 交互。
+secret/askpass → 保险箱注入），无凭据回退 ssh-agent / ssh 交互。
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from tools.topo_discovery import _make_askpass_script
 
 
 def _resolve_topology_credential(host: str, allow_fallback: bool = True) -> Optional[Dict]:
-    """读取拓扑表 host 行的 credential 引用（ssh_key/vault/askpass）。
+    """读取拓扑表 host 行的 credential 引用（ssh_key/secret/askpass）。
 
     无拓扑数据 / host 无凭据引用 / 读取异常 → None（回退 ssh-agent/交互）。
 
@@ -45,8 +45,8 @@ def _resolve_topology_credential(host: str, allow_fallback: bool = True) -> Opti
                 # 单数 credential 优先（老数据/手写）；无单数 → 复数 credentials
                 # 数组（topo-discover v0.4 原生形态，hosts 行
                 # ``credentials: [{type: ssh_key, ref, user, port}]``）——数组可能
-                # ssh_key/vault 混排，ssh 场景取 type=ssh_key 的第一条；数组里
-                # 无 ssh_key 时取第一条 dict 兜底（vault/askpass 也走同一消费
+                # ssh_key/secret 混排，ssh 场景取 type=ssh_key 的第一条；数组里
+                # 无 ssh_key 时取第一条 dict 兜底（secret/askpass 也走同一消费
                 # 契约）。返回结构保持消费端契约（type/ref/user/port 与单数一致）。
                 cred = row.get("credential")
                 if isinstance(cred, dict):
@@ -76,7 +76,7 @@ def _build_ssh_argv(host: str, *, user: str, port: int = 22,
 
     cred（拓扑 credential 引用，port 缺省 22）：
       - ``ssh_key``: ref = 私钥路径 → ``-i <ref>``；
-      - ``vault``:   ref = 保险箱凭据名 → askpass 脚本读保险箱文件；
+      - ``secret``:  ref = 保险箱凭据名 → askpass 脚本读保险箱文件；
       - ``askpass``: ref = askpass 脚本路径 → 直接作为 SSH_ASKPASS。
     """
     # IdentitiesOnly=yes：ssh-agent 多 key 时 ``-i key`` 不等于"只用这个 key"，
@@ -92,7 +92,7 @@ def _build_ssh_argv(host: str, *, user: str, port: int = 22,
         cred_type = str(cred.get("type") or "")
         if cred_type == "ssh_key":
             key_path = key_path or cred.get("ref")
-        elif cred_type == "vault":
+        elif cred_type == "secret":
             try:
                 from tools.credential_vault import path_for
                 askpass_ref = str(_make_askpass_script(path_for(str(cred["ref"]))))
@@ -120,10 +120,10 @@ def _split_hostspec(hostspec: str, user: Optional[str] = None) -> Tuple[str, str
 
 
 def _credential_status(cred: Optional[Dict]) -> str:
-    """凭据状态标签：✓ssh_key / ✓vault / ✓askpass / ✗无凭据（只显示类型不显示值）。"""
+    """凭据状态标签：✓ssh_key / ✓secret / ✓askpass / ✗无凭据（只显示类型不显示值）。"""
     if isinstance(cred, dict):
         cred_type = str(cred.get("type") or "").strip()
-        if cred_type in ("ssh_key", "vault", "askpass"):
+        if cred_type in ("ssh_key", "secret", "askpass"):
             return f"✓{cred_type}"
     return "✗无凭据"
 
@@ -184,11 +184,11 @@ def build_vssh_parser(subparsers, *, cmd_vssh: Callable) -> None:
     """Attach the ``vssh`` subcommand to ``subparsers``."""
     vssh_parser = subparsers.add_parser(
         "vssh",
-        help="常用运维命令：vault 安全凭据的交互 SSH（密码经保险箱注入，不回显）",
+        help="常用运维命令：secret 安全凭据的交互 SSH（密码经保险箱注入，不回显）",
         description=(
-            "常用运维命令第一块（OPS-DELTA #26 产品化）：vault 安全凭据的交互 SSH。"
+            "常用运维命令第一块（OPS-DELTA #26 产品化）：secret 安全凭据的交互 SSH。"
             "密码/passphrase 经保险箱 → SSH_ASKPASS 注入，命令串/argv/env 不出现明文；"
-            "host 在拓扑表带 credential 引用时自动读取（ssh_key → -i；vault/askpass → "
+            "host 在拓扑表带 credential 引用时自动读取（ssh_key → -i；secret/askpass → "
             "保险箱注入），无凭据回退 ssh-agent/交互。"
         ),
     )
@@ -211,7 +211,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     """独立入口（测试/直接调用）：argv → Namespace → run。"""
     parser = argparse.ArgumentParser(
         prog="vigil vssh",
-        description="vault 安全凭据的交互 SSH（常用运维命令；密码经保险箱安全注入，不回显）。",
+        description="secret 安全凭据的交互 SSH（常用运维命令；密码经保险箱安全注入，不回显）。",
     )
     parser.add_argument("hostspec", nargs="?",
                         help="目标主机：<host> 或 <user>@<host>（IP/主机名）")

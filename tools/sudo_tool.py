@@ -5,7 +5,7 @@
 等管道形态——密码由工具从凭据来源内部注入，命令串/argv/展示层永不出现密码。
 
 凭据从拓扑表 host 行的 ``credential`` 引用解析（复用 vssh 的
-``_resolve_topology_credential`` + ``_build_ssh_argv``：ssh_key/vault/askpass
+``_resolve_topology_credential`` + ``_build_ssh_argv``：ssh_key/secret/askpass
 三通道，port 缺省 22）；sudo 密码只经 ASKPASS 注入：
 
 - 本地 sudo：``sudo -A <command>`` + env ``SUDO_ASKPASS=<0700 askpass 脚本>``
@@ -28,7 +28,7 @@
 → approve 决策走既有审批门（批次四十七 §BT：CLI 交互提示 / web 审批注册表弹窗 /
 gateway 回环，批准后才执行；无人在场 fail-closed）；deny → 拒绝；只读诊断
 （L1 查询档）直接执行。凭据缺失/认证失败 → 停下来问用户（提供凭据或手动执行），
-禁止翻 ~/.ssh/ 试密钥、禁止连续猜 vault 字段、禁止换用户名试登录（§Q/§AD 教训
+禁止翻 ~/.ssh/ 试密钥、禁止连续猜 secret 字段、禁止换用户名试登录（§Q/§AD 教训
 ——会触发 SSH 认证熔断，且违反 fail-closed）。
 
 四层骨架（本批只落地 sudo 适配器，后续批次扩展）：
@@ -49,6 +49,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from hermes_cli.i18n import t
 from hermes_cli.subcommands.vssh import _build_ssh_argv, _resolve_topology_credential
 from tools.credential_vault import path_for
 from tools.ops_permissions import check_ops_command_permission
@@ -63,7 +64,7 @@ _PROVISION_TIMEOUT_S = 60
 _LOCAL_HOST_ALIASES = ("localhost", "127.0.0.1", "::1", "")
 
 # sudo_tool 内置 clarify 通道回调（OPS-DELTA 批次三十二）：拓扑表无该 host
-# credential 且用户要 sudo 时，工具内部经 clarify 收密码 → vault store(0600) →
+# credential 且用户要 sudo 时，工具内部经 clarify 收密码 → secret store(0600) →
 # 执行，把正确路径做成工具内置流程（agent 无需自行设计裸 askpass/明文文件）。
 #
 # 用 ContextVar（而非 TLS）：CLI 主线程 set 后，经
@@ -84,7 +85,7 @@ def _get_clarify_callback():
     return _CLARIFY_CALLBACK.get()
 
 # sudo 认证失败信号（本地/远端 sudo 密码错误）——fail-closed：返回问用户引导，
-# 不继续猜 vault 字段/换用户名重试（§Q/§AD 教训）。
+# 不继续猜 secret 字段/换用户名重试（§Q/§AD 教训）。
 _SUDO_AUTH_FAILURE_HINTS = (
     "incorrect password",
     "sorry, try again",
@@ -105,23 +106,23 @@ _SUDO_AUTH_FAILURE_HINTS = (
 # 不是 ``bash -c``；shell 路径只作为 -s/--shell 的值出现，执行形态规则不跳过）。
 _SHELL_EXEC_RE = (
     (re.compile(r"\b(bash|sh|zsh|dash|fish)\s+-c\b", re.IGNORECASE),
-     "嵌套 shell（bash -c …）", True),
+     ("sudo.reason.shell_nested_c", "嵌套 shell（bash -c …）"), True),
     (re.compile(r"^(?:/?(?:usr/)?bin/)?(?:bash|sh|zsh|dash|fish)(?:\s|$)", re.IGNORECASE),
-     "嵌套 shell（首 token 是 shell：sh -c … / bash script.sh / 交互 shell）", False),
+     ("sudo.reason.shell_first_token", "嵌套 shell（首 token 是 shell：sh -c … / bash script.sh / 交互 shell）"), False),
     (re.compile(r"\|\s*(?:/?(?:usr/)?bin/)?(?:bash|sh|zsh|dash|fish)(?:\s|$)", re.IGNORECASE),
-     "嵌套 shell（管道到 shell：curl … | sh）", False),
-    (re.compile(r"<<"), "heredoc（多命令脚本形态）", False),
+     ("sudo.reason.shell_pipe", "嵌套 shell（管道到 shell：curl … | sh）"), False),
+    (re.compile(r"<<"), ("sudo.reason.heredoc", "heredoc（多命令脚本形态）"), False),
 )
 _FORBIDDEN_COMMAND_PATTERNS = (
-    (re.compile(r">"), "重定向（> / >> / 2>&1 / >&）"),
+    (re.compile(r">"), ("sudo.reason.redirect", "重定向（> / >> / 2>&1 / >&）")),
     (re.compile(r"(?<![&>])&(?![&])"),
-     "后台执行（&）——多步操作可用 && 顺序连接，或写成脚本文件后 sudo_exec 执行脚本"),
-    (re.compile(r";"), "多命令分隔（;）"),
-    (re.compile(r"\|\|"), "逻辑或（||）"),
-    (re.compile(r"\$\("), "命令替换（$(…)）"),
-    (re.compile(r"`"), "命令替换（反引号）"),
-    (re.compile(r"\bsudo\b", re.IGNORECASE), "内嵌 sudo（本工具已提供提权）"),
-    (re.compile(r"\n"), "多行命令"),
+     ("sudo.reason.background", "后台执行（&）——多步操作可用 && 顺序连接，或写成脚本文件后 sudo_exec 执行脚本")),
+    (re.compile(r";"), ("sudo.reason.multi_command", "多命令分隔（;）")),
+    (re.compile(r"\|\|"), ("sudo.reason.logical_or", "逻辑或（||）")),
+    (re.compile(r"\$\("), ("sudo.reason.cmd_subst", "命令替换（$(…)）")),
+    (re.compile(r"`"), ("sudo.reason.backtick", "命令替换（反引号）")),
+    (re.compile(r"\bsudo\b", re.IGNORECASE), ("sudo.reason.nested_sudo", "内嵌 sudo（本工具已提供提权）")),
+    (re.compile(r"\n"), ("sudo.reason.multiline", "多行命令")),
 )
 
 # §BQ 显式白名单：useradd/chsh/usermod 的 -s/--shell 参数值带 shell 路径是合法
@@ -143,26 +144,36 @@ def _validate_command(command: str) -> Optional[str]:
         if is_user_shell_cmd and user_shell_skip:
             continue  # useradd/chsh/usermod 的 -c 是注释/选项，不是 bash -c
         if pattern.search(command):
-            return f"sudo_exec 拒绝 command：{reason}（fail-closed，只读诊断请走单条命令）"
+            return _rejected(reason)
     for pattern, reason in _FORBIDDEN_COMMAND_PATTERNS:
         if pattern.search(command):
-            return f"sudo_exec 拒绝 command：{reason}（fail-closed，只读诊断请走单条命令）"
+            return _rejected(reason)
     try:
         tokens = shlex.split(command)
     except ValueError as exc:
-        return f"sudo_exec 拒绝 command：无法解析（{exc}）"
+        return t("sudo.unparseable", "sudo_exec 拒绝 command：无法解析（{exc}）", exc=exc)
     if not tokens:
-        return "sudo_exec 拒绝 command：空命令"
+        return t("sudo.empty_command", "sudo_exec 拒绝 command：空命令")
     return None
 
 
+def _rejected(reason: "tuple[str, str]") -> str:
+    """黑名单拒绝文案（reason = (i18n key, 原中文)；fail-closed 措辞）。"""
+    key, zh = reason
+    return t(
+        "sudo.rejected_reason",
+        "sudo_exec 拒绝 command：{reason}（fail-closed，只读诊断请走单条命令）",
+        reason=t(key, zh),
+    )
+
+
 def _sudo_askpass_for_vault(ref: str) -> Path:
-    """vault 凭据 → 0700 askpass 脚本（只 cat 保险箱文件，不进 argv/env）。"""
+    """secret 凭据 → 0700 askpass 脚本（只 cat 保险箱文件，不进 argv/env）。"""
     return _make_askpass_script(path_for(str(ref)))
 
 
 def _vault_name_for_host(host: str) -> str:
-    """无拓扑凭据时临时 vault 凭据名（``sudo-<host>``，符合 [A-Za-z0-9._-]+）。"""
+    """无拓扑凭据时临时 secret 凭据名（``sudo-<host>``，符合 [A-Za-z0-9._-]+）。"""
     base = str(host or "").strip().lower() or "local"
     safe = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-") or "local"
     return f"sudo-{safe}"
@@ -176,9 +187,11 @@ def _collect_sudo_password_via_clarify(host: str) -> Optional[str]:
     try:
         from tools.clarify_tool import clarify_tool as _clarify_tool
         raw = _clarify_tool(
-            question=(
-                f"sudo_exec 需要 {host or '本机'} 的 sudo 密码：请输入"
-                "（将安全存入凭据保险箱 0600，仅引用名字，不落会话明文）"
+            question=t(
+                "sudo.clarify_question",
+                "sudo_exec 需要 {host} 的 sudo 密码：请输入"
+                "（将安全存入凭据保险箱 0600，仅引用名字，不落会话明文）",
+                host=host or t("sudo.local_host", "本机"),
             ),
             callback=cb,
         )
@@ -229,17 +242,18 @@ def _run_local_sudo(command: str, cred: Dict[str, Any]) -> subprocess.CompletedP
     cred_type = str(cred.get("type") or "")
     askpass: Optional[Path] = None
     try:
-        if cred_type == "vault":
+        if cred_type == "secret":
             askpass = _sudo_askpass_for_vault(str(cred["ref"]))
         elif cred_type == "askpass":
             askpass = Path(str(cred["ref"]))
         else:
-            raise RuntimeError(
-                "本地 sudo 需要 vault/askpass 类型凭据（ssh_key 无密码明文）——"
-                "请补充拓扑表 credential 声明或手动执行"
-            )
+            raise RuntimeError(t(
+                "sudo.local_needs_secret_cred",
+                "本地 sudo 需要 secret/askpass 类型凭据（ssh_key 无密码明文）——"
+                "请补充拓扑表 credential 声明或手动执行",
+            ))
         if not askpass.is_file():
-            raise FileNotFoundError(f"askpass 脚本不存在: {askpass}")
+            raise FileNotFoundError(t("sudo.askpass_missing", "askpass 脚本不存在: {path}", path=askpass))
         argv = ["sudo", "-A"] + shlex.split(command)
         env = dict(os.environ)
         env["SUDO_ASKPASS"] = str(askpass)
@@ -249,7 +263,7 @@ def _run_local_sudo(command: str, cred: Dict[str, Any]) -> subprocess.CompletedP
                               timeout=_EXEC_TIMEOUT_S, env=env,
                               stdin=subprocess.DEVNULL)
     finally:
-        if askpass is not None and cred_type == "vault":
+        if askpass is not None and cred_type == "secret":
             try:
                 askpass.unlink()
             except OSError:
@@ -323,11 +337,11 @@ def _sudo_needs_password(proc: subprocess.CompletedProcess) -> bool:
 
 def _run_remote_sudo(host: str, user: str, port: int, command: str,
                      cred: Dict[str, Any]) -> subprocess.CompletedProcess:
-    """远端 sudo：vault 凭据走 ``sudo -A``；ssh_key 凭据走 ``sudo -n`` 直通。
+    """远端 sudo：secret 凭据走 ``sudo -A``；ssh_key 凭据走 ``sudo -n`` 直通。
 
     batch74（OPS-DELTA #89）：ssh_key 无密码 key + root → ``sudo -n`` 直通
     （root 的 sudo 默认免密，-n 保证不卡交互）；非 root 先试 ``sudo -n``
-    （可能配了 NOPASSWD），认证失败 → 报错引导配 vault。任何情况下不猜密码、
+    （可能配了 NOPASSWD），认证失败 → 报错引导配 secret。任何情况下不猜密码、
     不翻 ~/.ssh/、不换用户名重试（§Q/§AD 教训，fail-closed）。
     """
     cred_type = str(cred.get("type") or "")
@@ -335,26 +349,29 @@ def _run_remote_sudo(host: str, user: str, port: int, command: str,
         ssh_argv, ssh_env = _build_ssh_argv(host, user=user, port=port, cred=cred)
         proc = _ssh_run(ssh_argv, ssh_env, f"sudo -n {command}")
         if proc.returncode != 0 and _sudo_needs_password(proc):
-            raise RuntimeError(
-                f"远端 sudo 需要密码（当前凭据为 {user} 的 ssh_key，sudo 仍要求认证）"
-                "——请配置 vault 类型凭据（拓扑表 host credential 声明 vault，携带 "
-                "sudo 密码）或手动执行；禁止猜密码/翻 ~/.ssh/（§Q/§AD 教训）"
-            )
+            raise RuntimeError(t(
+                "sudo.remote_needs_password",
+                "远端 sudo 需要密码（当前凭据为 {user} 的 ssh_key，sudo 仍要求认证）"
+                "——请配置 secret 类型凭据（拓扑表 host credential 声明 secret，携带 "
+                "sudo 密码）或手动执行；禁止猜密码/翻 ~/.ssh/（§Q/§AD 教训）",
+                user=user,
+            ))
         return proc
-    if cred_type != "vault":
-        raise RuntimeError(
-            "远端 sudo 需要 vault 类型凭据（携带 sudo 密码）或 ssh_key（root 无密码"
-            "免密直通）——askpass 类型暂不支持远端注入；请补充拓扑表 vault credential "
-            "声明或手动执行"
-        )
+    if cred_type != "secret":
+        raise RuntimeError(t(
+            "sudo.remote_needs_secret_cred",
+            "远端 sudo 需要 secret 类型凭据（携带 sudo 密码）或 ssh_key（root 无密码"
+            "免密直通）——askpass 类型暂不支持远端注入；请补充拓扑表 secret credential "
+            "声明或手动执行",
+        ))
     vault_file = path_for(str(cred["ref"]))
     if not vault_file.is_file():
-        raise FileNotFoundError(f"保险箱中不存在凭据: {cred['ref']}")
+        raise FileNotFoundError(t("sudo.cred_not_in_vault", "保险箱中不存在凭据: {ref}", ref=cred["ref"]))
 
     basename = f"vigil-sudo-{os.getpid()}-{secrets.token_hex(4)}"
     remote_script = f"/tmp/{basename}.sh"
     remote_vault = f"/tmp/{basename}.vault"
-    askpass_local = _write_askpass_cat(remote_vault)  # 脚本 cat 远端 vault 路径
+    askpass_local = _write_askpass_cat(remote_vault)  # 脚本 cat 远端 secret 路径
     ssh_argv, ssh_env = _build_ssh_argv(host, user=user, port=port, cred=cred)
     try:
         # 批五十：dest 只传纯远端路径——_scp_argv_from_ssh 会拼
@@ -392,7 +409,8 @@ def _scp(ssh_argv: List[str], ssh_env: Dict[str, str], local: Path, dest: str) -
     _ssh_auth_breaker_note(ssh_argv, proc)
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()
-        raise RuntimeError(f"scp 上传失败：{detail[-1] if detail else '未知错误'}")
+        raise RuntimeError(t("sudo.scp_failed", "scp 上传失败：{detail}",
+                             detail=detail[-1] if detail else t("sudo.unknown_error", "未知错误")))
 
 
 def _require_ops_approval(command: str, decision: Dict[str, Any]) -> Optional[str]:
@@ -410,7 +428,7 @@ def _require_ops_approval(command: str, decision: Dict[str, Any]) -> Optional[st
     result = request_ops_approval(command, decision)
     if result.get("approved"):
         return None
-    return result.get("message") or "审批未通过（fail-closed，不执行）"
+    return result.get("message") or t("sudo.approval_not_granted", "审批未通过（fail-closed，不执行）")
 
 
 def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
@@ -419,7 +437,10 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     target_env = str(args.get("env") or "").strip() or None
 
     if not command:
-        return tool_error("sudo_exec 需要 command（要在远端/本机以 sudo 执行的只读诊断命令）")
+        return tool_error(t(
+            "sudo.requires_command",
+            "sudo_exec 需要 command（要在远端/本机以 sudo 执行的只读诊断命令）",
+        ))
     err = _validate_command(command)
     if err:
         return tool_error(err)
@@ -438,34 +459,37 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     decision = check_ops_command_permission(f"sudo {command}", target_env=target_env)
     if decision:
         if decision.get("action") == "deny":
-            return tool_error(f"权限矩阵拒绝执行：{decision.get('description') or 'deny'}")
+            return tool_error(t("sudo.matrix_denied", "权限矩阵拒绝执行：{description}",
+                                description=decision.get("description") or "deny"))
         if decision.get("action") == "approve":
             err = _require_ops_approval(f"sudo {command}", decision)
             if err:
                 return tool_error(err)
 
-    # 凭据解析：拓扑表 host 行 credential 引用（ssh_key/vault/askpass 三通道）。
+    # 凭据解析：拓扑表 host 行 credential 引用（ssh_key/secret/askpass 三通道）。
     cred = _resolve_topology_credential(host, allow_fallback=False)
     if not cred:
-        # OPS-DELTA 批次三十二：把"收密码 → vault store(0600) → 执行"做成工具
+        # OPS-DELTA 批次三十二：把"收密码 → secret store(0600) → 执行"做成工具
         # 内置流程，agent 无需自行设计裸 askpass/明文文件。无交互通道
         # （gateway/web/oneshot）时保持原 fail-closed 引导。
         collected = _collect_sudo_password_via_clarify(host)
         if collected is None:
-            return tool_error(
-                f"sudo_exec 缺少 sudo 凭据：拓扑表中 host {host or '(未指定)'} 无 credential 引用。"
+            return tool_error(t(
+                "sudo.missing_cred",
+                "sudo_exec 缺少 sudo 凭据：拓扑表中 host {host} 无 credential 引用。"
                 "请停止自动重试：1) 手动执行该命令 2) 或在拓扑表补充 credential 声明"
-                "（vault 类型，见 vssh / topo credential）3) 或询问用户提供正确凭据；"
-                "禁止翻 ~/.ssh/ 试密钥/猜 vault 字段/换用户名试登录（§Q/§AD 教训，"
-                "会触发限流）"
-            )
+                "（secret 类型，见 vssh / topo credential）3) 或询问用户提供正确凭据；"
+                "禁止翻 ~/.ssh/ 试密钥/猜 secret 字段/换用户名试登录（§Q/§AD 教训，"
+                "会触发限流）",
+                host=host or t("sudo.host_unspecified", "(未指定)"),
+            ))
         vault_name = _vault_name_for_host(host)
         try:
             from tools.credential_vault import store as _vault_store
             _vault_store(vault_name, collected, source="user")
         except Exception as exc:
-            return tool_error(f"sudo_exec 无法把凭据存入保险箱：{exc}")
-        cred = {"type": "vault", "ref": vault_name, "user": "root", "port": 22}
+            return tool_error(t("sudo.vault_store_failed", "sudo_exec 无法把凭据存入保险箱：{exc}", exc=exc))
+        cred = {"type": "secret", "ref": vault_name, "user": "root", "port": 22}
         credential_collected = True
     else:
         credential_collected = False
@@ -479,24 +503,27 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
         else:
             result = _run_remote_sudo(host, user, port, command, cred)
     except subprocess.TimeoutExpired:
-        return tool_error(f"sudo_exec 执行超时（{_EXEC_TIMEOUT_S}s）：sudo {command}")
+        return tool_error(t("sudo.timeout", "sudo_exec 执行超时（{n}s）：sudo {command}",
+                            n=_EXEC_TIMEOUT_S, command=command))
     except OSError as exc:
-        return tool_error(f"sudo_exec 无法执行：{exc}")
+        return tool_error(t("sudo.cannot_execute", "sudo_exec 无法执行：{exc}", exc=exc))
     except Exception as exc:
-        return tool_error(f"sudo_exec 失败：{exc}")
+        return tool_error(t("sudo.failed", "sudo_exec 失败：{exc}", exc=exc))
 
     if result.returncode != 0:
         stderr = (result.stderr or "").lower()
         if any(hint in stderr for hint in _SUDO_AUTH_FAILURE_HINTS):
             collected_note = (
-                f"（已把用户提供的密码存入保险箱 {vault_name}，如密码有误可让用户"
-                "更新该凭据或执行 credential_vault expire）"
+                t("sudo.auth_failed_collected",
+                  "（已把用户提供的密码存入保险箱 {vault}，如密码有误可让用户"
+                  "更新该凭据或执行 credential_vault expire）", vault=vault_name)
                 if credential_collected else ""
             )
             return tool_error(
-                f"sudo 认证失败（凭据错误或未生效）——停止自动重试：1) 手动执行该命令 "
-                "2) 修正/补充拓扑表 credential 声明 3) 或询问用户提供正确密码；"
-                "禁止连续猜 vault 字段/换用户名试登录（§Q/§AD 教训，会触发限流）"
+                t("sudo.auth_failed",
+                  "sudo 认证失败（凭据错误或未生效）——停止自动重试：1) 手动执行该命令 "
+                  "2) 修正/补充拓扑表 credential 声明 3) 或询问用户提供正确密码；"
+                  "禁止连续猜 secret 字段/换用户名试登录（§Q/§AD 教训，会触发限流）")
                 + collected_note
             )
 
@@ -525,9 +552,11 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
         "exit_code": result.returncode,
     }
     if credential_collected:
-        result_payload["_warning"] = (
-            f"已用保险箱凭据 {vault_name} 执行；建议在拓扑表 {host or 'local'} 行补充 "
-            f"credential 声明（type: vault, ref: {vault_name}）以便后续自动解析"
+        result_payload["_warning"] = t(
+            "sudo.cred_collected_warning",
+            "已用保险箱凭据 {vault} 执行；建议在拓扑表 {host} 行补充 "
+            "credential 声明（type: secret, ref: {vault}）以便后续自动解析",
+            vault=vault_name, host=host or "local",
         )
     return json.dumps(result_payload, ensure_ascii=False)
 
@@ -539,10 +568,10 @@ _SUDO_EXEC_SCHEMA = {
         "**提权/需 sudo 的命令一律走本工具**——禁止自行拼 `sudo -S <<< '密码'`、"
         "`SUDO_PASS=$(curl vault | jq)`、`echo 密码 | sudo -S` 等管道形态：密码由本工具"
         "从凭据来源内部注入（ASKPASS），命令串/argv/展示层永不出现密码。"
-        "凭据从拓扑表 host 行的 credential 引用自动读取（ssh_key/vault/askpass 三通道）。"
+        "凭据从拓扑表 host 行的 credential 引用自动读取（ssh_key/secret/askpass 三通道）。"
         "凭据缺失时本工具会内置 clarify 询问用户密码 → 自动存入凭据保险箱（0600）→"
         "执行，并提示在拓扑表补充 credential 声明；无交互通道或认证失败时**停下来问用户**"
-        "（提供凭据或手动执行），禁止翻 ~/.ssh/ 试密钥、禁止猜 vault 字段、禁止换用户名试登录。"
+        "（提供凭据或手动执行），禁止翻 ~/.ssh/ 试密钥、禁止猜 secret 字段、禁止换用户名试登录。"
         "安全边界：只接受单条只读命令——嵌套 shell 按执行形态拒绝（bash -c / "
         "sh 前缀 / 管道到 sh / heredoc；useradd -s /bin/bash 这类参数值放行）、"
         "重定向到文件（> / >> / >&）、后台（&；&& 顺序连接放行）、多命令分隔（;）、"

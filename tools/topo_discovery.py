@@ -314,7 +314,7 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
 
     fail-closed（批次二十一 §Q 收口）：SSH 认证凭据（key_path / askpass_file /
     key_passphrase_file 任一）未提供时直接报错——不再回退到"尝试默认 key / 
-    ssh-agent"自探测（§Q 实锤：agent 凭据缺失时翻 ~/.ssh/ 试密钥/猜 vault 字段，
+    ssh-agent"自探测（§Q 实锤：agent 凭据缺失时翻 ~/.ssh/ 试密钥/猜 secret 字段，
     触发 sshd MaxAuthTries 限流）。CLI 交互路径（topo-discover 交互收集凭据 /
     vssh）在调用方提供凭据，不受影响；sudo_password_file 是 sudo 密码不是 SSH
     认证凭据，不构成放行条件。
@@ -324,7 +324,7 @@ def _build_ssh_runner(host: str, user: str = "root", key_path: Optional[str] = N
     if not (key_path or askpass_file is not None or key_passphrase_file is not None):
         raise DiscoveryError(
             f"目标主机 {user}@{host} 未配置 SSH 凭据（拓扑表 credential 缺失或无 "
-            "key/password）——禁止自行翻 ~/.ssh/ 找 key / 试多个用户名 / 猜 vault "
+            "key/password）——禁止自行翻 ~/.ssh/ 找 key / 试多个用户名 / 猜 secret "
             "字段（§Q/§AD 教训，会触发 sshd MaxAuthTries 限流把主机锁 15 分钟）。"
             "请停止自动尝试：1) 手动 ssh 验证凭据 2) 或通过 topo_update 补充拓扑表 "
             "credential 声明 3) 或询问用户提供正确凭据"

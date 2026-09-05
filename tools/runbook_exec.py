@@ -25,6 +25,8 @@ import subprocess
 import threading
 import time
 from pathlib import Path
+
+from hermes_cli.i18n import t
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from tools.runbook_handlers import (
@@ -72,7 +74,8 @@ def _clip(text: str, limit: int = _STDOUT_MAX_CHARS) -> str:
     text = _redact(text or "")
     text = _SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=***", text)
     if len(text) > limit:
-        return text[:limit] + f"\n…(截断 {len(text) - limit} 字符)"
+        return text[:limit] + t("runbook_exec.truncated",
+                                "\n…(截断 {n} 字符)", n=len(text) - limit)
     return text
 
 
@@ -221,7 +224,7 @@ def resolve_target(home: Path, topo: Dict[str, Any],
 
     name = str(name or "").strip()
     if not name:
-        raise ValueError("target 必填（拓扑实体引用）")
+        raise ValueError(t("runbook_exec.target_required", "target 必填（拓扑实体引用）"))
     clusters = {
         str(c.get("name")): c
         for c in (topo.get("clusters") or [])
@@ -382,44 +385,53 @@ def substitute_text(text: str, step_values: Dict[str, Dict[str, Any]],
         segs = path.split(".")
         if segs[0] == "trigger_context":
             if len(segs) != 2:
-                raise ValueError(f"{where} 变量引用 {{{path}}} 不合法——"
-                                 "trigger_context 引用形如 {{ trigger_context.alertname }}")
+                raise ValueError(t(
+                    "runbook_exec.varref_bad_trigger",
+                    "{where} 变量引用 {{{path}}} 不合法——"
+                    "trigger_context 引用形如 {{{{ trigger_context.alertname }}}}",
+                    where=where, path=path))
             key = segs[1]
             if key not in trigger_ctx:
-                raise ValueError(
-                    f"{where} 变量引用 {{{path}}} 的字段 {key!r} 未注入触发上下文"
-                    f"（可用: {sorted(trigger_ctx)}）——触发原因由调度器/调用方注入"
-                )
+                raise ValueError(t(
+                    "runbook_exec.varref_field_missing",
+                    "{where} 变量引用 {{{path}}} 的字段 {key!r} 未注入触发上下文"
+                    "（可用: {available}）——触发原因由调度器/调用方注入",
+                    where=where, path=path, key=key,
+                    available=sorted(trigger_ctx)))
             return str(trigger_ctx[key])
         if segs[0] == "steps":
             if len(segs) < 4 or segs[2] not in ("params", "outputs"):
-                raise ValueError(
-                    f"{where} 变量引用 {{{path}}} 不合法——必须是 "
-                    "{{ steps.<id>.params.<key> }} / {{ steps.<id>.outputs.<key> }}"
-                )
+                raise ValueError(t(
+                    "runbook_exec.varref_bad_steps",
+                    "{where} 变量引用 {{{path}}} 不合法——必须是 "
+                    "{{{{ steps.<id>.params.<key> }}}} / {{{{ steps.<id>.outputs.<key> }}}}",
+                    where=where, path=path))
             ref_id = segs[1]
             bucket = step_values.get(ref_id)
             if bucket is None:
-                raise ValueError(
-                    f"{where} 变量引用 {{{path}}} 指向步骤 {ref_id!r}——该步骤"
-                    "尚未执行或不存在（步骤按顺序执行，只能引用已执行步骤）"
-                )
+                raise ValueError(t(
+                    "runbook_exec.varref_step_missing",
+                    "{where} 变量引用 {{{path}}} 指向步骤 {ref_id!r}——该步骤"
+                    "尚未执行或不存在（步骤按顺序执行，只能引用已执行步骤）",
+                    where=where, path=path, ref_id=ref_id))
             sub: Any = bucket
             for key in segs[2:]:
                 if isinstance(sub, dict) and key in sub:
                     sub = sub[key]
                 else:
-                    raise ValueError(
-                        f"{where} 变量引用 {{{path}}} 的 {key!r} 不存在于步骤 "
-                        f"{ref_id!r} 的 {segs[2]}"
-                    )
+                    raise ValueError(t(
+                        "runbook_exec.varref_key_missing",
+                        "{where} 变量引用 {{{path}}} 的 {key!r} 不存在于步骤 "
+                        "{ref_id!r} 的 {seg}",
+                        where=where, path=path, key=key, ref_id=ref_id, seg=segs[2]))
             if isinstance(sub, (dict, list)):
-                raise ValueError(
-                    f"{where} 变量引用 {{{path}}} 必须引用标量值，收到 "
-                    f"{type(sub).__name__}"
-                )
+                raise ValueError(t(
+                    "runbook_exec.varref_not_scalar",
+                    "{where} 变量引用 {{{path}}} 必须引用标量值，收到 {type}",
+                    where=where, path=path, type=type(sub).__name__))
             return str(sub)
-        raise ValueError(f"{where} 变量引用 {{{path}}} 不合法")
+        raise ValueError(t("runbook_exec.varref_invalid",
+                           "{where} 变量引用 {{{path}}} 不合法", where=where, path=path))
 
     return _VAR_REF_RE.sub(lambda m: _lookup(m.group(1).strip()), str(text))
 
@@ -460,10 +472,11 @@ def _step_approval(home: Path, env: str, action: str, desc: str,
     # 显式 ops.permissions.enabled: false（权限系统关闭）→ 交回 approvals.mode
     # 语义（与 terminal 一致）；缺省启用时矩阵缺失 = 权限系统不可用 → 拒绝。
     if ops_permissions_enabled() and not matrix_path(home).is_file():
-        return (
+        return t(
+            "runbook_exec.matrix_missing",
             "权限矩阵未初始化（matrix.yaml 缺失），runbook 执行已拒绝——矩阵是"
             "权限裁决的前提（§11.7 安全资产），缺失 = 权限系统不可用（fail-closed）；"
-            "修复指引：先运行 vigil setup（或 vigil ops-init）生成矩阵后再执行。"
+            "修复指引：先运行 vigil setup（或 vigil ops-init）生成矩阵后再执行。",
         )
     level = get_level(load_matrix_or_empty(home), env, action)["level"]
     if level == "execute" and not force_confirmation:
@@ -476,17 +489,23 @@ def _step_approval(home: Path, env: str, action: str, desc: str,
         "env": env,
         "require_confirmation": confirmed,
         "description": (
-            f"操作矩阵 {action}@{env} 档位"
-            + ("=强制人工（{approve: required}，不 smart 不 allowlist）"
+            t("runbook_exec.matrix_level_head", "操作矩阵 {action}@{env} 档位",
+              action=action, env=env)
+            + (t("runbook_exec.matrix_level_required",
+                 "=强制人工（{{approve: required}}，不 smart 不 allowlist）")
                if required else
-               ("=execute（回滚步骤强制人工确认覆盖）"
-                if force_confirmation else "=approve（交互审批）"))
+               (t("runbook_exec.matrix_level_execute",
+                  "=execute（回滚步骤强制人工确认覆盖）")
+                if force_confirmation else t("runbook_exec.matrix_level_approve",
+                                             "=approve（交互审批）")))
         ),
     }
     res = request_ops_approval(desc or action, decision)
     if not res.get("approved"):
         return str(res.get("message")
-                   or f"审批未通过（{action}@{env}）——fail-closed 不执行")
+                   or t("runbook_exec.approval_not_passed",
+                        "审批未通过（{action}@{env}）——fail-closed 不执行",
+                        action=action, env=env))
     return None
 
 
@@ -499,10 +518,11 @@ def _check_scheduled_exemption(data: Dict[str, Any]) -> Optional[str]:
     approved_by = data.get("approved_by")
     approved_version = data.get("approved_version")
     if not approved_at or not approved_by:
-        return (
+        return t(
+            "runbook_exec.not_asset_approved",
             "runbook 未过资产审批（缺 approved_at/approved_by 预审标记）——"
             "定时执行豁免前提是创建时人工审过；请先 runbook_create 重新创建"
-            "（过资产审批落盘预审标记）"
+            "（过资产审批落盘预审标记）",
         )
     payload = {k: v for k, v in data.items()
                if k not in ("approved_at", "approved_by", "approved_version")}
@@ -511,10 +531,12 @@ def _check_scheduled_exemption(data: Dict[str, Any]) -> Optional[str]:
                    default=str).encode("utf-8")
     ).hexdigest()[:16]
     if approved_version and current != approved_version:
-        return (
-            f"runbook 内容自审批后已被修改（approved_version={approved_version}，"
-            f"当前哈希={current}）——执行豁免失效；请 runbook_create 重新过资产"
-            "审批后再定时执行"
+        return t(
+            "runbook_exec.hash_drift",
+            "runbook 内容自审批后已被修改（approved_version={version}，"
+            "当前哈希={current}）——执行豁免失效；请 runbook_create 重新过资产"
+            "审批后再定时执行",
+            version=approved_version, current=current,
         )
     return None
 
@@ -529,10 +551,12 @@ def _exec_local(argv: List[str], timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, An
                               text=True, encoding='utf-8', errors='replace',
                               timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return {"exit_code": 1, "stdout": "", "stderr": f"执行超时（{timeout}s）",
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.local_timeout",
+                "执行超时（{timeout}s）", timeout=timeout),
                 "timed_out": True}
     except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": f"执行失败：{exc}"}
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.local_failed",
+                "执行失败：{exc}", exc=exc)}
     return {"exit_code": proc.returncode,
             "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
 
@@ -556,15 +580,18 @@ def _exec_remote(target: Dict[str, Any], argv: List[str],
     try:
         ssh_argv, ssh_env, host = _remote_ssh_argv(target)
     except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": f"远端凭据解析失败：{exc}"}
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.remote_cred_failed",
+                "远端凭据解析失败：{exc}", exc=exc)}
     remote_cmd = " ".join(shlex.quote(a) for a in argv)
     try:
         proc = _ssh_run(ssh_argv, ssh_env, remote_cmd, timeout=timeout)
     except subprocess.TimeoutExpired:
-        return {"exit_code": 1, "stdout": "", "stderr": f"远端执行超时（{timeout}s）",
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.remote_timeout",
+                "远端执行超时（{timeout}s）", timeout=timeout),
                 "timed_out": True}
     except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": f"远端执行失败：{exc}"}
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.remote_failed",
+                "远端执行失败：{exc}", exc=exc)}
     return {"exit_code": proc.returncode,
             "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
 
@@ -580,7 +607,9 @@ def _exec_sudo(home: Path, target: Dict[str, Any], cmd: str,
             cred = _resolve_topology_credential(host, allow_fallback=False)
             if not cred:
                 return {"exit_code": 1, "stdout": "", "stderr":
-                        f"远端 sudo 需要拓扑表 {host} 的 credential（vault）引用",
+                        t("runbook_exec.remote_sudo_needs_cred",
+                          "远端 sudo 需要拓扑表 {host} 的 credential（secret）引用",
+                          host=host),
                         "blocked": True}
             user = str(cred.get("user") or "root")
             port = int(cred.get("port") or 22)
@@ -589,15 +618,18 @@ def _exec_sudo(home: Path, target: Dict[str, Any], cmd: str,
             cred = _resolve_topology_credential(host, allow_fallback=False) or {}
             if not cred:
                 return {"exit_code": 1, "stdout": "", "stderr":
-                        "本地 sudo 需要拓扑表 credential（vault/askpass）引用——"
-                        "提权命令请先补充 credential 声明或由用户手动执行",
+                        t("runbook_exec.local_sudo_needs_cred",
+                          "本地 sudo 需要拓扑表 credential（secret/askpass）引用——"
+                          "提权命令请先补充 credential 声明或由用户手动执行"),
                         "blocked": True}
             proc = _run_local_sudo(cmd, cred)
     except subprocess.TimeoutExpired:
-        return {"exit_code": 1, "stdout": "", "stderr": f"sudo 执行超时（{timeout}s）",
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.sudo_timeout",
+                "sudo 执行超时（{timeout}s）", timeout=timeout),
                 "timed_out": True}
     except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": f"sudo 执行失败：{exc}"}
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.sudo_failed",
+                "sudo 执行失败：{exc}", exc=exc)}
     return {"exit_code": proc.returncode,
             "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
 
@@ -613,7 +645,8 @@ def _exec_transfer(home: Path, spec: Dict[str, Any],
     dst_path = str(dest.get("path") or "").strip()
     if not src_path or not dst_path:
         return {"exit_code": 1, "stdout": "", "stderr":
-                "transfer_file 需要 source.path 与 dest.path"}
+                t("runbook_exec.transfer_needs_paths",
+                  "transfer_file 需要 source.path 与 dest.path")}
     if not src_host and not dst_host:
         return _exec_local(["cp", "-a", src_path, dst_path], timeout)
 
@@ -653,17 +686,20 @@ def _exec_transfer(home: Path, spec: Dict[str, Any],
         else:
             argv, env = _scp_argv_for(dst_host, src_path, dst_path, upload=True)
     except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": f"scp 参数构造失败：{exc}"}
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.scp_argv_failed",
+                "scp 参数构造失败：{exc}", exc=exc)}
     try:
         proc = subprocess.run(argv, capture_output=True,
                               text=True, encoding='utf-8', errors='replace',
                               timeout=timeout, env=env,
                               stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return {"exit_code": 1, "stdout": "", "stderr": f"scp 超时（{timeout}s）",
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.scp_timeout",
+                "scp 超时（{timeout}s）", timeout=timeout),
                 "timed_out": True}
     except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": f"scp 执行失败：{exc}"}
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.scp_failed",
+                "scp 执行失败：{exc}", exc=exc)}
     return {"exit_code": proc.returncode,
             "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
 
@@ -697,28 +733,35 @@ def _exec_script_asset(home: Path, spec: Dict[str, Any],
     script_path = resolve_script_path(home, name)
     if script_path is None:
         return {"exit_code": 1, "stdout": "", "stderr":
-                f"脚本资产 {name!r} 不存在（{scripts_dir(home)}）——用 "
-                "script_asset_create 创建（内容过 tirith 扫描 + 资产审批后落盘"
-                "预审标记）；run_script 只引用资产，不内联脚本"}
+                t("runbook_exec.asset_missing",
+                  "脚本资产 {name!r} 不存在（{dir}）——用 "
+                  "script_asset_create 创建（内容过 tirith 扫描 + 资产审批后落盘"
+                  "预审标记）；run_script 只引用资产，不内联脚本",
+                  name=name, dir=scripts_dir(home))}
     meta_path = meta_dir(home) / f"{script_path.name}.json"
     if not meta_path.is_file():
         return {"exit_code": 1, "stdout": "", "stderr":
-                f"脚本资产 {name!r} 无审批标记（{meta_path} 缺失）——资产需经 "
-                "script_asset_create 过资产审批后才能被 run_script 引用"}
+                t("runbook_exec.asset_no_marker",
+                  "脚本资产 {name!r} 无审批标记（{meta} 缺失）——资产需经 "
+                  "script_asset_create 过资产审批后才能被 run_script 引用",
+                  name=name, meta=meta_path)}
     try:
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return {"exit_code": 1, "stdout": "", "stderr":
-                f"脚本资产 {name!r} 审批标记损坏：{exc}"}
+                t("runbook_exec.asset_marker_corrupt",
+                  "脚本资产 {name!r} 审批标记损坏：{exc}", name=name, exc=exc)}
     if not meta.get("approved_at") or not meta.get("approved_by"):
         return {"exit_code": 1, "stdout": "", "stderr":
-                f"脚本资产 {name!r} 缺预审标记（approved_at/approved_by）——"
-                "需重新过资产审批"}
+                t("runbook_exec.asset_not_approved",
+                  "脚本资产 {name!r} 缺预审标记（approved_at/approved_by）——"
+                  "需重新过资产审批", name=name)}
     content_hash = hashlib.sha256(script_path.read_bytes()).hexdigest()[:16]
     if meta.get("approved_version") and content_hash != meta.get("approved_version"):
         return {"exit_code": 1, "stdout": "", "stderr":
-                f"脚本资产 {name!r} 内容自审批后已被修改（哈希漂移）——执行豁免"
-                "失效，需重新过资产审批（script_asset_create --force）"}
+                t("runbook_exec.asset_hash_drift",
+                  "脚本资产 {name!r} 内容自审批后已被修改（哈希漂移）——执行豁免"
+                  "失效，需重新过资产审批（script_asset_create --force）", name=name)}
 
     args = [str(a) for a in (spec.get("args") or [])]
     argv = ["bash", str(script_path)] + args
@@ -727,10 +770,12 @@ def _exec_script_asset(home: Path, spec: Dict[str, Any],
                               text=True, encoding='utf-8', errors='replace',
                               timeout=timeout, stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
-        return {"exit_code": 1, "stdout": "", "stderr": f"脚本执行超时（{timeout}s）",
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.script_timeout",
+                "脚本执行超时（{timeout}s）", timeout=timeout),
                 "timed_out": True}
     except Exception as exc:
-        return {"exit_code": 1, "stdout": "", "stderr": f"脚本执行失败：{exc}"}
+        return {"exit_code": 1, "stdout": "", "stderr": t("runbook_exec.script_failed",
+                "脚本执行失败：{exc}", exc=exc)}
     return {"exit_code": proc.returncode,
             "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
 
@@ -927,7 +972,9 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
             from tools.topo_tools import load_topology
             topo = load_topology(home)
             if topo is None:
-                raise ValueError(f"{ctx} 拓扑表不存在——target 解析需要拓扑（topo_query 确认实体）")
+                raise ValueError(t("runbook_exec.topology_missing",
+                                   "{ctx} 拓扑表不存在——target 解析需要拓扑（topo_query 确认实体）",
+                                   ctx=ctx))
             target = resolve_target(home, topo, str(params["target"]),
                                     context=scope)
             entry["target"] = {"name": target.get("name"), "type": target.get("type"),
@@ -945,7 +992,10 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
             m = re.match(r"rollback\[([^\]]*)\]", where or "")
             if m:
                 scene = m.group(1)
-            approve_desc = f"⚠ 回滚（rollback 场景 {scene or '（默认）'}）: {approve_desc}"
+            approve_desc = t("runbook_exec.rollback_desc",
+                             "⚠ 回滚（rollback 场景 {scene}）: {desc}",
+                             scene=scene or t("runbook_exec.scene_default", "（默认）"),
+                             desc=approve_desc)
             force_confirmation = True
         approve_err = approve(env, action, approve_desc,
                               force_confirmation=force_confirmation)
@@ -966,8 +1016,10 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
             if result.get("exit_code") != 0:
                 entry.update({
                     "status": "failed", "ok": False,
-                    "error": _clip(f"命令失败（exit {result.get('exit_code')}）: {desc}\n"
-                                   f"{result.get('stderr') or result.get('stdout') or ''}",
+                    "error": _clip(t("runbook_exec.command_failed",
+                                     "命令失败（exit {code}）: {desc}\n{detail}",
+                                     code=result.get("exit_code"), desc=desc,
+                                     detail=result.get("stderr") or result.get("stdout") or ""),
                                    4000),
                 })
                 return entry
@@ -986,7 +1038,9 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                 check_results = [runner(s, target) for s in expect_specs]
                 ok, detail = evaluate_expect(expect, check_results)
                 if ok:
-                    detail = f"第 {attempt}/{attempts} 次尝试通过: {detail}"
+                    detail = t("runbook_exec.expect_attempt_ok",
+                               "第 {attempt}/{attempts} 次尝试通过: {detail}",
+                               attempt=attempt, attempts=attempts, detail=detail)
                     break
                 if attempt < attempts:
                     time.sleep(interval)
@@ -1000,9 +1054,10 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
             if not ok:
                 entry.update({
                     "status": "failed", "ok": False,
-                    "error": _clip(
-                        f"expect 未通过（{attempts} 次尝试均失败，"
-                        f"最后一次: {detail}）", 4000),
+                    "error": _clip(t("runbook_exec.expect_failed",
+                                     "expect 未通过（{attempts} 次尝试均失败，"
+                                     "最后一次: {detail}）",
+                                     attempts=attempts, detail=detail), 4000),
                 })
                 return entry
         entry["status"] = "ok"
@@ -1020,7 +1075,7 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
     except Exception as exc:
         logger.exception("runbook 步骤执行异常 %s", ctx)
         entry.update({"status": "failed", "ok": False,
-                      "error": f"执行异常：{exc}"})
+                      "error": t("runbook_exec.step_exception", "执行异常：{exc}", exc=exc)})
         return entry
 
 
@@ -1036,7 +1091,7 @@ def _resolve_on_failure(value: Any, default: str) -> tuple:
         return "rollback", None
     if isinstance(value, dict) and "rollback" in value:
         return "rollback", str(value.get("rollback") or "")
-    raise ValueError(f"on_failure 非法: {value!r}")
+    raise ValueError(t("runbook_exec.on_failure_invalid", "on_failure 非法: {value!r}", value=value))
 
 
 def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
@@ -1054,13 +1109,16 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
         scenario = next((s for s in scenarios if isinstance(s, dict)
                          and str(s.get("name")) == scenario_name), None)
         if scenario is None:
+            available = ", ".join(str(s.get("name")) for s in scenarios if isinstance(s, dict))
             return {"ok": False, "error":
-                    f"rollback 场景 {scenario_name!r} 不存在（可用: "
-                    f"{', '.join(str(s.get('name')) for s in scenarios if isinstance(s, dict))}）"}
+                    t("runbook_exec.rollback_scene_missing",
+                      "rollback 场景 {name!r} 不存在（可用: {available}）",
+                      name=scenario_name, available=available)}
     elif scenarios:
         scenario = scenarios[0]
     if scenario is None or not isinstance(scenario, dict):
-        return {"ok": False, "error": "runbook 未定义 rollback 场景，无法回滚"}
+        return {"ok": False, "error": t("runbook_exec.no_rollback_scene",
+                "runbook 未定义 rollback 场景，无法回滚")}
     rb_steps = scenario.get("steps") or []
     rb_results: List[Dict[str, Any]] = []
     for step in rb_steps:
@@ -1071,8 +1129,9 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
         rb_results.append(res)
         if not res.get("ok"):
             return {"ok": False, "results": rb_results,
-                    "error": f"rollback 步骤 {res.get('id')!r} 失败："
-                             f"{res.get('error')}——rollback 失败 → 强制 stop，人工介入"}
+                    "error": t("runbook_exec.rollback_step_failed",
+                               "rollback 步骤 {id!r} 失败：{error}——rollback 失败 → 强制 stop，人工介入",
+                               id=res.get("id"), error=res.get("error"))}
     return {"ok": True, "results": rb_results}
 
 

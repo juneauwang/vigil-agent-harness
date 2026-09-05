@@ -93,7 +93,7 @@ def _log_error(message: str) -> None:
 
 
 def _fetch_alerts(alertmanager: str, prom_cfg: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """拉 Alertmanager /api/v2/alerts，返回紧凑告警摘要（含 vault basic auth）。
+    """拉 Alertmanager /api/v2/alerts，返回紧凑告警摘要（含 secret basic auth）。
 
     非 200 / 非 JSON / 超时 → 抛异常（由 collect_once 捕获写 errors.log）。
     """

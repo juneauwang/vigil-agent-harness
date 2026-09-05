@@ -122,7 +122,7 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
         "全链路）/ source（系统维护诊断元数据）不可写。"
         "host 行可写：cluster（把主机归入/移出集群）+ credentials 数组（"
         "[{type: ssh_key|secret, ref, user?, port?}]，"
-        "只收引用——ref 是路径/vault 引用，明文凭据值拒绝写入；空数组 = 清空）。"
+        "只收引用——ref 是路径/secret 引用，明文凭据值拒绝写入；空数组 = 清空）。"
         "状态变更（容器 stop/start 等）请先运行 topo_status_sync 检测差异，再确认同步。"
     ),
     "parameters": {
@@ -847,7 +847,7 @@ def _entity_env(topo: Dict[str, Any], entity: Dict[str, Any]) -> str:
 
 # YAPL 主框架阶段 C 补丁 2（OPS-DELTA #88）：topo_update 支持 host 行
 # credentials 数组更新（v0.4 结构 [{type: ssh_key|secret, ref, user?, port?}]）。
-# 只收引用（ref = 路径 / vault 引用 / 标识）——明文凭据值一律拒绝写入拓扑。
+# 只收引用（ref = 路径 / secret 引用 / 标识）——明文凭据值一律拒绝写入拓扑。
 _CREDENTIAL_TYPES = ("ssh_key", "secret")
 _CREDENTIAL_REF_RE = re.compile(r"[A-Za-z0-9._~/:\-]+")
 
@@ -875,7 +875,7 @@ def _validate_credentials_update(value: Any) -> Optional[str]:
         if bad:
             return (
                 f"updates['credentials'][{i}] 含未知键 {sorted(bad)}——只接受 "
-                "type/ref/user/port；ref 只收引用（路径/vault 引用），不接受"
+                "type/ref/user/port；ref 只收引用（路径/secret 引用），不接受"
                 "明文凭据字段"
             )
         ctype = item.get("type")
@@ -888,7 +888,7 @@ def _validate_credentials_update(value: Any) -> Optional[str]:
         if not isinstance(ref, str) or not ref.strip():
             return (
                 f"updates['credentials'][{i}].ref 必填——引用形态：路径 "
-                "（~/.ssh/id_rsa）/ vault 引用（vault:secret/db-pass）/ 标识"
+                "（~/.ssh/id_rsa）/ secret 引用（secret:secret/db-pass）/ 标识"
             )
         ref = ref.strip()
         if not _CREDENTIAL_REF_RE.fullmatch(ref):
@@ -1219,7 +1219,7 @@ def topo_update(
         if host_row is None:
             return tool_error(
                 f"credentials 只挂在拓扑表 host 行——实体 {entity} 不是 host"
-                "（服务凭据走所属 host 的 credentials / vault 引用，不落服务行）"
+                "（服务凭据走所属 host 的 credentials / secret 引用，不落服务行）"
             )
         host_row["credentials"] = creds_request
         try:

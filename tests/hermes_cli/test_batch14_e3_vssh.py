@@ -1,6 +1,6 @@
 """批次十四 E3 — ``vigil vssh`` 内置命令验收测试。
 
-覆盖：凭据引用解析（拓扑 credential → ssh_key/vault/askpass）；密码/passphrase
+覆盖：凭据引用解析（拓扑 credential → ssh_key/secret/askpass）；密码/passphrase
 经 SSH_ASKPASS 注入、明文不进 argv/env；port 缺省与 credential 覆盖；
 无凭据回退 ssh-agent/交互；``run()`` execvpe 执行 ssh。
 """
@@ -48,9 +48,9 @@ def test_build_argv_ssh_key_credential():
 
 
 def test_build_argv_vault_credential_injects_askpass_no_plaintext():
-    """vault 引用 → SSH_ASKPASS 脚本注入；凭据名/密码明文不进 argv/env。"""
+    """secret 引用 → SSH_ASKPASS 脚本注入；凭据名/密码明文不进 argv/env。"""
     argv, env = _build_ssh_argv("db1", user="ops",
-                                cred={"type": "vault", "ref": "db-pass"})
+                                cred={"type": "secret", "ref": "db-pass"})
     assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "ops@db1"]
     assert env["SSH_ASKPASS_REQUIRE"] == "force"
     assert env["SSH_ASKPASS"]
@@ -60,12 +60,12 @@ def test_build_argv_vault_credential_injects_askpass_no_plaintext():
 
 
 def test_build_argv_vault_failure_falls_back(monkeypatch):
-    """vault 注入失败（askpass 构造异常）→ 回退无 SSH_ASKPASS 的普通 argv。"""
+    """secret 注入失败（askpass 构造异常）→ 回退无 SSH_ASKPASS 的普通 argv。"""
     def boom(_path):
         raise OSError("askpass write failed")
     monkeypatch.setattr(vssh_mod, "_make_askpass_script", boom)
     argv, env = _build_ssh_argv("db1", user="root",
-                                cred={"type": "vault", "ref": "db-pass"})
+                                cred={"type": "secret", "ref": "db-pass"})
     assert argv == ["ssh", "-o", "IdentitiesOnly=yes", "-p", "22", "root@db1"]
     assert "SSH_ASKPASS" not in env
 
@@ -99,7 +99,7 @@ def test_build_argv_always_includes_identities_only():
 
     多 key 环境 ``-i key`` 不等于"只用这个 key"——不显式声明会遍历 agent
     所有 key → MaxAuthTries 刷爆 → sshd 锁 15 分钟。所有形态（无凭据 / key /
-    vault / askpass / credential port 覆盖）都必须带上。
+    secret / askpass / credential port 覆盖）都必须带上。
     """
     argv, _ = _build_ssh_argv("h", user="root")
     assert argv[1:3] == ["-o", "IdentitiesOnly=yes"]
@@ -110,7 +110,7 @@ def test_build_argv_always_includes_identities_only():
     assert argv[1:3] == ["-o", "IdentitiesOnly=yes"]
     assert argv[4] == "2222"
     argv, _ = _build_ssh_argv("db1", user="ops",
-                              cred={"type": "vault", "ref": "db-pass"})
+                              cred={"type": "secret", "ref": "db-pass"})
     assert argv[1:3] == ["-o", "IdentitiesOnly=yes"]
 
 
@@ -139,7 +139,7 @@ def topo_home(tmp_path, monkeypatch):
         "  - name: db1\n"
         "    endpoint: 10.0.0.5\n"
         "    credential:\n"
-        "      type: vault\n"
+        "      type: secret\n"
         "      ref: db-pass\n"
         "  - name: web1\n"
         "    endpoint: 10.0.0.6\n"
@@ -155,12 +155,12 @@ def topo_home(tmp_path, monkeypatch):
 
 
 def test_resolve_topology_credential_by_name(topo_home):
-    assert _resolve_topology_credential("db1") == {"type": "vault", "ref": "db-pass"}
+    assert _resolve_topology_credential("db1") == {"type": "secret", "ref": "db-pass"}
     assert _resolve_topology_credential("web1") == {"type": "ssh_key", "ref": "/keys/web.pem"}
 
 
 def test_resolve_topology_credential_by_endpoint(topo_home):
-    assert _resolve_topology_credential("10.0.0.5") == {"type": "vault", "ref": "db-pass"}
+    assert _resolve_topology_credential("10.0.0.5") == {"type": "secret", "ref": "db-pass"}
 
 
 def test_resolve_topology_credential_missing(topo_home):
@@ -195,14 +195,14 @@ def test_resolve_topology_credential_plural_credentials(topo_home):
 
 
 def test_resolve_topology_credential_plural_mixed_picks_ssh_key(topo_home):
-    """batch84：复数数组 ssh_key/vault 混排 → ssh 场景取 type=ssh_key 那条。"""
+    """batch84：复数数组 ssh_key/secret 混排 → ssh 场景取 type=ssh_key 那条。"""
     (topo_home / "topology.yaml").write_text(
         "version: 4\n"
         "hosts:\n"
         "  - name: mixed\n"
         "    endpoint: 10.0.0.9\n"
         "    credentials:\n"
-        "      - type: vault\n"
+        "      - type: secret\n"
         "        ref: db-pass\n"
         "      - type: ssh_key\n"
         "        ref: /keys/mixed.pem\n"
@@ -238,7 +238,7 @@ def test_resolve_topology_credential_singular_still_wins(topo_home):
 
 
 def test_resolve_topology_credential_plural_askpass_fallback(topo_home):
-    """batch84：数组无 ssh_key（纯 askpass）→ 取第一条 dict 兜底（vault/askpass
+    """batch84：数组无 ssh_key（纯 askpass）→ 取第一条 dict 兜底（secret/askpass
     走同一消费契约）。"""
     (topo_home / "topology.yaml").write_text(
         "version: 4\n"
@@ -313,7 +313,7 @@ def test_run_no_hostspec_lists_topology_hosts(monkeypatch, topo_home, capsys):
     assert run(args) == 0
     out = capsys.readouterr().out
     # 三台主机都在，凭据状态只显示类型（不显示 ref/值）。
-    assert "db1" in out and "✓vault" in out
+    assert "db1" in out and "✓secret" in out
     assert "web1" in out and "✓ssh_key" in out
     assert "plain" in out and "✗无凭据" in out
     assert "用法: vigil vssh <host> [user@host]" in out
@@ -370,7 +370,7 @@ def test_vssh_subcommand_registered():
     )
     assert proc.returncode == 0, proc.stderr
     assert "常用运维命令第一块" in proc.stdout
-    assert "vault" in proc.stdout and "SSH_ASKPASS" in proc.stdout
+    assert "secret" in proc.stdout and "SSH_ASKPASS" in proc.stdout
     assert "凭据引用" in proc.stdout and "无凭据回退 ssh-agent/交互" in proc.stdout
     for flag in ("-p", "--port", "-i", "--key", "-u", "--user", "--no-credential"):
         assert flag in proc.stdout
@@ -391,7 +391,7 @@ def test_resolve_topology_credential_allow_fallback_false_no_cred(topo_home):
 def test_resolve_topology_credential_allow_fallback_false_with_cred(topo_home):
     """allow_fallback=False 且拓扑表有凭据引用 → 正常返回（凭据优先于 fallback）。"""
     assert _resolve_topology_credential("db1", allow_fallback=False) == {
-        "type": "vault", "ref": "db-pass"}
+        "type": "secret", "ref": "db-pass"}
 
 
 def test_sudo_tool_resolves_with_allow_fallback_false(monkeypatch):

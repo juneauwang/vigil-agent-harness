@@ -110,7 +110,7 @@ def _validate_promql(query: str) -> Optional[str]:
 
 
 def _resolve_basic_auth(cfg: Dict[str, Any]) -> Optional[str]:
-    """解析 vault 注入的 HTTP Basic Auth header 值；未配置返回 None。
+    """解析 secret 注入的 HTTP Basic Auth header 值；未配置返回 None。
 
     ``ops.prometheus.vault_path`` 指向本机保险箱里的一个 JSON 凭据条目
     （user/pass 字段）。解析失败抛 ValueError（错误消息不含明文凭据）。

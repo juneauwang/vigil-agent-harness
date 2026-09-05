@@ -2,7 +2,7 @@
 
 验收点：
   - store 后文件权限 600、内容含值；retrieve 正确；expire 后不可用；
-  - store/retrieve 分别登记 user/vault 来源（供 sudo guard 三态判定）；
+  - store/retrieve 分别登记 user/secret 来源（供 sudo guard 三态判定）；
   - 名非法（路径穿越）拒绝；owner 校验存在。
 """
 
@@ -45,13 +45,13 @@ def test_store_writes_0600_with_value(vault_home):
 def test_retrieve_returns_value_and_registers_vault_source(vault_home):
     cv.store("db_pass", "DbP@ssw0rd12345")
     assert cv.retrieve("db_pass") == "DbP@ssw0rd12345"
-    assert cv.has_credential_source("vault") is True
+    assert cv.has_credential_source("secret") is True
 
 
 def test_store_registers_user_source(vault_home):
     cv.store("my_pass", "MyP@ssw0rd")
     assert cv.has_credential_source("user") is True
-    assert cv.has_credential_source("vault") is False
+    assert cv.has_credential_source("secret") is False
 
 
 def test_store_registers_value_in_global_redaction_registry(vault_home):
@@ -75,7 +75,7 @@ def test_expire_makes_retrieve_fail(vault_home):
     assert not _secret_path(vault_home, "tmp_secret").exists()
     with pytest.raises(FileNotFoundError):
         cv.retrieve("tmp_secret")
-    assert cv.has_credential_source(("user", "vault")) is False
+    assert cv.has_credential_source(("user", "secret")) is False
 
 
 def test_invalid_name_rejected(vault_home):

@@ -1,8 +1,8 @@
 """batch74（OPS-DELTA #89）任务 2：远端 sudo root 免密 + 非 root 兜底验收测试。
 
 覆盖（任务书 §任务 2）：
-  - ssh_key + root → 远端命令是 ``sudo -n <command>``，无 askpass/vault 注入；
-  - ssh_key + root + sudo 仍要求密码（stderr 密码提示）→ 可操作错误含"配置 vault"；
+  - ssh_key + root → 远端命令是 ``sudo -n <command>``，无 askpass/secret 注入；
+  - ssh_key + root + sudo 仍要求密码（stderr 密码提示）→ 可操作错误含"配置 secret"；
   - vault 类型 → 现有 ``sudo -A`` scp askpass 路径不变；
   - ssh_key + 非 root + ``sudo -n`` 成功 → 直通；
   - ssh_key + 非 root + ``sudo -n`` 密码提示 → 引导配 vault；
@@ -56,7 +56,7 @@ def _ssh_key_cred(**overrides):
 
 class TestRemoteSudoRootNopass:
     def test_root_ssh_key_sudo_n_direct(self, fake_ssh):
-        """root + ssh_key → ``sudo -n <command>`` 直通，无 askpass/vault 注入。"""
+        """root + ssh_key → ``sudo -n <command>`` 直通，无 askpass/secret 注入。"""
         fake_ssh.responses["sudo -n"] = (0, "ok", "")
         result = _run_remote_sudo("10.0.0.1", "root", 22, "kubectl get pods", _ssh_key_cred())
         assert result.returncode == 0
@@ -70,9 +70,9 @@ class TestRemoteSudoRootNopass:
         assert "sudo -S" not in blob
 
     def test_root_ssh_key_password_prompt_guides_vault(self, fake_ssh):
-        """root + ssh_key 但 sudo 仍要求密码 → 可操作错误，引导配置 vault。"""
+        """root + ssh_key 但 sudo 仍要求密码 → 可操作错误，引导配置 secret。"""
         fake_ssh.responses["sudo -n"] = (1, "", "sudo: a password is required")
-        with pytest.raises(RuntimeError, match="配置 vault"):
+        with pytest.raises(RuntimeError, match="配置 secret"):
             _run_remote_sudo("10.0.0.1", "root", 22, "ss -tlnp", _ssh_key_cred())
 
     def test_root_ssh_key_command_failure_no_password_hint_returns(self, fake_ssh):
@@ -82,11 +82,11 @@ class TestRemoteSudoRootNopass:
         assert result.returncode == 2
 
     def test_vault_path_unchanged(self, tmp_path, monkeypatch):
-        """vault 类型 → 现有 ``sudo -A`` scp askpass 路径不变。"""
+        """secret 类型 → 现有 ``sudo -A`` scp askpass 路径不变。"""
         vault = tmp_path / "srv-pass"
         vault.write_text("pw", encoding="utf-8")
         monkeypatch.setattr(sudo_tool, "path_for", lambda name: vault)
-        cred = {"type": "vault", "ref": "srv-pass", "user": "ops", "port": 22}
+        cred = {"type": "secret", "ref": "srv-pass", "user": "ops", "port": 22}
         calls = {"sudo": None}
         monkeypatch.setattr(
             sudo_tool, "_build_ssh_argv",
@@ -120,14 +120,14 @@ class TestRemoteSudoRootNopass:
         assert fake_ssh.calls[-1]["cmd"] == "sudo -n systemctl status nginx"
 
     def test_non_root_ssh_key_sudo_n_failure_guides_vault(self, fake_ssh):
-        """非 root + ssh_key：sudo 要求密码 → 引导配置 vault（保持现状语义）。"""
+        """非 root + ssh_key：sudo 要求密码 → 引导配置 secret（保持现状语义）。"""
         fake_ssh.responses["sudo -n"] = (1, "", "sudo: a password is required")
-        with pytest.raises(RuntimeError, match="配置 vault"):
+        with pytest.raises(RuntimeError, match="配置 secret"):
             _run_remote_sudo("10.0.0.1", "ops", 22, "systemctl restart nginx",
                              _ssh_key_cred(user="ops"))
 
     def test_askpass_still_fail_closed(self, fake_ssh):
         """askpass 类型远端注入仍不支持 → fail-closed。"""
-        with pytest.raises(RuntimeError, match="vault 类型"):
+        with pytest.raises(RuntimeError, match="secret 类型"):
             _run_remote_sudo("host", "root", 22, "ls",
                              {"type": "askpass", "ref": "/keys/x"})

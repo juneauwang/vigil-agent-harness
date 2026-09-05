@@ -514,7 +514,7 @@ def _interactive_password_prompt_hint(output: str) -> str | None:
         "Enter passphrase / sudo password）——terminal 工具在非 TTY 环境无法"
         "安全输入密码：进程会挂起直到超时，getpass 还可能把密码回显进会话"
         "记录。请改用：1) clarify 让用户提供密码或选择来源 2) ansible -bK "
-        "优先设置 ANSIBLE_BECOME_PASS 环境变量（值从 vault/保险箱取，不进"
+        "优先设置 ANSIBLE_BECOME_PASS 环境变量（值从 secret/保险箱取，不进"
         "命令行）3) SSH 系操作走 vssh/sudo_exec 工具"
     )
 

@@ -28,9 +28,9 @@ logger = logging.getLogger(__name__)
 
 _SECRETS_DIRNAME = "secrets"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
-_VALID_SOURCES = {"user", "vault"}
+_VALID_SOURCES = {"user", "secret"}
 
-# 会话内已登记凭据标记：name -> {"source": "user"|"vault", "ts": iso}
+# 会话内已登记凭据标记：name -> {"source": "user"|"secret", "ts": iso}
 # 模块级（进程/会话生命周期）；key 为凭据名，跨会话共享由调用方负责隔离。
 _REGISTERED: Dict[str, Dict[str, Any]] = {}
 _REGISTERED_LOCK = threading.Lock()
@@ -73,10 +73,10 @@ def _check_owner(path: Path) -> None:
 
 
 def register_source(name: str, source: str) -> None:
-    """登记会话内凭据来源标记（user/vault + 时间戳），供 sudo guard 查询。"""
+    """登记会话内凭据来源标记（user/secret + 时间戳），供 sudo guard 查询。"""
     _validate_name(name)
     if source not in _VALID_SOURCES:
-        raise ValueError(f"凭据来源必须是 user/vault，收到 {source!r}")
+        raise ValueError(f"凭据来源必须是 user/secret，收到 {source!r}")
     with _REGISTERED_LOCK:
         _REGISTERED[name] = {"source": source, "ts": time.time()}
     logger.debug("credential_vault: registered source=%s for %r", source, name)
@@ -101,7 +101,7 @@ def store(name: str, value: str, source: str = "user") -> str:
     if not isinstance(value, str) or not value:
         raise ValueError("凭据值必须是非空字符串")
     if source not in _VALID_SOURCES:
-        raise ValueError(f"凭据来源必须是 user/vault，收到 {source!r}")
+        raise ValueError(f"凭据来源必须是 user/secret，收到 {source!r}")
 
     secrets = _secrets_dir()
     secrets.mkdir(parents=True, exist_ok=True)
@@ -142,7 +142,7 @@ def retrieve(name: str) -> str:
         raise FileNotFoundError(f"保险箱中不存在凭据: {name}")
     _check_owner(path)
     value = path.read_text(encoding="utf-8")
-    register_source(name, "vault")
+    register_source(name, "secret")
     return value
 
 
@@ -162,7 +162,7 @@ def expire(name: str) -> bool:
     return False
 
 
-def has_credential_source(sources=("user", "vault")) -> bool:
+def has_credential_source(sources=("user", "secret")) -> bool:
     """会话内是否已登记指定来源的凭据（sudo guard 三态判定的第 1/2 态）。"""
     if isinstance(sources, str):
         sources = (sources,)

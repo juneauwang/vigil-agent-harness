@@ -274,13 +274,13 @@ class TestSkillsInVolatileBand:
 
 class TestOpsCredentialFailClosedGuidance:
     def test_guidance_forbids_self_probing_on_auth_failure(self):
-        """认证失败 → 停止尝试并询问用户；禁止翻 ~/.ssh//试用户名/猜 vault 字段。"""
+        """认证失败 → 停止尝试并询问用户；禁止翻 ~/.ssh//试用户名/猜 secret 字段。"""
         from agent.prompt_builder import OPS_CREDENTIAL_SSH_GUIDANCE
 
         assert "STOP and ASK the user" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "dig through ~/.ssh/ for keys" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "try multiple usernames" in OPS_CREDENTIAL_SSH_GUIDANCE
-        assert "guessing vault" in OPS_CREDENTIAL_SSH_GUIDANCE
+        assert "guessing secret" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "swap tools/postures to retry the same target" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "MaxAuthTries" in OPS_CREDENTIAL_SSH_GUIDANCE
         assert "ask the user" in OPS_CREDENTIAL_SSH_GUIDANCE

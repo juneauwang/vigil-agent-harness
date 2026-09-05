@@ -135,7 +135,7 @@ class TestRunbookCreate:
         result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert "error" in result
         assert "明文凭据" in result["error"]
-        assert "<vault:path/field>" in result["error"]
+        assert "<secret:path/field>" in result["error"]
         # 拒绝时值不回显：错误消息不含 secret123。
         assert "secret123" not in result["error"]
         # 拒绝不落盘：磁盘仍是最初的存量内容。
@@ -154,7 +154,7 @@ class TestRunbookCreate:
         _seed_v1(rb_home)
         data = _incident_v1(
             steps=[{"id": "x", "title": "x",
-                    "commands": ["curl -u admin:<vault:ansible/pass> http://localhost/health"]}]
+                    "commands": ["curl -u admin:<secret:ansible/pass> http://localhost/health"]}]
         )
         result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert result.get("status") in ("created", "updated"), result
@@ -284,7 +284,7 @@ class TestRunbookCreate:
         assert "overwrite" in _DEFAULT_CREATE_SCHEMA["parameters"]["properties"]
         # 描述含专有名词绑定 + 凭据拒绝语义。
         assert "不是 Markdown 文档" in _DEFAULT_CREATE_SCHEMA["description"]
-        assert "<vault:path/field>" in _DEFAULT_CREATE_SCHEMA["description"]
+        assert "<secret:path/field>" in _DEFAULT_CREATE_SCHEMA["description"]
 
     def test_load_tail_offers_update(self, rb_home):
         """任务 3：runbook_load 返回尾部引导——执行有改进时提议更新 runbook。"""

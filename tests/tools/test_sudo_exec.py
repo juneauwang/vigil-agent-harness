@@ -22,12 +22,12 @@ SECRET = "sup3r-s3cr3t-42!"
 
 
 def _vault_cred(tmp_path, monkeypatch):
-    """vault 类型凭据 + 临时保险箱文件（mock path_for 指向临时文件）。"""
+    """secret 类型凭据 + 临时保险箱文件（mock path_for 指向临时文件）。"""
     vault = tmp_path / "secrets" / "srv-pass"
     vault.parent.mkdir(parents=True, exist_ok=True)
     vault.write_text(SECRET, encoding="utf-8")
     monkeypatch.setattr(sudo_tool, "path_for", lambda name: vault)
-    return {"type": "vault", "ref": "srv-pass", "user": "ops", "port": 22}
+    return {"type": "secret", "ref": "srv-pass", "user": "ops", "port": 22}
 
 
 class TestLocalSudoAskpassInjection:
@@ -76,7 +76,7 @@ class TestLocalSudoAskpassInjection:
 
     def test_local_ssh_key_credential_fail_closed(self, tmp_path, monkeypatch):
         """ssh_key 无密码明文 → fail-closed，不猜测。"""
-        with pytest.raises(RuntimeError, match="vault/askpass"):
+        with pytest.raises(RuntimeError, match="secret/askpass"):
             _run_local_sudo("ss -tlnp", {"type": "ssh_key", "ref": "/keys/x.pem"})
 
 
@@ -124,7 +124,7 @@ class TestRemoteSudoAskpassInjection:
 
     def test_remote_non_vault_credential_fail_closed(self, tmp_path, monkeypatch):
         """askpass 类型仍不支持远端注入 → fail-closed（batch74 起 ssh_key 走 sudo -n）。"""
-        with pytest.raises(RuntimeError, match="vault 类型"):
+        with pytest.raises(RuntimeError, match="secret 类型"):
             _run_remote_sudo("host", "ops", 22, "ss -tlnp",
                              {"type": "askpass", "ref": "/keys/x"})
 
@@ -182,7 +182,7 @@ class TestHandlerPermissionMatrix:
         )
         monkeypatch.setattr(sudo_tool, "_require_ops_approval", lambda command, decision: None)
         monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
-                            lambda host, **kw: {"type": "vault", "ref": "srv-pass"})
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
         executed = []
         monkeypatch.setattr(sudo_tool, "_run_remote_sudo",
                             lambda *a, **k: executed.append(a) or SimpleNamespace(
@@ -230,7 +230,7 @@ class TestHandlerPermissionMatrix:
         _vault_cred(tmp_path, monkeypatch)
         monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
         monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
-                            lambda host, **kw: {"type": "vault", "ref": "srv-pass"})
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
 
         def fake_run(argv, **kwargs):
             return SimpleNamespace(returncode=0, stdout="Active: active", stderr="")
@@ -287,7 +287,7 @@ class TestHandlerSecurityBoundary:
         _vault_cred(tmp_path, monkeypatch)
         monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
         monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
-                            lambda host, **kw: {"type": "vault", "ref": "srv-pass"})
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
 
         def fake_run(argv, **kwargs):
             return SimpleNamespace(returncode=0, stdout="sshd", stderr="")
@@ -363,7 +363,7 @@ def test_local_sudo_auth_failure_returns_ask_user_guidance(tmp_path, monkeypatch
     out = _sudo_exec_handler({"host": "localhost", "command": "ss -tlnp", "env": "dev"})
     assert "sudo 认证失败" in out
     assert "停止自动重试" in out and "询问用户提供正确密码" in out
-    assert "禁止连续猜 vault 字段" in out
+    assert "禁止连续猜 secret 字段" in out
 
 
 def test_remote_sudo_breaker_error_flows_ask_user_guidance(monkeypatch):
@@ -377,7 +377,7 @@ def test_remote_sudo_breaker_error_flows_ask_user_guidance(monkeypatch):
     monkeypatch.setattr(sudo_tool, "check_ops_command_permission", lambda *a, **k: None)
     monkeypatch.setattr(
         sudo_tool, "_resolve_topology_credential",
-        lambda host, **kw: {"type": "vault", "ref": "srv-pass", "user": "ops", "port": 22},
+        lambda host, **kw: {"type": "secret", "ref": "srv-pass", "user": "ops", "port": 22},
     )
     topodisc._SSH_AUTH_FAILURES.clear()
 

@@ -5,7 +5,7 @@
     HTTP 500 / 超时 / 非 JSON → 返回原始错误，无编造值；
   - alert_query：有告警 / 无告警两态；无 alertmanager 配置 → 明确不可用；
   - check_fn：无 endpoint 配置 → 工具不可用；有配置 → 可用；
-  - vault 注入：凭据经 Basic Auth header 注入，输出与日志无明文。
+  - secret 注入：凭据经 Basic Auth header 注入，输出与日志无明文。
 """
 
 from __future__ import annotations
@@ -293,7 +293,7 @@ class TestAlertQuery:
 
 
 # ---------------------------------------------------------------------------
-# vault 注入
+# secret 注入
 # ---------------------------------------------------------------------------
 
 class TestVaultInjection:

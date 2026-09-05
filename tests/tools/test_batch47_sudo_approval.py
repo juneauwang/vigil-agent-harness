@@ -175,7 +175,7 @@ class TestSudoExecHandlerApprovalChain:
         )
         monkeypatch.setattr(
             sudo_tool, "_resolve_topology_credential",
-            lambda host, **kw: {"type": "vault", "ref": "srv-pass",
+            lambda host, **kw: {"type": "secret", "ref": "srv-pass",
                                 "user": "ops", "port": 22},
         )
 

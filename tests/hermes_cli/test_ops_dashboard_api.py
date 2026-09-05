@@ -251,13 +251,13 @@ def test_runbooks_detail_path_traversal_blocked(ops_home, client):
 
 
 def test_runbook_detail_vault_placeholder_preserved(ops_home, client):
-    """<vault:...> 是凭据引用占位符（非明文），保留展示。"""
+    """<secret:...> 是凭据引用占位符（非明文），保留展示。"""
     from pathlib import Path as _Path
     home = _Path(os.environ["VIGIL_HOME"])
     (home / "runbooks" / "with-vault.yaml").write_text(
         RUNBOOK.replace(
             '- "docker ps --filter name=harbor"',
-            '- "docker ps --filter name=harbor; echo <vault:db/pass>"',
+            '- "docker ps --filter name=harbor; echo <secret:db/pass>"',
         ),
         encoding="utf-8",
     )
@@ -265,7 +265,7 @@ def test_runbook_detail_vault_placeholder_preserved(ops_home, client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    assert "<vault:db/pass>" in json.dumps(body, ensure_ascii=False)
+    assert "<secret:db/pass>" in json.dumps(body, ensure_ascii=False)
 
 
 # ---------------------------------------------------------------------------

@@ -51,8 +51,8 @@ def test_user_source_allows_sudo_S():
 
 
 def test_vault_source_allows_sudo_S(tmp_path):
-    cv.store("sudo_pass", "VaultP@ssw0rd12345", source="vault")
-    assert cv.has_credential_source("vault") is True
+    cv.store("sudo_pass", "VaultP@ssw0rd12345", source="secret")
+    assert cv.has_credential_source("secret") is True
     is_blocked, _ = approval_module._check_sudo_stdin_guard("sudo -S systemctl restart nginx")
     assert is_blocked is False
 

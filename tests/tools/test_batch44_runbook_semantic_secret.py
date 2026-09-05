@@ -7,9 +7,9 @@
     （短串非数字/路径/变量/引用）→ 仍拦；--password=... 词面严格仍拦。
   - Task2 放行：变量名含 PASS/TOKEN 但值是指向 secret 的路径/引用 →
     不是明文；真明文赋值（PASSWORD=hunter2）仍拦。
-  - Task3：拦截错误消息含正确写法引导（topo_query / vssh / <vault:path/field>），
+  - Task3：拦截错误消息含正确写法引导（topo_query / vssh / <secret:path/field>），
     且值不回显。
-  - <vault:...> 占位符放行行为保持。
+  - <secret:...> 占位符放行行为保持。
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ class TestErrorHint:
         assert "明文凭据" in hint
         assert "topo_query" in hint
         assert "vssh" in hint
-        assert "<vault:path/field>" in hint
+        assert "<secret:path/field>" in hint
 
     def test_hint_mentions_plain_arg_is_ok(self):
         hint = _secret_error_hint("PASSWORD")
@@ -147,7 +147,7 @@ class TestRunbookCreateSemantic:
 
     def test_vault_placeholder_still_allowed(self, rb_home):
         data = _incident(steps=[{"id": "s1", "title": "x", "commands": [
-            "curl -u admin:<vault:ansible/pass> http://localhost/health",
+            "curl -u admin:<secret:ansible/pass> http://localhost/health",
         ]}])
         result = _load(runbook_create(**data, overwrite=True, home=rb_home))
         assert result.get("status") in ("created", "updated"), result

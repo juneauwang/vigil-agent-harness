@@ -228,7 +228,7 @@ def test_discover_credential_derived_from_key_path_only():
     runner = _default_runner()
     d = discover_host("203.0.113.20", "prod",
                       {"user": "ops", "key_path": "/keys/node1.pem"}, runner=runner)
-    # v0.4：credential 单对象 → credentials 数组（ssh_key/vault 多凭据）。
+    # v0.4：credential 单对象 → credentials 数组（ssh_key/secret 多凭据）。
     assert d["host"]["credentials"] == [
         {"type": "ssh_key", "ref": "/keys/node1.pem", "user": "ops", "port": 22},
     ]

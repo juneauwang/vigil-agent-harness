@@ -38,6 +38,8 @@ import yaml
 
 from tools.registry import registry, tool_error
 
+from hermes_cli.i18n import t
+
 logger = logging.getLogger(__name__)
 
 _RUNBOOKS_DIRNAME = "runbooks"
@@ -45,10 +47,10 @@ _STATE_FILENAME = ".runbook-state.json"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _VALID_ENVS = {"local", "test", "dev", "prod"}
 _VALID_STATUSES = {"pass", "fail"}
-# OPS-DELTA #21：runbook commands 的 <vault:path/field> 凭据引用占位符。
+# OPS-DELTA #21：runbook commands 的 <secret:path/field> 凭据引用占位符。
 # runbook_load 永远不返回明文——占位符描述化返回，明文只在执行时由 agent 从
-# 保险箱/vault 读取并立即注入命令（命令串过 agent/redact.py 打码）。
-_VAULT_REF_RE = re.compile(r"<vault:([A-Za-z0-9_./-]+)>")
+# 保险箱/secret 读取并立即注入命令（命令串过 agent/redact.py 打码）。
+_VAULT_REF_RE = re.compile(r"<secret:([A-Za-z0-9_./-]+)>")
 # runbook_create 专有：名称严格 kebab-case（小写字母/数字 + 连字符），
 # 防路径穿越（".." / 隐藏文件/点号下划线）与非法文件名写盘。
 _CREATE_NAME_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
@@ -161,7 +163,7 @@ def _normalize_runbook_env(env: Any) -> Optional[str]:
     return None
 # 疑似明文凭据模式（runbook_create 校验用）：赋值式（password= / token: ...）
 # 与 flag 式（--password / -p value）。命中即拒绝（fail-closed），提示改用
-# <vault:path/field> 占位符；只判"疑似"，不漏明文，宁误报也提示。
+# <secret:path/field> 占位符；只判"疑似"，不漏明文，宁误报也提示。
 _PLAINTEXT_SECRET_ASSIGN_RE = re.compile(
     r"(?i)(password|passwd|pwd|secret|token|api[_-]?key)\s*[=:]\s*(\S+)"
 )
@@ -269,7 +271,7 @@ _DEFAULT_CREATE_SCHEMA = {
         "runbook 是 Vigil 程序层机制（触发条件 + 步骤 + 命令 + 回滚），不是 Markdown 文档："
         "runbook_load 可按名/触发词加载，runbook_checkpoint 可门控部署阶段。"
         "用户说'沉淀/记录/保存为 runbook'时应调用本工具。v0.1 命令一律拒绝明文"
-        "密码/token——用 <vault:path/field> 占位符（执行时从保险箱读取注入）。同名已存在需 "
+        "密码/token——用 <secret:path/field> 占位符（执行时从保险箱读取注入）。同名已存在需 "
         "overwrite=true 才覆盖。"
         "v0.2 完整示例：{name: svc-restart, title: 重启服务, version: 2, kind: incident, "
         "env: prod, triggers: [\"svc down\"], clusters: [], host_groups: [], hosts: [], "
@@ -1376,7 +1378,7 @@ def _summary_line(rb: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _describe_vault_refs_in_commands(holder: Dict[str, Any], key: str) -> int:
-    """把 holder[key] 命令列表里的 <vault:...> 占位符描述化，返回替换次数。"""
+    """把 holder[key] 命令列表里的 <secret:...> 占位符描述化，返回替换次数。"""
     count = 0
     cmds = holder.get(key)
     if not isinstance(cmds, list):
@@ -1386,7 +1388,7 @@ def _describe_vault_refs_in_commands(holder: Dict[str, Any], key: str) -> int:
         if isinstance(cmd, str):
             cmd, n = _VAULT_REF_RE.subn(
                 lambda m: (
-                    f"«vault:{m.group(1)} — 凭据引用（执行时从保险箱/vault 读取，"
+                    f"«secret:{m.group(1)} — 凭据引用（执行时从保险箱/secret 读取，"
                     "明文不进会话记录）»"
                 ),
                 cmd,
@@ -1398,7 +1400,7 @@ def _describe_vault_refs_in_commands(holder: Dict[str, Any], key: str) -> int:
 
 
 def _describe_vault_refs(payload: Dict[str, Any]) -> int:
-    """遍历 runbook 的 steps/rollback 命令，描述化 <vault:...> 占位符。"""
+    """遍历 runbook 的 steps/rollback 命令，描述化 <secret:...> 占位符。"""
     count = 0
     for step in payload.get("steps") or []:
         if isinstance(step, dict):
@@ -1417,33 +1419,40 @@ def _full_payload(home: Path, rb: Dict[str, Any]) -> Dict[str, Any]:
     session_env = _normalize_runbook_env(payload["session_env"])
     if rb.get("env") and payload["session_env"] and rb_env and session_env and rb_env != session_env:
         payload["env_mismatch"] = True
-        payload["env_warning"] = (
-            f"runbook 适用环境 {rb['env']} 与当前会话环境 {payload['session_env']} 不一致；"
-            "跨环境操作由命令级权限矩阵逐条判定（L2 及以上走审批），不是整体拒绝。"
+        payload["env_warning"] = t(
+            "runbook_tools.env_mismatch",
+            "runbook 适用环境 {rb_env} 与当前会话环境 {session_env} 不一致；"
+            "跨环境操作由命令级权限矩阵逐条判定（L2 及以上走审批），不是整体拒绝。",
+            rb_env=rb["env"], session_env=payload["session_env"],
         )
     payload["checklist_state"] = _checklist_state_for(home, name) if _is_checklist_runbook(rb) else None
     if _is_v2_runbook(rb):
-        payload["note"] = (
+        payload["note"] = t(
+            "runbook_tools.note_v2",
             "v0.2 runbook（声明式动作，无命令）：执行请调 runbook_execute 工具——"
             "执行器按 action × target 类型 × managed_by 生成命令、过矩阵审批门、"
             "检查 expect（变更动作默认轮询等待就绪）。本工具只返回规格内容，"
-            "不要自己用 terminal 复现步骤。"
+            "不要自己用 terminal 复现步骤。",
         )
     else:
-        payload["note"] = (
-            "本工具不执行任何命令；步骤命令由 agent 通过终端执行，逐条过权限矩阵。"
+        payload["note"] = t(
+            "runbook_tools.note_v1",
+            "本工具不执行任何命令；步骤命令由 agent 通过终端执行，逐条过权限矩阵。",
         )
     vault_refs = _describe_vault_refs(payload)
     if vault_refs:
         payload["vault_refs"] = vault_refs
-        payload["note"] += (
-            f" 本 runbook 含 {vault_refs} 处 <vault:...> 凭据引用：明文只在执行时"
-            "由你从保险箱/vault 读取并立即注入命令（命令串过 redact），不要在"
-            "对话或命令文本里内插明文。"
+        payload["note"] += t(
+            "runbook_tools.note_vault_refs",
+            " 本 runbook 含 {n} 处 <secret:...> 凭据引用：明文只在执行时"
+            "由你从保险箱/secret 读取并立即注入命令（命令串过 redact），不要在"
+            "对话或命令文本里内插明文。",
+            n=vault_refs,
         )
-    payload["note"] += (
+    payload["note"] += t(
+        "runbook_tools.note_improve",
         " 若本次执行有改进（新坑/新命令），可向用户提议更新本 runbook"
-        "（runbook_create overwrite=true）。"
+        "（runbook_create overwrite=true）。",
     )
     return payload
 
@@ -1457,10 +1466,12 @@ def runbook_load(
     home = home or _hermes_home()
     runbooks_dir = _runbooks_dir(home)
     if not runbooks_dir.is_dir():
-        return tool_error(
-            f"runbooks 数据不存在（{runbooks_dir}），"
-            "先跑 vigil topo-discover 或手工创建 runbooks/*.yaml。"
-        )
+        return tool_error(t(
+            "runbook_tools.data_missing",
+            "runbooks 数据不存在（{dir}），"
+            "先跑 vigil topo-discover 或手工创建 runbooks/*.yaml。",
+            dir=runbooks_dir,
+        ))
 
     if runbook:
         try:
@@ -1468,11 +1479,11 @@ def runbook_load(
         except ValueError as exc:
             return tool_error(str(exc))
         if data is None:
-            return tool_error(f"runbook 不存在: {runbook}（可省略参数列出全部）")
+            return tool_error(t("runbook_tools.not_found", "runbook 不存在: {name}（可省略参数列出全部）", name=runbook))
         try:
             _validate_runbook(data, runbook, home)
         except ValueError as exc:
-            return tool_error(f"runbook 校验失败: {exc}")
+            return tool_error(t("runbook_tools.validation_failed", "runbook 校验失败: {exc}", exc=exc))
         return json.dumps(_full_payload(home, data), ensure_ascii=False, indent=2)
 
     if query and query.strip():
@@ -1496,7 +1507,7 @@ def runbook_load(
             payload["alternatives"] = [_summary_line(rb) for _, rb in scored[1:5]]
             return json.dumps(payload, ensure_ascii=False, indent=2)
         return tool_error(
-            f"没有 runbook 匹配「{query}」。可用 runbook: "
+            t("runbook_tools.no_match", "没有 runbook 匹配「{query}」。可用 runbook: ", query=query)
             + ", ".join(sorted(p.stem for p in runbooks_dir.glob("*.yaml")
                                if not p.name.startswith(".")))
         )
@@ -1534,26 +1545,28 @@ def runbook_checkpoint(
     except ValueError as exc:
         return tool_error(str(exc))
     if data is None:
-        return tool_error(f"runbook 不存在: {runbook}")
+        return tool_error(t("runbook_tools.not_found_plain", "runbook 不存在: {name}", name=runbook))
     try:
         is_v2 = _is_v2_runbook(data)
     except ValueError as exc:
         return tool_error(str(exc))
     if is_v2:
-        return tool_error(
-            f"runbook {runbook} 是 schema v0.2（声明式动作，无 commands）："
+        return tool_error(t(
+            "runbook_tools.checkpoint_is_v2",
+            "runbook {name} 是 schema v0.2（声明式动作，无 commands）："
             "checkpoint 是 v0.1 checklist 阶段门；v0.2 请用 runbook_execute 执行"
-            "（执行器生成命令 + 矩阵审批门 + expect/on_failure + 执行记录）。"
-        )
+            "（执行器生成命令 + 矩阵审批门 + expect/on_failure + 执行记录）。",
+            name=runbook,
+        ))
     if not _is_checklist_runbook(data):
-        return tool_error(f"runbook {runbook} 不是 checklist runbook（kind=deploy, checklist=true），无需 checkpoint")
+        return tool_error(t("runbook_tools.not_checklist", "runbook {name} 不是 checklist runbook（kind=deploy, checklist=true），无需 checkpoint", name=runbook))
     if status not in _VALID_STATUSES:
-        return tool_error(f"status 必须是 pass/fail，收到 {status!r}")
+        return tool_error(t("runbook_tools.bad_status", "status 必须是 pass/fail，收到 {status!r}", status=status))
 
     steps = data.get("steps") or []
     ids = [s.get("id") for s in steps]
     if step_id not in ids:
-        return tool_error(f"runbook {runbook} 没有步骤 {step_id!r}（可用: {', '.join(ids)}）")
+        return tool_error(t("runbook_tools.no_such_step", "runbook {name} 没有步骤 {step_id!r}（可用: {ids}）", name=runbook, step_id=step_id, ids=", ".join(ids)))
 
     state = _read_checklist_state(home)
     rb_state = _checklist_state_for(home, runbook)
@@ -1563,11 +1576,13 @@ def runbook_checkpoint(
     idx = ids.index(step_id)
     blocked = [sid for sid in ids[:idx] if rb_state.get(sid, {}).get("status") != "pass"]
     if blocked:
-        return tool_error(
-            f"阶段门拒绝推进：步骤 {step_id!r} 的前置步骤未全部通过 "
-            f"({', '.join(blocked)})。先完成前置核对（runbook_load 查看步骤），"
-            "通过后 runbook_checkpoint(..., status='pass') 再推进。"
-        )
+        return tool_error(t(
+            "runbook_tools.gate_blocked",
+            "阶段门拒绝推进：步骤 {step_id!r} 的前置步骤未全部通过 "
+            "({blocked})。先完成前置核对（runbook_load 查看步骤），"
+            "通过后 runbook_checkpoint(..., status='pass') 再推进。",
+            step_id=step_id, blocked=", ".join(blocked),
+        ))
 
     rb_state[step_id] = {
         "status": status,
@@ -1578,7 +1593,8 @@ def runbook_checkpoint(
     _write_checklist_state(home, state)
     return json.dumps(
         {"runbook": runbook, "recorded": step_id, "status": status,
-         "checklist_state": rb_state, "note": "阶段门状态已记录（审计用）。"},
+         "checklist_state": rb_state,
+         "note": t("runbook_tools.gate_recorded", "阶段门状态已记录（审计用）。")},
         ensure_ascii=False, indent=2,
     )
 
@@ -1636,7 +1652,7 @@ def _looks_like_attribute(value: str) -> bool:
     v = (value or "").strip().strip('\'"')
     if not v:
         return True  # 无值 flag → 非密码
-    if v.startswith("<vault:"):
+    if v.startswith("<secret:"):
         return True
     # 端口/数字：docker -p 8080:80、psql -p 5432
     if v[0].isdigit():
@@ -1680,13 +1696,13 @@ def _assign_value_is_plaintext(value: str) -> bool:
     """赋值式（PASSWORD=... / --password=...）是否真明文。
 
     值形态是引用/路径/URL/vault 占位符/变量 → 放行（VAULT_PASS=secret/data/...
-    是指向 secret 的引用，不是明文）；纯短串（无 /、$、<vault:、: 等特征）才
+    是指向 secret 的引用，不是明文）；纯短串（无 /、$、<secret:、: 等特征）才
     是真明文。
     """
     v = (value or "").strip().strip('\'"')
     if not v:
         return False
-    if v.startswith("<vault:"):
+    if v.startswith("<secret:"):
         return False
     if _looks_like_attribute(v):
         return False
@@ -1696,12 +1712,12 @@ def _assign_value_is_plaintext(value: str) -> bool:
 def _find_plaintext_secret(cmd: str) -> Optional[str]:
     """返回命令中疑似明文凭据的键名（password/--password/-p 等），无则 None。
 
-    <vault:path/field> 占位符放行（既有机制）。批次四十四 §BN/§BL 语义化：
+    <secret:path/field> 占位符放行（既有机制）。批次四十四 §BN/§BL 语义化：
       - ``-p`` 只在密码命令白名单（sshpass/mysql/mysqldump/pg_dump/redis-cli/
         mongosh 等）且值是密码候选（非数字/路径/变量/引用）时才算密码；
         docker/scp/psql 端口、mkdir 无值 flag、-i 私钥路径一律放行。
       - 赋值式命中（PASSWORD=hunter2）只在值是真明文时拦截；值是指向 secret
-        的路径/引用（VAULT_PASS=secret/data/... / $VAR / <vault:>）放行。
+        的路径/引用（VAULT_PASS=secret/data/... / $VAR / <secret:>）放行。
     --password/--token/--api-key 词面语义明确是凭据，保持严格。
     只报键名不报值——凭据值绝不出现在错误消息/日志里。
     """
@@ -1717,17 +1733,17 @@ def _find_plaintext_secret(cmd: str) -> Optional[str]:
             continue
         if not _is_password_flag(flag, value, cmd):
             continue
-        if value.startswith("<vault:"):
+        if value.startswith("<secret:"):
             continue
         return flag
     m = _PLAINTEXT_SECRET_ASSIGN_RE.search(cmd)
     if m:
-        if m.group(2).startswith("<vault:"):
+        if m.group(2).startswith("<secret:"):
             return None
         if _assign_value_is_plaintext(m.group(2)):
             return m.group(1)
     m = _PLAINTEXT_CRED_FLAG_RE.search(cmd)
-    if m and "<vault:" not in m.group(2):
+    if m and "<secret:" not in m.group(2):
         return m.group(1)
     return None
 
@@ -1737,7 +1753,7 @@ def _secret_error_hint(key: str) -> str:
     return (
         f"疑似含明文凭据（{key}）。正确写法：优先用受控凭据通道——"
         "目标主机经 topo_query 取凭据后经 vssh/sudo_exec 注入，或命令里用 "
-        "<vault:path/field> 占位符（执行时由你从保险箱/vault 读取并立即注入）。"
+        "<secret:path/field> 占位符（执行时由你从保险箱/secret 读取并立即注入）。"
         "若这只是本地文件路径/端口/连接参数而非凭据，可直接写（本校验只拦真明文）。"
     )
 
@@ -1803,10 +1819,11 @@ def _asset_approve_runbook(data: Dict[str, Any], name: str, home: Path,
     # 显式 ops.permissions.enabled: false（权限系统关闭）→ 交回 approvals.mode
     # 语义（与 terminal 一致）；缺省启用时矩阵缺失 = 权限系统不可用 → 拒绝。
     if ops_permissions_enabled() and not matrix_path(home).is_file():
-        return False, {}, (
+        return False, {}, t(
+            "runbook_tools.asset_matrix_missing",
             "权限矩阵未初始化（matrix.yaml 缺失），runbook 资产审批已拒绝——矩阵"
             "是权限裁决的前提（§11.7 安全资产），缺失 = 权限系统不可用（fail-closed）；"
-            "修复指引：先运行 vigil setup（或 vigil ops-init）生成矩阵后再落盘。"
+            "修复指引：先运行 vigil setup（或 vigil ops-init）生成矩阵后再落盘。",
         )
 
     acts = _runbook_v2_actions(data)
@@ -1818,16 +1835,20 @@ def _asset_approve_runbook(data: Dict[str, Any], name: str, home: Path,
     result = request_asset_approval(
         asset_type="runbook",
         asset_name=name,
-        description=(
-            f"runbook {name}（env={env or 'local'}）内容审批——"
-            f"动作: {action_desc}（矩阵裁决：{'含强制人工高危动作' if force_manual else '常规档位'}）"
+        description=t(
+            "runbook_tools.asset_approval_desc",
+            "runbook {name}（env={env}）内容审批——"
+            "动作: {actions}（矩阵裁决：{verdict}）",
+            name=name, env=env or "local", actions=action_desc,
+            verdict=(t("runbook_tools.asset_verdict_manual", "含强制人工高危动作")
+                     if force_manual else t("runbook_tools.asset_verdict_normal", "常规档位")),
         ),
         env=env or "local",
         force_manual=force_manual,
         smart_low_risk=smart_low_risk,
     )
     if not result.get("approved"):
-        return False, {}, str(result.get("message") or "资产审批未通过")
+        return False, {}, str(result.get("message") or t("runbook_tools.asset_approval_failed", "资产审批未通过"))
     markers = {
         "approved_by": str(result.get("approved_by") or "manual"),
     }
@@ -1860,7 +1881,7 @@ def runbook_create(
     后落盘带 approved_at/approved_by/approved_version 预审标记，P4 调度器执行
     豁免用）。v0.1 保留原路径（不经资产审批，OPS-DELTA #69 注明过渡期）。
     Fail-closed：严格 kebab-case 名称（防路径穿越）、非空 steps、v0.1 commands
-    拒绝疑似明文凭据（用 <vault:path/field> 占位符）、同名已存在需 overwrite=True。
+    拒绝疑似明文凭据（用 <secret:path/field> 占位符）、同名已存在需 overwrite=True。
     写盘前复用 ``_validate_runbook`` 校验，保证 runbook_load 能原样加载回来。
     env 接受四值 local/test/dev/prod；老值 uat→prod、staging→dev 按档位映射后落盘
     （create 是新写入，直接规范到新枚举；load 保留文件原值）。

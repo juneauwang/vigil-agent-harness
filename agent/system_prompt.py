@@ -60,7 +60,7 @@ from utils import is_truthy_value
 
 logger = logging.getLogger(__name__)
 
-# Ops/terminal tools that can touch SSH, sudo, or vault — when any is loaded,
+# Ops/terminal tools that can touch SSH, sudo, or the secret store — when any is loaded,
 # the ops credential/SSH discipline block joins the stable tier.
 _OPS_SECURITY_TOOLS = frozenset({
     "terminal", "sudo_exec", "topo_discover", "topo_update", "topo_query",
@@ -275,7 +275,7 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
         stable_parts.append(STEER_CHANNEL_NOTE)
 
     # Ops credential + SSH discipline (OPS-DELTA 批次十九): behavioral
-    # constraints for the surfaces that can touch SSH/sudo/vault. Static text,
+    # constraints for the surfaces that can touch SSH/sudo/secret-store. Static text,
     # gated only on stable toolset membership → byte-stable prompt.
     if set(agent.valid_tool_names or []) & _OPS_SECURITY_TOOLS:
         stable_parts.append(OPS_CREDENTIAL_SSH_GUIDANCE)
