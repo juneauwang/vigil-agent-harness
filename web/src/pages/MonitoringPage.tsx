@@ -19,8 +19,9 @@ import { translateBackendMessage } from "@/lib/backendMsg";
  *
  * Three-block layout (Grafana mental model + the existing blue-gray theme):
  * 1. Service health list — topology services probed on demand (30s backend
- *    cache), up green / down red / unknown gray; top summary + status filter +
- *    30s auto refresh.
+ *    cache), up green / down red / unknown gray / internal neutral outline
+ *    (cluster-internal ports are not probed from outside); top summary +
+ *    status filter + 30s auto refresh.
  * 2. PromQL query — promql + duration/step → structured series table + SVG
  *    sparkline (hand-rolled, no chart library); guidance shown when Prometheus
  *    is not configured.
@@ -33,6 +34,8 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   up: { label: "up", cls: "bg-[var(--vigil-ok)] text-white" },
   down: { label: "down", cls: "bg-[var(--vigil-error)] text-white" },
   unknown: { label: "unknown", cls: "bg-[var(--vigil-muted)] text-white" },
+  // internal（集群内部端口，不从外部探测）= 中性描边 chip，不是绿/红判定。
+  internal: { label: "internal", cls: "border border-[var(--vigil-border)] text-[var(--vigil-muted)]" },
 };
 
 const REFRESH_MS = 30_000;
@@ -208,7 +211,7 @@ function AlertRow({ alert, onExecute }: {
   );
 }
 
-type StatusFilter = "all" | "up" | "down" | "unknown";
+type StatusFilter = "all" | "up" | "down" | "unknown" | "internal";
 
 export default function MonitoringPage() {
   const { t, i18n } = useTranslation();
@@ -216,7 +219,7 @@ export default function MonitoringPage() {
   const blang = i18n.language === "en" ? "en" : "zh";
   const bmsg = (m: string | null) => (m ? translateBackendMessage(m, blang) : undefined);
   const [health, setHealth] = useState<MonitoringHealthService[]>([]);
-  const [summary, setSummary] = useState({ up: 0, down: 0, unknown: 0 });
+  const [summary, setSummary] = useState({ up: 0, down: 0, unknown: 0, internal: 0 });
   const [healthError, setHealthError] = useState<string | null>(null);
   const [healthLoaded, setHealthLoaded] = useState(false);
   const [filter, setFilter] = useState<StatusFilter>("all");
@@ -294,9 +297,13 @@ export default function MonitoringPage() {
       .getMonitoringHealth(refresh)
       .then((resp) => {
         setHealth(resp.data?.services ?? []);
-        setSummary(
-          resp.data?.summary ?? { up: 0, down: 0, unknown: 0 },
-        );
+        const s = resp.data?.summary;
+        setSummary({
+          up: s?.up ?? 0,
+          down: s?.down ?? 0,
+          unknown: s?.unknown ?? 0,
+          internal: s?.internal ?? 0,
+        });
         setHealthError(null);
         setHealthLoaded(true);
       })
@@ -407,7 +414,7 @@ export default function MonitoringPage() {
           <div className="mb-3 flex flex-wrap items-center gap-3">
             <h3 className="text-sm font-medium">{t("monitoring.healthTitle")}</h3>
             <div className="flex items-center gap-1.5">
-              {(["up", "down", "unknown"] as const).map((k) => (
+              {(["up", "down", "unknown", "internal"] as const).map((k) => (
                 <button
                   key={k}
                   type="button"
@@ -562,6 +569,7 @@ export default function MonitoringPage() {
                         </td>
                         <td className="px-2 py-1.5">
                           <span
+                            title={s.status === "internal" ? t("monitoring.internalHint") : undefined}
                             className={cn(
                               "inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
                               meta.cls,

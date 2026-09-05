@@ -106,7 +106,7 @@ def test_health_three_states(env_home, client, monkeypatch):
     resp = client.get("/api/monitoring/health")
     assert resp.status_code == 200
     data = resp.json()["data"]
-    assert data["summary"] == {"up": 1, "down": 1, "unknown": 1}
+    assert data["summary"] == {"up": 1, "down": 1, "unknown": 1, "internal": 0}
     assert data["cached"] is False
     by_name = {s["name"]: s for s in data["services"]}
     assert by_name["web"]["status"] == "up"
@@ -175,9 +175,54 @@ def test_health_batch_timeout_marks_remaining_unknown(env_home, client, monkeypa
     assert resp.status_code == 200
     assert elapsed < 1.5  # 没等慢探测跑完
     data = resp.json()["data"]
-    assert data["summary"] == {"up": 0, "down": 0, "unknown": 3}
+    assert data["summary"] == {"up": 0, "down": 0, "unknown": 3, "internal": 0}
     for s in data["services"]:
         assert s["status"] == "unknown"
+
+
+def test_health_internal_rows_not_probed_and_counted(env_home, client, monkeypatch):
+    """reachability=internal（ClusterIP 类内部端口）不探测：状态 internal、
+    latency None、无 ports 明细，不计入 up/down；无标记 → 默认 external 照常
+    探测（不静默跳过）；大小写/空白容忍（手改 YAML 常见）。"""
+    (env_home / "topology.yaml").write_text(json.dumps({
+        "version": 4,
+        "hosts": [{"name": "node1", "env": "prod", "cluster": "k8s-prod",
+                   "endpoint": "203.0.113.10"}],
+    }), encoding="utf-8")
+    (env_home / "services").mkdir()
+    (env_home / "services" / "node1.yaml").write_text(json.dumps({
+        "host": "node1",
+        "services": [
+            {"name": "argocd-redis", "type": "cache", "managed_by": "kubectl",
+             "endpoint": "203.0.113.10:6379", "reachability": "internal"},
+            {"name": "eventbus", "type": "queue", "managed_by": "kubectl",
+             "endpoint": "203.0.113.10:4222", "reachability": "INTERNAL"},
+            {"name": "web", "type": "app", "managed_by": "systemd",
+             "endpoint": "203.0.113.10:8080"},
+        ],
+    }), encoding="utf-8")
+    tcp_calls: list = []
+
+    def fake_tcp(host, port):
+        tcp_calls.append(port)
+        return ("up", 0.5)
+
+    monkeypatch.setattr(mon, "_probe_tcp", fake_tcp)
+    monkeypatch.setattr(mon, "_probe_http", lambda url: ("up", 1.0))
+    resp = client.get("/api/monitoring/health")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["summary"] == {"up": 1, "down": 0, "unknown": 0, "internal": 2}
+    by_name = {s["name"]: s for s in data["services"]}
+    # internal 行：不发起连接、无延迟、无端口明细。
+    assert by_name["argocd-redis"]["status"] == "internal"
+    assert by_name["argocd-redis"]["latency_ms"] is None
+    assert by_name["argocd-redis"]["ports"] == []
+    assert by_name["eventbus"]["status"] == "internal"
+    # 无标记行：默认 external，照常探测。
+    assert by_name["web"]["status"] == "up"
+    assert tcp_calls == [8080]
+    assert 6379 not in tcp_calls and 4222 not in tcp_calls
 
 
 # ---------------------------------------------------------------------------

@@ -65,6 +65,44 @@ const EMPTY_HEALTH = {
   data: { checked_at: "2026-08-23T12:00:00Z", cached: false, summary: { up: 0, down: 0, unknown: 0 }, services: [] },
 };
 
+// internal（集群内部端口）行：不从外部探测，状态中性、不计入 up/down。
+const INTERNAL_HEALTH = {
+  ok: true,
+  data: {
+    checked_at: "2026-08-23T12:00:00Z",
+    cached: false,
+    summary: { up: 1, down: 1, unknown: 0, internal: 1 },
+    services: [
+      {
+        name: "web",
+        host: "node1",
+        type: "app",
+        endpoint: "http://web.local:8080",
+        status: "up",
+        latency_ms: 1.5,
+      },
+      {
+        name: "argocd-redis",
+        host: "node1",
+        cluster: "k8s-prod",
+        type: "cache",
+        managed_by: "kubectl",
+        endpoint: "node1:6379",
+        status: "internal",
+        latency_ms: null,
+      },
+      {
+        name: "db",
+        host: "node1",
+        type: "db",
+        endpoint: "node1:5432",
+        status: "down",
+        latency_ms: 3003.0,
+      },
+    ],
+  },
+};
+
 const QUERY_RESULT = {
   ok: true,
   data: {
@@ -349,6 +387,35 @@ describe("MonitoringPage", () => {
     vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
     const { container } = await renderPage();
     expect(container.textContent).toContain("获取中");
+  });
+
+  // ── internal（集群内部端口）：中性徽标 + 过滤按钮，不计入 down ─────────────
+
+  it("internal services render a neutral badge and filter, excluded from down", async () => {
+    vi.mocked(api.getMonitoringHealth).mockResolvedValue(INTERNAL_HEALTH as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue({ ok: true, data: { count: 0, matched_count: 0, unmatched_count: 0, alerts: [] } } as never);
+    const { container } = await renderPage();
+
+    // 汇总 chips：internal 1 独立计数（up 1 / down 1 不被 internal 撑大）。
+    expect(container.textContent).toContain("internal 1");
+    expect(container.textContent).toContain("up 1");
+    expect(container.textContent).toContain("down 1");
+    // internal 徽标存在（非绿/红中性 chip）。
+    const badges = Array.from(container.querySelectorAll("span"))
+      .map((s) => s.textContent?.trim())
+      .filter((t) => t === "internal");
+    expect(badges.length).toBe(1);
+    // internal 过滤按钮：只显示 internal 行。
+    const internalBtn = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.textContent?.includes("internal 1"),
+    );
+    expect(internalBtn).toBeTruthy();
+    await act(async () => {
+      internalBtn!.click();
+    });
+    expect(container.textContent).toContain("argocd-redis");
+    expect(container.textContent).not.toContain("web");
+    expect(container.textContent).not.toContain("db");
   });
 
   it("设置面板：打开读取当前配置，保存调用 API", async () => {

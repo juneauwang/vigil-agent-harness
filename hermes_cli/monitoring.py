@@ -16,6 +16,10 @@
   超时/连接失败 = down。
 - 端口类 endpoint（host:port）→ TCP 连接测试，通 = up。
 - 无法探测（无 endpoint / 无端口 / 需认证的服务）→ unknown（不误报）。
+- reachability=internal 的服务行（k8s ClusterIP 等集群内部端口）不发起连接——
+  从集群外探测必超时（每端口烧满 3s 还拖垮批次额度），标 internal、latency
+  None，不计入 up/down；summary 增加 internal 计数。字段缺省/其他值 → external
+  （照常探测，老数据行为不变）。
 - extra_ports 随主 endpoint 一并探测，作为补充信息返回（不改变主状态）。
 """
 
@@ -103,6 +107,7 @@ def _service_rows(home: Optional[Path] = None) -> List[Dict[str, Any]]:
             "managed_by": str(row.get("managed_by") or "").strip(),
             "env": str(row.get("env") or "").strip(),
             "endpoint": str(row.get("endpoint") or "").strip() or None,
+            "reachability": (str(row.get("reachability") or "").strip().lower() or None),
             "extra_ports": _normalize_ports(row.get("extra_ports")),
         })
     return rows
@@ -168,7 +173,13 @@ def _probe_tcp(host: str, port: int) -> tuple[str, float]:
 
 
 def _probe_service(row: Dict[str, Any]) -> Dict[str, Any]:
-    """单服务探测：主 endpoint 定状态，extra_ports 补充信息。"""
+    """单服务探测：主 endpoint 定状态，extra_ports 补充信息。
+
+    reachability=internal（集群内部端口）不发起连接：状态 internal、latency
+    None、无 ports 明细（判定只看该字段，探测动作本身一个都不发生）。
+    """
+    if str(row.get("reachability") or "").strip().lower() == "internal":
+        return {**row, "status": "internal", "latency_ms": None, "ports": []}
     ep = row.get("endpoint")
     ports: List[Dict[str, Any]] = []
     status = "unknown"
@@ -238,7 +249,7 @@ def probe_services_health(home: Optional[Path] = None,
     # 保序（与拓扑顺序一致），未完成行补在最后。
     by_name = {r["name"]: r for r in results}
     ordered = [by_name.get(r["name"], r) for r in rows]
-    summary = {"up": 0, "down": 0, "unknown": 0}
+    summary = {"up": 0, "down": 0, "unknown": 0, "internal": 0}
     for r in ordered:
         key = r.get("status")
         if key in summary:

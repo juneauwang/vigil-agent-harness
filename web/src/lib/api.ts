@@ -610,7 +610,7 @@ export interface MonitoringHealthService {
   managed_by?: string;
   env?: string;
   endpoint?: string | null;
-  status: "up" | "down" | "unknown";
+  status: "up" | "down" | "unknown" | "internal";
   latency_ms?: number | null;
   checked_at?: string;
   ports?: Array<{
@@ -635,7 +635,7 @@ export interface MonitoringHealthResponse {
   data?: {
     checked_at?: string;
     cached?: boolean;
-    summary?: { up: number; down: number; unknown: number };
+    summary?: { up: number; down: number; unknown: number; internal: number };
     services?: MonitoringHealthService[];
   };
 }

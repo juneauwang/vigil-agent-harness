@@ -1356,3 +1356,72 @@ def test_parse_docker_ps_names_array_form():
     # 空 Names
     out3 = '{"Names":[],"State":"running"}\n'
     assert _parse_docker_ps(out3) == []
+
+
+# ---------------------------------------------------------------------------
+# reachability 标记（ClusterIP 内部端口不被外探，监控不误报 down）
+# ---------------------------------------------------------------------------
+
+KUBE_REACHABILITY = (
+    '{"items":['
+    '{"kind":"Service","metadata":{"name":"argocd-redis","namespace":"argocd"},'
+    '"spec":{"ports":[{"port":6379}]}},'
+    '{"kind":"Service","metadata":{"name":"argocd-server","namespace":"argocd"},'
+    '"spec":{"type":"NodePort","ports":[{"port":443,"nodePort":30443}]}},'
+    '{"kind":"Service","metadata":{"name":"argocd-lb","namespace":"argocd"},'
+    '"spec":{"type":"LoadBalancer","ports":[{"port":80,"nodePort":30080}]}}'
+    ']}'
+)
+
+
+def test_discover_marks_k8s_service_reachability():
+    """ClusterIP-only svc（无 nodePort）→ reachability=internal；
+    NodePort/LoadBalancer（nodePort 对外入口）→ external。"""
+    d = discover_host("10.0.0.1", "prod",
+                      runner=_docker_runner(**{"kubectl": KUBE_REACHABILITY}))
+    names = {s["name"]: s for s in d["services"]}
+    # ClusterIP：endpoint 是集群内部端口（外部不可达）→ internal。
+    assert names["argocd-redis"]["managed_by"] == "kubectl"
+    assert names["argocd-redis"]["endpoint"] == "10.0.0.1:6379"
+    assert names["argocd-redis"]["reachability"] == "internal"
+    # NodePort / LoadBalancer：endpoint 是 nodePort，对外可达 → external。
+    assert names["argocd-server"]["endpoint"] == "10.0.0.1:30443"
+    assert names["argocd-server"]["reachability"] == "external"
+    assert names["argocd-lb"]["reachability"] == "external"
+
+
+def test_write_discovery_backfills_reachability_onto_existing_rows(tmp_path):
+    """合并落盘：同名行不覆盖（手动 endpoint 保留），但 reachability 新字段
+    缺省时回填——老拓扑里的 ClusterIP 服务重新发现后也能拿到内部标记，
+    否则监控误报永不消失。"""
+    home = tmp_path / "hermes_home"
+    home.mkdir()
+    (home / "topology.yaml").write_text(yaml.safe_dump({
+        "version": 4,
+        "updated_at": "2026-08-01",
+        "hosts": [{"name": "10.0.0.1", "env": "prod", "cluster": "default",
+                   "endpoint": "10.0.0.1"}],
+    }, allow_unicode=True), encoding="utf-8")
+    (home / "services").mkdir()
+    (home / "services" / "10.0.0.1.yaml").write_text(yaml.safe_dump({
+        "host": "10.0.0.1",
+        "services": [
+            # 老数据：字段引入前的行——无 reachability，endpoint 为手动值。
+            {"name": "argocd-redis", "type": "cache", "managed_by": "kubectl",
+             "endpoint": "10.0.0.1:36379"},
+        ],
+    }, allow_unicode=True), encoding="utf-8")
+
+    d = discover_host("10.0.0.1", "prod",
+                      runner=_docker_runner(**{"kubectl": KUBE_REACHABILITY}))
+    result = write_discovery(home, d)
+    assert result["appended"] == 2  # argocd-server / argocd-lb 为新增
+    index = yaml.safe_load(
+        (home / "services" / "10.0.0.1.yaml").read_text(encoding="utf-8"))
+    rows = {s["name"]: s for s in index["services"]}
+    # 同名行：手动 endpoint 保留，reachability 回填。
+    assert rows["argocd-redis"]["endpoint"] == "10.0.0.1:36379"
+    assert rows["argocd-redis"]["reachability"] == "internal"
+    # 新行：直接带标记。
+    assert rows["argocd-server"]["reachability"] == "external"
+    assert rows["argocd-lb"]["reachability"] == "external"

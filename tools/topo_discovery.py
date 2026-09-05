@@ -737,7 +737,13 @@ def _parse_nvidia_smi(output: str) -> List[str]:
 
 
 def _parse_kubectl(output: str) -> List[Dict[str, Any]]:
-    """kubectl get deploy,svc -A -o json → 服务/端口/镜像映射。"""
+    """kubectl get deploy,svc -A -o json → 服务/端口/镜像映射。
+
+    k8s-service 行附 reachability：任一端口带 nodePort（NodePort/LoadBalancer
+    的对外入口）→ external；有端口但全无 nodePort（ClusterIP）→ internal——
+    集群内部端口从集群外 TCP 探测必超时，监控层据此跳过（不误报 down）。
+    无端口服务（ExternalName 等）→ external（endpoint 本就为空，探测 unknown）。
+    """
     try:
         data = json.loads(output or "{}")
     except json.JSONDecodeError:
@@ -752,13 +758,18 @@ def _parse_kubectl(output: str) -> List[Dict[str, Any]]:
             continue
         if kind == "service":
             ports = []
+            has_node_port = False
             for p in (item.get("spec") or {}).get("ports") or []:
                 if isinstance(p, dict):
+                    if p.get("nodePort"):
+                        has_node_port = True
                     port = p.get("nodePort") or p.get("port")
                     if port:
                         ports.append(int(port))
+            reachability = "external" if (has_node_port or not ports) else "internal"
             rows.append({"kind": "k8s-service", "name": name, "namespace": namespace,
-                         "ports": sorted(set(ports))})
+                         "ports": sorted(set(ports)),
+                         "reachability": reachability})
         elif kind == "deployment":
             containers = (((item.get("spec") or {}).get("template") or {})
                           .get("spec") or {}).get("containers") or []
@@ -1507,6 +1518,7 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                 "name": name,
                 "type": service_type,
                 "managed_by": "kubectl",
+                "reachability": str(row.get("reachability") or "external"),
                 "endpoint": f"{host}:{node_port}" if node_port else None,
                 "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
                 "log_paths": [],
@@ -1951,6 +1963,15 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
         row.pop("_host", None)
         if str(row.get("name")) in existing_names:
             # 同名跳过：保留现有行（含手动 endpoint/type/managed_by），不覆盖。
+            # 例外：reachability（内/外部可达标记）——现有行缺省而本次发现带值
+            # 时回填；否则老拓扑里的 ClusterIP 服务永远等不到标记，监控误报
+            # 不消失（字段比合并语义新，不存在被覆盖的手动值）。
+            if row.get("reachability"):
+                for existing_row in merged_rows:
+                    if (isinstance(existing_row, dict)
+                            and str(existing_row.get("name")) == str(row.get("name"))):
+                        existing_row.setdefault("reachability", row["reachability"])
+                        break
             continue
         merged_rows.append(row)
         appended += 1

@@ -282,6 +282,7 @@ const zh = {
     thCluster: "集群",
     thStatus: "状态",
     thLatency: "延迟",
+    internalHint: "集群内部端口（如 ClusterIP），不从外部探测，不计入 up/down",
     healthLoading: "获取中…",
     healthLoadingDesc: "正在探测拓扑服务（30s 缓存命中则直接返回）。",
     settingsBtn: "设置",

@@ -282,6 +282,7 @@ const en = {
     thCluster: "Cluster",
     thStatus: "Status",
     thLatency: "Latency",
+    internalHint: "Cluster-internal port (e.g. ClusterIP) — not probed from outside, excluded from up/down",
     healthLoading: "Fetching…",
     healthLoadingDesc: "Probing topology services (served from a 30s cache when hit).",
     settingsBtn: "Settings",

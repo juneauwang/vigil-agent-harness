@@ -4144,7 +4144,8 @@ async def get_monitoring_health(request: Request, refresh: bool = False):
 
     遍历拓扑服务（P1 数据层 services/），对 endpoint（+ extra_ports）探测：
     HTTP 类 → GET 200-399 = up；端口类 → TCP 通 = up；无 endpoint/需认证 →
-    unknown（不误报）。不落盘、不写拓扑、不产生审计。
+    unknown（不误报）；reachability=internal（集群内部端口）不探测，标
+    internal，不计入 up/down。不落盘、不写拓扑、不产生审计。
     """
     _require_token(request)
     from hermes_cli.monitoring import probe_services_health
