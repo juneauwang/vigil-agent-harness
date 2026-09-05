@@ -23,6 +23,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       setChatSessionModel: vi.fn(),
       getChatUsage: vi.fn(),
       getUsageAnalytics: vi.fn(),
+      approveApproval: vi.fn(),
     },
   };
 });
@@ -55,6 +56,7 @@ const apiMock = api as unknown as {
   setChatSessionModel: ReturnType<typeof vi.fn>;
   getChatUsage: ReturnType<typeof vi.fn>;
   getUsageAnalytics: ReturnType<typeof vi.fn>;
+  approveApproval: ReturnType<typeof vi.fn>;
 };
 
 if (typeof globalThis.HTMLElement !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
@@ -558,6 +560,34 @@ describe("批四十二 §BH 全局弹窗批准 → 对话内审批卡同步", ()
     });
     expect(container.textContent).toContain("已拒绝");
     expect(container.textContent).not.toContain("等待审批");
+  });
+});
+
+describe("待审批浮层（BUGFIX OPS-DELTA #107）", () => {
+  it("pending 审批卡同时出现在消息流底部浮层；批准后浮层消失", async () => {
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    apiMock.approveApproval.mockResolvedValue({ ok: true } as never);
+    apiMock.chatStream.mockImplementation(async (_sid, _msg, onEvent) => {
+      onEvent({ type: "chat:tool", data: { tool_id: "call_1", name: "terminal", input_summary: "kubectl delete pod x" } });
+      onEvent({ type: "chat:approval_pending", data: { approval_id: "apv_9", command: "kubectl delete pod x", env: "prod" } });
+      // no chat:done — approval stays pending, card must float at stream bottom
+    });
+    await sendMessage("删除 pod");
+    const float = container.querySelector('[data-testid="pending-cards-float"]');
+    expect(float).not.toBeNull();
+    expect(float!.textContent).toContain("等待审批");
+    // Resolve via the floating card's approve button.
+    const approveBtn = Array.from(float!.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("批准"),
+    )!;
+    await act(async () => {
+      approveBtn.click();
+    });
+    expect(apiMock.approveApproval).toHaveBeenCalledWith("apv_9", "once");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container.querySelector('[data-testid="pending-cards-float"]')).toBeNull();
   });
 });
 

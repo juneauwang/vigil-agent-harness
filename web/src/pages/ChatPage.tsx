@@ -1009,8 +1009,15 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Batch 82: leaving /chat (unmount) → clear the sid param.
-  useEffect(() => () => syncSid(null), [syncSid]);
+  // BUGFIX (OPS-DELTA #107): REMOVED the batch-82 "unmount → clear sid" effect.
+  // It called setSearchParams in the unmount cleanup, which resolved against the
+  // component's STALE location (/chat?sid=…) and replaceState'd the URL back to
+  // /chat right after a nav pushState (/runbooks) — the pending navigation was
+  // overwritten, so clicking any sidebar link while a session was active (URL had
+  // ?sid=) appeared to do nothing. Leaving ?sid= in the URL is harmless (no other
+  // page reads it) and actually helps: re-entering /chat restores the same session
+  // (batch 82's original intent, via the init-time urlSid logic below).
+
 
   // Switching to a session without cache → fetch history to restore the scene (1a: messages intact across switches).
   useEffect(() => {
@@ -1067,6 +1074,36 @@ export default function ChatPage() {
             return { ...prev, [activeId]: hadInterrupted ? markTurnInterrupted(st) : st };
           });
           setBusyMap((prev) => ({ ...prev, [activeId]: false }));
+        } else if (s?.busy) {
+          // BUGFIX (OPS-DELTA #107): still busy → poll history so a post-refresh
+          // UI keeps following the run. The SSE stream is created at send time and
+          // dies with the page; the old code only refetched on the busy→idle flip,
+          // so after a refresh mid-run output never appeared until the turn fully
+          // finished. Fingerprint the tail to skip no-op ticks (avoid re-render
+          // churn + autoscroll jumps while nothing moved).
+          const h = await api.getChatHistory(activeId);
+          setStates((prev) => {
+            const slot = prev[activeId];
+            if (!slot) return prev;
+            // busy:false on purpose — slot.busy must stay managed by busyMap
+            // (chatInputDisabled reads slot.busy; a stuck true here would keep
+            // the input disabled even after a stop-timeout clears the map).
+            const fresh = stateFromHistory(h.messages ?? [], false);
+            const a = slot.messages;
+            const b = fresh.messages;
+            if (a.length === b.length && a.length > 0) {
+              const la = a[a.length - 1];
+              const lb = b[b.length - 1];
+              if (
+                la.role === lb.role &&
+                la.content === lb.content &&
+                (la.steps?.length ?? 0) === (lb.steps?.length ?? 0)
+              ) {
+                return prev;
+              }
+            }
+            return { ...prev, [activeId]: fresh };
+          });
         }
       } catch {
         // transient network hiccup — next tick retries
@@ -1315,6 +1352,19 @@ export default function ChatPage() {
   const lastMsg = activeState.messages[activeState.messages.length - 1];
   // Stop already clicked (last item is the local "stopped" row): hide the stop button so an inert button doesn't mislead.
   const stopIssued = Boolean(lastMsg?.interrupted);
+  // BUGFIX (OPS-DELTA #107): pending approval/clarify cards are ALSO surfaced at
+  // the bottom of the message stream ("arrive like a new message"). Without this,
+  // a card rendered inside a long turn's step list (top of the message) sits far
+  // above the viewport while the agent's latest output grows at the bottom — the
+  // card looked "pinned to an old position". Resolving updates both copies via the
+  // shared state (steps list keeps its slot; the floating copy disappears).
+  const pendingApprovals = activeState.messages
+    .flatMap((m) => m.approvals ?? [])
+    .filter((c) => c.status === "pending");
+  const pendingClarifies = activeState.messages
+    .flatMap((m) => m.clarifies ?? [])
+    .filter((c) => c.status === "pending");
+  const hasPendingCards = pendingApprovals.length + pendingClarifies.length > 0;
   const activeModel =
     modelSelections[activeId ?? ""] ??
     sessions.find((s) => s.id === activeId)?.model ??
@@ -1483,6 +1533,16 @@ export default function ChatPage() {
             onResolveClarify={resolveClarify}
           />
         ))}
+        {hasPendingCards && (
+          <div className="space-y-2 border-t border-dashed border-amber-500/40 pt-2" data-testid="pending-cards-float">
+            {pendingApprovals.map((card) => (
+              <ApprovalCard key={`float-${card.approvalId}`} card={card} onResolve={resolveApproval} />
+            ))}
+            {pendingClarifies.map((card) => (
+              <ClarifyCard key={`float-${card.clarifyId}`} card={card} onResolve={resolveClarify} />
+            ))}
+          </div>
+        )}
         <div ref={bottomRef} />
       </div>
 
