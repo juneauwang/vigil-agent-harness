@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import time
 from collections.abc import Callable, Mapping
+
+from hermes_cli.i18n import t
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -123,9 +125,11 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="[N]"),
     CommandDef("title", "Set a title for the current session", "Session",
                args_hint="[name]"),
-    CommandDef("env", "查看/切换会话操作环境（ops.environments 已定义列表；/env 无参显示当前环境与可用列表）", "Session",
+    CommandDef("env", t("slash.env_help",
+                        "查看/切换会话操作环境（ops.environments 已定义列表；/env 无参显示当前环境与可用列表）"), "Session",
                cli_only=True, args_hint="[name]"),
-    CommandDef("topo", "会话内拓扑发现——本地直调发现引擎（/topo [host...] [--env prod] [--user root] [--key path]；无参交互式收集）。注意：会话内不支持 --sudo-password（凭据纪律：密码不进 LLM 会话参数）；root-only 探测项需在 CLI 层跑 vigil topo-discover --sudo-password 或预配拓扑 credential", "Session",
+    CommandDef("topo", t("slash.topo_help",
+                         "会话内拓扑发现——本地直调发现引擎（/topo [host...] [--env prod] [--user root] [--key path]；无参交互式收集）。注意：会话内不支持 --sudo-password（凭据纪律：密码不进 LLM 会话参数）；root-only 探测项需在 CLI 层跑 vigil topo-discover --sudo-password 或预配拓扑 credential"), "Session",
                cli_only=True, args_hint="[host...] [--env E] [--user U] [--key K]"),
     CommandDef("handoff", "Hand off this session to a messaging platform (Telegram, Discord, etc.)", "Session",
                args_hint="<platform>", cli_only=True),

@@ -1110,7 +1110,7 @@
   给用户的 apply 命令不含任何密码（密码在文件里）；验证用哈希比对（sha256[:16]）
   而非明文。
 - **待改方向（并入第 5/16 条的凭据红线）**：
-  1. runbook 的 commands 字段支持 `<vault:path/field>` 占位符，执行时由 runbook
+  1. runbook 的 commands 字段支持 `<secret:path/field>` 占位符，执行时由 runbook
      工具从 vault 解析注入，agent 构造命令时永远拿不到明文。
   2. agent 输出层：检测到命令文本含"疑似凭据字符串"（长度≥16 的高熵串）时
      打码/警告。
@@ -1118,7 +1118,7 @@
      一律占位符/文件路径，不回显**。
 
 - **已实施（批次一）**：
-  1. runbook schema v0.1 兼容扩展：commands 支持 `<vault:path/field>` 占位符，
+  1. runbook schema v0.1 兼容扩展：commands 支持 `<secret:path/field>` 占位符，
      `runbook_load` 返回时描述化（"«vault:path — 凭据引用（执行时从保险箱/vault
      读取，明文不进会话记录）»"），**永远不返回明文**；带 vault 引用的 runbook
      附 `vault_refs` 计数 + 提示。
@@ -1318,7 +1318,7 @@
      后合入版本——与"拓扑读一遍靠 LLM 自觉"同类问题，需机制而非自觉。
 - **商业化卡点与解法**：可执行的 runbook 必须含环境信息（端点/凭据位置/文件名），
   可卖的 runbook 必须剥离环境信息（否则泄露客户拓扑）——解法是模板化：schema
-  v0.2 支持 {{var}} 占位符 + <vault:path/field> 凭据引用，执行时绑定环境。
+  v0.2 支持 {{var}} 占位符 + <secret:path/field> 凭据引用，执行时绑定环境。
   这恰好合并第 21 条的待改方向（runbook commands 支持 vault 占位符，原为凭据
   安全）——一个改动两个卖点。
 - **可卖形态**：剥离环境后的通用模板（如本次 alertmanager 部署去掉 IP/节点号/
@@ -2096,7 +2096,7 @@
      - **fail-closed 校验**：名称严格 `^[a-z0-9]+(-[a-z0-9]+)*$`（防路径穿越
        ".."/隐藏文件）；steps/commands 非空；commands 疑似明文凭据（赋值式
        password=/token:、flag 式 --password/-p、curl `-u user:pass`）→ 拒绝并
-       提示改用 `<vault:path/field>` 占位符（复用 _VAULT_REF_RE 机制），错误消息
+       提示改用 `<secret:path/field>` 占位符（复用 _VAULT_REF_RE 机制），错误消息
        **只报键名不报值**（凭据值绝不回显）；`-p 8080:80` 端口发布不误判。
      - 写盘前复用 `_validate_runbook` 校验 → 保证 runbook_load 原样加载回来
        （kind=deploy 的 checklist/rollback 规则一并生效）；同名已存在未
@@ -2126,7 +2126,7 @@
   test_runbook_vault_refs.py 全绿（52 passed）。
 - **行为探针（实测）**：runbook_create 创建 ansible-syntax-check → runbook_load
   回读 triggers/commands；明文 `curl -u admin:secret123` 拒绝且错误消息不含值、
-  `<vault:ansible/pass>` 放行；prompt 常量含 runbook_create + "不是写 Markdown
+  `<secret:ansible/pass>` 放行；prompt 常量含 runbook_create + "不是写 Markdown
   文档" + "沉淀为 runbook"；runbook_load 返回尾部含"提议更新…overwrite=true"；
   resolve_toolset("runbook") 含 runbook_create。
 - **runbook_create schema 与现有样例一致性**：落盘结构对齐 schema v0.1 样例
@@ -2449,7 +2449,7 @@
      - sudo_exec（tools/sudo_tool.py）：拓扑表无该 host credential 且用户要
        sudo 时，工具内部走 clarify 收密码 → `credential_vault.store()`（0600，
        name=`sudo-<host>`）→ 执行 → 返回拓扑登记提示（credential 声明
-       type: vault, ref）。回调经 ContextVar 注册（CLI `_install_tool_callbacks`
+       type: secret, ref）。回调经 ContextVar 注册（CLI `_install_tool_callbacks`
        一行），`propagate_context_to_thread` 的 `copy_context` 自动传播到工具
        worker 线程；gateway/web/oneshot 无交互通道时保持原 fail-closed 引导。
        认证失败时提示已存凭据名（可更新或 expire）。
@@ -2733,13 +2733,13 @@
 
 ### 61. 批次四十四 runbook 凭据校验误判收口——语义识别替代词面（Codex 产出，2026-08-18，dogfood §BN/§BL）
 
-- **范围**：tools/runbook_tools.py + tests/tools/test_batch44_runbook_semantic_secret.py。不碰 conversation_loop/审批核心/权限矩阵/拓扑/批四十 redact·askpass 防护；配置走 config.yaml，本批白名单是代码常量不涉及配置键；前端零改动；`<vault:path/field>` 占位符放行行为保持。
-- **§BN -p 值形态误判（dogfood §BN）**：原 FLAG_RE 对 `-p\s+(\S+)` 只豁免数字开头值，`mkdir -p /root/x.pem`、`scp -p`、`-i /root/x.pem`、`docker -p 8080:80` 路径/端口/无值 flag 全被当密码，逼 agent 绕词。修法：新增 `_first_command_name(cmd)` 跳过 sudo/env/nohup/time 前缀与前置环境变量赋值取真实命令名；新增 `_PASSWORD_FLAG_COMMANDS` 白名单（sshpass/mysql/mysqldump/mysqlimport/mariadb/mariadb-dump/pg_dump/pg_restore/redis-cli/mongosh/mongodump/sqlplus/sqlcmd/psql）；新增 `_looks_like_attribute(value)`（路径/URL/数字端口/变量/`<vault:`/无值 → 属性放行）；新增 `_is_password_flag(flag, value, cmd)`——`-p` 只在密码命令白名单 AND 值形态是密码候选（非数字/路径/变量/引用的短串）才拦；`-P`（DB 工具大写端口）一律放行；`--password/--token/--api-key` 词面明确，保持严格。FLAG_RE 重写为正则交替组（long-flag 空格/= + `-p`/`-P` 空格/紧贴/= 三形态）。
-- **§BL 变量名含 PASS 误判（dogfood §BL）**：`VAULT_PASS=secret/data/...` 变量名 ASCII 含 PASS 被 ASSIGN_RE 大小写不敏感命中。修法：新增 `_assign_value_is_plaintext(value)`——赋值式只在值是**真明文**（纯短串，无 `/`、`$`、`<vault:`、`:` 等引用/路径特征）才拦；指向 secret 的路径/引用（VAULT_PASS=secret/data/CSNDC/maas、$VAR、<vault:>）放行。`PASSWORD=hunter2` 真明文仍拦。
-- **§BL 错误信息给正确写法**：新增 `_secret_error_hint(key)`——命中拦截时报"疑似含明文凭据（{key}）。正确写法：优先用受控凭据通道——目标主机经 topo_query 取凭据后经 vssh/sudo_exec 注入，或命令里用 `<vault:path/field>` 占位符…若这只是本地文件路径/端口/连接参数而非凭据，可直接写"。`_scan_commands_for_secrets` 的 step/rollback 两分支统一复用它。错误只报键名不报值——凭据值绝不进错误/日志。
+- **范围**：tools/runbook_tools.py + tests/tools/test_batch44_runbook_semantic_secret.py。不碰 conversation_loop/审批核心/权限矩阵/拓扑/批四十 redact·askpass 防护；配置走 config.yaml，本批白名单是代码常量不涉及配置键；前端零改动；`<secret:path/field>` 占位符放行行为保持。
+- **§BN -p 值形态误判（dogfood §BN）**：原 FLAG_RE 对 `-p\s+(\S+)` 只豁免数字开头值，`mkdir -p /root/x.pem`、`scp -p`、`-i /root/x.pem`、`docker -p 8080:80` 路径/端口/无值 flag 全被当密码，逼 agent 绕词。修法：新增 `_first_command_name(cmd)` 跳过 sudo/env/nohup/time 前缀与前置环境变量赋值取真实命令名；新增 `_PASSWORD_FLAG_COMMANDS` 白名单（sshpass/mysql/mysqldump/mysqlimport/mariadb/mariadb-dump/pg_dump/pg_restore/redis-cli/mongosh/mongodump/sqlplus/sqlcmd/psql）；新增 `_looks_like_attribute(value)`（路径/URL/数字端口/变量/`<secret:`/无值 → 属性放行）；新增 `_is_password_flag(flag, value, cmd)`——`-p` 只在密码命令白名单 AND 值形态是密码候选（非数字/路径/变量/引用的短串）才拦；`-P`（DB 工具大写端口）一律放行；`--password/--token/--api-key` 词面明确，保持严格。FLAG_RE 重写为正则交替组（long-flag 空格/= + `-p`/`-P` 空格/紧贴/= 三形态）。
+- **§BL 变量名含 PASS 误判（dogfood §BL）**：`VAULT_PASS=secret/data/...` 变量名 ASCII 含 PASS 被 ASSIGN_RE 大小写不敏感命中。修法：新增 `_assign_value_is_plaintext(value)`——赋值式只在值是**真明文**（纯短串，无 `/`、`$`、`<secret:`、`:` 等引用/路径特征）才拦；指向 secret 的路径/引用（VAULT_PASS=secret/data/CSNDC/maas、$VAR、<secret:>）放行。`PASSWORD=hunter2` 真明文仍拦。
+- **§BL 错误信息给正确写法**：新增 `_secret_error_hint(key)`——命中拦截时报"疑似含明文凭据（{key}）。正确写法：优先用受控凭据通道——目标主机经 topo_query 取凭据后经 vssh/sudo_exec 注入，或命令里用 `<secret:path/field>` 占位符…若这只是本地文件路径/端口/连接参数而非凭据，可直接写"。`_scan_commands_for_secrets` 的 step/rollback 两分支统一复用它。错误只报键名不报值——凭据值绝不进错误/日志。
 - **安全底线不回退**：`sshpass -p hunter2`、`mysql -psecret`/`mysql -p'secret'`（含紧贴形态）、`PASSWORD=hunter2`、`--password=abc`、`curl -u admin:secret123` 全部仍拦；测试断言 24 值边界（11 放行 + 8 拦截 + hint 2 + 完整路径 5）。
 - **测试**：批四十四新增 26 例全绿（`test_batch44_runbook_semantic_secret.py`——`_find_plaintext_secret` 直测 + `runbook_create` 完整路径）；回归：批二十五 create/checkpoint/vault-refs/批四十 gate 49 例全绿；`tests/tools/ -k runbook` 77 例（含 3 skip）全绿。全量 `tests/tools/` 95 失败均为预存失败与本批无关（video/voice/watch/web/zombie 等环境/模拟类；已 stash 基线上手工复现 3 类同失）。
-- **核销方式**：测试常驻——`mkdir -p /path`、`scp -p`、`docker -p 端口`、`psql -p 端口`、`-i 私钥路径`、DB 工具 `-P` 大写端口、`VAULT_PASS=secret/data/...` 引用全放行断言在；`sshpass -p`、`mysql -p'pwd'`/`-psecret`、`PASSWORD=hunter2`、`--password=abc` 真明文拦截断言在；错误消息含 topo_query/vssh/`<vault:path/field>` 正确写法 + 值不回显断言在。季度体检检查：`_PASSWORD_FLAG_COMMANDS` 白名单在、`_is_password_flag`/`_assign_value_is_plaintext` 语义判定在、`_secret_error_hint` 正确写法引导在。
+- **核销方式**：测试常驻——`mkdir -p /path`、`scp -p`、`docker -p 端口`、`psql -p 端口`、`-i 私钥路径`、DB 工具 `-P` 大写端口、`VAULT_PASS=secret/data/...` 引用全放行断言在；`sshpass -p`、`mysql -p'pwd'`/`-psecret`、`PASSWORD=hunter2`、`--password=abc` 真明文拦截断言在；错误消息含 topo_query/vssh/`<secret:path/field>` 正确写法 + 值不回显断言在。季度体检检查：`_PASSWORD_FLAG_COMMANDS` 白名单在、`_is_password_flag`/`_assign_value_is_plaintext` 语义判定在、`_secret_error_hint` 正确写法引导在。
 
 ### 62. 批次四十五 Overview 连线拓扑总览——整网层级拓扑替换弱展示（Codex 产出，2026-08-18，dogfood §BC/§BD）
 

@@ -44,6 +44,8 @@ from urllib.parse import unquote, urlparse
 from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
+
+from hermes_cli.i18n import t
 from typing import List, Dict, Any, Optional
 
 logger = logging.getLogger(__name__)
@@ -132,8 +134,8 @@ def _estimate_exit_cost_label(
         if accum and accum > 0:
             status = str(getattr(agent, "session_cost_status", "") or "")
             if status == "included":
-                return " · 成本已含（订阅）"
-            return f" · 估算成本 ≈${accum:.2f}"
+                return t("usage.costIncluded", " · 成本已含（订阅）")
+            return t("usage.estCostApprox", " · 估算成本 ≈${amount}", amount=f"{accum:.2f}")
     except Exception:
         pass
     try:
@@ -163,8 +165,8 @@ def _estimate_exit_cost_label(
             _cost = _try(0)
         if _cost is not None and _cost.amount_usd is not None:
             if str(getattr(_cost, "status", "")) == "included":
-                return " · 成本已含（订阅）"
-            return f" · 估算成本 {_cost.label}"
+                return t("usage.costIncluded", " · 成本已含（订阅）")
+            return t("usage.estCostLabeled", " · 估算成本 {label}", label=_cost.label)
     except Exception:
         pass
     return ""
@@ -5404,12 +5406,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     opts[name] = "1"
                 elif name in ("env", "user", "key", "cluster"):
                     if i + 1 >= len(tokens):
-                        self._console_print(f"  ✗ --{name} 缺少参数值")
+                        self._console_print(t("cli.arg_missing_value", "  ✗ --{name} 缺少参数值", name=name))
                         return
                     opts[name] = tokens[i + 1]
                     i += 1
                 else:
-                    self._console_print(f"  ✗ 未知参数 --{name}")
+                    self._console_print(t("cli.arg_unknown", "  ✗ 未知参数 --{name}", name=name))
                     return
             else:
                 # 批三十三 2b：host 参数支持逗号分隔（用户习惯 ip1,ip2,ip3），
@@ -5545,7 +5547,7 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
             ctype = str(cred.get("type") or "")
             if ctype == "ssh_key":
                 creds["key_path"] = key_arg or cred.get("ref")
-            elif ctype == "vault":
+            elif ctype == "secret":
                 try:
                     from tools.credential_vault import path_for
                     creds["askpass_file"] = str(
@@ -15328,7 +15330,9 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     total_input = 0
                 rate_label = ""
                 if total_input > 0:
-                    rate_label = f" · 缓存命中率 {int(cache_read) / total_input * 100:.1f}%"
+                    rate_label = t("usage.cacheHitRate",
+                                   " · 缓存命中率 {rate}%",
+                                   rate=f"{int(cache_read) / total_input * 100:.1f}")
                 cache_write = getattr(agent, "session_cache_write_tokens", 0) or 0
                 cost_label = _estimate_exit_cost_label(
                     agent,
@@ -15340,9 +15344,12 @@ class HermesCLI(CLIAgentSetupMixin, CLICommandsMixin, CLIBillingMixin):
                     api_calls=int(api_calls),
                     fallback_model=str(getattr(self, "model", "") or ""),
                 )
-                print(f"Tokens:         📊 本次会话: 输入 {inp:,} · 输出 {out:,} · "
-                      f"缓存 {cache_read:,} · reasoning {reasoning:,} · 总计 {total:,} tokens"
-                      f"{rate_label}{cost_label}")
+                print(t("usage.sessionSummary",
+                        "Tokens:         📊 本次会话: 输入 {inp} · 输出 {out} · "
+                        "缓存 {cache} · reasoning {reasoning} · 总计 {total} tokens",
+                        inp=f"{inp:,}", out=f"{out:,}", cache=f"{cache_read:,}",
+                        reasoning=f"{reasoning:,}", total=f"{total:,}")
+                      + rate_label + cost_label)
         else:
             try:
                 from hermes_cli.skin_engine import get_active_goodbye

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List
 
+from hermes_cli.i18n import t
 from hermes_cli.monitoring import MonitoringUnavailable, MonitoringUpstreamError
 
 _STATUS_OK = 0
@@ -24,45 +25,59 @@ def _json_out(payload: Any) -> int:
 
 def _fmt_disposition_text(disp: Dict[str, Any]) -> str:
     if not disp.get("matched"):
-        return "无匹配 runbook" + (
-            f"（{disp.get('hint')}）" if disp.get("hint") else ""
+        return t("alerts.no_match", "无匹配 runbook") + (
+            t("alerts.hint_parens", "（{hint}）", hint=disp.get("hint")) if disp.get("hint") else ""
         )
     confidence = disp.get("confidence")
     matched_by = disp.get("matched_by")
-    label = {"high": "高置信", "medium": "中置信"}.get(confidence, confidence or "")
-    basis = "触发词命中" if matched_by == "trigger" else "模糊匹配"
+    label = {
+        "high": t("alerts.conf_high", "高置信"),
+        "medium": t("alerts.conf_medium", "中置信"),
+    }.get(confidence, confidence or "")
+    basis = (
+        t("alerts.basis_trigger", "触发词命中")
+        if matched_by == "trigger"
+        else t("alerts.basis_fuzzy", "模糊匹配")
+    )
     title = disp.get("title")
     name = disp.get("runbook")
-    head = f"→ {name}（{label} · {basis}"
+    head = t("alerts.match_head", "→ {name}（{label} · {basis}", name=name, label=label, basis=basis)
     if disp.get("matched_keyword"):
-        head += f"「{disp.get('matched_keyword')}」"
-    head += "）"
+        head += t("alerts.match_keyword", "「{keyword}」", keyword=disp.get("matched_keyword"))
+    head += t("alerts.match_close", "）")
     if title:
-        head += f" · {title}"
+        head += t("alerts.match_title", " · {title}", title=title)
     alts = disp.get("alternatives") or []
     if alts:
-        head += "；次优: " + ", ".join(a.get("name") or "" for a in alts)
+        names = ", ".join(a.get("name") or "" for a in alts)
+        head += t("alerts.alternatives", "；次优: {names}", names=names)
     return head
 
 
 def _print_alerts_text(payload: Dict[str, Any]) -> None:
     alerts: List[Dict[str, Any]] = payload.get("alerts") or []
-    print(
-        f"活跃告警: {payload.get('count', 0)}"
-        f"（{payload.get('matched_count', 0)} 条有 runbook 建议）"
-    )
+    print(t(
+        "alerts.list_header",
+        "活跃告警: {count}（{matched} 条有 runbook 建议）",
+        count=payload.get("count", 0),
+        matched=payload.get("matched_count", 0),
+    ))
     for a in alerts:
         sev = a.get("severity") or "info"
         inst = a.get("instance") or ""
-        line = f"- [{sev}] {a.get('alertname') or '未知告警'}"
+        line = t("alerts.alert_line", "- [{sev}] {alertname}",
+                 sev=sev, alertname=a.get("alertname") or t("alerts.unknown_alert", "未知告警"))
         if inst:
             line += f" · instance={inst}"
         if a.get("summary"):
             line += f"\n  summary: {a['summary']}"
-        line += "\n  建议处置: " + _fmt_disposition_text(a.get("disposition") or {})
+        line += t("alerts.disposition_label", "\n  建议处置: ") + _fmt_disposition_text(a.get("disposition") or {})
         print(line)
-    print("\n提示：以上为处置建议（仅供建议，不自动执行）。确认后执行请走 "
-          "runbook_execute（agent）/ Web 监控页 / 既有执行链（矩阵 + 审批门）。")
+    print(t(
+        "alerts.list_footer",
+        "\n提示：以上为处置建议（仅供建议，不自动执行）。确认后执行请走 "
+        "runbook_execute（agent）/ Web 监控页 / 既有执行链（矩阵 + 审批门）。",
+    ))
 
 
 def _run_list(args) -> int:
@@ -74,7 +89,7 @@ def _run_list(args) -> int:
         print(f"✗ {exc}")
         return _STATUS_ERROR
     except MonitoringUpstreamError as exc:
-        print(f"✗ Alertmanager 上游错误: {exc}")
+        print(t("alerts.upstream_error", "✗ Alertmanager 上游错误: {exc}", exc=exc))
         return _STATUS_ERROR
     if getattr(args, "json", False):
         return _json_out(payload)
@@ -89,17 +104,23 @@ def _run_history(args) -> int:
     rows = recent_alert_triage(limit=limit)
     if getattr(args, "json", False):
         return _json_out(rows)
-    print(f"最近 triage 审计（runtime/alert_triage.jsonl）: {len(rows)} 条")
+    print(t("alerts.history_header",
+            "最近 triage 审计（runtime/alert_triage.jsonl）: {n} 条", n=len(rows)))
     for row in rows:
-        print(
-            f"- {row.get('ts')} · 告警 {row.get('alert_count', 0)} 条"
-            f"（匹配 {row.get('matched_count', 0)}）"
-        )
+        print(t(
+            "alerts.history_row",
+            "- {ts} · 告警 {total} 条（匹配 {matched}）",
+            ts=row.get("ts"),
+            total=row.get("alert_count", 0),
+            matched=row.get("matched_count", 0),
+        ))
         for e in row.get("entries") or []:
-            hit = e.get("runbook") or "无匹配"
+            hit = e.get("runbook") or t("alerts.no_match", "无匹配")
             detail = (
                 f" → {hit}"
-                + (f"（{e.get('confidence')}/{e.get('matched_by')}）" if e.get("matched") else "")
+                + (t("alerts.history_conf", "（{confidence}/{matched_by}）",
+                     confidence=e.get("confidence"), matched_by=e.get("matched_by"))
+                   if e.get("matched") else "")
             )
             print(f"    {e.get('alertname') or '?'} [{e.get('severity') or '?'}]{detail}")
     return _STATUS_OK

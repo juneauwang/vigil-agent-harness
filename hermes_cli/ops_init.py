@@ -46,6 +46,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from hermes_cli.i18n import t
+
 _SAMPLE_DIR = Path(__file__).resolve().parent / "ops_samples"
 _PROFILE_NAME = "ops"
 
@@ -155,9 +157,13 @@ def _resolve_env_defs(env: str) -> list[dict]:
     """
     tier = _env_tier(env)
     if tier != str(env or "").strip().lower():
-        print(f"· 提示：自定义环境 {env} 已映射到 {tier} 档"
-              f"（环境枚举现为 {'/'.join(_ENV_TIERS)}；权限语义不放松，"
-              f"uat→prod 只会更严）。如需调整请在 config.yaml ops.environments 修改")
+        print(t(
+            "opsinit.env_mapped",
+            "· 提示：自定义环境 {env} 已映射到 {tier} 档"
+            "（环境枚举现为 {tiers}；权限语义不放松，"
+            "uat→prod 只会更严）。如需调整请在 config.yaml ops.environments 修改",
+            env=env, tier=tier, tiers="/".join(_ENV_TIERS),
+        ))
     return [dict(d) for d in _DEFAULT_ENV_DEFS]
 
 
@@ -172,7 +178,7 @@ def _write_config(profile_dir: Path, env: str, force: bool) -> bool:
     """Write config.yaml into the profile. Returns True when written."""
     path = profile_dir / "config.yaml"
     if path.exists() and not force:
-        print(f"· config.yaml 已存在，跳过（--force 覆盖）：{path}")
+        print(t("opsinit.skip_exists", "· {name} 已存在，跳过（--force 覆盖）：{path}", name="config.yaml", path=path))
         return False
     env_defs = _resolve_env_defs(env)
     tier = _env_tier(env)
@@ -184,7 +190,7 @@ def _write_config(profile_dir: Path, env: str, force: bool) -> bool:
         environments=_environments_yaml(env_defs),
     )
     path.write_text(text, encoding="utf-8")
-    print(f"· 写入 config.yaml：{path}")
+    print(t("opsinit.wrote", "· 写入 {name}：{path}", name="config.yaml", path=path))
     return True
 
 
@@ -200,28 +206,28 @@ def seed_ops_samples(dst_dir: Path, *, force: bool = False, report=None) -> bool
     _report = report or (lambda _m: None)
     src = _SAMPLE_DIR / "topology.yaml"
     if not src.is_file():
-        raise SystemExit(f"缺少样例拓扑 {src} —— 初始化中止。")
+        raise SystemExit(t("opsinit.missing_sample", "缺少样例拓扑 {src} —— 初始化中止。", src=src))
     dst = dst_dir / "topology.yaml"
     if dst.exists() and not force:
-        _report(f"· topology.yaml 已存在，跳过（--force 覆盖）：{dst}")
+        _report(t("opsinit.skip_exists", "· {name} 已存在，跳过（--force 覆盖）：{path}", name="topology.yaml", path=dst))
     else:
         shutil.copy2(src, dst)
-        _report(f"· 写入 topology.yaml：{dst}")
+        _report(t("opsinit.wrote", "· 写入 {name}：{path}", name="topology.yaml", path=dst))
 
     entities_src = _SAMPLE_DIR / "entities"
     entities_dst = dst_dir / "entities"
     if not entities_src.is_dir():
-        raise SystemExit(f"缺少样例实体目录 {entities_src} —— 初始化中止。")
+        raise SystemExit(t("opsinit.missing_sample_dir", "缺少样例实体目录 {src} —— 初始化中止。", src=entities_src))
 
     if not force and entities_dst.exists() and any(entities_dst.iterdir()):
-        _report(f"· entities/ 已存在且非空，跳过（--force 覆盖）：{entities_dst}")
+        _report(t("opsinit.skip_dir_nonempty", "· {name} 已存在且非空，跳过（--force 覆盖）：{path}", name="entities/", path=entities_dst))
     else:
         entities_dst.mkdir(parents=True, exist_ok=True)
         copied = 0
         for src_file in sorted(entities_src.glob("*.yaml")):
             shutil.copy2(src_file, entities_dst / src_file.name)
             copied += 1
-        _report(f"· 写入 entities/：{copied} 个实体档案 → {entities_dst}")
+        _report(t("opsinit.wrote_entities", "· 写入 entities/：{n} 个实体档案 → {path}", n=copied, path=entities_dst))
 
     # v0.4：第二层目录 services/（样例旧 hosts/ 兼容保留）。
     services_src = _SAMPLE_DIR / "services"
@@ -230,42 +236,42 @@ def seed_ops_samples(dst_dir: Path, *, force: bool = False, report=None) -> bool
     services_dst = dst_dir / "services"
     if services_src.is_dir():
         if not force and services_dst.exists() and any(services_dst.iterdir()):
-            _report(f"· services/ 已存在且非空，跳过（--force 覆盖）：{services_dst}")
+            _report(t("opsinit.skip_dir_nonempty", "· {name} 已存在且非空，跳过（--force 覆盖）：{path}", name="services/", path=services_dst))
         else:
             services_dst.mkdir(parents=True, exist_ok=True)
             copied_services = 0
             for src_file in sorted(services_src.glob("*.yaml")):
                 shutil.copy2(src_file, services_dst / src_file.name)
                 copied_services += 1
-            _report(f"· 写入 services/：{copied_services} 个服务目录 → {services_dst}")
+            _report(t("opsinit.wrote_services", "· 写入 services/：{n} 个服务目录 → {path}", n=copied_services, path=services_dst))
 
     # 硬件层 hardware/（v0.4 第四层；样例占位，实际数据由 topology discover 产出）。
     hardware_src = _SAMPLE_DIR / "hardware"
     hardware_dst = dst_dir / "hardware"
     if hardware_src.is_dir():
         if not force and hardware_dst.exists() and any(hardware_dst.iterdir()):
-            _report(f"· hardware/ 已存在且非空，跳过（--force 覆盖）：{hardware_dst}")
+            _report(t("opsinit.skip_dir_nonempty", "· {name} 已存在且非空，跳过（--force 覆盖）：{path}", name="hardware/", path=hardware_dst))
         else:
             hardware_dst.mkdir(parents=True, exist_ok=True)
             copied_hardware = 0
             for src_file in sorted(hardware_src.glob("*.yaml")):
                 shutil.copy2(src_file, hardware_dst / src_file.name)
                 copied_hardware += 1
-            _report(f"· 写入 hardware/：{copied_hardware} 个硬件档案 → {hardware_dst}")
+            _report(t("opsinit.wrote_hardware", "· 写入 hardware/：{n} 个硬件档案 → {path}", n=copied_hardware, path=hardware_dst))
 
     runbooks_src = _SAMPLE_DIR / "runbooks"
     runbooks_dst = dst_dir / "runbooks"
     if not runbooks_src.is_dir():
-        raise SystemExit(f"缺少样例 runbooks 目录 {runbooks_src} —— 初始化中止。")
+        raise SystemExit(t("opsinit.missing_sample_dir", "缺少样例 runbooks 目录 {src} —— 初始化中止。", src=runbooks_src))
     if not force and runbooks_dst.exists() and any(runbooks_dst.iterdir()):
-        _report(f"· runbooks/ 已存在且非空，跳过（--force 覆盖）：{runbooks_dst}")
+        _report(t("opsinit.skip_dir_nonempty", "· {name} 已存在且非空，跳过（--force 覆盖）：{path}", name="runbooks/", path=runbooks_dst))
     else:
         runbooks_dst.mkdir(parents=True, exist_ok=True)
         copied = 0
         for src_file in sorted(runbooks_src.glob("*.yaml")):
             shutil.copy2(src_file, runbooks_dst / src_file.name)
             copied += 1
-        _report(f"· 写入 runbooks/：{copied} 个 runbook → {runbooks_dst}")
+        _report(t("opsinit.wrote_runbooks", "· 写入 runbooks/：{n} 个 runbook → {path}", n=copied, path=runbooks_dst))
     return True
 
 

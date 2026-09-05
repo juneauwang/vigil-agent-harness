@@ -305,6 +305,24 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
     return None
 
 
+def _checkout_branch(repo: Path) -> Optional[str]:
+    """Return the checked-out branch name via ``.git/HEAD`` (no subprocess).
+
+    None when it can't be determined cheaply (missing/unreadable HEAD or
+    detached HEAD) — callers keep their pre-check behavior in that case.
+    """
+    git_dir = repo / ".git"
+    if not git_dir.is_dir():
+        return None
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if head.startswith("ref: refs/heads/"):
+        return head[len("ref: refs/heads/"):] or None
+    return None
+
+
 def check_for_updates() -> Optional[int]:
     """Check whether a Vigil update is available.
 
@@ -331,6 +349,33 @@ def check_for_updates() -> Optional[int]:
         from hermes_cli.config import detect_install_method, get_project_root
         if detect_install_method(get_project_root()) == "docker":
             return None
+    except Exception:
+        pass
+
+    # A checkout that is not on branch main never "follows" origin/main:
+    # Vigil's release model is PyPI + release branches (e.g. v1.0), so
+    # counting HEAD..origin/main on a release branch reports a permanent
+    # bogus "N commits behind". Skip the check entirely for non-main
+    # checkouts (same precedent as the docker guard above — the check
+    # doesn't apply). This suppresses the banner line, the `--version`
+    # update echo, and the dashboard /api/update check consistently;
+    # `vigil update` itself stays fully functional and takes --branch.
+    try:
+        for _repo in [
+            Path(__file__).parent.parent.resolve(),
+            get_hermes_home() / "hermes-agent",
+        ]:
+            if not (_repo / ".git").is_dir():
+                continue
+            _branch = _checkout_branch(_repo)
+            if _branch is not None and _branch != "main":
+                # Positively on a non-main branch — the behind count against
+                # origin/main is meaningless; skip the check (and ignore any
+                # stale cache entry the old check wrote).
+                return None
+            # Undeterminable branch (detached/unreadable HEAD) → keep the
+            # existing check behavior for this repo.
+            break
     except Exception:
         pass
 

@@ -40,6 +40,8 @@ import subprocess
 import tempfile
 from datetime import datetime
 from pathlib import Path
+
+from hermes_cli.i18n import t
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
@@ -275,16 +277,22 @@ def validate_matrix(raw: Any, path: Optional[Path] = None) -> Dict[str, Any]:
             if not cell_source:
                 cell_source = top_source or base_template or "unknown"
             if cell_source not in ("manual",) and cell_source not in TEMPLATE_NAMES:
-                warnings.append(f"sources.{env}.{act}: 来源 {cell_source!r} 未知，按原样保留。")
+                warnings.append(t(
+                    "matrix.source_unknown",
+                    "sources.{env}.{act}: 来源 {source!r} 未知，按原样保留。",
+                    env=env, act=act, source=cell_source,
+                ))
             sources[env][act] = cell_source
 
         # 漏配检查：该环境缺的动作 → 默认 approve（保守）+ warning。
         missing = sorted(action_set - set(matrix[env].keys()))
         if missing:
             shown = ", ".join(missing)
-            warnings.append(
-                f"matrix.{env} 漏配 {len(missing)} 个动作（{shown}）——默认 approve（保守）。"
-            )
+            warnings.append(t(
+                "matrix.missing_actions",
+                "matrix.{env} 漏配 {n} 个动作（{shown}）——默认 approve（保守）。",
+                env=env, n=len(missing), shown=shown,
+            ))
 
     if errors:
         raise MatrixValidationError(errors)

@@ -276,36 +276,44 @@ def _matrix_description(command: str, action_name: str, level: str, env: str,
                         prod_hardgate: bool = False) -> str:
     """审批展示文案：动作 × env 档位 / unknown 保守提示 / 链式取保守说明。"""
     from tools import matrix_data as _md
+    from hermes_cli.i18n import t
     chain = classification.get("chain") or None
     if level == _md.LEVEL_REQUIRED:
-        desc = (
-            f"⚠ 操作矩阵强制人工确认（{action_name} × {env} = "
-            "{approve: required}，覆盖 approvals.mode）"
+        desc = t(
+            "opsperm.required",
+            "⚠ 操作矩阵强制人工确认（{action} × {env} = "
+            "{{approve: required}}，覆盖 approvals.mode）",
+            action=action_name, env=env,
         )
     elif prod_hardgate:
-        desc = (
-            f"⚠ prod 变更强制人工确认（{action_name} × {env}）：terminal 裸命令"
-            "不得绕过 runbook 执行器矩阵裁决（OPS-DELTA #95）"
+        desc = t(
+            "opsperm.prod_hardgate",
+            "⚠ prod 变更强制人工确认（{action} × {env}）：terminal 裸命令"
+            "不得绕过 runbook 执行器矩阵裁决（OPS-DELTA #95）",
+            action=action_name, env=env,
         )
     elif action_name == "unknown":
-        desc = (
-            f"⚠ 未能识别命令意图（unknown）：{command} 不在操作分类规则表内，"
+        desc = t(
+            "opsperm.unknown",
+            "⚠ 未能识别命令意图（unknown）：{command} 不在操作分类规则表内，"
             "矩阵漏配 → 按保守审批处理（默认 approve 走审批门）；"
-            "可在 OPS-DELTA 登记新规则。"
+            "可在 OPS-DELTA 登记新规则。",
+            command=command,
         )
     else:
-        desc = f"操作矩阵 {action_name} × {env} 判定为需要审批（approve）"
+        desc = t("opsperm.approve", "操作矩阵 {action} × {env} 判定为需要审批（approve）",
+                 action=action_name, env=env)
     rule = str(primary.get("rule") or "").strip()
     if rule:
-        desc = f"{desc}（规则 {rule}）"
+        desc = t("opsperm.rule_suffix", "{desc}（规则 {rule}）", desc=desc, rule=rule)
     note = str(primary.get("note") or "").strip()
     if note and action_name != "unknown":
-        desc = f"{desc}；{note}"
+        desc = t("opsperm.note_suffix", "{desc}；{note}", desc=desc, note=note)
     if chain and len(chain) > 1:
         joined = " / ".join(
             f"{c.get('action')}({c.get('rule') or '?'})" for c in chain
         )
-        desc = f"{desc}（链式命令取保守：{joined}）"
+        desc = t("opsperm.chain_suffix", "{desc}（链式命令取保守：{joined}）", desc=desc, joined=joined)
     return desc
 
 

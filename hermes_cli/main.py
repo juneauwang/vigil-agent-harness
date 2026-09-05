@@ -763,6 +763,8 @@ if _FORCE_IPV4_EARLY:
         pass  # best-effort — don't crash if hermes_constants not importable yet
 
 import logging
+
+from hermes_cli.i18n import t
 import threading
 import time as _time
 from datetime import datetime
@@ -2746,9 +2748,9 @@ def cmd_chat(args):
         )
 
     # Import and run the CLI（import 即触发 CLI_CONFIG=load_cli_config() 等重加载）
-    _progress_hint("· 加载配置与模型…")
+    _progress_hint(t("boot.loadingConfig", "· 加载配置与模型…"))
     from cli import main as cli_main
-    _progress_hint("· 启动就绪")
+    _progress_hint(t("boot.ready", "· 启动就绪"))
 
     # Build kwargs from args
     kwargs = {
@@ -11213,7 +11215,7 @@ def _prepare_agent_startup(args) -> None:
         return
 
     _accept_hooks = bool(getattr(args, "accept_hooks", False))
-    _progress_hint("· 加载插件与工具…")
+    _progress_hint(t("boot.loadingPlugins", "· 加载插件与工具…"))
     try:
         from hermes_cli.plugins import discover_plugins
 
@@ -11223,7 +11225,7 @@ def _prepare_agent_startup(args) -> None:
             "plugin discovery failed at CLI startup",
             exc_info=True,
         )
-    _progress_hint("· 插件与工具加载完成")
+    _progress_hint(t("boot.pluginsLoaded", "· 插件与工具加载完成"))
     _run_inline_mcp_discovery = True
     if _is_tui_chat_launch(args):
         # The TUI launcher hands off to a dedicated startup path that already

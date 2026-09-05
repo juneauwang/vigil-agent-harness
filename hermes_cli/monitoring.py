@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from hermes_cli.i18n import t
+
 import httpx
 
 logger = logging.getLogger(__name__)
@@ -304,9 +306,10 @@ def query_prometheus(promql: str, duration: str = "", step: str = "") -> Dict[st
     cfg = pt._prom_config()
     endpoint = pt._endpoint_url(cfg)
     if not endpoint:
-        raise MonitoringUnavailable(
-            "未配置 Prometheus（config ops.prometheus.endpoint），仅健康探测可用。"
-        )
+        raise MonitoringUnavailable(t(
+            "monitoring.prom_unavailable",
+            "未配置 Prometheus（config ops.prometheus.endpoint），仅健康探测可用。",
+        ))
     q = str(promql or "").strip()
     if not q:
         raise MonitoringBadRequest("promql 必填（PromQL 表达式）。")
@@ -383,9 +386,10 @@ def fetch_active_alerts() -> Dict[str, Any]:
     cfg = pt._prom_config()
     alertmanager = (cfg.get("alertmanager") or "").strip().rstrip("/")
     if not alertmanager:
-        raise MonitoringUnavailable(
-            "未配置 Alertmanager（config ops.prometheus.alertmanager），仅健康探测可用。"
-        )
+        raise MonitoringUnavailable(t(
+            "monitoring.alertmanager_unavailable",
+            "未配置 Alertmanager（config ops.prometheus.alertmanager），仅健康探测可用。",
+        ))
     auth: Optional[str] = None
     try:
         auth = pt._resolve_basic_auth(cfg)

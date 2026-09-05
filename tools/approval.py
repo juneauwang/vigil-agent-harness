@@ -13,6 +13,8 @@ import fnmatch
 import functools
 import hashlib
 import logging
+
+from hermes_cli.i18n import t as _ops_t
 import os
 import re
 import shlex
@@ -641,7 +643,7 @@ def _check_sudo_stdin_guard(command: str) -> tuple:
         return (False, None)
     try:
         from tools.credential_vault import has_credential_source
-        if has_credential_source(("user", "vault")):
+        if has_credential_source(("user", "secret")):
             # 会话内已登记用户/vault 来源凭据 → 密码有来源，视为授权放行。
             return (False, None)
     except Exception:
@@ -813,9 +815,12 @@ def _sudo_stdin_block_result(description: str) -> dict:
         "approved": False,
         "message": (
             f"BLOCKED: {description}. "
-            "在对话中提供密码（仅本次使用，系统将安全存储、不回显），"
-            "或将 SUDO_PASSWORD 写入 .env；否则请自行在终端手动执行该 "
-            "sudo 命令。不要向 'sudo -S' 管道猜测的密码——这是暴力破解向量。"
+            + _ops_t(
+                "approval.sudo_stdin_blocked",
+                "在对话中提供密码（仅本次使用，系统将安全存储、不回显），"
+                "或将 SUDO_PASSWORD 写入 .env；否则请自行在终端手动执行该 "
+                "sudo 命令。不要向 'sudo -S' 管道猜测的密码——这是暴力破解向量。",
+            )
         ),
     }
 
@@ -2595,10 +2600,10 @@ def approve_web_approval(approval_id: str, scope: str = "once") -> dict:
     with _lock:
         entry = _web_approvals.get(approval_id)
         if entry is None:
-            return {"code": "not_found", "message": f"审批不存在: {approval_id}"}
+            return {"code": "not_found", "message": _ops_t("approval.not_found", "审批不存在: {id}", id=approval_id)}
         if _web_approval_timeout(entry, now_epoch):
             entry["status"] = "timeout"
-            return {"code": "timeout", "message": "审批已超时（wait 策略：不自动批准，命令保持 pending）"}
+            return {"code": "timeout", "message": _ops_t("approval.timeout_approve", "审批已超时（wait 策略：不自动批准，命令保持 pending）")}
         if entry["status"] != "pending":
             # 批四十一 §2：幂等化——重复批准/拒绝不再报 invalid_request，
             # 返回当前终态（200），前端连点/重放不会把已裁决的请求当错误。
@@ -2608,11 +2613,11 @@ def approve_web_approval(approval_id: str, scope: str = "once") -> dict:
                 "already_resolved": True,
             }
         if scope not in ("once", "session", "permanent"):
-            return {"code": "invalid_request", "message": "scope 必须是 once/session/permanent"}
+            return {"code": "invalid_request", "message": _ops_t("approval.bad_scope", "scope 必须是 once/session/permanent")}
         if scope == "session" and not entry["allow_session"]:
-            return {"code": "invalid_request", "message": "该审批不支持 session 作用域（prod 变更确认门只允许 once）"}
+            return {"code": "invalid_request", "message": _ops_t("approval.scope_session_unsupported", "该审批不支持 session 作用域（prod 变更确认门只允许 once）")}
         if scope == "permanent" and not entry["allow_permanent"]:
-            return {"code": "invalid_request", "message": "该审批不支持 permanent 作用域"}
+            return {"code": "invalid_request", "message": _ops_t("approval.scope_permanent_unsupported", "该审批不支持 permanent 作用域")}
         if entry["smart_denied"]:
             scope = "once"
         entry["scope"] = scope
@@ -2629,10 +2634,10 @@ def deny_web_approval(approval_id: str, reason: Optional[str] = None) -> dict:
     with _lock:
         entry = _web_approvals.get(approval_id)
         if entry is None:
-            return {"code": "not_found", "message": f"审批不存在: {approval_id}"}
+            return {"code": "not_found", "message": _ops_t("approval.not_found", "审批不存在: {id}", id=approval_id)}
         if _web_approval_timeout(entry, now_epoch):
             entry["status"] = "timeout"
-            return {"code": "timeout", "message": "审批已超时（wait 策略：不自动拒绝，命令保持 pending）"}
+            return {"code": "timeout", "message": _ops_t("approval.timeout_deny", "审批已超时（wait 策略：不自动拒绝，命令保持 pending）")}
         if entry["status"] != "pending":
             # 批四十一 §2：幂等化（同 approve）。
             return {
@@ -3071,8 +3076,10 @@ def prompt_dangerous_approval(command: str, description: str,
                 # only once/deny are meaningful (same shape as smart deny).
                 print(t("approval.choose_smart_deny"))
             if offer_learn:
-                print("      (l)earn — 这类只读命令以后不再询问"
-                      "（写入命令级自进化白名单 v0.1）")
+                print(_ops_t(
+                    "approval.learn_hint",
+                    "      (l)earn — 这类只读命令以后不再询问"
+                    "（写入命令级自进化白名单 v0.1）"))
             print()
             sys.stdout.flush()
 
