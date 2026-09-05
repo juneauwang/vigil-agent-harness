@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import { translateBackendMessage } from "@/lib/backendMsg";
 import { ArrowRight, Boxes, ListChecks, Server, TriangleAlert, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { RunbookCoverageResponse, RunbookSummary, TopologyView } from "@/lib/api";
@@ -9,7 +12,7 @@ import { EmptyState } from "@/components/EmptyState";
 import type { GraphEntityRef } from "@/lib/topologyGraph";
 import { cn } from "@/lib/ops";
 
-/** 4 指标卡（Nodes sky / Services emerald / Runbooks amber / Incidents rose）。 */
+/** 4 metric cards (Nodes sky / Services emerald / Runbooks amber / Incidents rose). */
 function MetricCard({
   tone,
   icon,
@@ -52,7 +55,7 @@ function MetricCard({
   );
 }
 
-/** Runbook Queue 悬浮抽屉（可关闭，行点击跳 Runbooks?name=）。 */
+/** Runbook Queue floating drawer (closable; row click jumps to Runbooks?name=). */
 function RunbookQueue({
   runbooks,
   onClose,
@@ -62,6 +65,7 @@ function RunbookQueue({
   onClose: () => void;
   onSelect: (name: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="vigil-card relative w-full shrink-0 lg:w-[320px]">
       <div className="p-4">
@@ -70,7 +74,7 @@ function RunbookQueue({
           <button
             type="button"
             onClick={onClose}
-            aria-label="关闭 Runbook Queue"
+            aria-label={t("overview.closeQueueAria")}
             className="text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
           >
             <X className="size-4" />
@@ -79,8 +83,8 @@ function RunbookQueue({
 
         {runbooks.length === 0 ? (
           <EmptyState
-            title="暂无 Runbook"
-            hint="先运行 vigil topo-discover 或创建 runbooks/*.yaml"
+            title={t("overview.noRunbooksTitle")}
+            hint={t("runbooks.emptyHint")}
             className="py-8"
           />
         ) : (
@@ -91,7 +95,7 @@ function RunbookQueue({
                   <th>Name</th>
                   <th>Type</th>
                   <th>Status</th>
-                  <th className="text-right">更新</th>
+                  <th className="text-right">{t("runbooks.thUpdated")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -117,6 +121,7 @@ function RunbookQueue({
 }
 
 export default function OverviewPage() {
+  const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const [view, setView] = useState<TopologyView | null>(null);
   const [runbooks, setRunbooks] = useState<RunbookSummary[]>([]);
@@ -137,7 +142,7 @@ export default function OverviewPage() {
       .then(([topo, rbs, inc, cov]) => {
         if (!alive) return;
         if (topo && topo.ok && topo.data) setView(topo.data);
-        else if (topo && !topo.ok) setError(topo.error ?? "拓扑加载失败");
+        else if (topo && !topo.ok) setError(topo.error ?? t("topology.loadFailed"));
         if (rbs && rbs.ok && rbs.data) setRunbooks(rbs.data.runbooks);
         if (inc) setIncidentCount(typeof inc.total === "number" ? inc.total : (inc.incidents?.length ?? 0));
         if (cov && cov.ok && cov.data) setCoverage(cov.data);
@@ -165,27 +170,27 @@ export default function OverviewPage() {
     <div className="flex h-full min-h-0 flex-col gap-4">
       {error && !view && (
         <div className="vigil-card border-dashed p-6 text-center text-sm text-[var(--vigil-muted)]">
-          {error}
+          {translateBackendMessage(error, i18n.language === "en" ? "en" : "zh")}
         </div>
       )}
 
-      {/* 5 指标卡行：Nodes / Services / Runbooks / Incidents（真实计数）/ 未覆盖风险 */}
+      {/* 5 metric cards row: Nodes / Services / Runbooks / Incidents (real count) / uncovered risk */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <MetricCard tone="sky" icon={<Boxes className="size-4" />} label="Nodes" value={stats.nodes} sub={view ? `clusters ${view.clusters.length}` : undefined} />
         <MetricCard tone="emerald" icon={<Server className="size-4" />} label="Services" value={stats.services} />
-        <MetricCard tone="amber" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub="剧本库" />
-        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={incidentCount ?? 0} sub={incidentCount === null ? "告警接入后显示" : "watch inbox"} />
+        <MetricCard tone="amber" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub={t("overview.metricRunbooksSub")} />
+        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={incidentCount ?? 0} sub={incidentCount === null ? t("overview.incidentSubNull") : "watch inbox"} />
         <MetricCard
           tone="violet"
           icon={<TriangleAlert className="size-4" />}
-          label="未覆盖风险"
+          label={t("overview.riskTitle")}
           value={coverage ? coverage.high_risk.uncovered.length : 0}
-          sub={coverage ? `高危 ${coverage.high_risk.total} 已覆盖 ${coverage.high_risk.covered}（覆盖率 ${coverage.high_risk.coverage_pct}%）` : "矩阵 required 高危 − runbook 覆盖"}
+          sub={coverage ? t("overview.riskSub", { total: coverage.high_risk.total, covered: coverage.high_risk.covered, pct: coverage.high_risk.coverage_pct }) : t("overview.riskSubEmpty")}
           onClick={() => navigate("/runbooks")}
         />
       </div>
 
-      {/* 中：Topology Graph 通栏 + Runbook Queue 抽屉 */}
+      {/* Middle: Topology Graph full-width + Runbook Queue drawer */}
       <div className="flex min-h-0 flex-1 flex-col gap-4 xl:flex-row">
         <div className="vigil-card flex min-h-[240px] flex-1 flex-col p-4">
           <div className="mb-3 flex items-center justify-between">
@@ -195,7 +200,7 @@ export default function OverviewPage() {
               onClick={() => navigate("/topology")}
               className="vigil-link inline-flex items-center gap-1 text-xs"
             >
-              打开资产拓扑 <ArrowRight className="size-3" />
+              {t("overview.openTopology")} <ArrowRight className="size-3" />
             </button>
           </div>
           {view ? (
@@ -203,27 +208,27 @@ export default function OverviewPage() {
               <div className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-[var(--vigil-muted)]">
                 <span className="flex items-center gap-1.5">
                   <span className="size-2.5 rounded-sm border border-[var(--vigil-primary)]/50 bg-[var(--vigil-card)]" />
-                  集群
+                  {t("topology.kind.cluster")}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="size-2.5 rounded-sm border border-emerald-500/60 bg-emerald-500/10" />
-                  主机
+                  {t("topology.kind.host")}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="size-2.5 rounded-sm border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]" />
-                  服务
+                  {t("topology.kind.service")}
                 </span>
                 <span className="flex items-center gap-1.5">
                   <span className="size-2.5 rounded-sm border border-amber-500/60 bg-amber-500/10" />
-                  服务依赖
+                  {t("overview.legendDeps")}
                 </span>
               </div>
               <TopologyGraph view={view} onSelect={setDrawer} className="h-full min-h-[420px]" />
             </div>
           ) : (
             <EmptyState
-              title="无拓扑数据"
-              hint="先运行 vigil topo-discover 发现主机"
+              title={t("overview.noTopologyTitle")}
+              hint={t("overview.noTopologyHint")}
               className="min-h-[180px] flex-1"
             />
           )}

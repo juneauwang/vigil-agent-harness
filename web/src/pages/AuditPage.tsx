@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import { translateBackendMessage } from "@/lib/backendMsg";
 import { ChevronRight, History, Trash2, XCircle } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { AuditEvent, AuditSessionSummary } from "@/lib/api";
@@ -6,12 +9,14 @@ import { isMockEnabled, MOCK_AUDIT_EVENTS, MOCK_AUDIT_SESSIONS } from "@/lib/moc
 import { cn } from "@/lib/ops";
 
 /**
- * Audit 审计页（批二十八契约，数据源现成——trajectory JSON 化）：
- * GET /api/audit/sessions → GET /api/audit/events?session_id=&type=
- * → GET /api/audit/events/{session_id}/{seq}（单事件全量，已 redact）。
- * 列表 output 只给 preview（前 500 字符）。
+ * Audit page (batch 28 contract, data source already exists — JSON-ified
+ * trajectories): GET /api/audit/sessions → GET /api/audit/events?session_id=&type=
+ * → GET /api/audit/events/{session_id}/{seq} (single event full payload, redacted).
+ * List output only gets a preview (first 500 chars).
  */
 export default function AuditPage() {
+  const { t, i18n } = useTranslation();
+  const blang = i18n.language === "en" ? "en" : "zh";
   const mock = isMockEnabled();
   const [sessions, setSessions] = useState<AuditSessionSummary[]>([]);
   const [selectedSession, setSelectedSession] = useState<string | null>(null);
@@ -32,7 +37,7 @@ export default function AuditPage() {
       .getAuditSessions({ limit: 50 })
       .then((resp) => {
         if (resp.error) {
-          setError(resp.error.message ?? "加载失败");
+          setError(resp.error.message ?? t("audit.loadFailed"));
           return;
         }
         setSessions(resp.sessions ?? []);
@@ -69,7 +74,7 @@ export default function AuditPage() {
       .then((resp) => {
         if (!alive) return;
         if (resp.error) {
-          setError(resp.error.message ?? "加载失败");
+          setError(resp.error.message ?? t("audit.loadFailed"));
           return;
         }
         setEvents(resp.events ?? []);
@@ -83,7 +88,7 @@ export default function AuditPage() {
     };
   }, [selectedSession, typeFilter, mock]);
 
-  // 事件行点击 = 展开/收起切换（再次点击同一行收起）
+  // Event row click = expand/collapse toggle (clicking the same row again collapses)
   const openDetail = async (seq: number) => {
     if (!selectedSession) return;
     if (detail?.seq === seq) {
@@ -132,42 +137,42 @@ export default function AuditPage() {
         <div className="flex items-center gap-2">
           <History className="size-5 text-[var(--vigil-muted)]" />
           <h1 className="text-lg font-semibold">Audit</h1>
-          <span className="text-xs text-[var(--vigil-muted)]">· 审计日志</span>
+          <span className="text-xs text-[var(--vigil-muted)]">{t("audit.subtitle")}</span>
         </div>
-        <span className="ml-auto text-xs text-[var(--vigil-muted)]">只读 · 内容已脱敏</span>
+        <span className="ml-auto text-xs text-[var(--vigil-muted)]">{t("audit.readonlyNote")}</span>
       </div>
 
       {mockNote && (
         <div className="mb-3 inline-flex w-fit items-center gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-          模拟数据
+          {t("audit.mockBadge")}
         </div>
       )}
 
       {error && (
         <div className="mb-3 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs">
           <XCircle className="size-4 shrink-0 text-red-500" />
-          <span>{error}</span>
+          <span>{translateBackendMessage(error, blang)}</span>
         </div>
       )}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
-        {/* 会话列表 */}
+        {/* Session list */}
         <div className="scroll-thin min-h-0 overflow-y-auto">
           <div className="mb-2 flex items-center justify-between px-1 text-xs text-[var(--vigil-muted)]">
-            <span>会话（{sessions.length}）</span>
+            <span>{t("audit.sessionsHeading", { n: sessions.length })}</span>
             <button
               type="button"
               onClick={prune}
               disabled={!selectedSession}
               className="vigil-btn h-6 px-2 text-xs disabled:opacity-40"
-              title="删除该会话事件（DELETE /api/audit/events）"
+              title={t("audit.pruneTitle")}
             >
               <Trash2 className="size-3" /> prune
             </button>
           </div>
           {sessions.length === 0 ? (
             <div className="rounded-md border border-dashed border-[var(--vigil-border)] p-6 text-center text-xs text-[var(--vigil-muted)]">
-              暂无会话
+              {t("audit.noSessions")}
             </div>
           ) : (
             <div className="vigil-card">
@@ -186,7 +191,7 @@ export default function AuditPage() {
                 >
                   <span className="font-mono text-[11px] text-[var(--vigil-text)]">{s.session_id}</span>
                   <span className="text-[11px] text-[var(--vigil-muted)]">
-                    {s.event_count} 事件
+                    {t("audit.eventCount", { n: s.event_count })}
                     {s.started_at ? ` · ${String(s.started_at).slice(0, 16)}` : ""}
                   </span>
                 </button>
@@ -195,18 +200,18 @@ export default function AuditPage() {
           )}
         </div>
 
-        {/* 事件列表 + 详情 */}
+        {/* Event list + detail */}
         <div className="flex min-h-0 flex-col gap-3">
           <div className="flex items-center gap-2">
             <select
               value={typeFilter}
               onChange={(e) => {
                 setTypeFilter(e.target.value);
-                setDetail(null); // 筛选变更：清详情，列表重新拉取
+                setDetail(null); // filter change: clear detail, list refetches
               }}
               className="vigil-input h-8 w-36 text-xs"
             >
-              <option value="">全部类型</option>
+              <option value="">{t("audit.allTypes")}</option>
               <option value="terminal">terminal</option>
               <option value="tool_call">tool_call</option>
               <option value="tool_result">tool_result</option>
@@ -214,14 +219,14 @@ export default function AuditPage() {
               <option value="llm">llm</option>
             </select>
             <span className="text-xs text-[var(--vigil-muted)]">
-              会话 <span className="font-mono">{selectedSession ?? "-"}</span> · {events.length} 事件
+              {t("audit.sessionLabel")} <span className="font-mono">{selectedSession ?? "-"}</span> · {t("audit.eventCount", { n: events.length })}
             </span>
           </div>
 
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
             {events.length === 0 ? (
               <div className="rounded-md border border-dashed border-[var(--vigil-border)] p-8 text-center text-xs text-[var(--vigil-muted)]">
-                暂无事件
+                {t("audit.noEvents")}
               </div>
             ) : (
               <div className="vigil-card">
@@ -246,12 +251,12 @@ export default function AuditPage() {
             )}
           </div>
 
-          {/* 事件详情（全量，已 redact） */}
+          {/* Event detail (full payload, redacted) */}
           {detail && (
             <div className="vigil-card scroll-thin max-h-72 overflow-y-auto p-3">
               <div className="mb-2 flex items-center gap-2 text-xs font-medium">
                 <History className="size-3.5 text-[var(--vigil-muted)]" />
-                事件 #{detail.seq} · {detail.type ?? "-"} · {detail.ts ?? ""}
+                {t("audit.eventDetailHeading", { seq: detail.seq, type: detail.type ?? "-", ts: detail.ts ?? "" })}
               </div>
               {detail.command && (
                 <pre className="mb-2 overflow-x-auto rounded bg-[var(--vigil-muted-bg)] p-2 font-mono text-[11px]">

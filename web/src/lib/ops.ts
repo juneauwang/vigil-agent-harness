@@ -1,3 +1,5 @@
+import i18n from "@/i18n";
+
 /** 轻量 className 合并（不依赖上游 @/lib/utils cn）。 */
 export function cn(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(" ");
@@ -191,14 +193,37 @@ export interface LastSeenInfo {
  * - 无记录 → "未探测"（offline）；
  * - 距现在 ≤ 阈值 → "在线 · X 分钟前活跃"（ok；<1 分钟 → "刚刚活跃"）；
  * - 超过阈值 → "离线 · 已 X 分钟无活动"（offline）。
+ * label 经 i18n 输出（common.lastSeen.*），tone 保持原始语义。
  */
 export function lastSeenInfo(lastSeen?: number, now: number = Date.now()): LastSeenInfo {
-  if (!lastSeen || lastSeen <= 0) return { label: "未探测", tone: "offline" };
+  if (!lastSeen || lastSeen <= 0) return { label: i18n.t("common.lastSeen.never"), tone: "offline" };
   const ageMin = Math.floor((now - lastSeen * 1000) / 60_000);
-  if (ageMin < 0) return { label: "在线 · 刚刚活跃", tone: "ok" };
-  if (ageMin === 0) return { label: "在线 · 刚刚活跃", tone: "ok" };
+  if (ageMin < 0) return { label: i18n.t("common.lastSeen.justNow"), tone: "ok" };
+  if (ageMin === 0) return { label: i18n.t("common.lastSeen.justNow"), tone: "ok" };
   if (ageMin <= LAST_SEEN_ACTIVE_MINUTES) {
-    return { label: `在线 · ${ageMin} 分钟前活跃`, tone: "ok" };
+    return { label: i18n.t("common.lastSeen.activeMin", { n: ageMin }), tone: "ok" };
   }
-  return { label: `离线 · 已 ${ageMin} 分钟无活动`, tone: "offline" };
+  return { label: i18n.t("common.lastSeen.inactiveMin", { n: ageMin }), tone: "offline" };
 }
+
+// ── Backend monitoring error markers ─────────────────────────────────────
+// The dashboard backend emits these error strings in zh (default) or en
+// (backend ops.lang=en), plus stable error codes; match any. Backend message
+// i18n lives in hermes_cli/i18n.py (keys monitoring.prom_unavailable /
+// monitoring.alertmanager_unavailable) — keep the markers in sync with both
+// catalog languages.
+
+/** Prometheus not-configured/unavailable detection (zh/en message text or error code). */
+export function isPrometheusUnavailableError(text: string): boolean {
+  return (
+    text.includes("未配置 Prometheus") ||
+    text.includes("Prometheus not configured") ||
+    text.includes("prometheus_unavailable")
+  );
+}
+
+/** Alertmanager not-configured detection (zh/en message text). */
+export function isAlertmanagerUnconfiguredError(text: string): boolean {
+  return text.includes("未配置 Alertmanager") || text.includes("Alertmanager not configured");
+}
+

@@ -1,26 +1,31 @@
 /**
- * 批四十九：审批桌面通知（Web Notification API）。
+ * Batch 49: approval desktop notifications (Web Notification API).
  *
- * 审批只在 Vigil 页面内可见，用户切到其他程序就错过 → 本模块把新审批以
- * 系统级通知送出（标题"Vigil 需要审批" + 命令摘要 + 剩余时限），点击通知 →
- * 聚焦/打开 dashboard（审批弹窗全局常驻，聚焦即见）。权限首次触发时请求；
- * 拒绝则降级为仅页内弹窗，不阻塞审批功能。页面打开期间生效（本地 dashboard
- * 常驻页面，无需 Service Worker）。
+ * Approvals are only visible inside the Vigil page — the user misses them when
+ * switching to another app → this module pushes new approvals as system-level
+ * notifications (title "Vigil needs approval" + command summary + time left);
+ * clicking the notification focuses/opens the dashboard (the approval popup is
+ * globally resident, so focusing reveals it). Permission is requested on first
+ * trigger; denial degrades to the in-page popup only, without blocking
+ * approvals. Active while the page is open (the local dashboard keeps a
+ * resident page, no Service Worker needed).
  *
- * 测试友好：纯函数 + 无副作用的权限门，Notification mock 可验证。
+ * Test-friendly: pure functions + a side-effect-free permission gate; the
+ * Notification mock is verifiable.
  */
 
 import type { ApprovalItem } from "./api";
+import i18n from "@/i18n";
 
 let permissionRequested = false;
 
-/** 当前通知权限（无 Notification 支持 = denied，降级页内弹窗）。 */
+/** Current notification permission (no Notification support = denied, in-page popup fallback). */
 export function notificationPermission(): NotificationPermission {
   if (typeof Notification === "undefined") return "denied";
   return Notification.permission;
 }
 
-/** 通知正文：命令摘要（前 80 字符，单行）+ 剩余时限（timeout_at 推导）。 */
+/** Notification body: command summary (first 80 chars, single line) + time left (derived from timeout_at). */
 export function approvalNotificationBody(item: ApprovalItem, now: number = Date.now()): string {
   const cmd = (item.command ?? "").replace(/\s+/g, " ").trim();
   const summary = cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd;
@@ -31,21 +36,21 @@ export function approvalNotificationBody(item: ApprovalItem, now: number = Date.
       const total = Math.ceil(ms / 1000);
       const m = Math.floor(total / 60);
       const s = total % 60;
-      time = ` · 剩余 ${m > 0 ? `${m}m ${s}s` : `${s}s`}`;
+      time = i18n.t("lib.notifyRemaining", { time: m > 0 ? `${m}m ${s}s` : `${s}s` });
     } else if (!Number.isNaN(ms)) {
-      time = " · 即将超时";
+      time = i18n.t("lib.notifyExpiring");
     }
   }
   return `${summary}${time}`;
 }
 
-/** 发送一条审批通知（权限未授予 → 静默返回 false，页内弹窗兜底）。 */
+/** Send one approval notification (permission not granted → silently return false; in-page popup covers it). */
 export function showApprovalNotification(item: ApprovalItem): boolean {
   if (typeof Notification === "undefined" || Notification.permission !== "granted") {
     return false;
   }
   try {
-    const n = new Notification("Vigil 需要审批", {
+    const n = new Notification(i18n.t("lib.notifyTitle"), {
       body: approvalNotificationBody(item),
       tag: item.id,
     });
@@ -53,7 +58,7 @@ export function showApprovalNotification(item: ApprovalItem): boolean {
       try {
         window.focus();
       } catch {
-        /* 聚焦失败不影响审批功能 */
+        /* focus failure doesn't affect the approval flow */
       }
       try {
         n.close();
@@ -68,8 +73,9 @@ export function showApprovalNotification(item: ApprovalItem): boolean {
 }
 
 /**
- * 首次触发时请求通知权限（幂等：已请求过不再弹系统询问）。
- * 拒绝 → 后续调用直接返回 false（降级页内弹窗，不打扰）。
+ * Request notification permission on first trigger (idempotent: no repeat
+ * system prompt once asked). Denial → subsequent calls return false directly
+ * (degrades to the in-page popup, no nagging).
  */
 export async function requestApprovalNotificationPermission(): Promise<boolean> {
   if (typeof Notification === "undefined") return false;
@@ -85,7 +91,7 @@ export async function requestApprovalNotificationPermission(): Promise<boolean> 
   }
 }
 
-/** 测试用：重置模块级"已请求"标记（每用例隔离）。 */
+/** Test hook: reset the module-level "requested" flag (per-case isolation). */
 export function resetApprovalNotificationState(): void {
   permissionRequested = false;
 }

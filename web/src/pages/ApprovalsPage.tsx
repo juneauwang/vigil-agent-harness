@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import { translateBackendMessage } from "@/lib/backendMsg";
 import { Check, ChevronDown, ChevronUp, Clock, ShieldCheck, X, XCircle } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { ApprovalItem, ApprovalScope } from "@/lib/api";
@@ -7,15 +10,17 @@ import { cn } from "@/lib/ops";
 import { notifyApprovalResolved } from "@/lib/approvalEvents";
 
 /**
- * Approvals 审批中心（批二十八契约）：
- * GET /api/approvals（env/status 过滤 + limit/offset 分页，total/has_more）
- * + POST /api/approvals/{id}/approve（scope：once 默认；session/permanent
- * 仅 allow_* 时可选）+ deny；超时 → 409 timeout（fail-closed）。
- * mock 模式（localStorage vigil-mock=1）用文档 IP 占位数据。
+ * Approvals center (batch 28 contract):
+ * GET /api/approvals (env/status filter + limit/offset pagination, total/has_more)
+ * + POST /api/approvals/{id}/approve (scope: once default; session/permanent
+ * only selectable when allow_*) + deny; timeout → 409 timeout (fail-closed).
+ * Mock mode (localStorage vigil-mock=1) uses doc IP placeholder data.
  */
-/** 批四十一 §6：审批记录可展开详情——完整命令（等宽 + 滚动 + 展开全文，
- * 保留缩进）+ 完整 description + 审批人/时间等元信息。 */
+/** Batch 41 §6: approval records expand for details — full command (monospace
+ * + scroll + expand full text, indentation preserved) + full description +
+ * approver/time metadata. */
 function CommandDetail({ item }: { item: ApprovalItem }) {
+  const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const lines = (item.command ?? "").split("\n");
   const long = lines.length > 1 || (item.command ?? "").length > 80;
@@ -39,7 +44,7 @@ function CommandDetail({ item }: { item: ApprovalItem }) {
           aria-expanded={expanded}
         >
           {expanded ? <ChevronUp className="size-3" /> : <ChevronDown className="size-3" />}
-          {expanded ? "收起" : "展开全文"}
+          {expanded ? t("common.collapse") : t("common.expandFull")}
         </button>
       )}
       {expanded && (
@@ -50,7 +55,7 @@ function CommandDetail({ item }: { item: ApprovalItem }) {
       {(item.session_key || item.source) && (
         <div className="mt-1 text-[10px] text-[var(--vigil-muted)]">
           {item.session_key && <span className="mr-2">session: {item.session_key}</span>}
-          {item.source && <span>来源: {item.source}</span>}
+          {item.source && <span>{t("approvals.sourceLabel")}{item.source}</span>}
         </div>
       )}
     </div>
@@ -58,6 +63,8 @@ function CommandDetail({ item }: { item: ApprovalItem }) {
 }
 
 export default function ApprovalsPage() {
+  const { t, i18n } = useTranslation();
+  const blang = i18n.language === "en" ? "en" : "zh";
   const mock = isMockEnabled();
   const [items, setItems] = useState<ApprovalItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -99,7 +106,7 @@ export default function ApprovalsPage() {
         .getApprovals(p)
         .then((resp) => {
           if (resp.error) {
-            setError(resp.error.message ?? "加载失败");
+            setError(resp.error.message ?? t("approvals.loadFailed"));
             return;
           }
           setItems(resp.approvals ?? []);
@@ -132,7 +139,7 @@ export default function ApprovalsPage() {
       await load(offset);
     } catch (e) {
       if (e instanceof ApiError && e.code === "timeout") {
-        setError(`审批 ${id} 已超时，不自动通过；命令保持待审批状态。`);
+        setError(t("approvals.timeoutMsg", { id }));
       } else if (e instanceof ApiError) {
         setError(`[${e.code}] ${e.message}`);
       } else {
@@ -148,7 +155,7 @@ export default function ApprovalsPage() {
     void act(item.id, async () => {
       if (mock) return;
       await api.approveApproval(item.id, scope);
-      // 批四十二 §BH：审批中心批准同样广播——对话页对应审批卡立即"已批准"。
+      // Batch 42 §BH: approval-center approvals broadcast too — the matching chat-page approval card flips to "approved" immediately.
       notifyApprovalResolved(item.id, "approved");
     });
   };
@@ -181,27 +188,27 @@ export default function ApprovalsPage() {
           <h1 className="text-lg font-semibold">Approvals</h1>
         </div>
         <span className="rounded-full bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-xs text-[var(--vigil-muted)]">
-          {total} 条
+          {t("approvals.totalBadge", { n: total })}
         </span>
         <span className="ml-auto text-xs text-[var(--vigil-muted)]">
-          超时审批不自动通过
+          {t("approvals.timeoutNote")}
         </span>
       </div>
 
       {mockNote && (
         <div className="mb-3 inline-flex items-center gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-          <Clock className="size-3" /> 模拟数据
+          <Clock className="size-3" /> {t("approvals.mockBadge")}
         </div>
       )}
 
-      {/* 过滤 + 分页工具条 */}
+      {/* Filter + pagination toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <select
           value={envFilter}
           onChange={(e) => setEnvFilter(e.target.value)}
           className="vigil-input h-8 w-28 text-xs"
         >
-          <option value="">env 全部</option>
+          <option value="">{t("approvals.envAll")}</option>
           <option value="prod">prod</option>
           <option value="test">test</option>
           <option value="dev">dev</option>
@@ -212,12 +219,12 @@ export default function ApprovalsPage() {
           onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
           className="vigil-input h-8 w-32 text-xs"
         >
-          <option value="">状态全部</option>
+          <option value="">{t("approvals.statusAll")}</option>
           <option value="pending">pending</option>
           <option value="resolved">resolved</option>
         </select>
         <button type="button" onClick={() => load(0)} className="vigil-btn h-8 border border-[var(--vigil-border)]">
-          刷新
+          {t("common.refresh")}
         </button>
         <div className="ml-auto flex items-center gap-1 text-xs text-[var(--vigil-muted)]">
           <button
@@ -226,7 +233,7 @@ export default function ApprovalsPage() {
             onClick={() => load(Math.max(0, offset - limit))}
             className="vigil-btn h-6 px-2 disabled:opacity-40"
           >
-            上一页
+            {t("approvals.prevPage")}
           </button>
           <span>
             {offset + 1}–{Math.min(offset + items.length, total)} / {total}
@@ -237,7 +244,7 @@ export default function ApprovalsPage() {
             onClick={() => load(offset + limit)}
             className="vigil-btn h-6 px-2 disabled:opacity-40"
           >
-            下一页
+            {t("approvals.nextPage")}
           </button>
         </div>
       </div>
@@ -245,13 +252,13 @@ export default function ApprovalsPage() {
       {error && (
         <div className="mb-3 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs">
           <XCircle className="size-4 shrink-0 text-red-500" />
-          <span>{error}</span>
+          <span>{translateBackendMessage(error, blang)}</span>
         </div>
       )}
 
       {items.length === 0 ? (
         <div className="rounded-md border border-dashed border-[var(--vigil-border)] p-12 text-center text-sm text-[var(--vigil-muted)]">
-          暂无审批条目
+          {t("approvals.empty")}
           {error && <div className="mt-1 text-xs opacity-70"></div>}
         </div>
       ) : (
@@ -260,12 +267,12 @@ export default function ApprovalsPage() {
             <thead>
               <tr>
                 <th>ID</th>
-                <th>命令 / 描述</th>
+                <th>{t("approvals.thCommand")}</th>
                 <th>env</th>
                 <th>grade</th>
-                <th>状态</th>
-                <th>创建</th>
-                <th className="text-right">操作</th>
+                <th>{t("approvals.thStatus")}</th>
+                <th>{t("approvals.thCreated")}</th>
+                <th className="text-right">{t("approvals.thAction")}</th>
               </tr>
             </thead>
             <tbody>
@@ -280,7 +287,7 @@ export default function ApprovalsPage() {
                   <td>{statusBadge(item.status)}</td>
                   <td className="text-[11px] text-[var(--vigil-muted)]">
                     {item.created_at ? String(item.created_at).slice(0, 16) : "-"}
-                    {isPastTimeout(item) && <div className="text-red-500">已超时</div>}
+                    {isPastTimeout(item) && <div className="text-red-500">{t("approvals.timedOut")}</div>}
                   </td>
                   <td className="text-right">
                     {item.status === "pending" ? (
@@ -302,7 +309,7 @@ export default function ApprovalsPage() {
                           onClick={() => approve(item)}
                           className="vigil-btn vigil-btn-primary h-6 px-2 text-xs disabled:opacity-40"
                         >
-                          <Check className="size-3" /> 批准
+                          <Check className="size-3" /> {t("approvals.approve")}
                         </button>
                         <button
                           type="button"
@@ -310,7 +317,7 @@ export default function ApprovalsPage() {
                           onClick={() => deny(item)}
                           className="vigil-btn h-6 border border-[var(--vigil-border)] px-2 text-xs disabled:opacity-40"
                         >
-                          <X className="size-3" /> 拒绝
+                          <X className="size-3" /> {t("approvals.deny")}
                         </button>
                       </div>
                     ) : (

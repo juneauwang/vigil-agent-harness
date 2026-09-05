@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import {
   Background,
   Controls,
@@ -29,16 +31,21 @@ import { EnvBadge, StatusDot } from "@/components/StatusBits";
 import { cn } from "@/lib/ops";
 
 /**
- * 可交互拓扑图（批三十五）：react-flow 缩放/平移 + 三层节点 + 状态着色 +
- * 点击节点 → 详情抽屉。数据来自现有 GET /api/topology，零新端点。
- * 主机 = 名称 + 活性点 + 状态；服务 = label + 状态点；琥珀 = 依赖链路实体（services 层 depends_on）。
+ * Interactive topology graph (batch 35): react-flow zoom/pan + three node
+ * layers + status coloring + click node → detail drawer. Data comes from the
+ * existing GET /api/topology, zero new endpoints.
+ * Host = name + activity dot + status; service = label + status dot; amber =
+ * dependency-path entity (services-level depends_on).
  *
- * 批四十九：布局改 d3-force 力导向（网络拓扑形态）；节点可拖（拖后固定，
- * 刷新/切集群回到力导向）；图上方集群标签栏（"全部" + 各集群）切换后节点
- * 重排 + fitView；``focusedName`` 高亮（列表 ↔ 图联动，TopologyPage 用）。
+ * Batch 49: layout switched to d3-force (network-topology shape); nodes are
+ * draggable (pinned after drag; refresh/cluster switch returns to force
+ * layout); cluster tab bar above the graph ("all" + each cluster) re-lays out
+ * nodes + fitView; ``focusedName`` highlight (list ↔ graph sync, used by
+ * TopologyPage).
  */
 
 function ClusterNodeView({ data }: NodeProps<TopologyFlowNode>) {
+  const { t } = useTranslation();
   const { name, card, keyPath, selected } = data;
   return (
     <div
@@ -51,15 +58,16 @@ function ClusterNodeView({ data }: NodeProps<TopologyFlowNode>) {
     >
       <Handle type="target" position={Position.Left} />
       <Handle type="source" position={Position.Right} />
-      <span className="truncate">🖥️ 集群 {name}</span>
+      <span className="truncate">{t("topology.nodeCluster", { name })}</span>
       <EnvBadge env={card.env} />
       {card.status && <StatusDot status={card.status} />}
-      {keyPath && <span className="text-[10px] text-amber-500">依赖链路</span>}
+      {keyPath && <span className="text-[10px] text-amber-500">{t("topology.keyPathBadge")}</span>}
     </div>
   );
 }
 
 function HostNodeView({ data }: NodeProps<TopologyFlowNode>) {
+  const { t } = useTranslation();
   const { name, card, keyPath, selected } = data;
   const activity = lastSeenInfo(card.last_seen);
   const port = portLabel(card);
@@ -93,7 +101,7 @@ function HostNodeView({ data }: NodeProps<TopologyFlowNode>) {
           :{port}
         </div>
       )}
-      {keyPath && <span className="text-[10px] text-amber-500">依赖链路</span>}
+      {keyPath && <span className="text-[10px] text-amber-500">{t("topology.keyPathBadge")}</span>}
     </div>
   );
 }
@@ -122,6 +130,7 @@ function ServiceNodeView({ data }: NodeProps<TopologyFlowNode>) {
 }
 
 function CrossHostNodeView({ data }: NodeProps<TopologyFlowNode>) {
+  const { t } = useTranslation();
   const { name, card, keyPath, selected } = data;
   return (
     <div
@@ -137,12 +146,12 @@ function CrossHostNodeView({ data }: NodeProps<TopologyFlowNode>) {
       <Handle type="source" position={Position.Right} />
       <span className="min-w-0 truncate font-medium text-[var(--vigil-text)]">{name}</span>
       {card.type && <span className="truncate text-[10px] text-[var(--vigil-muted)]">{card.type}</span>}
-      {keyPath && <span className="text-[10px] text-amber-500">依赖链路</span>}
+      {keyPath && <span className="text-[10px] text-amber-500">{t("topology.keyPathBadge")}</span>}
     </div>
   );
 }
 
-/** 端口标签：port 优先 + ports 去重合并，最多 3 个用 / 连接，空返回 null。 */
+/** Port label: `port` first + dedup-merged `ports`, at most 3 joined with /, null when empty. */
 function portLabel(card: { port?: string | number | null; ports?: Array<number | string> | null }): string | null {
   const p = card.port != null && card.port !== "" ? [String(card.port)] : [];
   const ps = Array.isArray(card.ports)
@@ -161,10 +170,12 @@ const nodeTypes = {
 };
 
 /**
- * 模块级状态缓存：TopologyPage 路由切换（拓扑→Overview→拓扑）会卸载/重挂载
- * TopologyGraph，内部 state（拖动位置/缩放/平移）随之丢失。这里在组件外缓存
- * 拖动位置与 viewport，重挂载时恢复——切换标签页回来，图保持用户最后的状态。
- * 注意：集群切换/力导向重算（组件内）仍走布局重置逻辑，缓存随 nodes 更新。
+ * Module-level state cache: route switches (topology→Overview→topology)
+ * unmount/remount TopologyGraph and lose internal state (drag positions /
+ * zoom / pan). Node positions and viewport are cached outside the component
+ * and restored on remount — switching tabs back keeps the user's last graph
+ * state. Note: cluster switch / force-layout recompute (in-component) still
+ * goes through the layout-reset logic; the cache updates with nodes.
  */
 let cachedNodePositions: Map<string, { x: number; y: number }> | null = null;
 let cachedViewport: { x: number; y: number; zoom: number } | null = null;
@@ -178,17 +189,19 @@ export default function TopologyGraph({
 }: {
   view: TopologyView;
   onSelect: (entity: GraphEntityRef) => void;
-  /** 列表 ↔ 图联动：图中点选节点时回调（TopologyPage 联动列表滚动）。 */
+  /** List ↔ graph sync: fired when a node is clicked in the graph (TopologyPage scrolls the list). */
   onNodeFocus?: (name: string) => void;
-  /** 外部（列表选中）高亮图中的节点名。 */
+  /** Node name highlighted in the graph from outside (list selection). */
   focusedName?: string | null;
   className?: string;
 }) {
-  // 批四十九：集群切换是前端过滤（不改 /api/topology 数据结构）。
+  const { t } = useTranslation();
+  // Batch 49: cluster switch is a frontend filter (no /api/topology shape change).
   const options = useMemo(() => clusterOptions(view), [view]);
   const [cluster, setCluster] = useState<string>("all");
-  // 力导向只在 view/cluster 变化时重算（节点选中只做轻量 data 映射，不重跑
-  // 布局——点选联动列表时不抖动画布）。
+  // Force layout recomputes only when view/cluster changes (node selection is
+  // a light data remap, no layout rerun — clicking to sync the list does not
+  // jitter the canvas).
   const baseModel = useMemo(() => {
     const base = buildGraphModel(view);
     const filtered = filterGraphModel(base, cluster);
@@ -204,11 +217,13 @@ export default function TopologyGraph({
     }),
     [baseModel, focusedName],
   );
-  // 批四十九修复：受控模式必须有 onNodesChange，否则拖动被 props 立即覆盖
-  // （看起来拖不动）。useNodesState 内部 applyNodeChanges。
-  // 初始值：重挂载时若有缓存位置则恢复（切标签页回来保持拖动状态），
-  // 否则用力导向布局初始位置。useNodesState 只取首次值，后续由
-  // onNodesChange/布局 effect 驱动。
+  // Batch 49 fix: controlled mode requires onNodesChange, otherwise drags are
+  // immediately overwritten by props (nodes feel undraggable). useNodesState
+  // applies changes internally.
+  // Initial value: restore cached positions on remount if present (keeps drag
+  // state across tab switches), else force-layout initial positions.
+  // useNodesState only takes the first value; afterwards driven by
+  // onNodesChange / layout effects.
   const initialNodes = useMemo(() => {
     if (cachedNodePositions) {
       return model.nodes.map((n) => {
@@ -220,15 +235,19 @@ export default function TopologyGraph({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [model]);
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
-  // 拖动/布局变化 → 同步缓存（模块级，卸载不丢）
+  // Drag/layout change → sync cache (module-level, survives unmount)
   useEffect(() => {
     cachedNodePositions = new Map(nodes.map((n) => [n.id, n.position]));
   }, [nodes]);
-  // 集群切换 → 力导向重算 → 重置布局。view 引用变化（切标签页重挂载/refetch）
-  // 不触发重置——重挂载时 useNodesState 初始化已用缓存位置恢复，若这里再按
-  // 新 view 重算力导向就会覆盖缓存（切回位置重置的根因）。
-  // ⚠️ useEffect 挂载后必执行一次：必须跳过首次渲染，否则重挂载时这里仍会
-  // 用新布局覆盖 useNodesState 从缓存恢复的位置（拓扑修改后切回依旧重置）。
+  // Cluster switch → force-layout recompute → reset layout. A view reference
+  // change (tab-switch remount / refetch) does NOT trigger the reset — on
+  // remount useNodesState already restored cached positions; recomputing the
+  // force layout against the new view here would overwrite the cache (root
+  // cause of positions resetting when switching back).
+  // ⚠️ useEffect always runs once after mount: the first render must be
+  // skipped, otherwise on remount this overwrites the positions useNodesState
+  // restored from cache with the fresh layout (topology edits then switching
+  // back still reset positions).
   const isFirstLayout = useRef(true);
   useEffect(() => {
     if (isFirstLayout.current) {
@@ -238,7 +257,7 @@ export default function TopologyGraph({
     setNodes(baseModel.nodes.map((n) => ({ ...n, data: { ...n.data, selected: false } })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cluster, setNodes]);
-  // focusedName 变化 → 只更新 selected 高亮，不动 position（不覆盖拖动）。
+  // focusedName change → update only the selected highlight, never position (keeps drags).
   useEffect(() => {
     setNodes((prev) =>
       prev.map((n) => {
@@ -257,7 +276,7 @@ export default function TopologyGraph({
     },
     [onSelect, onNodeFocus],
   );
-  // 平移/缩放结束 → 缓存 viewport（模块级，卸载不丢）
+  // Pan/zoom end → cache viewport (module-level, survives unmount)
   const handleMoveEnd = useCallback(
     (_e: unknown, viewport: { x: number; y: number; zoom: number }) => {
       cachedViewport = viewport;
@@ -268,7 +287,7 @@ export default function TopologyGraph({
   if (model.overflow) {
     return (
       <div className="flex h-[240px] items-center justify-center rounded-md border border-dashed border-[var(--vigil-border)] text-xs text-[var(--vigil-muted)]">
-        节点数超过上限（{MAX_GRAPH_NODES}），请使用下方卡片/列表视图查看明细。
+        {t("topology.overflow", { max: MAX_GRAPH_NODES })}
       </div>
     );
   }
@@ -277,7 +296,7 @@ export default function TopologyGraph({
     <div className={cn("flex h-[460px] w-full flex-col overflow-hidden rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)]", className)}>
       {options.length > 1 && (
         <div className="flex flex-wrap items-center gap-1 border-b border-[var(--vigil-border)] px-2.5 py-1.5">
-          <span className="mr-1 text-[10px] text-[var(--vigil-muted)]">集群</span>
+          <span className="mr-1 text-[10px] text-[var(--vigil-muted)]">{t("topology.clusterLabel")}</span>
           <button
             type="button"
             data-testid="topo-cluster-all"
@@ -289,7 +308,7 @@ export default function TopologyGraph({
                 : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]",
             )}
           >
-            全部
+            {t("topology.allClusters")}
           </button>
           {options.map((name) => (
             <button
@@ -310,7 +329,7 @@ export default function TopologyGraph({
         </div>
       )}
       <ReactFlow
-        // 集群切换 → 节点集合变化 → 重挂载触发 fitView（节点重排 + 适配）。
+        // Cluster switch → node set change → remount triggers fitView (re-layout + fit).
         key={cluster}
         nodes={nodes}
         onNodesChange={onNodesChange}
@@ -318,7 +337,7 @@ export default function TopologyGraph({
         nodeTypes={nodeTypes}
         onNodeClick={handleNodeClick}
         onMoveEnd={handleMoveEnd}
-        // 重挂载（切标签页回来）时恢复用户最后的缩放/平移；无缓存才 fitView。
+        // On remount (tab switch back) restore the user's last zoom/pan; fitView only without cache.
         defaultViewport={cachedViewport ?? undefined}
         fitView={cachedViewport == null}
         fitViewOptions={{ padding: 0.15 }}

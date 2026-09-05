@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import { translateBackendMessage } from "@/lib/backendMsg";
 import { Grid3x3, ShieldCheck, TriangleAlert, Wand2, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { MatrixData, MatrixLevel } from "@/lib/api";
@@ -6,21 +9,24 @@ import { EmptyState } from "@/components/EmptyState";
 import { cn } from "@/lib/ops";
 
 /**
- * 操作矩阵页（YAPL P3 §11.7 定案）。
+ * Ops matrix page (YAPL P3 §11.7 final).
  *
- * 行 = 动作枚举（schemas.yaml actions 23 个），列 = 环境（matrix.yaml 键），
- * 格 = 三态下拉（execute / approve / {approve: required}）+ 每格来源
- * （模板名 or 手动改）。顶部说明「矩阵是人工安全资产，修改即审计」。
+ * Rows = action enum (23 actions in schemas.yaml), columns = environments
+ * (matrix.yaml keys), cells = three-state dropdown (execute / approve /
+ * {approve: required}) + per-cell source (template name or manual change).
+ * Header note: "the matrix is a manually-owned safety asset; every change is
+ * audited".
  *
- * 修改走 PUT /api/matrix（人工通道，后端落审计）；LLM 只有 matrix_query
- * 只读工具，本页无任何 LLM set 路径。空态引导用四模板 init（模板 4 =
- * 三步级联多选 modal）。
+ * Changes go through PUT /api/matrix (manual channel, backend writes the
+ * audit); the LLM only has the read-only matrix_query tool — this page has no
+ * LLM set path. Empty state guides via the four-template init (template 4 =
+ * three-step cascade multi-select modal).
  */
 
-const LEVEL_OPTIONS: Array<{ value: MatrixLevel; label: string; title: string }> = [
-  { value: "execute", label: "execute", title: "直接执行（低风险）" },
-  { value: "approve", label: "approve", title: "交互执行需人工审批" },
-  { value: "required", label: "required", title: "{approve: required} 强制人工（不 smart）" },
+const LEVEL_OPTIONS: Array<{ value: MatrixLevel; label: string; titleKey: string }> = [
+  { value: "execute", label: "execute", titleKey: "matrix.levelTitle.execute" },
+  { value: "approve", label: "approve", titleKey: "matrix.levelTitle.approve" },
+  { value: "required", label: "required", titleKey: "matrix.levelTitle.required" },
 ];
 
 const LEVEL_COLORS: Record<MatrixLevel, string> = {
@@ -29,11 +35,11 @@ const LEVEL_COLORS: Record<MatrixLevel, string> = {
   required: "text-[var(--vigil-error)]",
 };
 
-const TEMPLATES: Array<{ id: string; label: string; desc: string }> = [
-  { id: "template1", label: "模板 1 · 单人", desc: "local，execute 全部，仅高危 4 需审批" },
-  { id: "template2", label: "模板 2 · 小团队", desc: "local / test / dev / prod 严格度阶梯" },
-  { id: "template3", label: "模板 3 · 中型", desc: "local / test / uat / dev / prod，prod 最高限制" },
-  { id: "template4", label: "模板 4 · 自定义", desc: "三步级联多选（execute → approve → 其余 required）" },
+const TEMPLATES: Array<{ id: string; labelKey: string; descKey: string }> = [
+  { id: "template1", labelKey: "matrix.templates.template1_label", descKey: "matrix.templates.template1_desc" },
+  { id: "template2", labelKey: "matrix.templates.template2_label", descKey: "matrix.templates.template2_desc" },
+  { id: "template3", labelKey: "matrix.templates.template3_label", descKey: "matrix.templates.template3_desc" },
+  { id: "template4", labelKey: "matrix.templates.template4_label", descKey: "matrix.templates.template4_desc" },
 ];
 
 function LevelCell({
@@ -47,6 +53,7 @@ function LevelCell({
   onChange: (level: MatrixLevel) => void;
   busy: boolean;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="flex flex-col items-start gap-1">
       <select
@@ -58,7 +65,7 @@ function LevelCell({
         value={level}
         disabled={busy}
         onChange={(e) => onChange(e.target.value as MatrixLevel)}
-        title={LEVEL_OPTIONS.find((o) => o.value === level)?.title}
+        title={t(LEVEL_OPTIONS.find((o) => o.value === level)?.titleKey ?? "")}
       >
         {LEVEL_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>
@@ -71,15 +78,17 @@ function LevelCell({
           "text-[10px] leading-none",
           source === "manual" ? "text-[var(--vigil-warn)]" : "text-[var(--vigil-muted)]",
         )}
-        title={source === "manual" ? "手动改过（人工通道）" : `来源模板：${source}`}
+        title={source === "manual" ? t("matrix.cellManualTitle") : t("matrix.cellSourceTitle", { source })}
       >
-        {source === "manual" ? "· 手动改" : source || "-"}
+        {source === "manual" ? t("matrix.cellManual") : source || "-"}
       </span>
     </div>
   );
 }
 
 export default function MatrixPage() {
+  const { t, i18n } = useTranslation();
+  const blang = i18n.language === "en" ? "en" : "zh";
   const [data, setData] = useState<MatrixData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -95,7 +104,7 @@ export default function MatrixPage() {
       .getMatrix()
       .then((resp) => {
         if (resp.ok && resp.data) setData(resp.data);
-        else setError(resp.error ?? "矩阵加载失败");
+        else setError(resp.error ?? t("matrix.loadFailed"));
       })
       .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
       .finally(() => setLoading(false));
@@ -118,7 +127,7 @@ export default function MatrixPage() {
   const changeCell = (env: string, action: string, level: MatrixLevel) => {
     const old = data?.matrix?.[env]?.[action] ?? "approve";
     if (old === level) return;
-    // 乐观更新
+    // Optimistic update
     setData((prev) => {
       if (!prev) return prev;
       const matrix = { ...prev.matrix, [env]: { ...(prev.matrix[env] ?? {}), [action]: level } };
@@ -131,9 +140,9 @@ export default function MatrixPage() {
       .setMatrixCell(env, action, level)
       .then((resp) => {
         if (resp.ok) {
-          flash(`已更新 ${env}.${action} → ${level}（修改即审计）`);
+          flash(t("matrix.updatedMsg", { env, action, level }));
         } else {
-          setError(resp.error ? String(resp.error) : "更新失败");
+          setError(resp.error ? String(resp.error) : t("matrix.updateFailed"));
           reload();
         }
       })
@@ -157,9 +166,9 @@ export default function MatrixPage() {
       .then((resp) => {
         if (resp.ok && resp.data) {
           setData(resp.data);
-          flash(`已生成矩阵（${template}，热生效无需重启）`);
+          flash(t("matrix.generatedMsg", { template }));
         } else {
-          setInitError(resp.error ?? "生成失败");
+          setInitError(resp.error ?? t("matrix.initFailed"));
         }
       })
       .catch((e: unknown) => setInitError(e instanceof Error ? e.message : String(e)));
@@ -170,11 +179,11 @@ export default function MatrixPage() {
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <div className="flex items-center gap-2">
           <Grid3x3 className="size-5 text-[var(--vigil-muted)]" />
-          <h1 className="text-lg font-semibold">操作矩阵</h1>
+          <h1 className="text-lg font-semibold">{t("matrix.title")}</h1>
         </div>
         <span className="ml-auto flex items-center gap-1 text-xs text-[var(--vigil-muted)]">
           <ShieldCheck className="size-3.5 text-[var(--vigil-ok)]" />
-          矩阵是人工安全资产，修改即审计（LLM 只有 matrix_query 只读）
+          {t("matrix.headerNote")}
         </span>
       </div>
 
@@ -190,24 +199,24 @@ export default function MatrixPage() {
         </div>
       )}
 
-      {loading && <div className="py-8 text-center text-xs text-[var(--vigil-muted)]">加载中…</div>}
+      {loading && <div className="py-8 text-center text-xs text-[var(--vigil-muted)]">{t("common.loading")}</div>}
 
       {!loading && isEmpty && (
         <EmptyState
           icon={<Grid3x3 className="size-8" />}
-          title="尚未生成操作矩阵"
-          description="矩阵是权限唯一裁决（runbook 每步执行时查）。用 setup 四模板生成后热生效，无需重启服务。"
-          hint="已存在矩阵时本页直接显示；重建请用 vigil matrix reset（防误覆盖）。"
+          title={t("matrix.emptyTitle")}
+          description={t("matrix.emptyDesc")}
+          hint={t("matrix.emptyHint")}
           action={
             <div className="flex flex-wrap items-center justify-center gap-2">
-              {TEMPLATES.map((t) => (
+              {TEMPLATES.map((tpl) => (
                 <button
-                  key={t.id}
+                  key={tpl.id}
                   className="rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-3 py-2 text-left hover:border-[var(--vigil-primary)]"
-                  onClick={() => (t.id === "template4" ? setCascadeOpen(true) : initTemplate(t.id))}
+                  onClick={() => (tpl.id === "template4" ? setCascadeOpen(true) : initTemplate(tpl.id))}
                 >
-                  <div className="text-xs font-medium">{t.label}</div>
-                  <div className="text-[10px] text-[var(--vigil-muted)]">{t.desc}</div>
+                  <div className="text-xs font-medium">{t(tpl.labelKey)}</div>
+                  <div className="text-[10px] text-[var(--vigil-muted)]">{t(tpl.descKey)}</div>
                 </button>
               ))}
             </div>
@@ -225,23 +234,23 @@ export default function MatrixPage() {
         <>
           {(data.warnings ?? []).length > 0 && (
             <div className="mb-3 rounded border border-[var(--vigil-warn)]/40 bg-[var(--vigil-warn)]/10 px-3 py-2 text-xs text-[var(--vigil-text-secondary)]">
-              <div className="mb-1 font-medium text-[var(--vigil-warn)]">漏配警告（默认 approve 保守）</div>
+              <div className="mb-1 font-medium text-[var(--vigil-warn)]">{t("matrix.warningsTitle")}</div>
               {(data.warnings ?? []).map((w, i) => (
-                <div key={i}>· {w}</div>
+                <div key={i}>· {translateBackendMessage(w, blang)}</div>
               ))}
             </div>
           )}
           <div className="mb-3 flex flex-wrap items-center gap-3 text-[11px] text-[var(--vigil-muted)]">
             <span>
-              顶层来源：<b>{data.source || "未生成"}</b>
+              {t("matrix.topSource")}<b>{data.source || t("matrix.notGenerated")}</b>
             </span>
-            {data.base_template && <span>基底模板：{data.base_template}</span>}
-            {data.updated_at && <span>更新：{data.updated_at}</span>}
+            {data.base_template && <span>{t("matrix.baseTemplate", { tpl: data.base_template })}</span>}
+            {data.updated_at && <span>{t("matrix.updatedAt", { time: data.updated_at })}</span>}
             <span className="ml-auto flex items-center gap-3">
               {LEVEL_OPTIONS.map((o) => (
                 <span key={o.value} className="flex items-center gap-1">
                   <span className={cn("font-medium", LEVEL_COLORS[o.value])}>{o.label}</span>
-                  <span className="opacity-70">{o.title}</span>
+                  <span className="opacity-70">{t(o.titleKey)}</span>
                 </span>
               ))}
             </span>
@@ -251,7 +260,7 @@ export default function MatrixPage() {
               <thead className="sticky top-0 bg-[var(--vigil-muted-bg)]">
                 <tr>
                   <th className="border-b border-r border-[var(--vigil-border)] px-2 py-2 text-left font-medium">
-                    动作
+                    {t("matrix.thAction")}
                   </th>
                   {envs.map((env) => (
                     <th
@@ -294,7 +303,7 @@ export default function MatrixPage() {
             </table>
           </div>
           <div className="mt-2 text-[10px] text-[var(--vigil-muted)]">
-            · 手动改过的格子来源显示「· 手动改」；· 每格改动走 PUT /api/matrix，审计事件在「审计」页可查（type=matrix_change）
+            {t("matrix.footnote")}
           </div>
         </>
       )}
@@ -314,8 +323,10 @@ export default function MatrixPage() {
 }
 
 /**
- * 模板 4 三步级联多选（§11.3）：先选 execute 集 → 从剩余选 approve 集 →
- * 其余自动 {approve: required}。已选的从后续选项移除（级联语义）。
+ * Template 4 three-step cascade multi-select (§11.3): pick the execute set →
+ * pick the approve set from the remainder → the rest automatically become
+ * {approve: required}. Selected items are removed from later options
+ * (cascade semantics).
  */
 function CascadeModal({
   actions,
@@ -326,6 +337,7 @@ function CascadeModal({
   onCancel: () => void;
   onConfirm: (s: { execute: string[]; approve: string[] }) => void;
 }) {
+  const { t } = useTranslation();
   const [step, setStep] = useState<1 | 2>(1);
   const [executeSet, setExecuteSet] = useState<string[]>([]);
   const [approveSet, setApproveSet] = useState<string[]>([]);
@@ -342,26 +354,26 @@ function CascadeModal({
       <div className="flex max-h-[85vh] w-full max-w-2xl flex-col rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-card)] shadow-lg">
         <div className="flex items-center gap-2 border-b border-[var(--vigil-border)] px-4 py-3">
           <Wand2 className="size-4 text-[var(--vigil-primary)]" />
-          <h2 className="text-sm font-semibold">模板 4 · 自定义级联（{step === 1 ? "第 1 步 / 共 3 步" : "第 2 步 / 共 3 步"}）</h2>
-          <button className="ml-auto rounded p-1 hover:bg-[var(--vigil-muted-bg)]" onClick={onCancel} aria-label="关闭">
+          <h2 className="text-sm font-semibold">{t("matrix.cascadeTitle", { step: step === 1 ? t("matrix.cascadeStep1") : t("matrix.cascadeStep2") })}</h2>
+          <button className="ml-auto rounded p-1 hover:bg-[var(--vigil-muted-bg)]" onClick={onCancel} aria-label={t("common.close")}>
             <X className="size-4" />
           </button>
         </div>
         <div className="min-h-0 flex-1 overflow-auto p-4">
           <div className="mb-3 text-xs text-[var(--vigil-muted)]">
             {step === 1
-              ? "选择 execute 集（直接执行，低风险）——已选的会从后续 approve 选项中移除。"
-              : "从剩余动作选择 approve 集（交互执行需审批）——其余自动为 {approve: required}（强制人工）。"}
+              ? t("matrix.cascadeHint1")
+              : t("matrix.cascadeHint2")}
           </div>
           <div className="mb-2 flex items-center gap-2 text-xs font-medium">
-            {step === 1 ? "execute 集" : "approve 集"}
-            <span className="text-[var(--vigil-muted)]">（{step === 1 ? executeSet.length : approveSet.length} 已选）</span>
+            {step === 1 ? t("matrix.executeSet") : t("matrix.approveSet")}
+            <span className="text-[var(--vigil-muted)]">{t("matrix.selectedCount", { n: step === 1 ? executeSet.length : approveSet.length })}</span>
             {step === 1 && (
               <button
                 className="ml-auto rounded border border-[var(--vigil-border)] px-2 py-0.5 text-[10px] hover:border-[var(--vigil-primary)]"
                 onClick={() => setExecuteSet(executeSet.length === actions.length ? [] : [...actions])}
               >
-                {executeSet.length === actions.length ? "清空" : "全选"}
+                {executeSet.length === actions.length ? t("matrix.clearAll") : t("matrix.selectAll")}
               </button>
             )}
           </div>
@@ -391,16 +403,16 @@ function CascadeModal({
           </div>
           {step === 2 && (
             <div className="mt-3 rounded border border-[var(--vigil-error)]/30 bg-[var(--vigil-error)]/5 px-3 py-2 text-xs">
-              <span className="font-medium text-[var(--vigil-error)]">required（强制人工）</span>
+              <span className="font-medium text-[var(--vigil-error)]">{t("matrix.requiredLabel")}</span>
               <span className="ml-1 text-[var(--vigil-muted)]">
-                {requiredSet.length} 个：{requiredSet.join(", ") || "（无）"}
+                {t("matrix.requiredCount", { n: requiredSet.length, list: requiredSet.join(", ") || t("matrix.requiredNone") })}
               </span>
             </div>
           )}
         </div>
         <div className="flex items-center justify-between gap-2 border-t border-[var(--vigil-border)] px-4 py-3">
           <button className="rounded px-3 py-1.5 text-xs hover:bg-[var(--vigil-muted-bg)]" onClick={onCancel}>
-            取消
+            {t("common.cancel")}
           </button>
           <div className="flex items-center gap-2">
             {step === 2 && (
@@ -408,7 +420,7 @@ function CascadeModal({
                 className="rounded border border-[var(--vigil-border)] px-3 py-1.5 text-xs hover:border-[var(--vigil-primary)]"
                 onClick={() => setStep(1)}
               >
-                上一步
+                {t("matrix.prevStep")}
               </button>
             )}
             {step === 1 ? (
@@ -417,14 +429,14 @@ function CascadeModal({
                 disabled={executeSet.length === 0}
                 onClick={() => setStep(2)}
               >
-                下一步
+                {t("matrix.nextStep")}
               </button>
             ) : (
               <button
                 className="rounded bg-[var(--vigil-primary)] px-3 py-1.5 text-xs text-white"
                 onClick={() => onConfirm({ execute: executeSet, approve: approveSet })}
               >
-                生成矩阵
+                {t("matrix.generate")}
               </button>
             )}
           </div>

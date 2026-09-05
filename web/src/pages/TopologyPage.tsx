@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import {
   Database,
   LayoutGrid,
@@ -19,29 +21,31 @@ import { EnvBadge, StatusPill } from "@/components/StatusBits";
 import { cn, lastSeenInfo, matchesSearch, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
 import type { GraphEntityRef } from "@/lib/topologyGraph";
 
-const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; label: string }> = [
-  { id: "all", label: "全部" },
-  { id: "ok", label: "正常" },
-  { id: "warn", label: "告警" },
-  { id: "error", label: "故障" },
-  { id: "offline", label: "离线" },
+const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; key: string }> = [
+  { id: "all", key: "topology.filter.all" },
+  { id: "ok", key: "topology.filter.ok" },
+  { id: "warn", key: "topology.filter.warn" },
+  { id: "error", key: "topology.filter.error" },
+  { id: "offline", key: "topology.filter.offline" },
 ];
 
 function DetailButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation();
   return (
     <button
       type="button"
       onClick={onClick}
       className="vigil-btn h-6 gap-1 px-2 text-xs"
-      aria-label="查看详情"
+      aria-label={t("topology.detailAria")}
     >
-      详情
+      {t("topology.detailBtn")}
     </button>
   );
 }
 
-/** 批三十五：host 活性行（lazy last_seen；"在线 · X 分钟前活跃" / "未探测"）。 */
+/** Batch 35: host activity line (lazy last_seen; label provided by i18n). */
 function ActivityLine({ lastSeen }: { lastSeen?: number }) {
+  const { t } = useTranslation();
   const info = lastSeenInfo(lastSeen);
   return (
     <div className="mb-1.5 flex items-center gap-1.5 text-[11px] text-[var(--vigil-muted)]">
@@ -51,7 +55,7 @@ function ActivityLine({ lastSeen }: { lastSeen?: number }) {
           info.tone === "ok" ? "bg-[var(--vigil-ok)]" : "bg-[var(--vigil-offline)]",
         )}
       />
-      <span>活性：{info.label}</span>
+      <span>{t("topology.activity", { label: info.label })}</span>
     </div>
   );
 }
@@ -94,6 +98,7 @@ function ServiceRow({
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
 }) {
+  const { t } = useTranslation();
   const card = svc.card;
   if (!matchesSearch(card, q)) return null;
   if (!statusMatchesFilter(card.status, filter)) return null;
@@ -107,7 +112,7 @@ function ServiceRow({
     >
       <span className="font-medium">{card.name}</span>
       {card.on_key_path && (
-        <span title="关键链路实体">
+        <span title={t("topology.keyPathTitle")}>
           <Link2 className="size-3.5 text-amber-500" />
         </span>
       )}
@@ -139,6 +144,7 @@ function HostCard({
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
 }) {
+  const { t } = useTranslation();
   const card = host.card;
   const anyServiceVisible = host.services.some(
     (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
@@ -162,7 +168,7 @@ function HostCard({
         <StatusPill status={card.status} />
         {card.on_key_path && (
           <span className="flex items-center gap-1 text-[11px] text-amber-500">
-            <Link2 className="size-3" /> 关键链路
+            <Link2 className="size-3" /> {t("topology.keyPath")}
           </span>
         )}
         <div className="ml-auto min-w-0">
@@ -173,10 +179,10 @@ function HostCard({
       <ActivityLine lastSeen={card.last_seen} />
       <div className="border-t border-dashed border-[var(--vigil-border)] pt-2">
         <div className="mb-1 text-[11px] text-[var(--vigil-muted)]">
-          服务{visibleServices.length > 0 ? `（${visibleServices.length}）` : ""}
+          {visibleServices.length > 0 ? t("topology.servicesWithCount", { n: visibleServices.length }) : t("topology.kind.service")}
         </div>
         {visibleServices.length === 0 ? (
-          <div className="text-xs italic text-[var(--vigil-muted)]">无服务数据</div>
+          <div className="text-xs italic text-[var(--vigil-muted)]">{t("topology.noServices")}</div>
         ) : (
           visibleServices.map((svc) => (
             <ServiceRow
@@ -228,7 +234,7 @@ function CrossCard({
   );
 }
 
-/** 高密度列表视图行。 */
+/** High-density list-view row. */
 function ListRow({
   card,
   kind,
@@ -268,6 +274,7 @@ function ListRow({
 }
 
 export default function TopologyPage() {
+  const { t } = useTranslation();
   const [searchParams] = useSearchParams();
   const [view, setView] = useState<TopologyView | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -276,8 +283,9 @@ export default function TopologyPage() {
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
   const [resetting, setResetting] = useState(false);
-  // 批四十九：图 ↔ 表联动——图中点选节点 → 列表滚动到该行；列表点行 →
-  // 图中高亮节点（TopologyGraph focusedName）。
+  // Batch 49: graph ↔ list sync — clicking a graph node scrolls the list to
+  // that row; clicking a list row highlights the node in the graph
+  // (TopologyGraph focusedName).
   const [focused, setFocused] = useState<string | null>(null);
 
   useEffect(() => {
@@ -293,7 +301,7 @@ export default function TopologyPage() {
       .then((resp) => {
         if (!alive) return;
         if (resp.ok && resp.data) setView(resp.data);
-        else setError(resp.error ?? "拓扑加载失败");
+        else setError(resp.error ?? t("topology.loadFailed"));
       })
       .catch((e: unknown) => {
         if (alive) setError(e instanceof Error ? e.message : String(e));
@@ -324,7 +332,7 @@ export default function TopologyPage() {
       .map((name) => ({ name, meta: meta.get(name), hosts: byCluster.get(name)! }));
   }, [view]);
 
-  // v0.4：服务依赖连线数（services 层 depends_on，取代 key_paths 关键链路）。
+  // v0.4: service dependency link count (services-level depends_on, replacing key_paths).
   const depCount = useMemo(() => {
     if (!view) return 0;
     const names = new Set(view.hosts.flatMap((h) => h.services.map((s) => s.card.name)));
@@ -345,11 +353,11 @@ export default function TopologyPage() {
     return n;
   }, [view]);
 
-  /** 批八十五：清空全部拓扑数据（破坏性；确认对话框 + 审计由后端负责）。 */
+  /** Batch 85: clear ALL topology data (destructive; confirm dialog + auditing owned by the backend). */
   const handleReset = async () => {
     if (!view) return;
     const ok = window.confirm(
-      `将清空全部拓扑数据（${view.hosts.length} 主机 / ${view.clusters.length} 集群 + 服务/实体目录），回到未初始化状态。此操作不可撤销，确认？`,
+      t("topology.resetConfirm", { hosts: view.hosts.length, clusters: view.clusters.length }),
     );
     if (!ok) return;
     setResetting(true);
@@ -357,9 +365,9 @@ export default function TopologyPage() {
       const resp = await api.resetTopology();
       if (resp.ok) {
         setView(null);
-        setError("拓扑已清空（未初始化）。重新登记：vigil topo-discover。");
+        setError(t("topology.resetDone"));
       } else {
-        setError(typeof resp.error === "string" ? resp.error : "拓扑清空失败");
+        setError(typeof resp.error === "string" ? resp.error : t("topology.resetFailed"));
       }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
@@ -370,7 +378,7 @@ export default function TopologyPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* 工具条 */}
+      {/* Toolbar */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2">
           <Network className="size-5 text-[var(--vigil-muted)]" />
@@ -378,7 +386,7 @@ export default function TopologyPage() {
         </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* 状态筛选 */}
+          {/* Status filter */}
           <div className="flex items-center gap-0.5 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
             {STATUS_FILTER_LABELS.map((f) => (
               <button
@@ -392,17 +400,17 @@ export default function TopologyPage() {
                     : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]",
                 )}
               >
-                {f.label}
+                {t(f.key)}
               </button>
             ))}
           </div>
 
-          {/* 列表/卡片切换 */}
+          {/* List/card switch */}
           <div className="flex items-center gap-0.5 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
             <button
               type="button"
               onClick={() => setViewMode("card")}
-              aria-label="卡片视图"
+              aria-label={t("topology.cardViewAria")}
               className={cn(
                 "rounded p-1",
                 viewMode === "card"
@@ -415,7 +423,7 @@ export default function TopologyPage() {
             <button
               type="button"
               onClick={() => setViewMode("list")}
-              aria-label="列表视图"
+              aria-label={t("topology.listViewAria")}
               className={cn(
                 "rounded p-1",
                 viewMode === "list"
@@ -427,28 +435,28 @@ export default function TopologyPage() {
             </button>
           </div>
 
-          {/* 搜索 */}
+          {/* Search */}
           <div className="flex h-8 w-56 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
             <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="搜索名称 / 类型 / 环境"
+              placeholder={t("topology.searchPlaceholder")}
               className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
             />
           </div>
 
-          {/* 批八十五：清空拓扑入口（破坏性，确认对话框） */}
+          {/* Batch 85: clear-topology entry (destructive, confirm dialog) */}
           <button
             type="button"
             onClick={() => void handleReset()}
             disabled={resetting}
             className="vigil-btn h-8 gap-1 px-2.5 text-xs"
-            aria-label="清空拓扑"
-            title="清空全部拓扑数据（回到未初始化；与 vigil matrix reset 回退模板不同）"
+            aria-label={t("topology.clearTopology")}
+            title={t("topology.clearTitle")}
           >
             <Trash2 className="size-3.5" />
-            {resetting ? "清空中…" : "清空拓扑"}
+            {resetting ? t("topology.clearing") : t("topology.clearTopology")}
           </button>
         </div>
       </div>
@@ -459,23 +467,23 @@ export default function TopologyPage() {
         </div>
       ) : view ? (
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-          {/* Meta + 关键链路缩略图 */}
+          {/* Meta + key-path graph thumbnail */}
           <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--vigil-muted)]">
-            <span>数据根：{view.data_root}</span>
-            <span>{view.clusters.length} 集群</span>
-            <span>{view.hosts.length} 主机</span>
-            <span>{view.hosts.reduce((n, h) => n + h.services.length, 0)} 服务</span>
-            <span>{view.cross_host.length} 跨主机实体</span>
-            <span>{depCount} 条服务依赖连线</span>
+            <span>{t("topology.dataRoot", { root: view.data_root })}</span>
+            <span>{t("topology.clustersCount", { n: view.clusters.length })}</span>
+            <span>{t("topology.hostsCount", { n: view.hosts.length })}</span>
+            <span>{t("topology.servicesCount", { n: view.hosts.reduce((n, h) => n + h.services.length, 0) })}</span>
+            <span>{t("topology.crossCount", { n: view.cross_host.length })}</span>
+            <span>{t("topology.depCount", { n: depCount })}</span>
           </div>
 
           <div className="vigil-card mb-4 p-3">
             <div
               className="mb-1.5 flex items-center gap-2 text-xs font-medium text-[var(--vigil-muted)]"
-              title="业务请求链路：入口 → 网关 → 服务 → 存储；琥珀点 = 链上服务"
+              title={t("topology.overviewTitleTip")}
             >
               <Database className="size-3.5" />
-              连线拓扑总览
+              {t("topology.overviewTitle")}
             </div>
             <TopologyGraph
               view={view}
@@ -500,10 +508,10 @@ export default function TopologyPage() {
                   <div key={group.name} className="mb-2 last:mb-0">
                     <div className="flex items-center gap-2 px-2 py-1 text-xs font-semibold">
                       <Database className="size-3.5 text-[var(--vigil-muted)]" />
-                      集群 {group.name}
+                      {t("topology.clusterHeading", { name: group.name })}
                       <StatusPill status={group.meta?.status} />
                       <span className="font-normal text-[var(--vigil-muted)]">
-                        （{visibleHosts.length} 台主机）
+                        {t("topology.hostCountSuffix", { n: visibleHosts.length })}
                       </span>
                     </div>
                     <div className="rounded border border-[var(--vigil-border)]/70">
@@ -536,7 +544,7 @@ export default function TopologyPage() {
               })}
               {view.hosts.length === 0 && (
                 <p className="px-2 py-4 text-sm italic text-[var(--vigil-muted)]">
-                  拓扑表暂无主机（hosts 段为空）。
+                  {t("topology.noHosts")}
                 </p>
               )}
             </div>
@@ -546,7 +554,7 @@ export default function TopologyPage() {
                 <section key={group.name} className="mb-6">
                   <h2 className="mb-2.5 flex flex-wrap items-baseline gap-2 text-sm font-semibold">
                     <Database className="size-4 text-[var(--vigil-muted)]" />
-                    集群 {group.name}
+                    {t("topology.clusterHeading", { name: group.name })}
                     <StatusPill status={group.meta?.status} />
                     {group.meta?.description && (
                       <span className="text-xs font-normal text-[var(--vigil-muted)]">
@@ -554,7 +562,7 @@ export default function TopologyPage() {
                       </span>
                     )}
                     <span className="text-xs font-normal text-[var(--vigil-muted)]">
-                      （{group.hosts.length} 台主机）
+                      {t("topology.hostCountSuffix", { n: group.hosts.length })}
                     </span>
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -575,7 +583,7 @@ export default function TopologyPage() {
                 <section className="mb-6">
                   <h2 className="mb-2.5 flex items-center gap-2 text-sm font-semibold">
                     <Layers className="size-4 text-[var(--vigil-muted)]" />
-                    跨主机实体（{view.cross_host.length}）
+                    {t("topology.crossHeading", { n: view.cross_host.length })}
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                     {view.cross_host.map((svc) => (

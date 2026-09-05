@@ -1,5 +1,8 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import { translateBackendMessage } from "@/lib/backendMsg";
 import {
   BookOpen,
   ChevronDown,
@@ -41,12 +44,12 @@ function EnvTag({ env }: { env?: string }) {
   return <span className={cn("vigil-env", colors[env] ?? "env-other")}>{env}</span>;
 }
 
+const KIND_KEYS = new Set(["deploy", "incident", "maintenance", "checklist"]);
+
 function KindTag({ kind, checklist }: { kind?: string; checklist?: boolean }) {
+  const { t } = useTranslation();
   const label =
-    kind === "deploy" ? "部署"
-    : kind === "incident" ? "事故"
-    : kind === "maintenance" ? "维护"
-    : kind === "checklist" ? "清单"
+    kind && KIND_KEYS.has(kind) ? t(`runbooks.kind.${kind}`)
     : kind ?? "runbook";
   return (
     <span className="rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
@@ -56,23 +59,29 @@ function KindTag({ kind, checklist }: { kind?: string; checklist?: boolean }) {
   );
 }
 
+/** action family → i18n key (runbooks.family.*). */
+const ACTION_FAMILY_KEYS: Record<string, string> = {
+  start: "lifecycle", stop: "lifecycle", restart: "lifecycle", reload: "lifecycle",
+  enable: "lifecycle", disable: "lifecycle",
+  reboot: "host", shutdown: "host",
+  deploy: "release", rollback: "release", scale: "release", decommission: "release",
+  backup: "data", restore: "data",
+  apply_config: "config",
+  query: "query", fetch_log: "query", verify: "query",
+  transfer_file: "file",
+  run_script: "exec",
+  install: "package", upgrade: "package", remove: "package",
+};
+
 function ActionBadge({ action }: { action?: string }) {
+  const { t } = useTranslation();
   if (!action) return null;
-  const family =
-    ["start", "stop", "restart", "reload", "enable", "disable"].includes(action) ? "生命周期"
-    : ["reboot", "shutdown"].includes(action) ? "主机"
-    : ["deploy", "rollback", "scale", "decommission"].includes(action) ? "发布"
-    : ["backup", "restore"].includes(action) ? "数据"
-    : action === "apply_config" ? "配置"
-    : ["query", "fetch_log", "verify"].includes(action) ? "查询"
-    : action === "transfer_file" ? "文件"
-    : action === "run_script" ? "执行"
-    : ["install", "upgrade", "remove"].includes(action) ? "包"
-    : "";
+  const familyKey = ACTION_FAMILY_KEYS[action];
+  const family = familyKey ? t(`runbooks.family.${familyKey}`) : "";
   return (
     <span
       className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px]"
-      title={family ? `${family}族动作` : undefined}
+      title={family ? t("runbooks.familyTitle", { family }) : undefined}
     >
       {action}
       {family ? <span className="text-[var(--vigil-muted)]">· {family}</span> : null}
@@ -104,13 +113,14 @@ function ParamsView({ params }: { params: Record<string, unknown> }) {
 }
 
 function OnFailureTag({ value }: { value?: unknown }) {
+  const { t } = useTranslation();
   if (value === undefined || value === null) return null;
   const label =
-    value === "stop" ? "失败即停"
-    : value === "continue" ? "失败继续"
-    : value === "rollback" ? "回滚"
+    value === "stop" ? t("runbooks.onFailure.stop")
+    : value === "continue" ? t("runbooks.onFailure.continue")
+    : value === "rollback" ? t("runbooks.onFailure.rollback")
     : typeof value === "object" && value !== null && "rollback" in (value as object)
-      ? `回滚 → ${String((value as Record<string, unknown>).rollback)}`
+      ? t("runbooks.onFailure.rollbackTo", { target: String((value as Record<string, unknown>).rollback) })
       : String(value);
   return (
     <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
@@ -121,12 +131,13 @@ function OnFailureTag({ value }: { value?: unknown }) {
 }
 
 function ExpectView({ expect }: { expect: Record<string, unknown> }) {
+  const { t } = useTranslation();
   if (!expect || typeof expect !== "object") return null;
   const predKeys = ["contains", "http_status", "body_contains", "exit_code"];
   return (
     <div className="mt-1.5 space-y-0.5 text-xs">
       <div className="text-[var(--vigil-muted)]">
-        expect: 通道 <code className="text-[var(--vigil-text)] opacity-75">{String(expect.target ?? "")}</code>
+        {t("runbooks.expectChannel")} <code className="text-[var(--vigil-text)] opacity-75">{String(expect.target ?? "")}</code>
       </div>
       {predKeys.filter((k) => k in expect).map((k) => (
         <div key={k} className="pl-3 text-[var(--vigil-muted)]">
@@ -194,6 +205,7 @@ function StepView({ step }: { step: Record<string, unknown> }) {
 }
 
 function YAMLPreview({ data }: { data: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const preview = yamlPreview(data);
   return (
@@ -205,7 +217,7 @@ function YAMLPreview({ data }: { data: Record<string, unknown> }) {
         aria-expanded={open}
       >
         {open ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
-        YAML 预览（已脱敏）
+        {t("runbooks.yamlPreviewBtn")}
       </button>
       {open && (
         <pre className="scroll-thin mt-2 max-h-80 overflow-auto rounded-md border border-[var(--vigil-border)] p-3 text-[11px] leading-relaxed"
@@ -218,6 +230,7 @@ function YAMLPreview({ data }: { data: Record<string, unknown> }) {
 }
 
 function RunbookDetail({ data }: { data: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const steps = (data.steps as Array<Record<string, unknown>>) ?? [];
   const rollback = (data.rollback as Array<Record<string, unknown>>) ?? [];
   const triggers = (data.triggers as unknown[]) ?? [];
@@ -237,11 +250,11 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
       <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-[var(--vigil-muted)]">
         <span>name: <span className="text-[var(--vigil-text)] opacity-80">{String(data.name ?? "")}</span></span>
         <span>schema: <span className="text-[var(--vigil-text)] opacity-80">
-          v{String(data.version ?? "?")}{String(data.version) === "2" ? "（声明式动作）" : ""}
+          v{String(data.version ?? "?")}{String(data.version) === "2" ? t("runbooks.schemaDeclarative") : ""}
         </span></span>
         <span>env: <span className="text-[var(--vigil-text)] opacity-80">{String(data.env ?? "-")}</span></span>
         <span>kind: <span className="text-[var(--vigil-text)] opacity-80">{String(data.kind ?? "-")}</span></span>
-        <span>更新: <span className="text-[var(--vigil-text)] opacity-80">{String(data.updated_at ?? "-")}</span></span>
+        <span>{t("runbooks.updatedAt")} <span className="text-[var(--vigil-text)] opacity-80">{String(data.updated_at ?? "-")}</span></span>
       </div>
 
       {data.summary ? <p className="text-sm text-[var(--vigil-text)] opacity-80">{String(data.summary)}</p> : null}
@@ -252,14 +265,15 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
           <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
             <Clock className="size-3" />
             schedule: <code>{String(schedule.cron ?? "")}</code>
-            {schedule.timezone ? <span>（{String(schedule.timezone)}）</span> : null}
+            {schedule.timezone ? <span>{t("runbooks.scheduleTimezone", { tz: String(schedule.timezone) })}</span> : null}
           </span>
         ) : null}
         {scopeCount > 0 ? (
           <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
-            目标范围: {clusters.length ? `集群 ${clusters.join(", ")}` : ""}
-            {hostGroups.length ? `${clusters.length ? " · " : ""}主机组 ${hostGroups.join(", ")}` : ""}
-            {scopeHosts.length ? `${clusters.length || hostGroups.length ? " · " : ""}主机 ${scopeHosts.join(", ")}` : ""}
+            {t("runbooks.scopePrefix")}
+            {clusters.length ? t("runbooks.scopeClusters", { list: clusters.join(", ") }) : ""}
+            {hostGroups.length ? `${clusters.length ? t("common.sep") : ""}${t("runbooks.scopeHostGroups", { list: hostGroups.join(", ") })}` : ""}
+            {scopeHosts.length ? `${clusters.length || hostGroups.length ? t("common.sep") : ""}${t("runbooks.scopeHosts", { list: scopeHosts.join(", ") })}` : ""}
           </span>
         ) : null}
       </div>
@@ -267,7 +281,7 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
       {triggers.length > 0 && (
         <section>
           <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold">
-            <TriangleAlert className="size-3.5 text-[var(--vigil-muted)]" /> 触发条件
+            <TriangleAlert className="size-3.5 text-[var(--vigil-muted)]" /> {t("runbooks.triggersTitle")}
           </h3>
           <div className="flex flex-wrap gap-1.5">
             {triggers.map((t, i) => (
@@ -282,7 +296,7 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
       {steps.length > 0 && (
         <section>
           <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold">
-            <ListChecks className="size-3.5 text-[var(--vigil-muted)]" /> 步骤（{steps.length}）
+            <ListChecks className="size-3.5 text-[var(--vigil-muted)]" /> {t("runbooks.stepsTitle", { n: steps.length })}
           </h3>
           <ol className="space-y-2">
             {steps.map((step, i) => (
@@ -302,13 +316,13 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
       {rollback.length > 0 && (
         <section>
           <h3 className="mb-2 flex items-center gap-2 text-xs font-semibold">
-            <Terminal className="size-3.5 text-[var(--vigil-muted)]" /> 回滚预案
+            <Terminal className="size-3.5 text-[var(--vigil-muted)]" /> {t("runbooks.rollbackTitle")}
           </h3>
           <div className="space-y-1.5">
             {rollback.map((rb, i) => (
               <div key={i} className="vigil-card p-3">
                 <div className="mb-1 text-sm font-medium">
-                  {String(rb.name ?? rb.title ?? `场景 ${i + 1}`)}
+                  {String(rb.name ?? rb.title ?? t("runbooks.rollbackScene", { n: i + 1 }))}
                 </div>
                 {Array.isArray(rb.steps) ? (
                   <div className="space-y-1.5">
@@ -335,7 +349,7 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
 
       {Object.keys(data).some((k) => !known.has(k)) && (
         <section>
-          <h3 className="mb-2 text-xs font-semibold">其他字段</h3>
+          <h3 className="mb-2 text-xs font-semibold">{t("runbooks.otherFields")}</h3>
           <div className="vigil-card p-3">
             {Object.entries(data)
               .filter(([k]) => !known.has(k))
@@ -360,22 +374,23 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
   );
 }
 
+const RESULT_KEYS = new Set(["ok", "rolled_back", "blocked", "failed"]);
+
 function ExecResultLabel({ result }: { result?: string }) {
+  const { t } = useTranslation();
   const cls =
     result === "ok" ? "text-[var(--vigil-ok)]"
     : result === "rolled_back" ? "text-[var(--vigil-warn)]"
     : result === "blocked" ? "text-[var(--vigil-warn)]"
     : "text-[var(--vigil-error)]";
   const label =
-    result === "ok" ? "成功"
-    : result === "rolled_back" ? "已回滚"
-    : result === "blocked" ? "被拦截"
-    : result === "failed" ? "失败"
-    : String(result ?? "未知");
+    result && RESULT_KEYS.has(result) ? t(`runbooks.result.${result}`)
+    : String(result ?? t("runbooks.result.unknown"));
   return <span className={`font-semibold ${cls}`}>{label}</span>;
 }
 
 function ExecSteps({ steps }: { steps?: RunbookStepResult[] }) {
+  const { t } = useTranslation();
   if (!steps || steps.length === 0) return null;
   return (
     <ol className="mt-2 space-y-1.5">
@@ -407,7 +422,7 @@ function ExecSteps({ steps }: { steps?: RunbookStepResult[] }) {
               {st.error ? <div className="text-[var(--vigil-error)]">{String(st.error).slice(0, 400)}</div> : null}
               {st.steps && st.steps.length > 0 ? (
                 <div className="mt-1 border-l border-[var(--vigil-border)] pl-2">
-                  <div className="text-[10px] text-[var(--vigil-muted)]">回滚场景</div>
+                  <div className="text-[10px] text-[var(--vigil-muted)]">{t("runbooks.rollbackScenes")}</div>
                   <ExecSteps steps={st.steps} />
                 </div>
               ) : null}
@@ -419,7 +434,7 @@ function ExecSteps({ steps }: { steps?: RunbookStepResult[] }) {
   );
 }
 
-// ── 批八十：runbook 执行实时进度面板（SSE 事件流渲染）────────────────────
+// ── Batch 80: runbook live execution progress panel (SSE event stream rendering) ────────────────────
 
 interface ProgressRow {
   key: string;
@@ -473,21 +488,22 @@ function buildProgressRows(events: RunbookProgressEvent[]): {
 }
 
 function ProgressStatusBadge({ status }: { status?: string }) {
+  const { t } = useTranslation();
   if (status === "ok") {
-    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-ok)]">成功</span>;
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-ok)]">{t("runbooks.result.ok")}</span>;
   }
   if (status === "failed" || status === "error") {
-    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-error)]">失败</span>;
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-error)]">{t("runbooks.result.failed")}</span>;
   }
   if (status === "blocked") {
-    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-warn)]">被拦截</span>;
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-warn)]">{t("runbooks.result.blocked")}</span>;
   }
   if (status === "rolled_back") {
-    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-warn)]">已回滚</span>;
+    return <span className="shrink-0 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-warn)]">{t("runbooks.result.rolled_back")}</span>;
   }
   return (
     <span className="inline-flex shrink-0 items-center gap-1 rounded bg-[var(--vigil-muted-bg)] px-1.5 py-px font-mono text-[10px] text-[var(--vigil-muted)]">
-      <Loader2 className="size-2.5 animate-spin" /> 运行中
+      <Loader2 className="size-2.5 animate-spin" /> {t("runbooks.runningLabel")}
     </span>
   );
 }
@@ -501,12 +517,13 @@ function RunbookProgressPanel({
   terminal?: RunbookProgressEvent | null;
   loading?: boolean;
 }) {
+  const { t } = useTranslation();
   const { rows, banners } = buildProgressRows(events);
   return (
     <div data-testid="runbook-progress" className="mt-2 space-y-1.5">
       {rows.length === 0 && loading ? (
         <div className="flex items-center gap-2 text-xs text-[var(--vigil-muted)]">
-          <Loader2 className="size-3 animate-spin" /> 等待执行启动…
+          <Loader2 className="size-3 animate-spin" /> {t("runbooks.waitingStart")}
         </div>
       ) : null}
       {rows.map((r) => (
@@ -541,14 +558,14 @@ function RunbookProgressPanel({
                 : "border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]"
           }`}
         >
-          {b.type === "rollback_start" ? "↩ 触发回滚" : b.type === "rollback_done" ? "↩ 回滚完成" : ""}
+          {b.type === "rollback_start" ? t("runbooks.rollbackStart") : b.type === "rollback_done" ? t("runbooks.rollbackDone") : ""}
           {b.detail ? <span className="ml-1 text-[var(--vigil-muted)]">{b.detail}</span> : null}
         </div>
       ))}
       {terminal ? (
         <div className="mt-1 flex items-center gap-2 border-t border-[var(--vigil-border)] pt-1.5 text-xs">
           <ProgressStatusBadge status={terminal.status} />
-          <span className="font-semibold">执行完成</span>
+          <span className="font-semibold">{t("runbooks.execDone")}</span>
           {terminal.duration_s !== undefined ? (
             <span className="text-[var(--vigil-muted)]">{(terminal.duration_s ?? 0).toFixed(1)}s</span>
           ) : null}
@@ -574,23 +591,23 @@ function ExecConfirmModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
       <div className="w-full max-w-md rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-5 shadow-lg">
         <div className="flex items-center gap-2">
           <Play className="size-4 text-[var(--vigil-primary)]" />
-          <h2 className="text-sm font-semibold">执行 runbook</h2>
-          <button className="ml-auto rounded p-1 hover:bg-[var(--vigil-muted-bg)]" onClick={onCancel} aria-label="关闭" disabled={running}>
+          <h2 className="text-sm font-semibold">{t("runbooks.execModalTitle")}</h2>
+          <button className="ml-auto rounded p-1 hover:bg-[var(--vigil-muted-bg)]" onClick={onCancel} aria-label={t("common.close")} disabled={running}>
             <X className="size-4" />
           </button>
         </div>
         <p className="mt-3 text-sm text-[var(--vigil-text)] opacity-80">
-          确认执行 <code className="font-mono">{name}</code>？步骤按操作矩阵逐次裁决
-          （execute 直跑；approve / 强制人工 → 右下角审批卡，需人工确认）。
+          {t("runbooks.execConfirmPrefix")}<code className="font-mono">{name}</code>{t("runbooks.execConfirmSuffix")}
         </p>
         <div className="mt-5 flex justify-end gap-2">
           <button type="button" className="vigil-btn border border-[var(--vigil-border)] px-3 py-1 text-xs" onClick={onCancel} disabled={running}>
-            取消
+            {t("common.cancel")}
           </button>
           <button
             type="button"
@@ -599,7 +616,7 @@ function ExecConfirmModal({
             disabled={running}
           >
             {running ? <Loader2 className="mr-1 inline size-3.5 animate-spin" /> : null}
-            确认执行
+            {t("runbooks.confirmExec")}
           </button>
         </div>
       </div>
@@ -608,6 +625,8 @@ function ExecConfirmModal({
 }
 
 export default function RunbooksPage() {
+  const { t, i18n } = useTranslation();
+  const blang = i18n.language === "en" ? "en" : "zh";
   const [searchParams] = useSearchParams();
   const urlName = searchParams.get("name");
   const [list, setList] = useState<RunbookSummary[] | null>(null);
@@ -620,11 +639,11 @@ export default function RunbooksPage() {
   const [execResult, setExecResult] = useState<RunbookExecution | null>(null);
   const [execError, setExecError] = useState<string | null>(null);
   const [history, setHistory] = useState<RunbookExecution[]>([]);
-  // 批八十：实时进度（SSE 事件流）+ 历史"运行中"行。
+  // Batch 80: live progress (SSE event stream) + history "running" rows.
   const [execEvents, setExecEvents] = useState<RunbookProgressEvent[]>([]);
   const [execDone, setExecDone] = useState<RunbookProgressEvent | null>(null);
   const [running, setRunning] = useState<RunbookRunningExec[]>([]);
-  // 批八十一：执行级并发锁快照（同名 runbook / 同目标禁止并发下发）。
+  // Batch 81: execution-level concurrency lock snapshot (same runbook / same target cannot dispatch concurrently).
   const [locks, setLocks] = useState<RunbookLock[]>([]);
   const [coverage, setCoverage] = useState<RunbookCoverageResponse["data"] | null>(null);
   const [runningEvents, setRunningEvents] = useState<Record<string, RunbookProgressEvent[]>>({});
@@ -655,10 +674,10 @@ export default function RunbooksPage() {
     };
   }, []);
 
-  // 批八十一：无实时流（定时/后台/LLM）的锁定中执行 → 仅显示锁定徽标，不可展开。
+  // Batch 81: locked executions without a live stream (scheduled/background/LLM) → show only the lock badge, not expandable.
   const lockOnly = locks.filter((l) => !running.some((r) => r.exec_id === l.exec_id));
 
-  // 批八十：卸载时中止进行中的进度流（服务端执行不受影响）。
+  // Batch 80: abort in-progress progress streams on unmount (server-side execution unaffected).
   useEffect(() => {
     return () => {
       streamAbortRef.current?.abort();
@@ -690,7 +709,7 @@ export default function RunbooksPage() {
       .runRunbook(selected)
       .then((resp) => {
         if (!resp.ok || !resp.data?.exec_id) {
-          setExecError(resp.error ?? "执行启动失败");
+          setExecError(resp.error ?? t("runbooks.execStartFailed"));
           setExecRunning(false);
           return;
         }
@@ -728,7 +747,7 @@ export default function RunbooksPage() {
       });
   };
 
-  // 批八十：历史"运行中"行展开 → 打开该执行的实时进度流。
+  // Batch 80: expanding a history "running" row → open that execution's live progress stream.
   const startRunningStream = (execId: string) => {
     if (runningStreamsRef.current.has(execId)) return;
     runningStreamsRef.current.add(execId);
@@ -801,7 +820,7 @@ export default function RunbooksPage() {
         if (resp.ok && resp.data) setDetail(resp.data);
         else {
           setDetail(null);
-          setDetailError(resp.error ?? "详情加载失败");
+          setDetailError(resp.error ?? t("runbooks.detailLoadFailed"));
         }
       })
       .catch((e: unknown) => {
@@ -825,23 +844,23 @@ export default function RunbooksPage() {
           <h1 className="text-lg font-semibold">Runbooks</h1>
         </div>
         <span className="ml-auto text-xs text-[var(--vigil-muted)]">
-          只读 · 内容已脱敏（路径/密钥/URL userinfo 过滤）
+          {t("runbooks.readonlyNote")}
         </span>
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(320px,420px)_1fr]">
-        {/* 紧凑表格 */}
+        {/* Compact table */}
         <div className="scroll-thin min-h-0 overflow-y-auto">
           {list && list.length > 0 ? (
             <div className="vigil-card">
               <table className="vigil-table">
                 <thead>
                   <tr>
-                    <th>名称</th>
+                    <th>{t("runbooks.thName")}</th>
                     <th>env</th>
                     <th>kind</th>
-                    <th className="text-right">步骤</th>
-                    <th className="text-right">更新</th>
+                    <th className="text-right">{t("runbooks.thSteps")}</th>
+                    <th className="text-right">{t("runbooks.thUpdated")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -871,25 +890,25 @@ export default function RunbooksPage() {
             </div>
           ) : (
             <EmptyState
-              title="无 runbook 数据"
-              hint="先运行 vigil topo-discover 或创建 runbooks/*.yaml"
+              title={t("runbooks.emptyTitle")}
+              hint={t("runbooks.emptyHint")}
             />
           )}
         </div>
 
-        {/* 详情 */}
+        {/* Details */}
         <div className="scroll-thin min-h-0 overflow-y-auto">
           {!selected ? (
             <div className="vigil-card border-dashed flex items-center justify-center gap-2 p-10 text-sm text-[var(--vigil-muted)]">
-              <FileText className="size-4" /> 选择左侧 runbook 查看详情
+              <FileText className="size-4" /> {t("runbooks.pickPrompt")}
             </div>
           ) : detailLoading ? (
             <div className="flex items-center justify-center gap-2 py-16 text-sm text-[var(--vigil-muted)]">
-              加载详情…
+              {t("runbooks.loadingDetail")}
             </div>
           ) : detailError ? (
             <div className="vigil-card border-dashed p-10 text-center text-sm text-[var(--vigil-muted)]">
-              {detailError}
+              {translateBackendMessage(detailError, blang)}
             </div>
           ) : detail ? (
             <div className="space-y-4">
@@ -906,7 +925,7 @@ export default function RunbooksPage() {
                       disabled={execRunning}
                     >
                       {execRunning ? <Loader2 className="mr-1 inline size-3.5 animate-spin" /> : <Play className="mr-1 inline size-3.5" />}
-                      {execRunning ? "执行中…" : "执行"}
+                      {execRunning ? t("runbooks.execRunning") : t("runbooks.execBtn")}
                     </button>
                   ) : null}
                 </div>
@@ -916,9 +935,9 @@ export default function RunbooksPage() {
               {(execRunning || execDone || execEvents.length > 0) ? (
                 <div className="vigil-card p-5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="text-xs font-semibold">执行进度</h3>
+                    <h3 className="text-xs font-semibold">{t("runbooks.progressTitle")}</h3>
                     {execRunning ? (
-                      <span className="text-[10px] text-[var(--vigil-muted)]">实时流 · 关键节点自动播报</span>
+                      <span className="text-[10px] text-[var(--vigil-muted)]">{t("runbooks.progressLiveNote")}</span>
                     ) : null}
                   </div>
                   <RunbookProgressPanel events={execEvents} terminal={execDone} loading={execRunning} />
@@ -928,7 +947,7 @@ export default function RunbooksPage() {
               {execResult ? (
                 <div className="vigil-card p-5">
                   <div className="flex flex-wrap items-center gap-2 text-sm">
-                    <h3 className="text-xs font-semibold">执行结果</h3>
+                    <h3 className="text-xs font-semibold">{t("runbooks.resultTitle")}</h3>
                     <ExecResultLabel result={String(execResult.result ?? "")} />
                     <span className="text-[10px] text-[var(--vigil-muted)]">
                       {String(execResult.ts ?? "")} · {String(execResult.env ?? "")} ·{" "}
@@ -936,7 +955,7 @@ export default function RunbooksPage() {
                     </span>
                   </div>
                   {execResult.error ? (
-                    <p className="mt-2 break-words text-xs text-[var(--vigil-error)]">{execResult.error}</p>
+                    <p className="mt-2 break-words text-xs text-[var(--vigil-error)]">{translateBackendMessage(execResult.error, blang)}</p>
                   ) : null}
                   <ExecSteps steps={execResult.steps} />
                 </div>
@@ -944,29 +963,29 @@ export default function RunbooksPage() {
 
               {execError ? (
                 <div className="vigil-card border-dashed p-5 text-sm text-[var(--vigil-error)]">
-                  执行失败：{execError}
+                  {t("runbooks.execFailedPrefix")}{translateBackendMessage(execError, blang)}
                 </div>
               ) : null}
 
               <div className="vigil-card p-5">
                 <div className="flex items-center gap-2">
-                  <h3 className="text-xs font-semibold">执行历史（最近 {history.length} 次）</h3>
+                  <h3 className="text-xs font-semibold">{t("runbooks.historyTitle", { n: history.length })}</h3>
                   <button
                     type="button"
                     className="ml-auto rounded border border-[var(--vigil-border)] px-2 py-0.5 text-[10px] hover:border-[var(--vigil-primary)]"
                     onClick={refreshHistory}
                   >
-                    刷新
+                    {t("common.refresh")}
                   </button>
                 </div>
                 {history.length > 0 || running.length > 0 || lockOnly.length > 0 ? (
                   <table className="vigil-table mt-2">
                     <thead>
                       <tr>
-                        <th>runbook</th>
-                        <th>时间</th>
-                        <th>来源</th>
-                        <th>结果</th>
+                        <th>{t("runbooks.thRunbook")}</th>
+                        <th>{t("runbooks.thTime")}</th>
+                        <th>{t("runbooks.thSource")}</th>
+                        <th>{t("runbooks.thResult")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -975,7 +994,7 @@ export default function RunbooksPage() {
                           <tr
                             className="cursor-pointer hover:bg-[var(--vigil-muted-bg)]"
                             onClick={() => toggleRunningRow(r.exec_id)}
-                            title="点击展开实时步骤"
+                            title={t("runbooks.expandLiveTitle")}
                           >
                             <td className="font-mono text-xs">
                               {String(r.runbook ?? "")}
@@ -989,9 +1008,9 @@ export default function RunbooksPage() {
                             <td className="text-xs text-[var(--vigil-muted)]">web</td>
                             <td className="text-xs">
                               <span className="inline-flex items-center gap-1 font-semibold text-[var(--vigil-muted)]">
-                                <Loader2 className="size-3 animate-spin" /> 运行中
+                                <Loader2 className="size-3 animate-spin" /> {t("runbooks.runningLabel")}
                                 <span className="ml-1 inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1 py-px text-[10px] font-medium text-[var(--vigil-muted)]">
-                                  <Lock className="size-2.5 text-[var(--vigil-warning)]" /> 锁定中
+                                  <Lock className="size-2.5 text-[var(--vigil-warning)]" /> {t("runbooks.locking")}
                                 </span>
                               </span>
                             </td>
@@ -1012,11 +1031,11 @@ export default function RunbooksPage() {
                         <tr key={`lock-${lk.exec_id}`} className="opacity-90">
                           <td className="font-mono text-xs">{String(lk.runbook ?? "")}</td>
                           <td className="text-xs text-[var(--vigil-muted)]">{String(lk.started_at ?? "")}</td>
-                          <td className="text-xs text-[var(--vigil-muted)]">定时/后台</td>
+                          <td className="text-xs text-[var(--vigil-muted)]">{t("runbooks.sourceScheduled")}</td>
                           <td className="text-xs">
                             <span className="inline-flex items-center gap-1 font-semibold text-[var(--vigil-muted)]">
-                              <Lock className="size-3 text-[var(--vigil-warning)]" /> 锁定中
-                              <span className="font-normal text-[10px]">（无实时流）</span>
+                              <Lock className="size-3 text-[var(--vigil-warning)]" /> {t("runbooks.locking")}
+                              <span className="font-normal text-[10px]">{t("runbooks.noStreamNote")}</span>
                             </span>
                           </td>
                         </tr>
@@ -1035,7 +1054,7 @@ export default function RunbooksPage() {
                   </table>
                 ) : (
                   <p className="mt-2 text-xs text-[var(--vigil-muted)]">
-                    暂无执行记录（交互 / 定时执行都会落到 runtime/runbook_executions.jsonl）
+                    {t("runbooks.noHistory")}
                   </p>
                 )}
               </div>
@@ -1044,34 +1063,33 @@ export default function RunbooksPage() {
         </div>
       </div>
 
-      {/* 批八十一：Runbook 覆盖率（审计动作使用率 × runbook 覆盖，只读统计） */}
+      {/* Batch 81: Runbook coverage (audit action usage × runbook coverage, read-only stats) */}
       <div className="vigil-card p-5">
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-sm font-semibold">Runbook 覆盖率</h3>
+          <h3 className="text-sm font-semibold">{t("runbooks.coverageTitle")}</h3>
           <span className="text-[10px] text-[var(--vigil-muted)]">
-            {coverage ? `近 ${coverage.usage.window_days} 天审计动作 × runbook 覆盖 · 只读统计` : "加载中…"}
+            {coverage ? t("runbooks.coverageMeta", { n: coverage.usage.window_days }) : t("common.loading")}
           </span>
         </div>
         {coverage ? (
           coverage.usage.total_unique === 0 ? (
             <p className="mt-3 text-xs text-[var(--vigil-muted)]">
-              暂无审计数据——terminal / runbook 执行过命令后，这里统计动作使用频率与 runbook
-              覆盖缺口（classifier 识别不出的动作不计入）。
+              {t("runbooks.coverageEmpty")}
             </p>
           ) : (
             <>
               <div className="mt-3 flex flex-wrap gap-4 text-xs text-[var(--vigil-muted)]">
-                <span>动作 {coverage.usage.total_unique}</span>
-                <span>已覆盖 {coverage.usage.covered_unique}</span>
-                <span>覆盖率 {coverage.usage.coverage_pct}%</span>
-                <span>扫描审计事件 {coverage.usage.audit_events_scanned}</span>
+                <span>{t("runbooks.statActions", { n: coverage.usage.total_unique })}</span>
+                <span>{t("runbooks.statCovered", { n: coverage.usage.covered_unique })}</span>
+                <span>{t("runbooks.statPct", { pct: coverage.usage.coverage_pct })}</span>
+                <span>{t("runbooks.statScanned", { n: coverage.usage.audit_events_scanned })}</span>
               </div>
               <table className="vigil-table mt-3">
                 <thead>
                   <tr>
-                    <th>动作</th>
-                    <th className="text-right">使用次数</th>
-                    <th>覆盖</th>
+                    <th>{t("runbooks.thAction")}</th>
+                    <th className="text-right">{t("runbooks.thUseCount")}</th>
+                    <th>{t("runbooks.thCovered")}</th>
                     <th>runbooks</th>
                   </tr>
                 </thead>
@@ -1082,9 +1100,9 @@ export default function RunbooksPage() {
                       <td className="text-right text-xs">{a.use_count}</td>
                       <td className="text-xs">
                         {a.covered ? (
-                          <span className="font-medium text-emerald-600 dark:text-emerald-400">已覆盖</span>
+                          <span className="font-medium text-emerald-600 dark:text-emerald-400">{t("runbooks.coveredYes")}</span>
                         ) : (
-                          <span className="font-medium text-amber-600 dark:text-amber-400">未覆盖</span>
+                          <span className="font-medium text-amber-600 dark:text-amber-400">{t("runbooks.coveredNo")}</span>
                         )}
                       </td>
                       <td className="text-xs text-[var(--vigil-muted)]">
@@ -1096,14 +1114,14 @@ export default function RunbooksPage() {
               </table>
               {coverage.usage.gaps.length > 0 ? (
                 <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-                  <span className="font-semibold">高频未覆盖，建议沉淀 runbook：</span>
-                  {coverage.usage.gaps.map((g) => `${g.action}（${g.use_count} 次）`).join("、")}
+                  <span className="font-semibold">{t("runbooks.gapsPrefix")}</span>
+                  {coverage.usage.gaps.map((g) => t("runbooks.gapItem", { action: g.action, n: g.use_count })).join(t("runbooks.gapsJoiner"))}
                 </div>
               ) : null}
             </>
           )
         ) : (
-          <p className="mt-3 text-xs text-[var(--vigil-muted)]">覆盖率加载中…</p>
+          <p className="mt-3 text-xs text-[var(--vigil-muted)]">{t("runbooks.coverageLoading")}</p>
         )}
       </div>
 

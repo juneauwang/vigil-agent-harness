@@ -1,9 +1,10 @@
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import "./index.css";
+import "@/i18n";
 import App from "./App";
 
-// mount_spa 在反向代理前缀场景注入 __VIGIL_BASE_PATH__；空字符串 = 根路径。
+// mount_spa injects __VIGIL_BASE_PATH__ behind reverse-proxy prefixes; empty string = root path.
 const base = (typeof window !== "undefined" ? window.__VIGIL_BASE_PATH__ : "") ?? "";
 const basename = base ? (base.startsWith("/") ? base : `/${base}`).replace(/\/+$/, "") : undefined;
 

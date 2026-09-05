@@ -1,18 +1,26 @@
 /**
- * 对话页纯逻辑（批三十一）——SSE 事件 → 消息列表的状态机。
+ * Chat page pure logic (batch 31) — SSE events → message-list state machine.
  *
- * 从组件里抽成纯函数以便 node 环境单测（无 jsdom/testing-library）：
- *   - applyChatEvent()：chat:delta/chat:reasoning/tool/tool_result/
- *     approval_pending/done/error 增量归并到消息列表
- *   - chatInputDisabled()：agent 忙时禁用输入（busy 语义照后端 409）
- *   - markApprovalResolved()：审批卡本地状态（批准/拒绝后回填）
- *   - stateFromHistory()：批三十三历史端点 → 会话状态（切回恢复现场）
- * 批四十一：工具输出按服务端唯一 tool_id 挂接（并行同名单工具零错位）；
- * assistant 消息内工具/审批按事件到达顺序串成有序步骤序列。
- * 凭据红线：工具 input/output 摘要只显示服务端 redact 后的内容，前端不再加工。
+ * Extracted from the component into pure functions for node-env unit tests
+ * (no jsdom/testing-library):
+ *   - applyChatEvent(): merges chat:delta/chat:reasoning/tool/tool_result/
+ *     approval_pending/done/error increments into the message list
+ *   - chatInputDisabled(): input disabled while the agent is busy (busy
+ *     semantics mirror the backend 409)
+ *   - markApprovalResolved(): approval-card local state (backfilled after
+ *     approve/deny)
+ *   - stateFromHistory(): batch 33 history endpoint → session state (scene
+ *     restore on switch-back)
+ * Batch 41: tool output attaches by the server's unique tool_id (zero
+ * mis-attachment for parallel same-named tools); tools/approvals inside an
+ * assistant message are chained into an ordered step sequence by event
+ * arrival order.
+ * Credential red line: tool input/output summaries only show server-redacted
+ * content; the frontend does no further processing.
  */
 
 import type { ChatHistoryMessage } from "./api";
+import i18n from "@/i18n";
 
 export type ChatStepKind = "tool" | "approval" | "clarify";
 export type ChatStepStatus =
@@ -25,27 +33,28 @@ export type ChatStepStatus =
   | "answered"
   | "timed_out";
 
-/** 有序步骤：工具调用与审批卡按事件到达顺序串成①②③…；ref 指向 tools/
- * approvals 数组里的条目。 */
+/** Ordered steps: tool calls and approval cards chained ①②③… by event arrival
+ * order; ref points at an entry in the tools/approvals arrays. */
 export interface ChatStep {
   kind: ChatStepKind;
-  /** tool 步骤 = ChatToolEvent.id；approval 步骤 = ChatApprovalCard.approvalId。 */
+  /** tool step = ChatToolEvent.id; approval step = ChatApprovalCard.approvalId. */
   ref: number | string;
   status: ChatStepStatus;
 }
 
 export interface ChatToolEvent {
-  /** 本地自增 id（渲染 key + 步骤引用）。 */
+  /** Local auto-increment id (render key + step references). */
   id: number;
-  /** 服务端唯一 id（模型 tool_call id；空串 = 旧服务端/兜底按名挂接）。 */
+  /** Server-unique id (model tool_call id; empty string = legacy server / fallback attach by name). */
   toolId: string;
   name: string;
   inputSummary: string;
   outputSummary?: string;
   ok?: boolean;
   expanded: boolean;
-  /** 批四十二 §BJ：该工具调用导向的推理（chat:reasoning.tool_id 归属累加；
-   * 历史结构化 reasoning.steps 按 tool_id 回填）。空串 = 无归属。 */
+  /** Batch 42 §BJ: reasoning that led to this tool call (attributed
+   * incrementally via chat:reasoning.tool_id; history structured
+   * reasoning.steps backfilled by tool_id). Empty string = unattributed. */
   reasoning: string;
 }
 
@@ -61,7 +70,7 @@ export interface ChatApprovalCard {
   status: ChatApprovalStatus;
 }
 
-/** 批四十九：对话流内 clarify 卡片（问题 + choices + 自由文本，非全局弹窗）。 */
+/** Batch 49: in-stream clarify card (question + choices + free text, not a global modal). */
 export type ChatClarifyStatus = "pending" | "answered" | "timed_out" | "error";
 
 export interface ChatClarifyCard {
@@ -77,17 +86,17 @@ export interface ChatMessage {
   id: number;
   role: "user" | "assistant";
   content: string;
-  /** 批四十一：推理过程纯文本（chat:reasoning 增量归并；历史端点带回）。 */
+  /** Batch 41: reasoning plain text (merged incrementally from chat:reasoning; carried back by the history endpoint). */
   reasoning: string;
   streaming?: boolean;
   tools: ChatToolEvent[];
   approvals: ChatApprovalCard[];
-  /** 批四十九：clarify 卡片（对话流内呈现，与审批卡并列）。 */
+  /** Batch 49: clarify cards (rendered in-stream, alongside approval cards). */
   clarifies: ChatClarifyCard[];
-  /** 批四十一：工具/审批按到达顺序的有序步骤序列。 */
+  /** Batch 41: ordered step sequence of tools/approvals by arrival order. */
   steps: ChatStep[];
   error?: string;
-  /** 批三十六：用户点"停止"后的本地状态行（不持久化，切会话/重拉历史即消失）。 */
+  /** Batch 36: local status row after the user clicks "stop" (not persisted; gone on session switch / history refetch). */
   interrupted?: boolean;
 }
 
@@ -96,11 +105,11 @@ export interface ChatTurnState {
   busy: boolean;
   nextId: number;
   activeMessageId: number | null;
-  /** 批八十一：引擎层 context >=80% 提示（chat:context_warning；新回合清除）。 */
+  /** Batch 81: engine-level context >=80% notice (chat:context_warning; cleared on a new turn). */
   contextWarning: string | null;
 }
 
-/** 批三十八 §AW：审批卡是否已超时（timeout_at 过期且仍 pending）。 */
+/** Batch 38 §AW: whether an approval card has timed out (timeout_at passed and still pending). */
 export function approvalIsTimedOut(
   card: Pick<ChatApprovalCard, "status" | "timeoutAt">,
   now: number = Date.now(),
@@ -111,7 +120,7 @@ export function approvalIsTimedOut(
   return now >= deadline;
 }
 
-/** 批四十九：clarify 卡是否已超时（timeout_at 过期且仍 pending）。 */
+/** Batch 49: whether a clarify card has timed out (timeout_at passed and still pending). */
 export function clarifyIsTimedOut(
   card: Pick<ChatClarifyCard, "status" | "timeoutAt">,
   now: number = Date.now(),
@@ -126,7 +135,7 @@ export function createChatState(): ChatTurnState {
   return { messages: [], busy: false, nextId: 1, activeMessageId: null, contextWarning: null };
 }
 
-/** 当前正在接收增量的事件（chat:delta 归并目标）。 */
+/** The event currently receiving increments (chat:delta merge target). */
 function activeAssistant(state: ChatTurnState): ChatMessage | null {
   if (state.activeMessageId === null) return null;
   const msg = state.messages.find((m) => m.id === state.activeMessageId);
@@ -141,8 +150,9 @@ function lastToolEvent(msg: ChatMessage, name: string): ChatToolEvent | undefine
   return undefined;
 }
 
-/** 把 message 的 tools/approvals 换成新对象（applyChatEvent 各分支在副本上
- * 修改，避免污染旧 state 引用的嵌套字段）。 */
+/** Replace the message's tools/approvals with fresh objects (applyChatEvent
+ * branches mutate the copy so nested fields of old state references stay
+ * untouched). */
 function cloneMessage(msg: ChatMessage): ChatMessage {
   return {
     ...msg,
@@ -153,7 +163,7 @@ function cloneMessage(msg: ChatMessage): ChatMessage {
   };
 }
 
-/** 只读查找步骤并返回新步骤数组（找不到返回原数组）。 */
+/** Read-only step lookup returning a new steps array (original array when not found). */
 function withStepStatus(
   msg: ChatMessage,
   ref: number | string,
@@ -206,10 +216,12 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     return next;
   }
 
-  // 批四十一 §3：推理增量归并进 active 消息的 reasoning 字段（无 active
-  // 时先创建消息——推理通常先于正文到达）。
-  // 批四十二 §BJ：带 tool_id 的推理归属对应工具行（该步推理）；找不到归属
-  // 工具时退回消息级（旧服务端/推理先于 chat:tool 到达的边界场景）。
+  // Batch 41 §3: reasoning increments merge into the active message's
+  // reasoning field (if no active message, create one first — reasoning
+  // usually arrives before the content).
+  // Batch 42 §BJ: reasoning carrying a tool_id is attributed to that tool row
+  // (per-step reasoning); fall back to message level when the tool can't be
+  // found (legacy server / reasoning arriving before chat:tool edge case).
   if (ev.type === "chat:reasoning") {
     const text = String(data.text ?? "");
     const toolId = data.tool_id != null ? String(data.tool_id) : "";
@@ -277,8 +289,9 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     const ok = Boolean(data.ok ?? true);
     if (active) {
       const toolId = data.tool_id != null ? String(data.tool_id) : "";
-      // 批四十一 §5：优先按服务端唯一 tool_id 挂接；旧服务端无 id 时兜底
-      // 按"最后一个同名未出结果"挂接（保持旧行为）。
+      // Batch 41 §5: attach by the server's unique tool_id first; when a legacy
+      // server sends no id, fall back to "last same-named tool without a
+      // result" (preserves old behavior).
       const tool = toolId
         ? active.tools.find((t) => t.toolId === toolId)
         : lastToolEvent(active, name);
@@ -323,7 +336,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     return next;
   }
 
-  // 批四十九：LLM 调 clarify → 对话流内挂问题卡片（非全局弹窗；审批卡并列）。
+  // Batch 49: LLM calls clarify → attach a question card in-stream (not a global modal; sits alongside approval cards).
   if (ev.type === "chat:clarify_pending") {
     const active = activeAssistant(next);
     const card: ChatClarifyCard = {
@@ -361,8 +374,9 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     if (active) {
       active.content = finalText;
       active.streaming = false;
-      // 回合已结束：仍挂 pending 的 clarify 卡收口（agent 已带着应答/超时
-      // 继续）——状态交由卡片自身倒计时/应答回写精确展示。
+      // Turn finished: close out clarify cards still pending (the agent already
+      // continued with the answer/timeout) — precise display is owned by the
+      // card's own countdown/answer write-back.
       for (const c of active.clarifies) {
         if (c.status === "pending") c.status = clarifyIsTimedOut(c) ? "timed_out" : "answered";
       }
@@ -373,7 +387,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
   }
 
   if (ev.type === "chat:error") {
-    const msg = String(data.message ?? "对话出错");
+    const msg = String(data.message ?? i18n.t("lib.chatErrorFallback"));
     const active = activeAssistant(next);
     if (active) {
       active.error = msg;
@@ -396,8 +410,9 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
     return next;
   }
 
-  // 批八十一：引擎层 context 用量 >=80% 主动提示（不阻断对话流；横幅 +
-  // "建议新开会话"按钮，直到下一回合清除）。
+  // Batch 81: engine-level proactive notice when context usage >=80% (doesn't
+  // block the stream; banner + "start a new session" button until cleared on
+  // the next turn).
   if (ev.type === "chat:context_warning") {
     next.contextWarning = String(data.message ?? "");
     return next;
@@ -406,7 +421,7 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
   return next;
 }
 
-/** 用户消息入列（发送时立即渲染气泡）。 */
+/** Enqueue a user message (bubble renders immediately on send). */
 export function pushUserMessage(state: ChatTurnState, text: string): ChatTurnState {
   return {
     ...state,
@@ -434,14 +449,16 @@ export function chatInputDisabled(state: ChatTurnState): boolean {
   return state.busy;
 }
 
-/** 批三十六：用户点"停止"后的本地状态收口——busy 解除 + 消息区"已停止"状态行。
+/** Batch 36: local state close-out after the user clicks "stop" — busy cleared + a "stopped" status row in the message area.
 
- * 服务端 turn 由 /interrupt 真中断（后台仍在收尾，busy 由注册表轮询兜底复位）；
- * 这里只做本地即时反馈：可立即发新消息（后端 409 会在极端竞态下兜底）。
+ * The server-side turn is truly interrupted via /interrupt (still finishing in
+ * the background; busy is reset via the registry polling fallback); this only
+ * provides immediate local feedback: a new message can be sent right away (the
+ * backend 409 guards extreme races).
  */
 export function markTurnInterrupted(state: ChatTurnState): ChatTurnState {
   const last = state.messages[state.messages.length - 1];
-  // 幂等：末条已是本地"已停止"行（轮询恢复历史后重挂）不重复追加。
+  // Idempotent: don't append a duplicate when the last item is already the local "stopped" row (re-applied after history restore via polling).
   if (last?.interrupted) return { ...state, busy: false, activeMessageId: null };
   return {
     ...state,
@@ -490,8 +507,8 @@ export function markApprovalResolved(
   };
 }
 
-/** 批四十九：clarify 卡本地收口（提交成功 → answered；提交失败 → error；
- * 倒计时到期 → timed_out）。步骤状态同步。 */
+/** Batch 49: clarify card local close-out (submit success → answered; submit
+ * failure → error; countdown expiry → timed_out). Step status kept in sync. */
 export function markClarifyResolved(
   state: ChatTurnState,
   clarifyId: string,
@@ -526,13 +543,17 @@ export function toggleToolExpanded(state: ChatTurnState, toolId: number): ChatTu
   };
 }
 
-/** 历史消息 → 会话状态（切回/切页恢复现场；批三十三）。
+/** History messages → session state (scene restore on switch-back/page switch; batch 33).
  *
- * 服务器消息带稳定行 id，这里重编号为本地自增（避免与流式渲染的 nextId
- * 冲突）；tools 已由服务端折叠进 assistant 气泡（含 tool_id/reasoning）。
- * 批四十二 §BJ：历史 reasoning 兼容单值字符串（消息级）与结构化
- * {steps:[{tool_id,text}]}（按 tool_id 挂回对应工具行的"该步推理"）。
- * busy 来自注册表（在跑的会话显示"处理中"，输入禁用直到后台 turn 完成）。
+ * Server messages carry stable row ids; renumber them to local auto-increment
+ * here (avoids colliding with the streaming renderer's nextId); tools have
+ * already been folded into the assistant bubble by the server (incl.
+ * tool_id/reasoning).
+ * Batch 42 §BJ: history reasoning accepts both a plain string (message level)
+ * and structured {steps:[{tool_id,text}]} (attached back to the matching tool
+ * row's per-step reasoning by tool_id).
+ * busy comes from the registry (a running session shows "working"; input is
+ * disabled until the background turn completes).
  */
 export function stateFromHistory(
   history: ChatHistoryMessage[],
@@ -574,8 +595,9 @@ export function stateFromHistory(
         reasoning: step?.text ?? "",
       };
     });
-    // 批八十二：历史审批/clarify 卡恢复（服务端已折叠进本气泡；状态以落库
-    // 快照 + 服务端覆盖为准，前端只做类型归一 + 步骤同步）。
+    // Batch 82: history approval/clarify card restore (the server folded them
+    // into this bubble; state follows the persisted snapshot + server
+    // overrides, the frontend only normalizes types + syncs steps).
     const approvals: ChatApprovalCard[] = (m.approvals ?? []).map((a) => ({
       approvalId: String(a.approval_id ?? ""),
       command: String(a.command ?? ""),
@@ -642,9 +664,11 @@ export function stateFromHistory(
   return { messages, busy: Boolean(busy), nextId, activeMessageId: null, contextWarning: null };
 }
 
-/** 批四十二 §BH：跨会话审批裁决回写——只重建含该审批卡的状态槽（全局弹窗/
- * 审批中心裁决后经 pub/sub 广播到所有 chat 会话）。幂等：重复通知/无匹配卡
- * 返回原引用不触发重渲染。 */
+/** Batch 42 §BH: cross-session approval resolution write-back — only rebuild
+ * the state slot containing that approval card (global modal / approval
+ * center resolutions broadcast via pub/sub to all chat sessions). Idempotent:
+ * duplicate notifications / no matching card return the original reference
+ * without triggering a re-render. */
 export function markApprovalResolvedInSessions(
   states: Record<string, ChatTurnState>,
   approvalId: string,

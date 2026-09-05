@@ -1,6 +1,8 @@
 import { type ReactNode } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 
-/** 递归 key-value 渲染（已脱敏数据；React 转义是最后一道 XSS 边界）。 */
+/** Recursive key-value rendering (data already sanitized; React escaping is the last XSS boundary). */
 function renderValue(value: unknown): ReactNode {
   if (value === null || value === undefined) {
     return <span className="opacity-50">-</span>;
@@ -34,7 +36,7 @@ function renderValue(value: unknown): ReactNode {
       </div>
     );
   }
-  // 字符串（命令/YAML 等）：不折行，超出横向滚动——长命令可读。
+  // Strings (commands/YAML etc.): no wrapping, horizontal scroll on overflow — keeps long commands readable.
   return (
     <span className="block whitespace-pre font-mono text-[var(--vigil-text)] opacity-85">
       {String(value)}
@@ -43,9 +45,10 @@ function renderValue(value: unknown): ReactNode {
 }
 
 export function DetailTree({ data }: { data: Record<string, unknown> }) {
+  const { t } = useTranslation();
   const entries = Object.entries(data);
   if (entries.length === 0) {
-    return <div className="text-sm text-[var(--vigil-muted)]">无详情数据</div>;
+    return <div className="text-sm text-[var(--vigil-muted)]">{t("common.noDetailData")}</div>;
   }
   return (
     <div className="text-sm">

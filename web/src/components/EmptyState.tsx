@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { cn } from "@/lib/ops";
 
-/** 空态占位（不造假数据——数据源未就绪的区块统一用它）。 */
+/** Empty-state placeholder (no fake data — used uniformly by blocks whose data source isn't ready). */
 export function EmptyState({
   icon,
   title,

@@ -1,5 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import { currentLang, switchLang } from "@/i18n";
 import {
   Activity,
   Bell,
@@ -35,21 +38,22 @@ const MonitoringPage = lazy(() => import("@/pages/MonitoringPage"));
 
 interface NavItem {
   path: string;
+  /** i18n key (common.nav.*) resolved at render time. */
   label: string;
   icon: typeof LayoutDashboard;
 }
 
-/** 豆包菜单 9 项：9 个路由页。 */
+/** Doubao menu, 9 items: 9 route pages. */
 const NAV_ITEMS: NavItem[] = [
-  { path: "/chat", label: "Chat", icon: MessageSquare },
-  { path: "/overview", label: "Overview", icon: LayoutDashboard },
-  { path: "/topology", label: "Topology", icon: Network },
-  { path: "/runbooks", label: "Runbooks", icon: ScrollText },
-  { path: "/matrix", label: "Matrix", icon: Grid3x3 },
-  { path: "/incidents", label: "Incidents", icon: TriangleAlert },
-  { path: "/approvals", label: "Approvals", icon: ShieldCheck },
-  { path: "/audit", label: "Audit", icon: History },
-  { path: "/monitoring", label: "监控", icon: Activity },
+  { path: "/chat", label: "common.nav.chat", icon: MessageSquare },
+  { path: "/overview", label: "common.nav.overview", icon: LayoutDashboard },
+  { path: "/topology", label: "common.nav.topology", icon: Network },
+  { path: "/runbooks", label: "common.nav.runbooks", icon: ScrollText },
+  { path: "/matrix", label: "common.nav.matrix", icon: Grid3x3 },
+  { path: "/incidents", label: "common.nav.incidents", icon: TriangleAlert },
+  { path: "/approvals", label: "common.nav.approvals", icon: ShieldCheck },
+  { path: "/audit", label: "common.nav.audit", icon: History },
+  { path: "/monitoring", label: "common.nav.monitoring", icon: Activity },
 ];
 
 const THEME_KEY = "vigil-console-theme";
@@ -72,12 +76,30 @@ function useConsoleTheme() {
   return { dark, toggle };
 }
 
+/** zh | EN language switcher — flips i18n language, persisted to localStorage. */
+function LangSwitch() {
+  const { t } = useTranslation();
+  const lang = currentLang();
+  return (
+    <button
+      type="button"
+      onClick={() => switchLang(lang === "zh" ? "en" : "zh")}
+      aria-label={t("common.language")}
+      title={t("common.language")}
+      className="flex h-8 items-center justify-center rounded-md px-1.5 text-xs font-medium text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]"
+    >
+      {lang === "zh" ? t("common.langEn") : t("common.langZh")}
+    </button>
+  );
+}
+
 export default function App() {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const { dark, toggle } = useConsoleTheme();
 
-  // 顶栏数据：环境标签（首个 cluster）+ API 健康 + 运行时长
+  // Header data: env label (first cluster) + API health + uptime
   const [headerMeta, setHeaderMeta] = useState<{ env: string; apiOk: boolean; uptime: string }>({
     env: "",
     apiOk: true,
@@ -89,12 +111,14 @@ export default function App() {
       .then(([health, topo]) => {
         if (!alive) return;
         const h = health as HealthResponse | null;
-        const t = topo as TopologyResponse | null;
+        const topoResp = topo as TopologyResponse | null;
         setHeaderMeta({
           apiOk: h?.ok !== false,
           uptime: formatUptime(h?.uptime_seconds),
           env:
-            t && t.ok && t.data && t.data.clusters.length > 0 ? t.data.clusters[0].name : "",
+            topoResp && topoResp.ok && topoResp.data && topoResp.data.clusters.length > 0
+              ? topoResp.data.clusters[0].name
+              : "",
         });
       })
       .catch(() => {});
@@ -103,10 +127,10 @@ export default function App() {
     };
   }, []);
 
-  // 待审批数量（顶部徽标 + 铃铛角标，批三十四：接全局轮询实时化）
+  // Pending approval count (header badge + bell badge; batch 34: live via global polling)
   const approvalPoll = useApprovalPolling();
 
-  // 侧边栏：默认 60px 纯图标，可展开 200px
+  // Sidebar: 60px icons-only by default, expandable to 200px
   const [collapsed, setCollapsed] = useState(() => {
     try {
       return localStorage.getItem("vigil-sidebar-collapsed") !== "0";
@@ -124,7 +148,7 @@ export default function App() {
     });
   }, []);
 
-  // 全局搜索（回车跳拓扑带 q）
+  // Global search (Enter jumps to topology with q)
   const [globalQuery, setGlobalQuery] = useState("");
   const goSearch = useCallback(
     (e: FormEvent) => {
@@ -137,7 +161,7 @@ export default function App() {
 
   return (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
-      {/* 顶部 Header（h-14，豆包布局） */}
+      {/* Top header (h-14, Doubao layout) */}
       <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--vigil-border)] bg-[var(--vigil-card)] px-4">
         <div className="flex w-[220px] shrink-0 items-center gap-2">
           <button type="button" onClick={() => navigate("/overview")} className="flex items-center gap-2" aria-label="Vigil">
@@ -157,56 +181,59 @@ export default function App() {
             <input
               value={globalQuery}
               onChange={(e) => setGlobalQuery(e.target.value)}
-              placeholder="搜索主机 / 服务 / 命令…"
+              placeholder={t("common.searchPlaceholder")}
               className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
             />
           </div>
         </form>
 
         <div className="ml-auto flex items-center gap-3 text-sm">
-          {/* API Healthy */}
+          {/* API healthy */}
           <span
             className={cn("vigil-badge hidden lg:inline-flex", headerMeta.apiOk ? "text-[var(--vigil-ok)]" : "text-[var(--vigil-error)]")}
-            title="服务健康检查"
+            title={t("common.apiHealthTitle")}
           >
             <span className={cn("vigil-status-dot", headerMeta.apiOk ? "dot-ok" : "dot-error")} />
             API {headerMeta.apiOk ? "Healthy" : "Degraded"}
           </span>
 
-          {/* 待审批数（点击跳审批中心） */}
+          {/* Pending approvals (click → approval center) */}
           <button
             type="button"
             onClick={() => navigate("/approvals")}
-            title="待审批（点击进入审批中心）"
+            title={t("common.approvalsBadgeTitle")}
             className="vigil-badge hidden lg:inline-flex hover:bg-[var(--vigil-muted-bg)]"
           >
             Approvals {approvalPoll.total}
           </button>
 
-          {/* 运行时长 */}
+          {/* Agent uptime */}
           <span className="vigil-badge hidden lg:inline-flex">Agent upt: {headerMeta.uptime}</span>
 
-          {/* 明暗切换 */}
+          {/* Light/dark toggle */}
           <button
             type="button"
             onClick={toggle}
-            aria-label={dark ? "切换浅色模式" : "切换深色模式"}
-            title={dark ? "切换浅色模式" : "切换深色模式"}
+            aria-label={dark ? t("common.themeToLight") : t("common.themeToDark")}
+            title={dark ? t("common.themeToLight") : t("common.themeToDark")}
             className="flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
           >
             {dark ? <Sun className="size-4" /> : <Moon className="size-4" />}
           </button>
 
-          {/* 待审批通知（铃铛 + 数量角标 + 下拉列表，可跳审批中心） */}
+          {/* zh/EN language switch (persisted to localStorage) */}
+          <LangSwitch />
+
+          {/* Approval notifications (bell + count badge + dropdown, jumps to approval center) */}
           <ApprovalBell />
 
-          {/* 设置菜单（主题 + 版本，无上游继承页入口） */}
+          {/* Settings menu (theme + version, no upstream-pages entry) */}
           <SettingsMenu dark={dark} onToggleTheme={toggle} />
         </div>
       </header>
 
       <div className="flex min-h-0 min-w-0 flex-1">
-        {/* 左侧窄侧边栏（默认 60px 纯图标，可展开 200px） */}
+        {/* Left narrow sidebar (60px icons-only by default, expandable to 200px) */}
         <aside
           className={cn(
             "flex shrink-0 flex-col border-r border-[var(--vigil-border)] bg-[var(--vigil-card)] py-3",
@@ -221,9 +248,9 @@ export default function App() {
                 <NavLink
                   key={item.path}
                   to={item.path}
-                  title={collapsed ? item.label : undefined}
+                  title={collapsed ? t(item.label) : undefined}
                   onClick={() => {
-                    // 点当前页导航项 = 回到概览（或保持收起态交互）
+                    // Clicking the active nav item = back to overview (collapsed-state interaction)
                     if (active) navigate("/overview");
                   }}
                   className={cn(
@@ -235,7 +262,7 @@ export default function App() {
                   )}
                 >
                   <Icon className="size-[18px] shrink-0" />
-                  {!collapsed && <span className="truncate text-sm">{item.label}</span>}
+                  {!collapsed && <span className="truncate text-sm">{t(item.label)}</span>}
                 </NavLink>
               );
             })}
@@ -245,7 +272,7 @@ export default function App() {
             <button
               type="button"
               onClick={toggleCollapsed}
-              aria-label={collapsed ? "展开侧边栏" : "折叠侧边栏"}
+              aria-label={collapsed ? t("common.sidebarExpand") : t("common.sidebarCollapse")}
               className="flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
             >
               {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
@@ -253,13 +280,13 @@ export default function App() {
           </div>
         </aside>
 
-        {/* 主内容区 */}
+        {/* Main content */}
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <Suspense
               fallback={
                 <div className="flex min-h-[40vh] items-center justify-center text-sm text-[var(--vigil-muted)]">
-                  加载中…
+                  {t("common.loading")}
                 </div>
               }
             >
@@ -281,19 +308,19 @@ export default function App() {
         </main>
       </div>
 
-      {/* 审批全局弹窗（批三十四）：任何路由可见；决策独立于对话页审批卡 */}
+      {/* Global approval modal (batch 34): visible on any route; decisions independent of chat-page approval cards */}
       <ApprovalModal />
     </div>
   );
 }
 
-/** 顶部设置菜单：主题切换 + 版本信息（无上游继承页入口）。 */
-/** 待审批通知：铃铛 + 数量角标；点开下拉列出待审批项，可跳审批中心。 */
+/** Approval notifications: bell + count badge; the dropdown lists pending approvals and jumps to the approval center. */
 function ApprovalBell() {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
-  // 批三十四：铃铛角标/下拉接全局轮询快照，实时反映 pending 审批。
+  // Batch 34: bell badge/dropdown hooked to the global polling snapshot, reflecting pending approvals live.
   const poll = useApprovalSnapshot();
   const count = poll.total;
   const items = poll.approvals.slice(0, 5);
@@ -313,8 +340,8 @@ function ApprovalBell() {
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label="待审批通知"
-        title={`待审批 ${count} 项`}
+        aria-label={t("common.bellAria")}
+        title={t("common.bellTitle", { n: count })}
         aria-expanded={open}
         className="relative flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
       >
@@ -328,10 +355,10 @@ function ApprovalBell() {
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 w-80 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-1 shadow-[var(--vigil-shadow)]">
           <div className="px-2.5 py-1.5 text-[11px] font-medium tracking-wide text-[var(--vigil-muted)]">
-            待审批（{count}）
+            {t("common.bellHeading", { n: count })}
           </div>
           {items.length === 0 ? (
-            <div className="px-2.5 py-3 text-center text-xs text-[var(--vigil-muted)]">暂无待审批</div>
+            <div className="px-2.5 py-3 text-center text-xs text-[var(--vigil-muted)]">{t("common.bellEmpty")}</div>
           ) : (
             items.map((item) => (
               <button
@@ -361,7 +388,7 @@ function ApprovalBell() {
               }}
               className="vigil-link w-full px-2.5 py-1 text-left text-xs"
             >
-              进入审批中心 →
+              {t("common.bellOpen")}
             </button>
           </div>
         </div>
@@ -371,6 +398,7 @@ function ApprovalBell() {
 }
 
 function SettingsMenu({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: () => void }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const [version, setVersion] = useState<string>("-");
@@ -396,9 +424,9 @@ function SettingsMenu({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: (
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        aria-label="设置菜单"
+        aria-label={t("common.settingsAria")}
         aria-expanded={open}
-        title="设置（主题 / 版本）"
+        title={t("common.settingsTitle")}
         className="flex size-8 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
       >
         <Settings className="size-4" />
@@ -406,16 +434,16 @@ function SettingsMenu({ dark, onToggleTheme }: { dark: boolean; onToggleTheme: (
       {open && (
         <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-1 shadow-[var(--vigil-shadow)]">
           <div className="px-2.5 py-1.5 text-[11px] font-medium tracking-wide text-[var(--vigil-muted)]">
-            设置
+            {t("common.settings")}
           </div>
           <MenuRow
-            label={dark ? "主题：深色（点击切换浅色）" : "主题：浅色（点击切换深色）"}
+            label={dark ? t("common.themeMenuDark") : t("common.themeMenuLight")}
             onClick={() => {
               onToggleTheme();
               setOpen(false);
             }}
           />
-          <MenuRow label={`版本 ${version}`} onClick={() => setOpen(false)} />
+          <MenuRow label={t("common.versionLabel", { version })} onClick={() => setOpen(false)} />
         </div>
       )}
     </div>

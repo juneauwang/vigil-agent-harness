@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link } from "react-router";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Search, Server, X } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
 import type {
@@ -9,18 +11,22 @@ import type {
   MonitoringSeries,
 } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
-import { cn } from "@/lib/ops";
+import { cn, isAlertmanagerUnconfiguredError, isPrometheusUnavailableError } from "@/lib/ops";
+import { translateBackendMessage } from "@/lib/backendMsg";
 
 /**
- * 监控页（OPS-DELTA #78）：服务健康 / PromQL 查询 / 活跃告警。
+ * Monitoring page (OPS-DELTA #78): service health / PromQL query / active alerts.
  *
- * 三块布局（Grafana 心智 + 现有蓝灰主题）：
- * 1. 服务健康列表——拓扑服务按需探测（后端 30s 缓存），up 绿 / down 红 /
- *    unknown 灰；顶部汇总 + 状态筛选 + 30s 自动刷新。
- * 2. PromQL 查询——promql + duration/step → 结构化 series 表格 + SVG
- *    sparkline（手写轻量，不引图表库）；未配置 Prometheus 时显示引导。
- * 3. 活跃告警——Alertmanager 实时快照，severity 色标复用 Incidents 分级样式。
- * 无监控数据/全 unknown 不崩（空态 + 引导文案）。
+ * Three-block layout (Grafana mental model + the existing blue-gray theme):
+ * 1. Service health list — topology services probed on demand (30s backend
+ *    cache), up green / down red / unknown gray; top summary + status filter +
+ *    30s auto refresh.
+ * 2. PromQL query — promql + duration/step → structured series table + SVG
+ *    sparkline (hand-rolled, no chart library); guidance shown when Prometheus
+ *    is not configured.
+ * 3. Active alerts — live Alertmanager snapshot, severity colors reuse the
+ *    Incidents tier styles. No monitoring data / all-unknown doesn't crash
+ *    (empty states + guidance copy).
  */
 
 const STATUS_META: Record<string, { label: string; cls: string }> = {
@@ -47,7 +53,7 @@ function errText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** 手写 SVG sparkline（不引图表库）：series 时间点折线，单值/全空返回 null。 */
+/** Hand-rolled SVG sparkline (no chart library): series time-point polyline, null for single/empty values. */
 function Sparkline({ points, width = 132, height = 28 }: {
   points: Array<[number, number | null]>;
   width?: number;
@@ -94,6 +100,7 @@ function fmtNum(v?: number): string {
 }
 
 function SeriesRow({ series }: { series: MonitoringSeries }) {
+  const { t } = useTranslation();
   const labelText = Object.entries(series.labels ?? {})
     .map(([k, v]) => `${k}=${v}`)
     .join(" ");
@@ -107,7 +114,7 @@ function SeriesRow({ series }: { series: MonitoringSeries }) {
           )}
         </div>
         <div className="mt-0.5 text-[10px] text-[var(--vigil-muted)]">
-          {series.point_count} 点 · last {fmtNum(series.summary.last)} · min{" "}
+          {series.point_count} {t("monitoring.pointsUnit")} · last {fmtNum(series.summary.last)} · min{" "}
           {fmtNum(series.summary.min)} · max {fmtNum(series.summary.max)}
         </div>
       </div>
@@ -120,10 +127,11 @@ function DispositionLine({ disp, onExecute }: {
   disp: AlertDisposition | null | undefined;
   onExecute: (d: AlertDisposition) => void;
 }) {
+  const { t } = useTranslation();
   if (!disp || !disp.matched || !disp.runbook) {
     return (
       <div className="mt-1.5 rounded bg-[var(--vigil-muted-bg)] px-2 py-1 text-[11px] text-[var(--vigil-muted)]">
-        建议处置：无匹配 runbook
+        {t("monitoring.dispNoMatch")}
       </div>
     );
   }
@@ -133,11 +141,11 @@ function DispositionLine({ disp, onExecute }: {
       : { label: "medium", cls: "border border-[var(--vigil-primary)] text-[var(--vigil-primary)]" };
   return (
     <div className="mt-1.5 flex flex-wrap items-center gap-1.5 rounded bg-[var(--vigil-muted-bg)] px-2 py-1">
-      <span className="text-[10px] text-[var(--vigil-muted)]">建议处置</span>
+      <span className="text-[10px] text-[var(--vigil-muted)]">{t("monitoring.dispLabel")}</span>
       <Link
         to={`/runbooks?name=${encodeURIComponent(disp.runbook)}`}
         className="inline-flex items-center rounded bg-[var(--vigil-primary)] px-1.5 py-0.5 text-[11px] font-medium text-white hover:opacity-90"
-        title="在 Runbooks 页查看该 SOP"
+        title={t("monitoring.dispViewSop")}
       >
         {disp.runbook}
       </Link>
@@ -150,7 +158,7 @@ function DispositionLine({ disp, onExecute }: {
         {confidence.label}
       </span>
       <span className="rounded border border-[var(--vigil-border)] px-1 py-0.5 text-[10px] text-[var(--vigil-muted)]">
-        {disp.matched_by === "trigger" ? "触发词" : "模糊匹配"}
+        {disp.matched_by === "trigger" ? t("monitoring.dispTrigger") : t("monitoring.dispFuzzy")}
       </span>
       {disp.title && (
         <span className="min-w-0 flex-1 truncate text-[11px] text-[var(--vigil-muted)]">
@@ -161,9 +169,9 @@ function DispositionLine({ disp, onExecute }: {
         type="button"
         className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[11px] text-[var(--vigil-text)] hover:border-[var(--vigil-primary)] hover:text-[var(--vigil-primary)]"
         onClick={() => onExecute(disp)}
-        title="人工确认后走既有 runbook 执行链（矩阵/审批门）"
+        title={t("monitoring.dispExecuteTitle")}
       >
-        <Play className="size-3" /> 执行
+        <Play className="size-3" /> {t("monitoring.dispExecute")}
       </button>
     </div>
   );
@@ -173,6 +181,7 @@ function AlertRow({ alert, onExecute }: {
   alert: MonitoringAlert;
   onExecute: (d: AlertDisposition) => void;
 }) {
+  const { t } = useTranslation();
   const badge = severityBadge(alert.severity);
   return (
     <div className="flex items-start gap-3 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-3">
@@ -186,7 +195,7 @@ function AlertRow({ alert, onExecute }: {
       </span>
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm font-medium text-[var(--vigil-text)]">
-          {alert.alertname || "未知告警"}
+          {alert.alertname || t("monitoring.unknownAlert")}
         </div>
         <div className="mt-0.5 truncate text-[11px] text-[var(--vigil-muted)]">
           {[alert.instance, alert.startsAt && new Date(alert.startsAt).toLocaleString()]
@@ -202,6 +211,10 @@ function AlertRow({ alert, onExecute }: {
 type StatusFilter = "all" | "up" | "down" | "unknown";
 
 export default function MonitoringPage() {
+  const { t, i18n } = useTranslation();
+  // Option C: backend messages arrive in zh (backend default); translate for en UI.
+  const blang = i18n.language === "en" ? "en" : "zh";
+  const bmsg = (m: string | null) => (m ? translateBackendMessage(m, blang) : undefined);
   const [health, setHealth] = useState<MonitoringHealthService[]>([]);
   const [summary, setSummary] = useState({ up: 0, down: 0, unknown: 0 });
   const [healthError, setHealthError] = useState<string | null>(null);
@@ -221,7 +234,7 @@ export default function MonitoringPage() {
   const [alertsError, setAlertsError] = useState<string | null>(null);
   const [alertsLoaded, setAlertsLoaded] = useState(false);
   const [alertsMatched, setAlertsMatched] = useState(0);
-  // batch87：执行建议 = 人工确认后走既有 runbook 执行 API（矩阵/审批门）。
+  // batch87: executing a suggestion = after manual confirmation, goes through the existing runbook execution API (matrix / approval gates).
   const [execTarget, setExecTarget] = useState<AlertDisposition | null>(null);
   const [execRunning, setExecRunning] = useState(false);
   const [execInfo, setExecInfo] = useState<string | null>(null);
@@ -298,8 +311,7 @@ export default function MonitoringPage() {
   );
   const isPromUnavailable =
     queryError !== null &&
-    (queryError.includes("未配置 Prometheus") ||
-      queryError.includes("prometheus_unavailable"));
+    isPrometheusUnavailableError(queryError);
 
   const confirmExecute = () => {
     if (!execTarget?.runbook || execRunning) return;
@@ -320,8 +332,8 @@ export default function MonitoringPage() {
         setExecRunning(false);
         setExecInfo(
           resp.ok
-            ? `已下发 ${execTarget.runbook} 执行（实时进度见 Runbooks 页）。`
-            : resp.error ?? "执行启动失败。",
+            ? t("monitoring.execStarted", { name: execTarget.runbook })
+            : resp.error ?? t("monitoring.execStartFailed"),
         );
       })
       .catch((e: unknown) => {
@@ -336,14 +348,14 @@ export default function MonitoringPage() {
       <div className="mb-4 flex items-center gap-2">
         <Activity className="size-5 text-[var(--vigil-muted)]" />
         <h1 className="text-lg font-semibold">Monitoring</h1>
-        <span className="text-xs text-[var(--vigil-muted)]">· 服务健康与指标</span>
+        <span className="text-xs text-[var(--vigil-muted)]">{t("monitoring.subtitle")}</span>
       </div>
 
       <div className="space-y-4">
-        {/* 1. 服务健康 */}
+        {/* 1. Service health */}
         <section className="vigil-card p-4">
           <div className="mb-3 flex flex-wrap items-center gap-3">
-            <h3 className="text-sm font-medium">服务健康</h3>
+            <h3 className="text-sm font-medium">{t("monitoring.healthTitle")}</h3>
             <div className="flex items-center gap-1.5">
               {(["up", "down", "unknown"] as const).map((k) => (
                 <button
@@ -370,7 +382,7 @@ export default function MonitoringPage() {
                     : "bg-[var(--vigil-muted-bg)] text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]",
                 )}
               >
-                全部 {health.length}
+                {t("monitoring.allFilter", { n: health.length })}
               </button>
             </div>
             <button
@@ -378,24 +390,24 @@ export default function MonitoringPage() {
               onClick={() => loadHealth(true)}
               className="ml-auto inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-2 py-1 text-[11px] text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
             >
-              <RefreshCw className="size-3" /> 刷新
+              <RefreshCw className="size-3" /> {t("common.refresh")}
             </button>
           </div>
 
           {!healthLoaded ? null : healthError ? (
             <EmptyState
               icon={<Activity className="size-6" />}
-              title="健康数据加载失败"
-              description={healthError}
-              hint="健康探测不依赖 Prometheus；请确认 dashboard 后端与拓扑数据（services/）可用。"
+              title={t("monitoring.healthLoadFailedTitle")}
+              description={bmsg(healthError)}
+              hint={t("monitoring.healthLoadFailedHint")}
               className="py-10"
             />
           ) : health.length === 0 ? (
             <EmptyState
               icon={<Server className="size-6" />}
-              title="暂无拓扑服务"
-              description="拓扑 services/ 目录为空或 topology.yaml 缺失——健康探测无对象。"
-              hint="运行 vigil ops-init 生成样例拓扑，或 vigil topo-discover 采集后回来刷新。"
+              title={t("monitoring.noServicesTitle")}
+              description={t("monitoring.noServicesDesc")}
+              hint={t("monitoring.noServicesHint")}
               className="py-10"
             />
           ) : (
@@ -403,12 +415,12 @@ export default function MonitoringPage() {
               <table className="w-full text-left text-xs">
                 <thead>
                   <tr className="border-b border-[var(--vigil-border)] text-[10px] uppercase tracking-wide text-[var(--vigil-muted)]">
-                    <th className="py-1.5 pr-2 font-medium">服务</th>
-                    <th className="px-2 py-1.5 font-medium">类型</th>
-                    <th className="px-2 py-1.5 font-medium">集群</th>
+                    <th className="py-1.5 pr-2 font-medium">{t("monitoring.thService")}</th>
+                    <th className="px-2 py-1.5 font-medium">{t("monitoring.thType")}</th>
+                    <th className="px-2 py-1.5 font-medium">{t("monitoring.thCluster")}</th>
                     <th className="px-2 py-1.5 font-medium">endpoint</th>
-                    <th className="px-2 py-1.5 font-medium">状态</th>
-                    <th className="px-2 py-1.5 font-medium">延迟</th>
+                    <th className="px-2 py-1.5 font-medium">{t("monitoring.thStatus")}</th>
+                    <th className="px-2 py-1.5 font-medium">{t("monitoring.thLatency")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -449,16 +461,16 @@ export default function MonitoringPage() {
           )}
         </section>
 
-        {/* 2. PromQL 查询 */}
+        {/* 2. PromQL query */}
         <section className="vigil-card p-4">
-          <h3 className="mb-3 text-sm font-medium">PromQL 查询</h3>
+          <h3 className="mb-3 text-sm font-medium">{t("monitoring.promqlTitle")}</h3>
           <form onSubmit={runQuery} className="mb-3 flex flex-wrap items-center gap-2">
             <div className="relative min-w-0 flex-1">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--vigil-muted)]" />
               <input
                 value={promql}
                 onChange={(e) => setPromql(e.target.value)}
-                placeholder="输入 PromQL，如 up、rate(http_requests_total[5m])"
+                placeholder={t("monitoring.promqlPlaceholder")}
                 className="vigil-input w-full rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] py-1.5 pl-8 pr-3 text-xs outline-none focus:border-[var(--vigil-primary)]"
               />
             </div>
@@ -466,14 +478,14 @@ export default function MonitoringPage() {
               value={duration}
               onChange={(e) => setDuration(e.target.value)}
               placeholder="duration 30m"
-              title="查询时长（默认 30m）"
+              title={t("monitoring.durationTitle")}
               className="vigil-input w-28 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2 py-1.5 text-xs outline-none focus:border-[var(--vigil-primary)]"
             />
             <input
               value={step}
               onChange={(e) => setStep(e.target.value)}
               placeholder="step 60s"
-              title="采样步长（默认 60s）"
+              title={t("monitoring.stepTitle")}
               className="vigil-input w-28 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2 py-1.5 text-xs outline-none focus:border-[var(--vigil-primary)]"
             />
             <button
@@ -481,42 +493,42 @@ export default function MonitoringPage() {
               disabled={querying || !promql.trim()}
               className="inline-flex items-center gap-1 rounded-md bg-[var(--vigil-primary)] px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
             >
-              <Play className="size-3" /> {querying ? "查询中…" : "执行"}
+              <Play className="size-3" /> {querying ? t("monitoring.querying") : t("monitoring.exec")}
             </button>
           </form>
 
           {isPromUnavailable ? (
             <EmptyState
               icon={<Search className="size-6" />}
-              title="Prometheus 未配置"
-              description={queryError}
-              hint="在 config.yaml 配置 ops.prometheus.endpoint 后，PromQL 查询与告警可用；服务健康不依赖 Prometheus，照常工作。"
+              title={t("monitoring.promUnavailableTitle")}
+              description={bmsg(queryError)}
+              hint={t("monitoring.promUnavailableHint")}
               className="py-8"
             />
           ) : queryError ? (
             <EmptyState
               icon={<AlertTriangle className="size-6" />}
-              title="查询失败"
-              description={queryError}
-              hint="可检查 PromQL 语法或上游 Prometheus 状态后重试。"
+              title={t("monitoring.queryFailedTitle")}
+              description={bmsg(queryError)}
+              hint={t("monitoring.queryFailedHint")}
               className="py-8"
             />
           ) : !queryDone ? (
             <div className="py-6 text-center text-xs text-[var(--vigil-muted)]">
-              输入 PromQL 并执行，结果会以 series + sparkline 展示。
+              {t("monitoring.queryIntro")}
             </div>
           ) : querySeries.length === 0 ? (
             <EmptyState
               icon={<Search className="size-6" />}
-              title="查询无结果"
-              description={`${queryMeta?.query ?? ""} 无匹配 series（${queryMeta?.duration ?? ""}/${queryMeta?.step ?? ""} 范围）。`}
+              title={t("monitoring.noSeriesTitle")}
+              description={t("monitoring.noSeriesDesc", { query: queryMeta?.query ?? "", duration: queryMeta?.duration ?? "", step: queryMeta?.step ?? "" })}
               className="py-8"
             />
           ) : (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] text-[var(--vigil-muted)]">
-                  {querySeries.length} 个 series · {queryMeta?.duration ?? ""}/{queryMeta?.step ?? ""}
+                  {t("monitoring.seriesCount", { n: querySeries.length, range: `${queryMeta?.duration ?? ""}/${queryMeta?.step ?? ""}` })}
                 </span>
                 {queryMeta && <span className="truncate font-mono text-[11px] text-[var(--vigil-muted)]">{queryMeta.query}</span>}
               </div>
@@ -527,44 +539,44 @@ export default function MonitoringPage() {
           )}
         </section>
 
-        {/* 3. 活跃告警 */}
+        {/* 3. Active alerts */}
         <section className="vigil-card p-4">
           <div className="mb-3 flex items-center gap-2">
-            <h3 className="text-sm font-medium">活跃告警</h3>
+            <h3 className="text-sm font-medium">{t("monitoring.alertsTitle")}</h3>
             {alertsLoaded && !alertsError && (
               <span className="rounded bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-[11px] text-[var(--vigil-muted)]">
-                {alerts.length} 条
-                {alertsMatched > 0 ? ` · ${alertsMatched} 条有处置建议` : ""}
+                {t("monitoring.alertsCount", { n: alerts.length })}
+                {alertsMatched > 0 ? t("monitoring.alertsMatched", { n: alertsMatched }) : ""}
               </span>
             )}
             {execInfo && (
               <span className="rounded bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-[11px] text-[var(--vigil-text)]">
-                {execInfo}
+                {bmsg(execInfo)}
               </span>
             )}
           </div>
           {!alertsLoaded ? null : alertsError &&
-            alertsError.includes("未配置 Alertmanager") ? (
+            isAlertmanagerUnconfiguredError(alertsError) ? (
             <EmptyState
               icon={<AlertTriangle className="size-6" />}
-              title="Alertmanager 未配置"
-              description={alertsError}
-              hint="在 config.yaml 配置 ops.prometheus.alertmanager 后显示实时告警快照。"
+              title={t("monitoring.promUnavailableTitle")}
+              description={bmsg(alertsError)}
+              hint={t("monitoring.alertmanagerHint")}
               className="py-8"
             />
           ) : alertsError ? (
             <EmptyState
               icon={<AlertTriangle className="size-6" />}
-              title="告警加载失败"
-              description={alertsError}
+              title={t("monitoring.alertsLoadFailedTitle")}
+              description={bmsg(alertsError)}
               className="py-8"
             />
           ) : alerts.length === 0 ? (
             <EmptyState
               icon={<AlertTriangle className="size-6" />}
-              title="暂无活跃告警"
-              description="Alertmanager 当前无活跃告警（实时快照）。"
-              hint="watch 采集的告警流见 Incidents 页——两者语义不同：Incidents = 采集归档，本页 = 实时状态。"
+              title={t("monitoring.noAlertsTitle")}
+              description={t("monitoring.noAlertsDesc")}
+              hint={t("monitoring.noAlertsHint")}
               className="py-8"
             />
           ) : (
@@ -585,23 +597,22 @@ export default function MonitoringPage() {
           <div className="w-full max-w-md rounded-lg border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-5 shadow-lg">
             <div className="flex items-center gap-2">
               <Play className="size-4 text-[var(--vigil-primary)]" />
-              <h2 className="text-sm font-semibold">执行 runbook（告警处置建议）</h2>
+              <h2 className="text-sm font-semibold">{t("monitoring.execModalTitle")}</h2>
               <button
                 className="ml-auto rounded p-1 hover:bg-[var(--vigil-muted-bg)]"
                 onClick={() => setExecTarget(null)}
-                aria-label="关闭"
+                aria-label={t("common.close")}
                 disabled={execRunning}
               >
                 <X className="size-4" />
               </button>
             </div>
             <p className="mt-3 text-sm text-[var(--vigil-text)] opacity-80">
-              确认执行建议 SOP{" "}
-              <code className="font-mono">{execTarget.runbook}</code>？步骤按操作
-              矩阵逐次裁决（execute 直跑；approve / 强制人工 → 审批卡人工确认）。
+              {t("monitoring.execConfirmPrefix")}
+              <code className="font-mono">{execTarget.runbook}</code>{t("monitoring.execConfirmSuffix")}
             </p>
             <p className="mt-2 text-xs text-[var(--vigil-muted)]">
-              匹配依据：{execTarget.reason ?? execTarget.hint ?? "—"}
+              {t("monitoring.matchBasis", { reason: execTarget.reason ?? execTarget.hint ?? "—" })}
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button
@@ -610,7 +621,7 @@ export default function MonitoringPage() {
                 onClick={() => setExecTarget(null)}
                 disabled={execRunning}
               >
-                取消
+                {t("common.cancel")}
               </button>
               <button
                 type="button"
@@ -619,7 +630,7 @@ export default function MonitoringPage() {
                 disabled={execRunning}
               >
                 {execRunning ? <Loader2 className="mr-1 inline size-3.5 animate-spin" /> : null}
-                确认执行
+                {t("monitoring.confirmExec")}
               </button>
             </div>
           </div>

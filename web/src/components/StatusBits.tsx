@@ -1,39 +1,32 @@
+import { useTranslation } from "react-i18next";
+import "@/i18n";
 import { envClass, statusPillClass, statusDotClass, statusTone } from "@/lib/ops";
 import { cn } from "@/lib/ops";
 
-const ENV_LABEL: Record<string, string> = {
-  prod: "生产环境",
-  test: "测试环境",
-  dev: "开发环境",
-  local: "本地环境",
-};
-
-const TONE_LABEL: Record<string, string> = {
-  ok: "在线/正常",
-  warn: "告警",
-  error: "故障",
-  offline: "离线/未知",
-};
-
-/** 环境小标签（prod 红 / test 琥珀 / dev 橙 / local 蓝 / 其他灰），悬停说明。 */
+/** Env badge (prod red / test amber / dev orange / local blue / others gray), hover explains. */
 export function EnvBadge({ env }: { env?: string }) {
+  const { t } = useTranslation();
   if (!env?.trim()) return null;
   const key = env.trim().toLowerCase();
+  const label = ["prod", "test", "dev", "local"].includes(key)
+    ? t(`common.env.${key}`)
+    : t("common.env.fallback");
   return (
-    <span className={cn("vigil-env", envClass(env))} title={ENV_LABEL[key] ?? "环境"}>
+    <span className={cn("vigil-env", envClass(env))} title={label}>
       {env}
     </span>
   );
 }
 
-/** 状态 pill：文字（原始状态）+ 颜色双重表达，悬停说明语义。 */
+/** Status pill: text (raw status) + color dual encoding, hover explains the semantics. */
 export function StatusPill({ status }: { status?: string }) {
+  const { t } = useTranslation();
   if (!status?.trim()) return null;
   const tone = statusTone(status);
   return (
     <span
       className={cn("vigil-status-pill", statusPillClass(status))}
-      title={`状态：${TONE_LABEL[tone] ?? "未知"}`}
+      title={t("common.statusTitle", { label: t(`common.tone.${tone}`) })}
     >
       <span className={cn("vigil-status-dot", statusDotClass(status))} />
       {status}
@@ -41,19 +34,21 @@ export function StatusPill({ status }: { status?: string }) {
   );
 }
 
-/** 纯状态点（链路摘要等紧凑场景用）：颜色 + 悬停说明；需文字时用 StatusPill。 */
+/** Bare status dot (compact spots like link summaries): color + hover explanation; use StatusPill when text is needed. */
 export function StatusDot({ status }: { status?: string }) {
+  const { t } = useTranslation();
   const tone = statusTone(status);
   return (
     <span
       className={cn("vigil-status-dot", statusDotClass(status))}
-      title={`状态：${TONE_LABEL[tone] ?? "未知"}`}
+      title={t("common.statusTitle", { label: t(`common.tone.${tone}`) })}
     />
   );
 }
 
-/** 状态文字标签（与 StatusDot 成对：点 + 字，双重表达）。 */
+/** Status text label (paired with StatusDot: dot + word, dual encoding). */
 export function StatusText({ status }: { status?: string }) {
+  const { t } = useTranslation();
   const tone = statusTone(status);
-  return <span className="text-[var(--vigil-muted)]">{TONE_LABEL[tone] ?? "未知"}</span>;
+  return <span className="text-[var(--vigil-muted)]">{t(`common.tone.${tone}`)}</span>;
 }

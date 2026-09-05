@@ -8,6 +8,7 @@ import {
 } from "d3-force";
 import type { TopologyCard, TopologyView } from "./api";
 import { statusTone } from "./ops";
+import i18n from "@/i18n";
 
 /**
  * 拓扑图数据模型（批三十五）：GET /api/topology → react-flow nodes/edges。
@@ -214,15 +215,15 @@ export function filterGraphModel(
   return { ...model, nodes, edges };
 }
 
-const KIND_LABEL: Record<GraphNodeKind, string> = {
-  cluster: "集群",
-  host: "主机",
-  service: "服务",
-  cross_host: "跨主机实体",
+const KIND_KEY: Record<GraphNodeKind, string> = {
+  cluster: "topology.kind.cluster",
+  host: "topology.kind.host",
+  service: "topology.kind.service",
+  cross_host: "topology.kind.cross_host",
 };
 
 export function kindLabel(kind: GraphNodeKind): string {
-  return KIND_LABEL[kind] ?? kind;
+  return i18n.t(KIND_KEY[kind] ?? kind);
 }
 
 /** 节点状态着色：关键链路琥珀优先；running 绿 / warn 琥珀 / error 红 / 其余灰。 */

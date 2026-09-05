@@ -1,4 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useTranslation } from "react-i18next";
+import "@/i18n";
+import i18n from "@/i18n";
+import { translateBackendMessage } from "@/lib/backendMsg";
 import {
   Bot,
   Check,
@@ -47,28 +51,19 @@ import StopButton from "@/components/StopButton";
 import { cn } from "@/lib/ops";
 
 /**
- * 对话 Session 页（批三十一，UI 壳核心价值页）：
+ * Chat session page (batch 31, core-value page of the UI shell):
  * POST /api/chat/sessions + GET /api/chat/sessions + POST
- * /api/chat/sessions/{id}/messages（SSE：chat:delta/chat:reasoning/tool/
- * tool_result/approval_pending/done/error）。流式打字机渲染；工具调用折叠行；
- * 审批卡弹在消息流内（走现有 POST /api/approvals/{id}/approve|deny）；同会话
- * 串行，agent 忙时输入禁用。
+ * /api/chat/sessions/{id}/messages (SSE: chat:delta/chat:reasoning/tool/
+ * tool_result/approval_pending/done/error). Streaming typewriter rendering;
+ * collapsible tool-call rows; approval cards appear inline in the message
+ * stream (via the existing POST /api/approvals/{id}/approve|deny); serial per
+ * session, input disabled while the agent is busy.
  *
- * 批四十一：工具输出按服务端 tool_id 挂接（§5）；推理折叠展示（§3）；工具/
- * 审批有序步骤序列（§4）；停止后 busy 校验（§23）；审批详情完整展示（§6）；
- * 切回 busy 指示恢复（§7）；会话级模型下拉（§8）。
+ * Batch 41: tool output attached by server-side tool_id (§5); reasoning shown
+ * collapsible (§3); ordered tool/approval step sequence (§4); post-stop busy
+ * verification (§23); full approval details (§6); busy indicator restored on
+ * switching back (§7); per-session model dropdown (§8).
  */
-
-const STEP_STATUS_LABEL: Record<ChatStepStatus, string> = {
-  running: "进行中",
-  done: "完成",
-  failed: "失败",
-  pending: "等待审批",
-  approved: "已批准",
-  denied: "已拒绝",
-  answered: "已回答",
-  timed_out: "已超时",
-};
 
 const STEP_STATUS_CLASS: Record<ChatStepStatus, string> = {
   running: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
@@ -81,12 +76,13 @@ const STEP_STATUS_CLASS: Record<ChatStepStatus, string> = {
   timed_out: "bg-red-500/15 text-red-600 dark:text-red-400",
 };
 
-/** 推理过程折叠块（批四十一 §3）：默认折叠为一行摘要，展开看完整文本。 */
+/** Reasoning collapse block (batch 41 §3): collapsed to a one-line summary by default, expand for the full text. */
 function ReasoningBlock({ text }: { text: string }) {
+  const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const trimmed = text.trim();
   if (!trimmed) return null;
-  const summary = trimmed.split("\n")[0].slice(0, 80) || "推理过程";
+  const summary = trimmed.split("\n")[0].slice(0, 80) || t("chat.reasoningFallback");
   return (
     <div className="mt-2 overflow-hidden rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]">
       <button
@@ -101,7 +97,7 @@ function ReasoningBlock({ text }: { text: string }) {
           <ChevronRight className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
         )}
         <Brain className="size-3.5 shrink-0 text-violet-500" />
-        <span className="font-medium">查看推理过程（{trimmed.length} 字）</span>
+        <span className="font-medium">{t("chat.reasoningToggle", { n: trimmed.length })}</span>
         <span className="ml-auto min-w-0 flex-1 truncate text-[var(--vigil-muted)]">
           {open ? "" : summary}
         </span>
@@ -126,9 +122,10 @@ function ToolRow({
   status: ChatStepStatus;
   onToggle: () => void;
 }) {
+  const { t } = useTranslation();
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const reasoning = (tool.reasoning ?? "").trim();
-  const reasoningSummary = reasoning.split("\n")[0].slice(0, 80) || "该步推理";
+  const reasoningSummary = reasoning.split("\n")[0].slice(0, 80) || t("chat.stepReasoningFallback");
   return (
     <div className="overflow-hidden rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]">
       <button
@@ -153,7 +150,7 @@ function ToolRow({
             STEP_STATUS_CLASS[status],
           )}
         >
-          {STEP_STATUS_LABEL[status]}
+          {t(`chat.stepStatus.${status}`)}
         </span>
         {tool.ok !== undefined && tool.ok === false && (
           <span className="shrink-0 text-[10px] text-[var(--vigil-error)]">✗</span>
@@ -174,7 +171,7 @@ function ToolRow({
               <ChevronRight className="size-3 shrink-0 text-[var(--vigil-muted)]" />
             )}
             <Brain className="size-3 shrink-0 text-violet-500" />
-            <span className="font-medium">该步推理（{reasoning.length} 字）</span>
+            <span className="font-medium">{t("chat.stepReasoningToggle", { n: reasoning.length })}</span>
             <span className="ml-auto min-w-0 flex-1 truncate text-[var(--vigil-muted)]">
               {reasoningOpen ? "" : reasoningSummary}
             </span>
@@ -190,7 +187,7 @@ function ToolRow({
         <div className="space-y-1.5 border-t border-[var(--vigil-border)] px-2.5 py-2">
           {tool.inputSummary && (
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-[var(--vigil-muted)]">输入</div>
+              <div className="text-[10px] uppercase tracking-wide text-[var(--vigil-muted)]">{t("chat.input")}</div>
               <pre className="scroll-thin whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--vigil-text)] opacity-85">
                 {tool.inputSummary}
               </pre>
@@ -198,9 +195,9 @@ function ToolRow({
           )}
           {tool.outputSummary !== undefined && (
             <div>
-              <div className="text-[10px] uppercase tracking-wide text-[var(--vigil-muted)]">输出</div>
+              <div className="text-[10px] uppercase tracking-wide text-[var(--vigil-muted)]">{t("chat.output")}</div>
               <pre className="scroll-thin max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-[var(--vigil-text)] opacity-85">
-                {tool.outputSummary || "（空输出）"}
+                {tool.outputSummary || t("chat.emptyOutput")}
               </pre>
             </div>
           )}
@@ -210,9 +207,11 @@ function ToolRow({
   );
 }
 
-/** 审批卡：长命令可滚动 + 叙述完整展示（批四十一 §6），批准/拒绝后状态标签。
- * 批四十二 §BK：展示触发该审批的推理摘要（一行可展开，默认折叠）——盲批风险
- * 防护，用户可先看 agent 为什么执行这条命令再决定。 */
+/** Approval card: scrollable long command + full description (batch 41 §6),
+ * status label after approve/deny. Batch 42 §BK: shows a summary of the
+ * reasoning that triggered the approval (one line, expandable, collapsed by
+ * default) — a blind-approval guard so users can see why the agent wants to
+ * run this command before deciding. */
 function ApprovalCard({
   card,
   onResolve,
@@ -222,11 +221,12 @@ function ApprovalCard({
   onResolve: (card: ChatApprovalCard, status: "approved" | "denied") => void;
   triggerReasoning?: string;
 }) {
+  const { t } = useTranslation();
   const busy = card.status === "approved" || card.status === "denied";
   const [expanded, setExpanded] = useState(false);
   const [reasonOpen, setReasonOpen] = useState(false);
   const triggerText = (triggerReasoning ?? "").trim();
-  const triggerSummary = triggerText.split("\n")[0].slice(0, 80) || "触发推理";
+  const triggerSummary = triggerText.split("\n")[0].slice(0, 80) || t("chat.triggerReasoningFallback");
   const longCommand = (card.command ?? "").length > 80;
   const [timedOut, setTimedOut] = useState(false);
   useEffect(() => {
@@ -248,18 +248,18 @@ function ApprovalCard({
     >
       <div className="flex flex-wrap items-center gap-2">
         <ShieldAlert className={cn("size-4 shrink-0", card.status === "approved" ? "text-emerald-500" : card.status === "denied" ? "text-red-500" : "text-amber-500")} />
-        <span className="font-medium">该命令需要审批</span>
+        <span className="font-medium">{t("chat.needsApproval")}</span>
         {card.grade && <span className="rounded bg-amber-500/15 px-1.5 py-px text-[10px] text-amber-600 dark:text-amber-400">L{card.grade}</span>}
         {card.env && <span className="text-[var(--vigil-muted)]">{card.env}</span>}
         <span className="ml-auto shrink-0 text-[10px]">
           {card.status === "pending" && timedOut ? (
-            <span className="text-red-500">审批超时，已终止</span>
+            <span className="text-red-500">{t("chat.approvalTimedOut")}</span>
           ) : card.status === "approved" ? (
-            <span className="text-emerald-500">已批准</span>
+            <span className="text-emerald-500">{t("chat.approved")}</span>
           ) : card.status === "denied" ? (
-            <span className="text-red-500">已拒绝</span>
+            <span className="text-red-500">{t("chat.denied")}</span>
           ) : (
-            <span className="text-amber-500">等待审批</span>
+            <span className="text-amber-500">{t("chat.awaitingApproval")}</span>
           )}
         </span>
       </div>
@@ -267,7 +267,7 @@ function ApprovalCard({
         type="button"
         onClick={() => setExpanded((v) => !v)}
         className="min-w-0 text-left font-mono text-[11px]"
-        title={longCommand ? "点击展开/收起完整命令" : card.command}
+        title={longCommand ? t("chat.expandCommandTitle") : card.command}
       >
         <span className="block whitespace-pre-wrap break-words">
           {expanded || !longCommand ? card.command : `${card.command.slice(0, 80)}…`}
@@ -279,7 +279,7 @@ function ApprovalCard({
           onClick={() => setExpanded(false)}
           className="self-start text-[10px] text-[var(--vigil-muted)] underline"
         >
-          收起
+          {t("common.collapse")}
         </button>
       )}
       {card.description && (
@@ -302,7 +302,7 @@ function ApprovalCard({
               <ChevronRight className="size-3 shrink-0 text-[var(--vigil-muted)]" />
             )}
             <Brain className="size-3 shrink-0 text-violet-500" />
-            <span className="font-medium">触发推理（{triggerText.length} 字）</span>
+            <span className="font-medium">{t("chat.triggerReasoningToggle", { n: triggerText.length })}</span>
             <span className="ml-auto min-w-0 flex-1 truncate text-[var(--vigil-muted)]">
               {reasonOpen ? "" : triggerSummary}
             </span>
@@ -322,7 +322,7 @@ function ApprovalCard({
             onClick={() => onResolve(card, "approved")}
             className="vigil-btn h-7 whitespace-nowrap border border-emerald-500/50 px-2 text-xs text-emerald-600 dark:text-emerald-400"
           >
-            <Check className="size-3.5" /> 批准
+            <Check className="size-3.5" /> {t("approvals.approve")}
           </button>
           <button
             type="button"
@@ -330,7 +330,7 @@ function ApprovalCard({
             onClick={() => onResolve(card, "denied")}
             className="vigil-btn h-7 whitespace-nowrap border border-red-500/50 px-2 text-xs text-red-600 dark:text-red-400"
           >
-            <X className="size-3.5" /> 拒绝
+            <X className="size-3.5" /> {t("approvals.deny")}
           </button>
         </div>
       )}
@@ -338,10 +338,12 @@ function ApprovalCard({
   );
 }
 
-/** 批四十九：对话流内 clarify 卡（问题 + choices 按钮 + 自由文本 + 提交/取消
- * + 超时倒计时）。非全局弹窗（clarify 是"问题"，审批是"命令确认"）。提交 →
- * POST /api/chat/sessions/{id}/clarify → 卡片收起、agent 回合继续；超时 →
- * "已超时，agent 自行决定"（后端 timeout 语义，前端倒计时同步显示）。 */
+/** Batch 49: in-stream clarify card (question + choice buttons + free text +
+ * submit/cancel + timeout countdown). Not a global modal (clarify is a
+ * "question", approval is a "command confirmation"). Submit → POST
+ * /api/chat/sessions/{id}/clarify → card collapses and the agent turn
+ * continues; timeout → "timed out, the agent decides on its own" (backend
+ * timeout semantics, frontend countdown displayed in sync). */
 function ClarifyCard({
   card,
   onResolve,
@@ -349,7 +351,8 @@ function ClarifyCard({
   card: ChatClarifyCard;
   onResolve: (card: ChatClarifyCard, answer: string | string[]) => void;
 }) {
-  // error 状态可重试（提交失败 → 按钮仍可用）；answered/timed_out 收口。
+  const { t } = useTranslation();
+  // error state is retryable (submit failed → buttons stay usable); answered/timed_out are terminal.
   const busy = card.status === "answered" || card.status === "timed_out";
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [custom, setCustom] = useState("");
@@ -425,18 +428,18 @@ function ClarifyCard({
     >
       <div className="flex flex-wrap items-center gap-2">
         <HelpCircle className="size-4 shrink-0 text-sky-500" />
-        <span className="font-medium">需要你回答</span>
+        <span className="font-medium">{t("chat.clarifyTitle")}</span>
         {card.status === "answered" ? (
-          <span className="ml-auto text-emerald-500">已提交，agent 继续</span>
+          <span className="ml-auto text-emerald-500">{t("chat.clarifySubmitted")}</span>
         ) : expired ? (
-          <span className="ml-auto text-red-500">已超时，agent 自行决定</span>
+          <span className="ml-auto text-red-500">{t("chat.clarifyTimedOut")}</span>
         ) : card.status === "error" ? (
-          <span className="ml-auto text-red-500">提交失败，请重试</span>
+          <span className="ml-auto text-red-500">{t("chat.clarifySubmitFailed")}</span>
         ) : (
           <span className="ml-auto shrink-0 text-[10px]">
             {remaining !== null && (
               <span className={cn(remaining <= 60 ? "text-red-500" : "text-[var(--vigil-muted)]")}>
-                剩余 {fmt(remaining)}
+                {t("chat.clarifyRemaining", { time: fmt(remaining) })}
               </span>
             )}
           </span>
@@ -480,7 +483,7 @@ function ClarifyCard({
             submit();
           }
         }}
-        placeholder={hasChoices ? "其他（自行输入）…" : "输入回答…"}
+        placeholder={hasChoices ? t("chat.clarifyOtherPlaceholder") : t("chat.clarifyInputPlaceholder")}
         data-testid={`clarify-input-${card.clarifyId}`}
         className="h-8 min-w-0 rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 text-xs text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-50"
       />
@@ -492,7 +495,7 @@ function ClarifyCard({
             onClick={cancel}
             className="vigil-btn h-7 border border-[var(--vigil-border)] px-2 text-xs text-[var(--vigil-muted)] disabled:opacity-50"
           >
-            取消
+            {t("common.cancel")}
           </button>
           <button
             type="button"
@@ -501,7 +504,7 @@ function ClarifyCard({
             data-testid={`clarify-submit-${card.clarifyId}`}
             className="vigil-btn h-7 whitespace-nowrap border border-sky-500/50 px-2 text-xs text-sky-600 dark:text-sky-400 disabled:opacity-50"
           >
-            提交
+            {t("chat.submit")}
           </button>
         </div>
       )}
@@ -520,14 +523,17 @@ function StepList({
   onResolveApproval: (card: ChatApprovalCard, status: "approved" | "denied") => void;
   onResolveClarify: (card: ChatClarifyCard, answer: string | string[]) => void;
 }) {
-  const toolById = new Map(msg.tools.map((t) => [t.id, t]));
+  const { t } = useTranslation();
+  const toolById = new Map(msg.tools.map((tool) => [tool.id, tool]));
   const approvalById = new Map(msg.approvals.map((a) => [a.approvalId, a]));
   const clarifyById = new Map(msg.clarifies.map((c) => [c.clarifyId, c]));
   const steps = msg.steps;
   if (steps.length === 0) return null;
 
-  // 批四十二 §BK：审批的"触发推理"= 其前最近一个工具步骤的该步推理（SSE 中
-  // 推理先随 chat:tool 到、审批在工具执行内到，顺序天然满足）。
+  // Batch 42 §BK: an approval's "trigger reasoning" = the per-step reasoning
+  // of the closest preceding tool step (in SSE, reasoning arrives with
+  // chat:tool before the approval fires inside the tool execution, so order
+  // naturally holds).
   const triggerReasoningFor = (index: number): string => {
     for (let i = index - 1; i >= 0; i--) {
       const prev = steps[i];
@@ -546,8 +552,8 @@ function StepList({
         <div className="flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
           <ListOrdered className="size-3" />
           <span>
-            共 {steps.length} 步
-            {current && <> · 当前：{STEP_STATUS_LABEL[current.status]}</>}
+            {t("chat.stepsTotal", { n: steps.length })}
+            {current && <> · {t("chat.stepsCurrent", { status: t(`chat.stepStatus.${current.status}`) })}</>}
           </span>
         </div>
       )}
@@ -570,7 +576,7 @@ function StepList({
               <li key={`approval-${step.ref}`} className="ml-3">
                 <div className="flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
                   <span className="w-4 text-center font-mono">{no}</span>
-                  <span>审批</span>
+                  <span>{t("chat.stepApproval")}</span>
                 </div>
                 <ApprovalCard
                   card={card}
@@ -603,12 +609,13 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval, onResolveClarify 
   onResolveApproval: (card: ChatApprovalCard, status: "approved" | "denied") => void;
   onResolveClarify: (card: ChatClarifyCard, answer: string | string[]) => void;
 }) {
+  const { t } = useTranslation();
   if (msg.role === "user") {
     return (
       <div className="flex justify-end">
         <div className="max-w-[85%] rounded-lg rounded-br-sm border border-[var(--vigil-border)] bg-[var(--vigil-primary)]/10 px-3 py-2">
           <div className="mb-1 flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
-            <User className="size-3" /> 你
+            <User className="size-3" /> {t("chat.you")}
           </div>
           <div className="whitespace-pre-wrap break-words text-sm">{msg.content}</div>
         </div>
@@ -625,13 +632,13 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval, onResolveClarify 
         </div>
         {msg.interrupted && (
           <div className="mb-2 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-600 dark:text-amber-400">
-            <Square className="size-3.5 shrink-0" /> 已停止
+            <Square className="size-3.5 shrink-0" /> {t("chat.stopped")}
           </div>
         )}
         {msg.error && (
           <div className="flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
             <XCircle className="size-4 shrink-0" />
-            {msg.error}
+            {translateBackendMessage(msg.error, i18n.language === "en" ? "en" : "zh")}
           </div>
         )}
         <StepList
@@ -651,8 +658,9 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval, onResolveClarify 
   );
 }
 
-/** 批四十一 §23：停止后校验注册表 busy 翻转（最多 10s），翻转后强制重拉
- * 历史 + 保留"已停止"本地行；未翻转给可见警告，不静默残留。 */
+/** Batch 41 §23: after stop, verify the registry busy flip (up to 10s); once
+ * flipped, force-refetch history + keep the local "stopped" row; if not
+ * flipped, surface a visible warning instead of silently lingering. */
 async function verifyBusyCleared(
   sid: string,
   setStates: Dispatch<SetStateAction<Record<string, ChatTurnState>>>,
@@ -675,30 +683,27 @@ async function verifyBusyCleared(
       }
       await new Promise((r) => setTimeout(r, 2000));
     }
-    setStopWarning("服务端仍显示忙碌（可能仍在收尾）。可在会话列表刷新或稍后重试。");
-    // 解除本地/注册表快照 busy，避免输入永久禁用——若后端真还忙，发送会被
-    // 409 busy 拦下并显示错误，用户仍可操作而非静默卡死。
+    setStopWarning(i18n.t("chat.busyStill"));
+    // Clear the local/registry busy snapshot so input isn't disabled forever —
+    // if the backend really is still busy, send is rejected with 409 busy and
+    // an error shows; the user stays in control instead of silently freezing.
     setBusyMap?.((prev) => ({ ...prev, [sid]: false }));
   } catch {
-    setStopWarning("未能确认忙碌状态已清除，可在会话列表刷新重试。");
+    setStopWarning(i18n.t("chat.busyUnclear"));
     setBusyMap?.((prev) => ({ ...prev, [sid]: false }));
   }
 }
 
-// ── 批六十四：token 用量面板（当前会话实时 + 历史累计 + 费用）─────────────
+// ── Batch 64: token usage panel (current session live + historical totals + cost) ─────────────
 
-const USAGE_SOURCE_LABEL: Record<string, string> = {
-  manual: "手动价",
-  online: "在线拉取",
-  builtin: "内置估算",
-};
+const USAGE_SOURCE_KEYS = new Set(["manual", "online", "builtin"]);
 
 function formatTokens(n: number | null | undefined): string {
   const v = Number(n ?? 0);
   return Number.isFinite(v) ? v.toLocaleString() : "0";
 }
 
-/** 批八十一：context 用量紧凑格式（37K / 131K；拿不到 → "—"）。 */
+/** Batch 81: compact context-usage format (37K / 131K; "—" when unavailable). */
 function formatCompactTokens(n: number | null | undefined): string {
   const v = Number(n ?? 0);
   if (!Number.isFinite(v) || v < 0) return "—";
@@ -719,7 +724,7 @@ function formatCost(cost: number | null | undefined, currency: string | null | u
   const v = Number(cost);
   if (cost === null || cost === undefined || !Number.isFinite(v)) return null;
   const symbol = currency === "cny" ? "¥" : "$";
-  return `约 ${symbol}${v.toFixed(2)}`;
+  return i18n.t("chat.costApprox", { value: `${symbol}${v.toFixed(2)}` });
 }
 
 function localTodayKey(): string {
@@ -744,17 +749,22 @@ function UsagePanel({
   analytics: UsageAnalyticsResponse | null;
   analyticsLoading: boolean;
 }) {
+  const { t } = useTranslation();
   const daily = analytics?.daily ?? [];
   const todayRow = daily.find((r) => r.day === localTodayKey()) ?? daily[daily.length - 1];
   const totals = analytics?.totals;
   const price = usage?.price ?? null;
   const costText = price ? formatCost(usage?.cost ?? null, usage?.cost_currency ?? null) : null;
-  const sourceLabel = price ? USAGE_SOURCE_LABEL[price.source] ?? price.source : null;
+  const sourceLabel = price
+    ? USAGE_SOURCE_KEYS.has(price.source)
+      ? t(`chat.usageSource.${price.source}`)
+      : price.source
+    : null;
 
   const row = (label: string, value: string, cost?: string | null) => (
     <div className="flex items-center justify-between gap-2">
       <span className="text-[var(--vigil-muted)]">{label}</span>
-      <span className="font-mono text-[var(--vigil-text)]">{value}{cost ? `（${cost}）` : null}</span>
+      <span className="font-mono text-[var(--vigil-text)]">{value}{cost ? t("chat.parens", { value: cost }) : null}</span>
     </div>
   );
 
@@ -762,64 +772,64 @@ function UsagePanel({
     <div data-testid="usage-panel" className="mb-3 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-3 text-xs">
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Coins className="size-3.5 text-[var(--vigil-muted)]" />
-        <span className="font-semibold">用量</span>
+        <span className="font-semibold">{t("chat.usageTitle")}</span>
         <span className="text-[var(--vigil-muted)]">
-          当前会话 token 实时读会话记录；今天/近 30 天含全部会话（CLI / 网关 / chat）。
+          {t("chat.usageNote")}
         </span>
       </div>
       <div className="grid gap-3 md:grid-cols-3">
         <div className="space-y-1 rounded border border-[var(--vigil-border)] p-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium">当前会话</span>
+            <span className="font-medium">{t("chat.usageCurrentSession")}</span>
             {usageLoading && <Loader2 className="size-3 animate-spin text-[var(--vigil-muted)]" />}
           </div>
           {!activeId ? (
-            <div className="text-[var(--vigil-muted)]">创建会话后显示用量</div>
+            <div className="text-[var(--vigil-muted)]">{t("chat.usageNeedSession")}</div>
           ) : usageError ? (
             <div className="text-red-600 dark:text-red-400">{usageError}</div>
           ) : usage ? (
             <>
-              {row("模型", usage.model || "—")}
-              {row("输入", formatTokens(usage.input_tokens))}
-              {row("输出", formatTokens(usage.output_tokens))}
-              {row("总计", formatTokens(usage.total_tokens))}
+              {row(t("chat.model"), usage.model || "—")}
+              {row(t("chat.inputTokens"), formatTokens(usage.input_tokens))}
+              {row(t("chat.outputTokens"), formatTokens(usage.output_tokens))}
+              {row(t("chat.totalTokens"), formatTokens(usage.total_tokens))}
               {costText ? (
                 <div className="flex items-center justify-between gap-2 pt-1">
-                  <span className="text-[var(--vigil-muted)]">费用</span>
+                  <span className="text-[var(--vigil-muted)]">{t("chat.cost")}</span>
                   <span className="font-mono text-[var(--vigil-ok)]">
                     {costText}
-                    {sourceLabel ? <span className="ml-1 text-[10px] text-[var(--vigil-muted)]">（{sourceLabel}）</span> : null}
+                    {sourceLabel ? <span className="ml-1 text-[10px] text-[var(--vigil-muted)]">{t("chat.parens", { value: sourceLabel })}</span> : null}
                   </span>
                 </div>
               ) : (
-                <div className="pt-1 text-[10px] text-[var(--vigil-muted)]">价格不可用，仅显示 token</div>
+                <div className="pt-1 text-[10px] text-[var(--vigil-muted)]">{t("chat.priceUnavailable")}</div>
               )}
             </>
           ) : (
-            <div className="text-[var(--vigil-muted)]">加载中…</div>
+            <div className="text-[var(--vigil-muted)]">{t("common.loading")}</div>
           )}
         </div>
 
         <div className="space-y-1 rounded border border-[var(--vigil-border)] p-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium">今天</span>
+            <span className="font-medium">{t("chat.today")}</span>
             {analyticsLoading && <Loader2 className="size-3 animate-spin text-[var(--vigil-muted)]" />}
           </div>
-          {row("输入", formatTokens(todayRow?.input_tokens))}
-          {row("输出", formatTokens(todayRow?.output_tokens))}
-          {row("总计", formatTokens((todayRow?.input_tokens ?? 0) + (todayRow?.output_tokens ?? 0)))}
-          {row("费用", "—", formatCost(todayRow?.estimated_cost ?? null, "usd"))}
+          {row(t("chat.inputTokens"), formatTokens(todayRow?.input_tokens))}
+          {row(t("chat.outputTokens"), formatTokens(todayRow?.output_tokens))}
+          {row(t("chat.totalTokens"), formatTokens((todayRow?.input_tokens ?? 0) + (todayRow?.output_tokens ?? 0)))}
+          {row(t("chat.cost"), "—", formatCost(todayRow?.estimated_cost ?? null, "usd"))}
         </div>
 
         <div className="space-y-1 rounded border border-[var(--vigil-border)] p-2">
           <div className="flex items-center justify-between gap-2">
-            <span className="font-medium">近 30 天</span>
+            <span className="font-medium">{t("chat.last30days")}</span>
             {analyticsLoading && <Loader2 className="size-3 animate-spin text-[var(--vigil-muted)]" />}
           </div>
-          {row("输入", formatTokens(totals?.total_input))}
-          {row("输出", formatTokens(totals?.total_output))}
-          {row("总计", formatTokens((totals?.total_input ?? 0) + (totals?.total_output ?? 0)))}
-          {row("费用", "—", formatCost(totals?.total_estimated_cost ?? null, "usd"))}
+          {row(t("chat.inputTokens"), formatTokens(totals?.total_input))}
+          {row(t("chat.outputTokens"), formatTokens(totals?.total_output))}
+          {row(t("chat.totalTokens"), formatTokens((totals?.total_input ?? 0) + (totals?.total_output ?? 0)))}
+          {row(t("chat.cost"), "—", formatCost(totals?.total_estimated_cost ?? null, "usd"))}
         </div>
       </div>
     </div>
@@ -827,8 +837,10 @@ function UsagePanel({
 }
 
 export default function ChatPage() {
-  // 批八十二：activeId 随 URL ?sid= 持久化（刷新/切回原会话；replace 不污染
-  // 历史栈；卸载时清参，其他页面不受影响）。
+  const { t, i18n } = useTranslation();
+  // Batch 82: activeId persisted via URL ?sid= (survives refresh / switching
+  // back to the original session; replace doesn't pollute history; the param
+  // is cleared on unmount so other pages are unaffected).
   const [searchParams, setSearchParams] = useSearchParams();
   const syncSid = useCallback(
     (sid: string | null) => {
@@ -847,22 +859,25 @@ export default function ChatPage() {
 
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  // 批三十三：会话状态分槽——每个会话独立消息列表 + busy/SSE 状态（按
-  // sessionId 存 map）。切页/切回不再丢消息；A 忙时可切到 B 发消息；切回
-  // A 由历史端点 + 轮询恢复现场。
+  // Batch 33: per-session state slots — each session has its own message list
+  // + busy/SSE state (stored in a map keyed by sessionId). Switching pages and
+  // back no longer loses messages; while A is busy you can switch to B and
+  // send; switching back to A restores the scene via the history endpoint +
+  // polling.
   const [states, setStates] = useState<Record<string, ChatTurnState>>({});
-  // 批四十一 §7：注册表 busy 快照（每次 listChatSessions 更新）——切回时
-  // 即使本地槽位丢失，也能恢复"处理中"指示。
+  // Batch 41 §7: registry busy snapshot (updated on every listChatSessions) —
+  // when switching back, the "working" indicator is restored even if the local
+  // slot was lost.
   const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [stopWarning, setStopWarning] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
   const [stopping, setStopping] = useState(false);
-  // 批四十一 §8：可选模型目录 + 每会话选择。
+  // Batch 41 §8: optional model catalog + per-session selection.
   const [modelOptions, setModelOptions] = useState<ChatModelOption[]>([]);
   const [modelSelections, setModelSelections] = useState<Record<string, string>>({});
-  // 批六十四：token 用量面板（打开时拉一次；会话切换时重拉）。
+  // Batch 64: token usage panel (fetch once on open; refetch on session switch).
   const [usageOpen, setUsageOpen] = useState(false);
   const [usageData, setUsageData] = useState<ChatUsageResponse | null>(null);
   const [usageLoading, setUsageLoading] = useState(false);
@@ -874,9 +889,9 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const activeState = (activeId && states[activeId]) || createChatState();
-  // 有效 busy：本地槽位 busy 或注册表快照 busy（§7：busi指示不依赖消息流）。
+  // Effective busy: local slot busy or registry snapshot busy (§7: indicator doesn't depend on the message stream).
   const activeBusy = activeBusyOf(activeId, states, busyMap);
-  // 批八十一：当前会话 context 用量（>80% 变色 + 建议新开）。
+  // Batch 81: current session context usage (>80% turns amber + suggests a new session).
   const activeUsage = activeId
     ? (sessions.find((s) => s.id === activeId)?.context_usage ?? null)
     : null;
@@ -913,7 +928,7 @@ export default function ChatPage() {
         if (existing && existing.messages.length > 0) return prev;
         return { ...prev, [id]: stateFromHistory(resp.messages ?? [], Boolean(resp.busy)) };
       });
-      // 同步注册表 busy 快照（历史端点自带 busy）。
+      // Sync the registry busy snapshot (the history endpoint carries busy).
       setBusyMap((prev) => ({ ...prev, [id]: Boolean(resp.busy) }));
     } catch {
       loadedRef.current.delete(id);
@@ -925,7 +940,7 @@ export default function ChatPage() {
       setError(null);
       setBusyAction(true);
       try {
-        // 批五十一：模型条目带 provider（custom:<slug> 等），随创建提交路由。
+        // Batch 51: model entries carry a provider (custom:<slug> etc.), submitted with creation for routing.
         const entry = model ? modelOptions.find((m) => m.id === model) : undefined;
         const resp = await api.createChatSession(model, entry?.provider);
         const sid = resp.chat_session_id;
@@ -947,7 +962,7 @@ export default function ChatPage() {
     [refreshSessions, modelOptions, syncSid],
   );
 
-  // 初始化：拉可选模型目录 + 列活会话；无则新建。
+  // Init: fetch the model catalog + list live sessions; create one if none.
   useEffect(() => {
     let alive = true;
     void api.getModels().then((resp) => {
@@ -964,8 +979,9 @@ export default function ChatPage() {
         trackSessions(list);
         setSessions(list);
         if (list.length > 0) {
-          // 批八十二：URL sid 优先（存在且在列表内）；无效/缺失 → 回退列表首个，
-          // 并同步 URL 让地址栏与实看会话一致（静默，不报错）。
+          // Batch 82: URL sid wins when present and in the list; invalid/missing
+          // → fall back to the first session and sync the URL so the address bar
+          // matches the session actually viewed (silent, no error).
           const urlSid = searchParams.get("sid");
           const target =
             urlSid && list.some((s) => s.id === urlSid) ? urlSid : list[0].id;
@@ -993,17 +1009,18 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // 批八十二：离开 /chat 页（卸载）→ 清理 sid 参数。
+  // Batch 82: leaving /chat (unmount) → clear the sid param.
   useEffect(() => () => syncSid(null), [syncSid]);
 
-  // 切到无缓存的会话 → 拉历史恢复现场（1a：切页/切回消息完整）。
+  // Switching to a session without cache → fetch history to restore the scene (1a: messages intact across switches).
   useEffect(() => {
     if (!activeId) return;
     void loadSessionHistory(activeId);
   }, [activeId, loadSessionHistory]);
 
-  // 批四十一 §7：activeId 变化/挂载时立即重拉注册表 busy（切回时恢复
-  // "处理中"指示，不等 2s 轮询）。
+  // Batch 41 §7: refetch the registry busy immediately on activeId change/mount
+  // (restores the "working" indicator on switch-back without waiting for the
+  // 2s poll).
   useEffect(() => {
     if (!activeId) return;
     let alive = true;
@@ -1014,8 +1031,9 @@ export default function ChatPage() {
         setStates((prev) => {
           const slot = prev[activeId];
           if (slot && slot.busy) return prev;
-          // 槽位缺失或本地 busy 丢失 → 用注册表 busy 恢复指示（保留已有消息，
-          // 消息列表增量事件缺失也不丢"处理中"视觉）。
+          // Slot missing or local busy lost → restore the indicator from the
+          // registry busy (keeps existing messages; the "working" visual survives
+          // missing incremental stream events).
           const st = slot ? { ...slot, busy: true } : { ...createChatState(), busy: true };
           return { ...prev, [activeId]: st };
         });
@@ -1026,8 +1044,10 @@ export default function ChatPage() {
     };
   }, [activeId, refreshSessions]);
 
-  // 后台 turn 收尾轮询：当前会话 busy（本地或注册表快照）时轮询注册表，
-  // busy 翻转 → 重拉历史拿最终内容（1b 验收③：在跑的显示"处理中"，跑完恢复）。
+  // Background turn completion polling: while the active session is busy (local
+  // or registry snapshot) poll the registry; on busy flip → refetch history for
+  // the final content (acceptance 1b③: "working" while running, restored when
+  // done).
   useEffect(() => {
     if (!activeId || !activeBusy) return;
     const timer = window.setInterval(async () => {
@@ -1039,8 +1059,9 @@ export default function ChatPage() {
           const h = await api.getChatHistory(activeId);
           setStates((prev) => {
             const existing = prev[activeId];
-            // 批四十一 §23：stop 场景本地"已停止"行不持久化——恢复历史后
-            // 若原槽位有 interrupted 标记，重挂一次，保证停止状态可见。
+            // Batch 41 §23: the local "stopped" row isn't persisted in the stop
+            // scenario — after restoring history, if the original slot had an
+            // interrupted marker, re-apply it so the stopped state stays visible.
             const hadInterrupted = existing?.messages.some((m) => m.interrupted) ?? false;
             const st = stateFromHistory(h.messages ?? [], false);
             return { ...prev, [activeId]: hadInterrupted ? markTurnInterrupted(st) : st };
@@ -1054,8 +1075,9 @@ export default function ChatPage() {
     return () => window.clearInterval(timer);
   }, [activeId, activeBusy, trackSessions]);
 
-  // 批六十四：用量面板打开 → 拉当前会话实时 token（会话切换时重拉）+ 历史
-  // 累计（全局，打开拉一次即可）。关闭时清空，避免残留旧会话数据。
+  // Batch 64: panel open → fetch the current session's live tokens (refetch on
+  // session switch) + historical totals (global; one fetch on open is enough).
+  // Cleared on close so stale session data doesn't linger.
   useEffect(() => {
     if (!usageOpen) return;
     let alive = true;
@@ -1104,13 +1126,14 @@ export default function ChatPage() {
     };
   }, [usageOpen]);
 
-  // 新内容自动滚底。
+  // Auto-scroll to bottom on new content.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [activeState.messages]);
 
-  // 批四十二 §BH：全局审批弹窗/审批中心裁决广播 → 所有会话槽位内对应
-  // approvalId 的审批卡立即回写（已批准/已拒绝），不依赖轮询或重拉历史。
+  // Batch 42 §BH: global modal / approval center resolution broadcast → the
+  // matching approval cards in every session slot write back immediately
+  // (approved/denied), no polling or history refetch needed.
   useEffect(
     () =>
       subscribeApprovalResolved((id, status) => {
@@ -1167,10 +1190,11 @@ export default function ChatPage() {
     try {
       await api.interruptChatSession(sid);
     } catch (err) {
-      // 中断请求失败（网络/409 等）提示但不卡死：仍 abort SSE + 本地标记停止，
-      // 后台 turn 由注册表轮询兜底复位。
+      // Interrupt request failed (network/409 etc.) — surface it without
+      // freezing: still abort the SSE + mark stopped locally; the background
+      // turn is reset via the registry polling fallback.
       const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
-      setError(`停止请求未送达（${msg}）；若 agent 仍在运行请稍后重试`);
+      setError(t("chat.stopNotDelivered", { msg }));
     } finally {
       setStopping(false);
     }
@@ -1180,9 +1204,9 @@ export default function ChatPage() {
       [sid]: markTurnInterrupted(prev[sid] ?? createChatState()),
     }));
     void refreshSessions();
-    // 批四十一 §23：本地 busy 已解除，独立校验循环核对注册表翻转。
+    // Batch 41 §23: local busy cleared; an independent verification loop checks the registry flip.
     void verifyBusyCleared(sid, setStates, setStopWarning, setBusyMap);
-  }, [activeId, refreshSessions, states, stopping]);
+  }, [activeId, refreshSessions, states, stopping, t]);
 
   const resolveApproval = useCallback(
     async (card: ChatApprovalCard, status: "approved" | "denied") => {
@@ -1207,8 +1231,9 @@ export default function ChatPage() {
     [activeId],
   );
 
-  // 批四十九：clarify 提交 → POST /api/chat/sessions/{id}/clarify；本地先收口
-  // 卡片（提交中禁用防连点），失败回滚为 error 可重试。
+  // Batch 49: clarify submit → POST /api/chat/sessions/{id}/clarify; close the
+  // card locally first (disable while submitting to prevent double clicks),
+  // roll back to error (retryable) on failure.
   const resolveClarify = useCallback(
     async (card: ChatClarifyCard, answer: string | string[]) => {
       const sid = activeId;
@@ -1221,7 +1246,7 @@ export default function ChatPage() {
         await api.answerChatClarify(sid, answer);
       } catch (err) {
         const apiErr = err instanceof ApiError ? err : null;
-        // 已超时 → 卡片显示"已超时"；无挂起（回合已收尾）→ 视为已提交。
+        // Timed out → card shows "timed out"; nothing pending (turn already wrapped) → treat as submitted.
         const status: "timed_out" | "answered" | "error" =
           apiErr?.code === "clarify_timed_out"
             ? "timed_out"
@@ -1244,7 +1269,7 @@ export default function ChatPage() {
   const switchSession = useCallback(
     (id: string) => {
       if (id === activeId) return;
-      // 切走：abort 旧会话 SSE（后台 turn 继续跑，切回由轮询恢复现场）。
+      // Switching away: abort the old session's SSE (the background turn keeps running; polling restores the scene on switch-back).
       if (activeId) abortRefs.current[activeId]?.abort();
       setActiveId(id);
       syncSid(id);
@@ -1265,7 +1290,7 @@ export default function ChatPage() {
     [activeId],
   );
 
-  // 批四十一 §8：切换会话模型（会话级，新消息生效）。批五十一：随 model 提交 provider 路由。
+  // Batch 41 §8: switch the session model (per-session, applies to new messages). Batch 51: provider routing submitted along with the model.
   const changeSessionModel = useCallback(
     async (sid: string, model: string) => {
       if (!sid || !model || modelSelections[sid] === model) return;
@@ -1277,54 +1302,54 @@ export default function ChatPage() {
         setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, model: resp.model } : s)));
       } catch (e) {
         const msg = e instanceof ApiError ? `[${e.code}] ${e.message}` : e instanceof Error ? e.message : String(e);
-        setError(`模型切换失败：${msg}`);
-        // 回滚到会话原模型。
+        setError(t("chat.modelSwitchFailed", { msg }));
+        // Roll back to the session's original model.
         const s = sessions.find((x) => x.id === sid);
         setModelSelections((prev) => ({ ...prev, [sid]: s?.model ?? modelSelections.__default ?? "" }));
       }
     },
-    [modelSelections, sessions, modelOptions],
+    [modelSelections, sessions, modelOptions, t],
   );
 
   const disabled = chatInputDisabled(activeState) || activeBusy || !activeId || busyAction;
   const lastMsg = activeState.messages[activeState.messages.length - 1];
-  // 已点过停止（末条为本地"已停止"行）：隐藏停止按钮，避免 inert 按钮误导。
+  // Stop already clicked (last item is the local "stopped" row): hide the stop button so an inert button doesn't mislead.
   const stopIssued = Boolean(lastMsg?.interrupted);
   const activeModel =
     modelSelections[activeId ?? ""] ??
     sessions.find((s) => s.id === activeId)?.model ??
     modelSelections.__default ??
     "";
-  // 批五十一：下拉按 provider 分组（custom:<slug> / provider 名 / 默认）。
+  // Batch 51: dropdown grouped by provider (custom:<slug> / provider name / default).
   const groupedModels = useMemo(() => {
     const groups = new Map<string, ChatModelOption[]>();
     for (const m of modelOptions) {
-      const g = m.provider || "默认";
+      const g = m.provider || t("chat.providerFallback");
       const list = groups.get(g);
       if (list) list.push(m);
       else groups.set(g, [m]);
     }
     return Array.from(groups.entries());
-  }, [modelOptions]);
+  }, [modelOptions, t]);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* 工具条：会话管理 */}
+      {/* Toolbar: session management */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2">
           <TerminalSquare className="size-5 text-[var(--vigil-muted)]" />
           <h1 className="text-lg font-semibold">Chat</h1>
-          <span className="hidden text-xs text-[var(--vigil-muted)] md:inline">· 和 Vigil 对话，看 agent 干活</span>
+          <span className="hidden text-xs text-[var(--vigil-muted)] md:inline">{t("chat.headerTagline")}</span>
         </div>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <select
             value={activeId ?? ""}
             onChange={(e) => switchSession(e.target.value)}
-            title="活会话切换"
+            title={t("chat.sessionSwitchTitle")}
             className="h-8 max-w-[220px] rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 font-mono text-xs text-[var(--vigil-text)] outline-none"
           >
-            {sessions.length === 0 && <option value="">（无会话）</option>}
+            {sessions.length === 0 && <option value="">{t("chat.noSessions")}</option>}
             {sessions.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.title || s.id}
@@ -1335,8 +1360,8 @@ export default function ChatPage() {
             <span
               title={
                 usagePct !== null
-                  ? `context 已用 ${usagePct}%${usageHot ? "，接近上限建议新开会话" : ""}`
-                  : "context 用量未知"
+                  ? t("chat.contextUsed", { pct: usagePct, hot: usageHot ? t("chat.contextHotSuffix") : "" })
+                  : t("chat.contextUnknown")
               }
               className={`inline-flex h-8 items-center rounded border px-2 font-mono text-[11px] ${
                 usageHot
@@ -1352,22 +1377,22 @@ export default function ChatPage() {
               type="button"
               onClick={() => void createSession(modelSelections[activeId ?? ""] ?? undefined)}
               disabled={busyAction}
-              title="context 接近上限，建议新开会话"
+              title={t("chat.contextHotTitle")}
               className="vigil-btn h-8 whitespace-nowrap border border-orange-500/60 bg-orange-500/10 text-xs text-orange-600 hover:bg-orange-500/20 dark:text-orange-400"
             >
-              <MessageSquarePlus className="size-3.5" /> 建议新开
+              <MessageSquarePlus className="size-3.5" /> {t("chat.suggestNew")}
             </button>
           )}
           <button
             type="button"
             onClick={() => setUsageOpen((v) => !v)}
-            title="会话 token 用量（当前会话实时 + 今天/近 30 天累计）"
+            title={t("chat.usageBtnTitle")}
             aria-pressed={usageOpen}
             className={`vigil-btn h-8 whitespace-nowrap border border-[var(--vigil-border)] text-xs ${
               usageOpen ? "bg-[var(--vigil-border)]/25" : ""
             }`}
           >
-            <Coins className="size-3.5" /> 用量
+            <Coins className="size-3.5" /> {t("chat.usageTitle")}
           </button>
           <button
             type="button"
@@ -1375,7 +1400,7 @@ export default function ChatPage() {
             disabled={busyAction}
             className="vigil-btn h-8 whitespace-nowrap border border-[var(--vigil-border)] text-xs"
           >
-            <MessageSquarePlus className="size-3.5" /> 新建会话
+            <MessageSquarePlus className="size-3.5" /> {t("chat.newSession")}
           </button>
         </div>
       </div>
@@ -1394,8 +1419,8 @@ export default function ChatPage() {
       {error && (
         <div className="mb-2 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs text-red-600 dark:text-red-400">
           <XCircle className="size-4 shrink-0" />
-          <span className="min-w-0 flex-1">{error}</span>
-          <button type="button" onClick={() => setError(null)} aria-label="关闭错误提示" className="text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]">
+          <span className="min-w-0 flex-1">{translateBackendMessage(error, i18n.language === "en" ? "en" : "zh")}</span>
+          <button type="button" onClick={() => setError(null)} aria-label={t("chat.closeError")} className="text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]">
             <X className="size-3.5" />
           </button>
         </div>
@@ -1413,7 +1438,7 @@ export default function ChatPage() {
             }}
             className="shrink-0 underline"
           >
-            重试
+            {t("chat.retry")}
           </button>
         </div>
       )}
@@ -1428,24 +1453,24 @@ export default function ChatPage() {
             disabled={busyAction}
             className="shrink-0 underline"
           >
-            新开会话
+            {t("chat.newSessionShort")}
           </button>
         </div>
       )}
 
-      {/* 消息列表 */}
+      {/* Message list */}
       <div className="scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] p-3">
         {activeState.messages.length === 0 && (
           <div className="flex h-full min-h-[200px] flex-col items-center justify-center gap-2 text-sm text-[var(--vigil-muted)]">
             <Bot className="size-8 opacity-60" />
             {activeBusy ? (
               <span className="flex items-center gap-2">
-                <Loader2 className="size-4 animate-spin" /> agent 处理中…
+                <Loader2 className="size-4 animate-spin" /> {t("chat.busyIndicator")}
               </span>
             ) : activeId ? (
-              "发一条消息开始对话"
+              t("chat.emptyStart")
             ) : (
-              "创建会话后开始对话"
+              t("chat.emptyCreate")
             )}
           </div>
         )}
@@ -1461,17 +1486,17 @@ export default function ChatPage() {
         <div ref={bottomRef} />
       </div>
 
-      {/* 输入行 */}
+      {/* Input row */}
       <form onSubmit={(e) => void send(e)} className="mt-2 shrink-0">
         {modelOptions.length > 0 && activeId && (
           <div className="mb-1.5 flex items-center gap-2">
-            <span className="text-[10px] text-[var(--vigil-muted)]">模型</span>
+            <span className="text-[10px] text-[var(--vigil-muted)]">{t("chat.model")}</span>
             <select
               value={activeModel}
               onChange={(e) => void changeSessionModel(activeId, e.target.value)}
               disabled={activeBusy || busyAction}
-              title="会话模型（新消息生效）"
-              aria-label="会话模型"
+              title={t("chat.modelSelectTitle")}
+              aria-label={t("chat.modelSelectAria")}
               className="h-7 max-w-[320px] rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 font-mono text-[11px] text-[var(--vigil-text)] outline-none disabled:opacity-60"
             >
               {groupedModels.map(([group, items]) => (
@@ -1479,7 +1504,7 @@ export default function ChatPage() {
                   {items.map((m) => (
                     <option key={`${group}::${m.id}`} value={m.id}>
                       {m.name}
-                      {m.default ? " · 默认" : ""}
+                      {m.default ? t("chat.defaultSuffix") : ""}
                     </option>
                   ))}
                 </optgroup>
@@ -1494,14 +1519,14 @@ export default function ChatPage() {
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={disabled ? (busyAction ? "正在创建会话…" : "agent 处理中，请稍候…") : "和 Vigil 说点什么，如「看下拓扑有几台主机」"}
+            placeholder={disabled ? (busyAction ? t("chat.placeholderCreating") : t("chat.placeholderBusy")) : t("chat.placeholder")}
             disabled={disabled}
             spellCheck={false}
             className="h-9 min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
           />
           {(activeBusy || chatInputDisabled(activeState)) && (
             <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[var(--vigil-muted)] sm:inline-flex">
-              <Loader2 className="size-3.5 animate-spin" /> agent 处理中…
+              <Loader2 className="size-3.5 animate-spin" /> {t("chat.busyIndicator")}
             </span>
           )}
           {activeBusy && !busyAction && !stopIssued && (
@@ -1510,10 +1535,10 @@ export default function ChatPage() {
           <button
             type="submit"
             disabled={disabled || !draft.trim()}
-            aria-label="发送"
+            aria-label={t("chat.send")}
             className="vigil-btn vigil-btn-primary h-8 shrink-0 px-3 text-sm"
           >
-            <Send className="size-3.5" /> 发送
+            <Send className="size-3.5" /> {t("chat.send")}
           </button>
         </div>
       </form>
@@ -1521,7 +1546,7 @@ export default function ChatPage() {
   );
 }
 
-/** 有效 busy = 本地槽位 busy 或注册表快照 busy（§7：指示不丢失）。 */
+/** Effective busy = local slot busy OR registry snapshot busy (§7: indicator never lost). */
 function activeBusyOf(
   activeId: string | null,
   states: Record<string, ChatTurnState>,

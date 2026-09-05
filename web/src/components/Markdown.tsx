@@ -1,15 +1,16 @@
 import { Fragment, type ReactNode } from "react";
 
 /**
- * 极简安全 Markdown 渲染（不引 react-markdown 依赖）：
- * 粗体 / 行内代码 / 深色代码块 / 无序·有序列表 / 段落。
- * 纯 React 元素构建，无 dangerouslySetInnerHTML（React 转义是最后一道 XSS 边界）。
- * 代码块样式参照 vigil 深色卡片风格（--vigil-terminal-bg / terminal-text）。
+ * Minimal safe Markdown rendering (no react-markdown dependency):
+ * bold / inline code / dark code blocks / unordered+ordered lists / paragraphs.
+ * Built from pure React elements, no dangerouslySetInnerHTML (React escaping is
+ * the last XSS boundary). Code block style follows the vigil dark card look
+ * (--vigil-terminal-bg / terminal-text).
  */
 
 const FENCE_RE = /^```(.*)$/;
 
-/** 行内格式：粗体 + 行内代码。 */
+/** Inline formatting: bold + inline code. */
 function renderInline(text: string, keyBase: string): ReactNode[] {
   const out: ReactNode[] = [];
   const pattern = /\*\*([^*]+)\*\*|`([^`]+)`/g;
@@ -79,7 +80,7 @@ export function Markdown({ text }: { text: string }) {
       continue;
     }
 
-    // 连续列表（同类型）合并成一个 <ul>/<ol>
+    // Merge a run of same-type list items into one <ul>/<ol>
     const item = isListItem(line);
     if (item) {
       const ordered = item.ordered;
@@ -105,7 +106,7 @@ export function Markdown({ text }: { text: string }) {
       continue;
     }
 
-    // 普通段落
+    // Plain paragraph
     const para: string[] = [line];
     i += 1;
     while (i < lines.length && lines[i].trim() !== "" && !FENCE_RE.test(lines[i]) && !isListItem(lines[i])) {
