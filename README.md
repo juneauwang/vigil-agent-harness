@@ -156,13 +156,13 @@ curl -fsSL https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/v1.0
 
 > 国内网络若 GitHub 下载 tirith 失败：脚本会提示，Vigil 本体照常可用（首次扫描自动重试补装），或开 VPN 后重跑脚本（幂等）。
 
-**或手动装（已有 Python 3.10+ 环境）：**
+**或手动装（已有 Python 3.11+ 环境）：**
 
 ```bash
 pip install vigil-agent-harness
 ```
 
-**前置**：Python 3.10+（3.12 推荐）
+**前置**：Python 3.11+（3.12 推荐）
 
 ```bash
 # 1. 安装（生成 vigil 命令入口）
