@@ -97,6 +97,13 @@ _DEFAULT_RULES: List[Tuple[str, str, str, str]] = [
      "镜像构建（install 语义，矩阵档位管）"),
     (r"docker\s+compose\s+pull\b", "install", "docker.compose.pull",
      "镜像拉取（install 语义）"),
+    # compose 只读子命令（2026-09-06 dogfood 补配：ps/logs/ls/top/events 此前
+    # 漏配 → unknown → 每次审批；compose 规则区先于通用 docker，此处命中不
+    # 会被 docker.query 误吞）
+    (r"docker\s+compose\s+(?:ps|ls|top|events|config|version)\b", "query",
+     "docker.compose.query", "compose 只读查询（矩阵档位管）"),
+    (r"docker\s+compose\s+logs\b", "fetch_log", "docker.compose.logs",
+     "compose 日志拉取（fetch_log 语义）"),
     # ---- docker 通用 ----
     (r"docker\s+restart\b", "restart", "docker.restart", ""),
     (r"docker\s+start\b", "start", "docker.start", ""),
