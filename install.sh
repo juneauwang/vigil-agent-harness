@@ -96,7 +96,7 @@ if [ ! -x "$VENV_DIR/bin/python" ]; then
 fi
 
 say "Installing vigil-agent-harness==$VIGIL_VERSION (PyPI)..."
-"$VENV_DIR/bin/pip" install --quiet --disable-pip-version-check "vigil-agent-harness==$VIGIL_VERSION"
+"$VENV_DIR/bin/pip" install --disable-pip-version-check "vigil-agent-harness==$VIGIL_VERSION"
 
 # Launcher symlink (venv console script; keep it a symlink so future `pip install -U`
 # inside the venv updates what PATH sees).
