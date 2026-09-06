@@ -1349,6 +1349,47 @@ export default function ChatPage() {
   );
 
   const disabled = chatInputDisabled(activeState) || activeBusy || !activeId || busyAction;
+
+  // task19 F2: Runbooks gap → chat bridge. A `?prompt=` deep-link prefills the
+  // draft once the composer can accept it (never clobbers an existing draft —
+  // setDraft guards on prev), then the param is cleared (replace, mirroring the
+  // `?sid=` handling above) so it doesn't linger or re-fire. While the composer
+  // is disabled because the agent is BUSY, the prompt is silently ignored and
+  // the param still cleared (brief semantics). The transient first-paint states
+  // (!activeId / session creation) WAIT instead — otherwise a fresh
+  // /chat?prompt= navigation would drop the prompt before any session exists.
+  const initialPromptRef = useRef<string | null>(searchParams.get("prompt"));
+  const promptHandledRef = useRef(false);
+  useEffect(() => {
+    if (promptHandledRef.current) return;
+    const prompt = (initialPromptRef.current ?? "").trim();
+    if (!prompt) {
+      promptHandledRef.current = true;
+      return;
+    }
+    // First paint: session not picked up yet — wait (do not consume the prompt).
+    if (!activeId || busyAction) return;
+    const clearPromptParam = () => {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("prompt");
+          return next;
+        },
+        { replace: true },
+      );
+    };
+    if (activeBusy || chatInputDisabled(activeState)) {
+      // Busy: silently ignore the prompt, but clear the param so it doesn't linger.
+      promptHandledRef.current = true;
+      clearPromptParam();
+      return;
+    }
+    promptHandledRef.current = true;
+    setDraft((prev) => (prev ? prev : prompt));
+    clearPromptParam();
+  }, [activeId, busyAction, activeBusy, activeState, searchParams, setSearchParams]);
+
   const lastMsg = activeState.messages[activeState.messages.length - 1];
   // Stop already clicked (last item is the local "stopped" row): hide the stop button so an inert button doesn't mislead.
   const stopIssued = Boolean(lastMsg?.interrupted);
