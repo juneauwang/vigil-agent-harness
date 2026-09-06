@@ -702,14 +702,6 @@ describe("批六十四 chat 用量面板", () => {
 // task19 F2 — Runbooks 缺口 → chat 桥：?prompt= 深链预填（镜像 ?sid= 的 replace 清理）
 // ---------------------------------------------------------------------------
 
-function currentSearch(): string {
-  // useLocation probe via performance entries is overkill; read the <base> the
-  // MemoryRouter maintains by rendering a marker — simplest: re-read from the
-  // last render's window.history is unavailable (MemoryRouter), so tests use
-  // the input value + a spy on replaceState instead.
-  return window.location.search;
-}
-
 describe("ChatPage ?prompt= prefill (task19 F2)", () => {
   it("mount 时预填草稿并清除 prompt 参数", async () => {
     let search = "";

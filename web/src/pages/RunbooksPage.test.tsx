@@ -480,14 +480,14 @@ describe("RunbooksPage coverage collapse + gap bridge (task19)", () => {
 
     const toggle = container.querySelector<HTMLButtonElement>('[data-testid="coverage-toggle"]');
     expect(toggle).toBeTruthy();
-    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
     // 折叠态：覆盖明细表不渲染
     expect(container.querySelector('[data-testid="coverage-table"]')).toBeNull();
 
     await act(async () => {
-      toggle.click();
+      toggle!.click();
     });
-    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle!.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector('[data-testid="coverage-table"]')).toBeTruthy();
     expect(container.textContent).toContain("reboot");
     expect(container.textContent).toContain("高频未覆盖，建议沉淀 runbook");

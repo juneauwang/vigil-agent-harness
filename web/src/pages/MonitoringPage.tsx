@@ -276,10 +276,10 @@ export default function MonitoringPage() {
       try {
         const resp = await api.saveMonitoringConfig({ endpoint, alertmanager });
         if (resp.error) {
-          setSettingsErr(bmsg(resp.error.message ?? resp.error.code ?? ""));
+          setSettingsErr(bmsg(resp.error.message ?? resp.error.code ?? "") ?? null);
         } else {
           setSettingsMsg(t("monitoring.settingsSaved"));
-          setEndpointDraft(resp.data?.endpoint ?? endpoint);
+          setEndpointDraft(resp.data?.endpoint ?? endpoint ?? "");
           setAlertmanagerDraft(resp.data?.alertmanager ?? alertmanager);
         }
       } catch (err) {
