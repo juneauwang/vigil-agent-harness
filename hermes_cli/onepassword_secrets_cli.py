@@ -62,7 +62,12 @@ def register_cli(parent_parser: argparse.ArgumentParser) -> None:
     )
     setup.add_argument(
         "--token",
-        help="Service-account token to store in .env non-interactively",
+        help=(
+            "Service-account token to store in .env non-interactively. "
+            "WARNING: argv values are visible to other local users via `ps` "
+            "and persist in shell history — prefer the interactive prompt, "
+            "or pre-set the token env var instead"
+        ),
     )
     setup.add_argument(
         "--binary-path",
@@ -79,7 +84,11 @@ def register_cli(parent_parser: argparse.ArgumentParser) -> None:
     )
     token.add_argument(
         "--token",
-        help="Provide the new token non-interactively (default: masked prompt)",
+        help=(
+            "Provide the new token non-interactively (default: masked prompt). "
+            "WARNING: argv values are visible to other local users via `ps` "
+            "and persist in shell history — prefer the interactive prompt"
+        ),
     )
     token.add_argument(
         "--no-verify",

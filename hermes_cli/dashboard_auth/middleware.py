@@ -41,12 +41,15 @@ from hermes_cli.dashboard_auth.public_paths import PUBLIC_API_PATHS
 
 _log = logging.getLogger(__name__)
 
-# Prefixes that bypass the auth gate. Match via ``path == prefix`` or
-# ``path.startswith(prefix)`` — so ``/assets/`` (with trailing slash)
-# matches ``/assets/foo.css`` but not ``/assetsleak``. Auth-bootstrap
-# (login page, OAuth round trip, provider listing) and static asset
-# mounts go here.
-_GATE_PUBLIC_PREFIXES: tuple[str, ...] = (
+# Auth-bootstrap routes that bypass the auth gate, matched EXACTLY. A bare
+# path must never be prefix-matched: ``startswith("/login")`` would also
+# public-ize ``/loginXYZ`` and any future route registered under one of these
+# names would silently skip authentication (F2, task-11 security review).
+# Paths that genuinely have variable tails (the MCP OAuth callback carries a
+# per-server suffix) live in _GATE_PUBLIC_PREFIXES below with a TRAILING
+# SLASH, so only segment-boundary children match — ``/api/mcp/oauth/callbackfoo``
+# does not.
+_GATE_PUBLIC_PATHS: frozenset[str] = frozenset({
     "/auth/login",
     "/auth/callback",
     "/auth/native/authorize",
@@ -56,9 +59,13 @@ _GATE_PUBLIC_PREFIXES: tuple[str, ...] = (
     "/auth/logout",
     "/login",
     "/api/auth/providers",
+    "/favicon.ico",
+})
+# Static-asset mounts and variable-tail callbacks: prefix-matched BY DESIGN
+# (trailing slash required, so the match always lands on a segment boundary).
+_GATE_PUBLIC_PREFIXES: tuple[str, ...] = (
     "/api/mcp/oauth/callback/",
     "/assets/",
-    "/favicon.ico",
     "/ds-assets/",
     "/fonts/",
     "/fonts-terminal/",
@@ -74,14 +81,18 @@ def _path_is_public(path: str) -> bool:
       the legacy ``_SESSION_TOKEN`` middleware also honours. Matched
       exactly (no prefix expansion) so adding ``/api/status`` doesn't
       accidentally expose ``/api/status/secret-extension``.
-    * :data:`_GATE_PUBLIC_PREFIXES` — auth-bootstrap routes and static
-      mounts. Prefix-matched so ``/assets/foo.css`` lights up via
-      ``/assets/``.
+    * :data:`_GATE_PUBLIC_PATHS` — auth-bootstrap routes, exact match.
+    * :data:`_GATE_PUBLIC_PREFIXES` — static mounts and the MCP OAuth
+      callback tree, prefix-matched; every entry ends in ``/`` so a
+      lookalike name glued onto a bare route (``/loginXYZ``) can never
+      skip authentication.
     """
     if path in PUBLIC_API_PATHS:
         return True
+    if path in _GATE_PUBLIC_PATHS:
+        return True
     return any(
-        path == prefix or path.startswith(prefix)
+        path.startswith(prefix)
         for prefix in _GATE_PUBLIC_PREFIXES
     )
 

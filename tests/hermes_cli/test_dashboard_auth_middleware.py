@@ -358,3 +358,48 @@ def test_all_providers_unreachable_returns_503(_gated_state):
     assert "unreachable" in r.text.lower()
 
 
+
+
+# ---------------------------------------------------------------------------
+# F2（任务11审查）—— 登录/认证路由公开匹配必须精确，形近路径不得绕过 gate
+# ---------------------------------------------------------------------------
+
+class TestPathIsPublicExactMatching:
+    def test_real_routes_stay_public(self):
+        from hermes_cli.dashboard_auth.middleware import _path_is_public
+
+        for path in (
+            "/login",
+            "/auth/login",
+            "/auth/callback",
+            "/auth/logout",
+            "/auth/native/authorize",
+            "/auth/native/token",
+            "/auth/native/refresh",
+            "/auth/password-login",
+            "/api/auth/providers",
+            "/favicon.ico",
+            # 静态资源与可变尾回调（段边界前缀）仍公开
+            "/assets/app.css",
+            "/api/mcp/oauth/callback/some-server",
+        ):
+            assert _path_is_public(path) is True, path
+
+    @pytest.mark.parametrize("lookalike", [
+        "/loginXYZ",
+        "/login.html",
+        "/auth/loginX",
+        "/auth/callbackX",
+        "/auth/callback/extra",
+        "/auth/logout-page",
+        "/auth/native/authorizeX",
+        "/auth/password-login-admin",
+        "/api/auth/providersXYZ",
+        "/api/mcp/oauth/callbackfoo",
+        "/favicon.ico.txt",
+    ])
+    def test_lookalike_paths_are_gated(self, lookalike):
+        """形近路径必须回到认证门内——此前 startswith 前缀匹配会放行。"""
+        from hermes_cli.dashboard_auth.middleware import _path_is_public
+
+        assert _path_is_public(lookalike) is False, lookalike

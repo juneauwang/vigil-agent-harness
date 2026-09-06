@@ -30,10 +30,39 @@ _SECRETS_DIRNAME = "secrets"
 _NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 _VALID_SOURCES = {"user", "secret"}
 
-# 会话内已登记凭据标记：name -> {"source": "user"|"secret", "ts": iso}
-# 模块级（进程/会话生命周期）；key 为凭据名，跨会话共享由调用方负责隔离。
-_REGISTERED: Dict[str, Dict[str, Any]] = {}
+# 会话内已登记凭据来源标记：(session_key, name) -> {"source", "ts"}。
+# session_key 复用 tools/approval.get_current_session_key() 的上下文解析
+# （approval session contextvar → gateway session_context → env 兜底），
+# 与 agent/secret_scope.py 的进程内隔离语义一致：本会话登记的来源只解除
+# 本会话的 sudo -S 防暴力守卫，不跨会话泄漏（任务11审查 A1）。
+# 单会话（CLI）场景所有读写解析到同一个 key，行为与旧实现完全一致。
+_REGISTERED: Dict[tuple, Dict[str, Any]] = {}
 _REGISTERED_LOCK = threading.Lock()
+# 长驻 multiplex gateway 里死会话的登记条目按 session 键驱逐（最老先出），
+# 防止注册表随会话数无界增长（与 approval._denial_tally 同款封顶策略）。
+_REGISTERED_MAX_SESSIONS = 256
+
+
+def _current_session_key() -> str:
+    """当前审批会话键（懒导入避免与 tools.approval 循环依赖）。"""
+    try:
+        from tools.approval import get_current_session_key
+        return get_current_session_key(default="default") or "default"
+    except Exception:
+        return "default"
+
+
+def _prune_locked() -> None:
+    """按 session 键驱逐最老条目（须持 _REGISTERED_LOCK 调用）。"""
+    sessions = {sess for sess, _name in _REGISTERED}
+    while len(sessions) > _REGISTERED_MAX_SESSIONS:
+        oldest = min(sessions, key=lambda s: min(
+            (info.get("ts") or 0)
+            for (sess, _n), info in _REGISTERED.items() if sess == s
+        ))
+        for key in [k for k in _REGISTERED if k[0] == oldest]:
+            _REGISTERED.pop(key, None)
+        sessions.discard(oldest)
 
 
 def _hermes_home() -> Path:
@@ -73,12 +102,15 @@ def _check_owner(path: Path) -> None:
 
 
 def register_source(name: str, source: str) -> None:
-    """登记会话内凭据来源标记（user/secret + 时间戳），供 sudo guard 查询。"""
+    """登记**当前会话**的凭据来源标记（user/secret + 时间戳），供 sudo guard 查询。"""
     _validate_name(name)
     if source not in _VALID_SOURCES:
         raise ValueError(f"凭据来源必须是 user/secret，收到 {source!r}")
     with _REGISTERED_LOCK:
-        _REGISTERED[name] = {"source": source, "ts": time.time()}
+        _REGISTERED[(_current_session_key(), name)] = {
+            "source": source, "ts": time.time(),
+        }
+        _prune_locked()
     logger.debug("credential_vault: registered source=%s for %r", source, name)
 
 
@@ -147,10 +179,14 @@ def retrieve(name: str) -> str:
 
 
 def expire(name: str) -> bool:
-    """标记过期并删除保险箱文件（生命周期结束清理）。"""
+    """标记过期并删除保险箱文件（生命周期结束清理）。
+
+    来源标记跨会话存在（同一凭据名可能被多个会话登记过）→ 全部清除。
+    """
     _validate_name(name)
     with _REGISTERED_LOCK:
-        _REGISTERED.pop(name, None)
+        for key in [k for k in _REGISTERED if k[1] == name]:
+            _REGISTERED.pop(key, None)
     path = _secrets_dir() / name
     try:
         if path.is_file():
@@ -163,21 +199,33 @@ def expire(name: str) -> bool:
 
 
 def has_credential_source(sources=("user", "secret")) -> bool:
-    """会话内是否已登记指定来源的凭据（sudo guard 三态判定的第 1/2 态）。"""
+    """当前会话是否已登记指定来源的凭据（sudo guard 三态判定的第 1/2 态）。
+
+    只查**当前会话**的登记切片——其他会话登记的来源不解除本会话的
+    sudo -S 防暴力守卫（任务11审查 A1：旧实现是进程全局扫描，多会话
+    gateway 里任意会话的登记会解除所有会话的拦截）。
+    """
     if isinstance(sources, str):
         sources = (sources,)
     allowed = set(sources)
+    session = _current_session_key()
     with _REGISTERED_LOCK:
         return any(
             info.get("source") in allowed
-            for info in _REGISTERED.values()
+            for (sess, _name), info in _REGISTERED.items()
+            if sess == session
         )
 
 
 def registered_summary() -> Dict[str, Any]:
-    """已登记凭据概览（审计/调试用，不含明文）。"""
+    """已登记凭据概览（审计/调试用，不含明文）。键为 ``session:name``。"""
     with _REGISTERED_LOCK:
         return {
-            name: {"source": info.get("source"), "ts": info.get("ts")}
-            for name, info in sorted(_REGISTERED.items())
+            f"{sess}:{name}": {
+                "session": sess,
+                "name": name,
+                "source": info.get("source"),
+                "ts": info.get("ts"),
+            }
+            for (sess, name), info in sorted(_REGISTERED.items())
         }

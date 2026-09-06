@@ -91,13 +91,98 @@ def test_registered_summary_has_no_plaintext(vault_home):
     cv.store("secret_a", "PlainTextValue123!")
     summary = cv.registered_summary()
     assert "PlainTextValue123!" not in str(summary)
-    assert summary["secret_a"]["source"] == "user"
+    entry = next(v for v in summary.values() if v["name"] == "secret_a")
+    assert entry["source"] == "user"
+    assert entry["session"]
 
 
 def test_mark_user_authorized_registers_user_source(vault_home):
     assert cv.has_credential_source("user") is False
     cv.mark_user_authorized()
     assert cv.has_credential_source("user") is True
+
+
+# ---------------------------------------------------------------------------
+# A1（任务11审查）——来源登记按会话隔离，不再进程全局
+# ---------------------------------------------------------------------------
+
+def test_registered_summary_includes_session_dimension(vault_home):
+    from tools.approval import reset_current_session_key, set_current_session_key
+
+    tok = set_current_session_key("sess-sum")
+    try:
+        cv.store("secret_b", "AnotherValue456!")
+    finally:
+        reset_current_session_key(tok)
+    summary = cv.registered_summary()
+    entry = next(v for v in summary.values() if v["name"] == "secret_b")
+    assert entry["session"] == "sess-sum"
+
+
+def test_source_registry_is_session_scoped(vault_home):
+    """会话 A 登记 → 会话 B 查不到；会话 A 自己查得到（A1 核心回归）。"""
+    from tools.approval import reset_current_session_key, set_current_session_key
+
+    tok_a = set_current_session_key("sess-A")
+    cv.mark_user_authorized()
+    assert cv.has_credential_source(("user", "secret")) is True
+
+    tok_b = set_current_session_key("sess-B")
+    try:
+        assert cv.has_credential_source(("user", "secret")) is False
+        assert cv.has_credential_source("user") is False
+        assert cv.has_credential_source("secret") is False
+    finally:
+        reset_current_session_key(tok_b)
+
+    # 回到会话 A：登记仍然有效（未被 B 的查询清除）
+    assert cv.has_credential_source(("user", "secret")) is True
+    reset_current_session_key(tok_a)
+
+
+def test_sudo_stdin_guard_is_session_scoped(vault_home, monkeypatch):
+    """sudo -S 防暴力守卫端到端：A 会话的用户确认只解除 A 的拦截。"""
+    import tools.approval as approval_module
+    from tools.approval import reset_current_session_key, set_current_session_key
+
+    monkeypatch.delenv("SUDO_PASSWORD", raising=False)
+    tok_a = set_current_session_key("sess-A")
+    cv.mark_user_authorized()
+    assert approval_module._check_sudo_stdin_guard(
+        "sudo -S apt install nginx")[0] is False
+
+    tok_b = set_current_session_key("sess-B")
+    try:
+        blocked, desc = approval_module._check_sudo_stdin_guard(
+            "sudo -S apt install nginx")
+        assert blocked is True
+        assert desc and "guessing" in desc
+    finally:
+        reset_current_session_key(tok_b)
+
+    reset_current_session_key(tok_a)
+
+
+def test_expire_clears_all_sessions_marks(vault_home):
+    """expire 清掉该凭据名在所有会话的登记（生命周期清理语义）。"""
+    from tools.approval import reset_current_session_key, set_current_session_key
+
+    tok_a = set_current_session_key("sess-A")
+    cv.store("tmp_secret", "TmpV@lue123456")
+    tok_b = set_current_session_key("sess-B")
+    try:
+        cv.store("tmp_secret", "TmpV@lue123456")
+    finally:
+        reset_current_session_key(tok_b)
+    reset_current_session_key(tok_a)
+
+    assert cv.expire("tmp_secret") is True
+    tok_b2 = set_current_session_key("sess-B")
+    try:
+        assert cv.has_credential_source(("user", "secret")) is False
+    finally:
+        reset_current_session_key(tok_b2)
+    assert cv.has_credential_source(("user", "secret")) is False
 
 
 def test_owner_check_blocks_other_owner(vault_home, monkeypatch):

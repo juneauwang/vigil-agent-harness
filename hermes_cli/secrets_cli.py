@@ -56,7 +56,12 @@ def register_cli(parent_parser: argparse.ArgumentParser) -> None:
     )
     setup.add_argument(
         "--access-token",
-        help="Provide the access token non-interactively (will be stored in .env)",
+        help=(
+            "Provide the access token non-interactively (stored in .env). "
+            "WARNING: argv values are visible to other local users via `ps` "
+            "and persist in shell history — prefer the interactive prompt, "
+            "or pre-set the token env var instead"
+        ),
     )
     setup.add_argument(
         "--server-url",
@@ -81,7 +86,11 @@ def register_cli(parent_parser: argparse.ArgumentParser) -> None:
     )
     token.add_argument(
         "--access-token",
-        help="Provide the new token non-interactively (default: masked prompt)",
+        help=(
+            "Provide the new token non-interactively (default: masked prompt). "
+            "WARNING: argv values are visible to other local users via `ps` "
+            "and persist in shell history — prefer the interactive prompt"
+        ),
     )
     token.add_argument(
         "--no-verify",
@@ -150,9 +159,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
         return 1
 
     # -- non-interactive guard --
+    # The token requirement can be satisfied non-interactively by either
+    # --access-token OR the token env var already being set (F1: env is the
+    # recommended scripting path — argv values leak via `ps`/history).
+    cfg = load_config()
+    secrets_cfg = (cfg.setdefault("secrets", {})
+                     .setdefault("bitwarden", {}))
+    token_env = secrets_cfg.get("access_token_env", "BWS_ACCESS_TOKEN")
     if not sys.stdin.isatty():
         missing = []
-        if not (args.access_token and args.access_token.strip()):
+        if not ((args.access_token and args.access_token.strip())
+                or os.environ.get(token_env, "").strip()):
             missing.append("--access-token")
         if not (args.server_url and args.server_url.strip()):
             # Also accept BWS_SERVER_URL env var as non-interactive substitute
@@ -175,12 +192,17 @@ def cmd_setup(args: argparse.Namespace) -> int:
     # ------------------------------------------------------------------- token
     console.print()
     console.print("[bold]Step 2[/bold]  Provide your access token")
-    cfg = load_config()
-    secrets_cfg = (cfg.setdefault("secrets", {})
-                     .setdefault("bitwarden", {}))
-    token_env = secrets_cfg.get("access_token_env", "BWS_ACCESS_TOKEN")
 
     token = (args.access_token or "").strip()
+    if not token:
+        # F1: env var wins over the interactive prompt — the recommended
+        # scripting path (`ps`/history never see the value).
+        token = os.environ.get(token_env, "").strip()
+        if token:
+            console.print(
+                f"  [green]✓[/green] using access token from {token_env} "
+                f"(will be persisted to {get_env_path()})"
+            )
     if not token:
         token = masked_secret_prompt(f"  Paste access token ({token_env}): ").strip()
     if not token:
