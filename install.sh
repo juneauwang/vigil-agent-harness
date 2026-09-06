@@ -20,7 +20,7 @@
 set -euo pipefail
 
 VIGIL_VERSION="1.0.2"
-PYTHON_MIN="3.10"
+PYTHON_MIN="3.11"
 VENV_DIR="${VIGIL_VENV_DIR:-$HOME/.local/share/vigil/venv}"
 BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/vigil"
