@@ -425,6 +425,7 @@ from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
+from hermes_cli.subcommands.topo_sync import build_topo_sync_parser
 from hermes_cli.subcommands.topo_export import build_topo_export_parser
 from hermes_cli.subcommands.matrix import build_matrix_parser
 from hermes_cli.subcommands.contract import build_contract_parser
@@ -12903,6 +12904,7 @@ def main():
     # topo-discover command  (parser built in hermes_cli/subcommands/topo_discover.py)
     # =========================================================================
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
+    build_topo_sync_parser(subparsers, cmd_topo_sync=cmd_topo_discover)
     build_topo_export_parser(subparsers, cmd_topo_export=cmd_topo_export,
                              cmd_topo_reset=cmd_topo_reset)
     build_matrix_parser(subparsers, cmd_matrix=cmd_matrix)

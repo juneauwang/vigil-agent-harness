@@ -250,8 +250,8 @@ Vigil's data directory is `~/.vigil` (override with `VIGIL_HOME`).
 - [x] Web console (chat/topology/monitoring/runbook/approvals/audit)
 - [x] Run-trajectory audit (append-only event log + query/replay/trim)
 - [x] Feedback loop (`runbook_create`: proven tasks consolidate into structured runbooks)
-- [ ] Sync adapters (terraform.tfstate / k8s API)
-- [ ] Periodic topology discovery (scheduled rediscovery + drift report)
+- [x] Sync adapters (terraform.tfstate / k8s API — `vigil topo-sync` + SSH kubectl discovery)
+- [x] Periodic topology discovery (topo-sync drift report + cron-based rescan, opt-in, off by default)
 
 ## License
 
