@@ -22,6 +22,7 @@ from typing import Awaitable, Callable
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
+from hermes_cli.dashboard_auth.client_ip import client_ip as _client_ip
 from hermes_cli.dashboard_auth import list_session_providers
 from hermes_cli.dashboard_auth.audit import AuditEvent, audit_log
 from hermes_cli.dashboard_auth.base import (
@@ -95,13 +96,6 @@ def _path_is_public(path: str) -> bool:
         path.startswith(prefix)
         for prefix in _GATE_PUBLIC_PREFIXES
     )
-
-
-def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else ""
 
 
 def _ordered_session_providers(

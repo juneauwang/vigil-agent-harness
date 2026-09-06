@@ -373,3 +373,61 @@ class TestLoginPageRender:
         finally:
             clear_providers()
 
+
+
+# ---------------------------------------------------------------------------
+# batch94 D1 — forged X-Forwarded-For must not bypass the rate limiter
+# ---------------------------------------------------------------------------
+
+
+class TestForgedXFFNotBypassingRateLimit:
+    def test_rotated_forged_xff_still_429(self, gated_app):
+        """Non-trusted peer (TestClient peer is not loopback): rotating a
+        forged X-Forwarded-For must NOT give each attempt a fresh limiter
+        bucket — all attempts key on the socket peer → 429 after budget."""
+        for i in range(15):
+            last = gated_app.post(
+                "/auth/password-login",
+                json={"provider": "testpw", "username": "admin", "password": "WRONG"},
+                headers={"X-Forwarded-For": f"198.51.100.{i}"},
+            )
+        assert last.status_code == 429
+
+    def test_client_ip_helper_ignores_xff_from_untrusted_peer(self):
+        from starlette.datastructures import Headers
+        from starlette.requests import Request
+
+        from hermes_cli.dashboard_auth.client_ip import _peer_is_trusted_proxy, client_ip
+
+        def _req(peer, xff):
+            headers = Headers({"x-forwarded-for": xff}) if xff is not None else Headers()
+            scope = {
+                "type": "http", "method": "GET", "path": "/",
+                "headers": headers.raw,
+                "query_string": b"", "client": peer, "server": ("127.0.0.1", 80),
+            }
+            return Request(scope)
+
+        # Untrusted public peer: forged XFF ignored, socket peer returned.
+        assert client_ip(_req(("198.51.100.9", 5555), "1.2.3.4")) == "198.51.100.9"
+        assert _peer_is_trusted_proxy("198.51.100.9") is False
+        assert _peer_is_trusted_proxy("testclient") is False
+        # Loopback peer: XFF honored, RIGHTMOST entry (our proxy appended it —
+        # a client forgery sits left of it).
+        assert client_ip(_req(("127.0.0.1", 5555), "1.2.3.4, 198.51.100.9")) == "198.51.100.9"
+        assert _peer_is_trusted_proxy("127.0.0.1") is True
+        assert _peer_is_trusted_proxy("::1") is True
+        assert _peer_is_trusted_proxy("::ffff:127.0.0.1") is True
+        # No XFF → peer even when trusted.
+        assert client_ip(_req(("127.0.0.1", 5555), None)) == "127.0.0.1"
+
+    def test_configured_trusted_proxy_extends_trust(self, monkeypatch):
+        import hermes_cli.config as hc
+        from hermes_cli.dashboard_auth import client_ip as cip_mod
+
+        monkeypatch.setattr(
+            hc, "load_config_readonly",
+            lambda: {"security": {"trusted_proxies": ["10.42.0.0/16", "not-a-cidr"]}},
+        )
+        assert cip_mod._peer_is_trusted_proxy("10.42.3.7") is True
+        assert cip_mod._peer_is_trusted_proxy("198.51.100.9") is False

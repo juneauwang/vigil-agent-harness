@@ -2185,6 +2185,12 @@ DEFAULT_CONFIG = {
         # mirror — choosing a mirror means trusting it for integrity (same
         # trust model as pointing pip at a mirror index).
         "download_mirror": "",
+        # Reverse-proxy CIDRs allowed to set X-Forwarded-For for the
+        # dashboard auth stack (rate limiting + audit IPs). Loopback is
+        # always trusted (default same-host proxy bind). Entries are CIDR
+        # strings, e.g. "10.0.0.0/8". XFF from any other peer is ignored —
+        # client-forged XFF must not reset the password-login rate limit.
+        "trusted_proxies": [],
         "website_blocklist": {
             "enabled": False,
             "domains": [],

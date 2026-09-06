@@ -671,12 +671,18 @@ def _make_callback_handler() -> tuple[type, dict]:
             result["state"] = state
             result["error"] = error
 
+            # HTML-escape the reflected error (batch94 D2): the page echoes a
+            # query param back, so an unescaped value is a loopback reflected
+            # XSS — a malicious site can drive a browser here with a crafted
+            # error= and inject markup into the loopback origin's page.
+            import html as _html
+            safe_error = _html.escape(error or "unknown", quote=True)
             body = (
                 "<html><body><h2>Authorization Successful</h2>"
                 "<p>You can close this tab and return to Vigil.</p></body></html>"
             ) if code else (
                 "<html><body><h2>Authorization Failed</h2>"
-                f"<p>Error: {error or 'unknown'}</p></body></html>"
+                f"<p>Error: {safe_error}</p></body></html>"
             )
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")

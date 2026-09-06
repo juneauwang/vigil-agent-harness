@@ -19,8 +19,10 @@ from __future__ import annotations
 import logging
 import os
 import re
+import stat
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -138,16 +140,30 @@ def store(name: str, value: str, source: str = "user") -> str:
     secrets = _secrets_dir()
     secrets.mkdir(parents=True, exist_ok=True)
     path = secrets / name
-    fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # task11 D4：临时文件 O_EXCL 0600 起步 + 原子 rename 落位（镜像 auth.json
+    # 写入器模式）。修复两点：① 旧实现预存文件 O_TRUNC 原地写、写后 chmod——
+    # 窗口期里明文保持旧档位（如 0644）世界可读；② 目标被预置符号链接时
+    # O_WRONLY 跟链写、chmod 也跟链——写入被重定向到链接目标。os.replace
+    # 只替换目录项不跟链：预置链接被原子顶替为常规文件，永不落到链接目标。
+    # 注意不能用 utils.atomic_replace——那个为 dotfiles 场景特意解析链接写
+    # 穿，对 secret 存储正是要防的行为。
+    tmp_path = secrets / f".{name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
+    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(value)
-    except Exception:
-        raise
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(str(tmp_path), str(path))
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except OSError:
+            pass
+    # 落位校验：目录项必须是常规文件（lstat 不跟链）+ 属主当前用户。
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise PermissionError(f"凭据文件 {path} 落位后不是常规文件，拒绝")
     _check_owner(path)
     register_source(name, source)
     # OPS-DELTA 批次三十二：写入的凭据值自动登记进全局 redact 登记表——
