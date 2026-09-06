@@ -114,8 +114,11 @@ if timeout 180 "$VENV_DIR/bin/python" -c "from tools.tirith_security import _ins
   say "tirith ready."
 else
   warn "tirith download failed (GitHub releases may be unreachable from your network)."
-  warn "Vigil still works; the first scanned command will warn and retry. Fix your"
-  warn "network (VPN / HTTPS_PROXY) and re-run this script — it is idempotent."
+  warn "On a restricted network (e.g. mainland China), set a download mirror and re-run:"
+  warn "  export TIRITH_DOWNLOAD_MIRROR=https://ghproxy.com   # or your GitHub mirror"
+  warn "The env var is picked up by this script's pre-install and by runtime auto-install."
+  warn "Vigil still works; the first scanned command will warn and retry. This script is"
+  warn "idempotent."
 fi
 
 # ---------------------------------------------------------------- done

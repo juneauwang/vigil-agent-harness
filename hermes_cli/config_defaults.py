@@ -2175,6 +2175,16 @@ DEFAULT_CONFIG = {
         "tirith_path": "tirith",
         "tirith_timeout": 5,
         "tirith_fail_open": True,
+        # Release-download mirror for the tirith auto-installer (mainland-China
+        # friendly). The TIRITH_DOWNLOAD_MIRROR env var wins over this value.
+        # Two shapes: prefix proxy ("https://ghproxy.com" → mirror + full
+        # github.com URL) or base substitution (mirror host mentions "github",
+        # e.g. "https://kkgithub.com" → github.com swapped for the mirror
+        # host). Empty = download directly from GitHub. Note: the archive is
+        # SHA-256-verified against the checksums file served by the same
+        # mirror — choosing a mirror means trusting it for integrity (same
+        # trust model as pointing pip at a mirror index).
+        "download_mirror": "",
         "website_blocklist": {
             "enabled": False,
             "domains": [],

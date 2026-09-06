@@ -890,3 +890,140 @@ class TestMkdtempOSErrorNoSpace:
             _install_tirith(log_failures=False)
         after = set(glob.glob("/tmp/tirith-install-*"))
         assert after - before == set()
+
+
+# ---------------------------------------------------------------------------
+# Download mirror (TIRITH_DOWNLOAD_MIRROR / security.download_mirror)
+# ---------------------------------------------------------------------------
+
+class TestDownloadMirror:
+    """Release-asset URL rewriting through the configured download mirror."""
+
+    def _urls(self, mock_dl):
+        return [call.args[0] for call in mock_dl.call_args_list]
+
+    # ---- shape (a): prefix proxy — mirror + original full github.com URL
+
+    def test_prefix_proxy_rewrites_release_urls(self):
+        from tools.tirith_security import _mirror_release_url
+        assert _mirror_release_url(
+            "https://github.com/sheeki03/tirith/releases/latest/download/tirith-x86_64-unknown-linux-gnu.tar.gz",
+            "https://ghproxy.com",
+        ) == "https://ghproxy.com/https://github.com/sheeki03/tirith/releases/latest/download/tirith-x86_64-unknown-linux-gnu.tar.gz"
+
+    def test_prefix_proxy_rewrites_checksums_url(self):
+        from tools.tirith_security import _mirror_release_url
+        assert _mirror_release_url(
+            "https://github.com/sheeki03/tirith/releases/latest/download/checksums.txt",
+            "https://ghproxy.com",
+        ) == "https://ghproxy.com/https://github.com/sheeki03/tirith/releases/latest/download/checksums.txt"
+
+    # ---- shape (b): base substitution — github.com swapped for mirror host
+
+    def test_base_substitution_rewrites_release_urls(self):
+        from tools.tirith_security import _mirror_release_url
+        assert _mirror_release_url(
+            "https://github.com/sheeki03/tirith/releases/latest/download/tirith-x86_64-unknown-linux-gnu.tar.gz",
+            "https://kkgithub.com",
+        ) == "https://kkgithub.com/sheeki03/tirith/releases/latest/download/tirith-x86_64-unknown-linux-gnu.tar.gz"
+
+    def test_base_substitution_rewrites_cosign_artifacts(self):
+        from tools.tirith_security import _mirror_release_url
+        base = "https://github.com/sheeki03/tirith/releases/latest/download"
+        for asset in ("checksums.txt.sig", "checksums.txt.pem"):
+            assert _mirror_release_url(f"{base}/{asset}", "https://kkgithub.com") == \
+                f"https://kkgithub.com/sheeki03/tirith/releases/latest/download/{asset}"
+
+    # ---- no mirror / normalization
+
+    def test_no_mirror_leaves_urls_unchanged(self):
+        from tools.tirith_security import _mirror_release_url
+        url = "https://github.com/sheeki03/tirith/releases/latest/download/checksums.txt"
+        assert _mirror_release_url(url, "") == url
+
+    def test_trailing_slash_stripped(self):
+        from tools.tirith_security import _mirror_release_url
+        assert _mirror_release_url(
+            "https://github.com/owner/repo/releases/latest/download/f",
+            "https://ghproxy.com/",
+        ) == "https://ghproxy.com/https://github.com/owner/repo/releases/latest/download/f"
+
+    def test_mirror_shape_detection(self):
+        from tools.tirith_security import _is_base_substitution_mirror
+        assert _is_base_substitution_mirror("https://ghproxy.com") is False
+        assert _is_base_substitution_mirror("https://ghfast.top") is False
+        assert _is_base_substitution_mirror("https://kkgithub.com") is True
+        assert _is_base_substitution_mirror("https://bgithub.xyz") is True
+        assert _is_base_substitution_mirror("https://github.com") is True  # identity no-op
+
+    # ---- resolution: env wins over config
+
+    def test_env_var_wins_over_config(self, monkeypatch):
+        from tools.tirith_security import _resolve_download_mirror
+        monkeypatch.setenv("TIRITH_DOWNLOAD_MIRROR", "https://ghproxy.com")
+        # If the env short-circuit were broken, the config read below would
+        # blow up with this error instead of silently shadowing the env value.
+        with patch("hermes_cli.config.load_config_readonly",
+                   side_effect=AssertionError("config must not be read when env is set")):
+            assert _resolve_download_mirror() == "https://ghproxy.com"
+
+    def test_config_used_when_env_unset(self, monkeypatch):
+        from tools.tirith_security import _resolve_download_mirror
+        monkeypatch.delenv("TIRITH_DOWNLOAD_MIRROR", raising=False)
+        fake_cfg = MagicMock()
+        fake_cfg.get.return_value = {"download_mirror": "https://kkgithub.com"}
+        with patch("hermes_cli.config.load_config_readonly", return_value=fake_cfg):
+            assert _resolve_download_mirror() == "https://kkgithub.com"
+
+    def test_unset_everywhere_is_empty(self, monkeypatch):
+        from tools.tirith_security import _resolve_download_mirror
+        monkeypatch.delenv("TIRITH_DOWNLOAD_MIRROR", raising=False)
+        with patch("hermes_cli.config.load_config_readonly",
+                   side_effect=OSError("no config")):
+            # config load failure degrades to "" rather than raising
+            assert _resolve_download_mirror() == ""
+
+    # ---- end-to-end through _install_tirith (mocked urllib layer)
+
+    @patch("tools.tirith_security._detect_target", return_value="x86_64-unknown-linux-gnu")
+    @patch("tools.tirith_security._download_file")
+    def test_install_routes_all_assets_through_prefix_proxy(self, mock_dl, mock_target,
+                                                            monkeypatch):
+        """With a prefix mirror set, archive + checksums (+ cosign artifacts)
+        are all fetched through the mirror so verification stays end-to-end."""
+        from tools.tirith_security import _install_tirith
+        monkeypatch.setenv("TIRITH_DOWNLOAD_MIRROR", "https://ghproxy.com")
+        # cosign present → sig/pem downloads also attempted
+        with patch("tools.tirith_security.shutil.which", return_value="/usr/bin/cosign"), \
+             patch("tools.tirith_security._verify_cosign", return_value=None), \
+             patch("tools.tirith_security._verify_checksum", return_value=False):
+            _install_tirith(log_failures=False)
+
+        urls = self._urls(mock_dl)
+        assert urls, "no downloads attempted"
+        gh = "https://ghproxy.com/https://github.com/sheeki03/tirith/releases/latest/download"
+        assert urls[0] == f"{gh}/tirith-x86_64-unknown-linux-gnu.tar.gz"
+        assert urls[1] == f"{gh}/checksums.txt"
+        assert f"{gh}/checksums.txt.sig" in urls
+        assert f"{gh}/checksums.txt.pem" in urls
+        # nothing fetched directly from github.com
+        assert not any(u.startswith("https://github.com") for u in urls)
+
+    @patch("tools.tirith_security._detect_target", return_value="x86_64-unknown-linux-gnu")
+    @patch("tools.tirith_security._download_file")
+    def test_install_routes_all_assets_through_base_mirror(self, mock_dl, mock_target,
+                                                           monkeypatch):
+        from tools.tirith_security import _install_tirith
+        monkeypatch.delenv("TIRITH_DOWNLOAD_MIRROR", raising=False)
+        fake_cfg = MagicMock()
+        fake_cfg.get.return_value = {"download_mirror": "https://kkgithub.com"}
+        with patch("hermes_cli.config.load_config_readonly", return_value=fake_cfg), \
+             patch("tools.tirith_security.shutil.which", return_value=None), \
+             patch("tools.tirith_security._verify_checksum", return_value=False):
+            _install_tirith(log_failures=False)
+
+        urls = self._urls(mock_dl)
+        gh = "https://kkgithub.com/sheeki03/tirith/releases/latest/download"
+        assert urls[0] == f"{gh}/tirith-x86_64-unknown-linux-gnu.tar.gz"
+        assert urls[1] == f"{gh}/checksums.txt"
+        assert not any(u.startswith("https://github.com") for u in urls)

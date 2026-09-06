@@ -296,6 +296,72 @@ def _download_file(url: str, dest: str, timeout: int = 10):
         shutil.copyfileobj(resp, f)
 
 
+# ---------------------------------------------------------------------------
+# Download mirror (mainland-China friendly)
+# ---------------------------------------------------------------------------
+
+# Every release asset lives under this origin; the mirror rewrites it.
+_GITHUB_URL_PREFIX = "https://github.com"
+
+
+def _resolve_download_mirror() -> str:
+    """Mirror for release downloads: ``TIRITH_DOWNLOAD_MIRROR`` env wins over
+    the ``security.download_mirror`` config key. Returns "" when unset/empty.
+    Trailing "/" is stripped so both mirror shapes compose cleanly."""
+    val = os.getenv("TIRITH_DOWNLOAD_MIRROR")
+    if val is None:
+        try:
+            from hermes_cli.config import load_config_readonly
+            cfg_sec = load_config_readonly().get("security", {}) or {}
+            val = cfg_sec.get("download_mirror") or ""
+        except Exception:
+            val = ""
+    return str(val).strip().rstrip("/")
+
+
+def _is_base_substitution_mirror(mirror: str) -> bool:
+    """Decide the mirror shape from its host name.
+
+    Two mirror conventions exist for GitHub release assets:
+      - prefix proxy (e.g. ghproxy.com and its clones): the ORIGINAL full
+        github.com URL is appended after the mirror origin — the dominant
+        mainland-China pattern, and the default shape;
+      - base substitution (e.g. kkgithub.com / bgithub.xyz — mirrors that
+        serve the same path structure under their own host): the
+        https://github.com prefix is replaced by the mirror base.
+
+    There is no protocol way to tell them apart, so the shape follows the
+    host name: a mirror whose host mentions "github" is treated as a base
+    substitution; anything else is treated as a prefix proxy.
+    """
+    try:
+        from urllib.parse import urlsplit
+        host = urlsplit(mirror if "//" in mirror else f"//{mirror}", scheme="https").netloc
+    except ValueError:
+        host = mirror
+    return "github" in host.lower()
+
+
+def _mirror_release_url(url: str, mirror: str) -> str:
+    """Rewrite a github.com release-asset URL through the download mirror.
+
+    Security stance: the archive is SHA-256-verified against the checksums
+    file served by the SAME mirror — choosing a mirror means trusting that
+    mirror for integrity, the same trust model as pointing pip at a mirror
+    index. Cosign provenance verification (when cosign is installed) still
+    pins the release workflow identity, so a mirror serving tampered
+    artifacts fails verification and aborts the install.
+    """
+    if not mirror:
+        return url
+    mirror = mirror.rstrip("/")
+    if _is_base_substitution_mirror(mirror):
+        if url.startswith(_GITHUB_URL_PREFIX):
+            return mirror + url[len(_GITHUB_URL_PREFIX):]
+        return url
+    return f"{mirror}/{url}"
+
+
 # 下载阶段总预算（OPS-DELTA #100）：单文件 10s 超时挡不住跨多文件累积挂起——
 # 直连 GitHub 慢时 archive + checksums（+ cosign 工件）逐文件重试/等待能拖 20+
 # 分钟，terminal 命令执行被阻塞。整个下载阶段墙钟上限，到期即弃 →
@@ -422,6 +488,9 @@ def _install_tirith(*, log_failures: bool = True) -> tuple[str | None, str]:
 
     archive_name = f"tirith-{target}.tar.gz"
     base_url = f"https://github.com/{_REPO}/releases/latest/download"
+    mirror = _resolve_download_mirror()
+    if mirror:
+        logger.info("tirith download mirror in use: %s", mirror)
 
     try:
         tmpdir = tempfile.mkdtemp(prefix="tirith-install-")
@@ -441,11 +510,18 @@ def _install_tirith(*, log_failures: bool = True) -> tuple[str | None, str]:
 
         try:
             _raise_if_download_deadline_passed(download_deadline)
-            _download_file(f"{base_url}/{archive_name}", archive_path)
+            _download_file(_mirror_release_url(f"{base_url}/{archive_name}", mirror), archive_path)
             _raise_if_download_deadline_passed(download_deadline)
-            _download_file(f"{base_url}/checksums.txt", checksums_path)
+            _download_file(_mirror_release_url(f"{base_url}/checksums.txt", mirror), checksums_path)
         except Exception as exc:
             log("tirith download failed: %s", exc)
+            if mirror:
+                log("download mirror %s unreachable or misbehaving — fix or clear "
+                    "TIRITH_DOWNLOAD_MIRROR / security.download_mirror and retry", mirror)
+            else:
+                log("GitHub releases unreachable from this network? Set "
+                    "TIRITH_DOWNLOAD_MIRROR=https://ghproxy.com (or your GitHub mirror) "
+                    "in the environment or security.download_mirror in config.yaml and retry")
             return None, "download_failed"
 
         # Cosign provenance verification — preferred but not mandatory.
@@ -457,9 +533,9 @@ def _install_tirith(*, log_failures: bool = True) -> tuple[str | None, str]:
         if shutil.which("cosign"):
             try:
                 _raise_if_download_deadline_passed(download_deadline)
-                _download_file(f"{base_url}/checksums.txt.sig", sig_path)
+                _download_file(_mirror_release_url(f"{base_url}/checksums.txt.sig", mirror), sig_path)
                 _raise_if_download_deadline_passed(download_deadline)
-                _download_file(f"{base_url}/checksums.txt.pem", cert_path)
+                _download_file(_mirror_release_url(f"{base_url}/checksums.txt.pem", mirror), cert_path)
             except Exception as exc:
                 logger.info("cosign artifacts unavailable (%s), proceeding with SHA-256 only", exc)
             else:
