@@ -330,3 +330,96 @@ def test_audit_best_effort_failure_does_not_block(mem_home):
     res = ar.triage_alerts([_alert(alertname="Harbor healthcheck failed")], home=mem_home)
     assert res["count"] == 1
     assert res["matched_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# batch94 C1 — 结构化触发词 > 字符串触发词（文档"结构化 > 字符串"此前被
+# "str:"/"obj:" 字符串字典序倒序反转为字符串恒胜）
+# ---------------------------------------------------------------------------
+
+def test_structured_trigger_outranks_string_trigger(mem_home):
+    """同一条告警同时命中某 runbook 的结构化触发词与另一（同文件）字符串触发词
+    → 结构化胜出（matched_keyword 为 k=v 串）。"""
+    _write(mem_home, "dual.yaml", """\
+name: dual-trigger
+title: 双形态触发词
+kind: incident
+env: prod
+summary: 结构化与字符串触发词并存。
+triggers:
+  - node filesystem full
+  - {alertname: NodeFilesystemFull, severity: critical}
+steps:
+  - id: check
+    title: 探查
+    action: query
+    params: {pattern: disk}
+""")
+    # 语料包含字符串触发词文本 + 结构化字段也逐字段命中 → 两者同时是候选
+    disp = ar.match_alert_to_runbook(
+        _alert(alertname="NodeFilesystemFull", severity="critical",
+               summary="node filesystem full on /data"),
+        home=mem_home,
+    )
+    assert disp["matched"] is True
+    assert disp["matched_by"] == "trigger"
+    assert disp["confidence"] == "high"
+    assert "alertname=NodeFilesystemFull" in disp["matched_keyword"]
+    assert "severity=critical" in disp["matched_keyword"]
+
+
+def test_string_trigger_still_wins_when_no_structured_match(mem_home):
+    """结构化不命中（severity 不符）时字符串触发词照常生效（不回归）。"""
+    _write(mem_home, "dual.yaml", """\
+name: dual-trigger
+title: 双形态触发词
+kind: incident
+env: prod
+summary: 结构化与字符串触发词并存。
+triggers:
+  - node filesystem full
+  - {alertname: NodeFilesystemFull, severity: critical}
+steps:
+  - id: check
+    title: 探查
+    action: query
+    params: {pattern: disk}
+""")
+    disp = ar.match_alert_to_runbook(
+        _alert(alertname="NodeFilesystemFull", severity="warning",
+               summary="node filesystem full on /data"),
+        home=mem_home,
+    )
+    assert disp["matched"] is True
+    assert disp["matched_keyword"] == "node filesystem full"
+
+
+# ---------------------------------------------------------------------------
+# batch94 C2 — annotations 全量透传 → annotations 来源的结构化触发词可命中
+# ---------------------------------------------------------------------------
+
+def test_structured_trigger_on_annotation_key(mem_home):
+    """结构化触发词声明 annotations 键（如 playbook）→ 告警 annotations 提供
+    该键时精确命中（真实管道依赖 monitoring 透传 annotations）。"""
+    _write(mem_home, "by-annotation.yaml", """\
+name: ann-playbook
+title: 注解路由 SOP
+kind: incident
+env: prod
+summary: 按 annotations.playbook 路由。
+triggers:
+  - {playbook: harbor-restart}
+steps:
+  - id: check
+    title: 探查
+    action: query
+    params: {pattern: harbor}
+""")
+    disp = ar.match_alert_to_runbook(
+        _alert(alertname="HarborUnhealthy", severity="critical",
+               annotations={"playbook": "harbor-restart"}),
+        home=mem_home,
+    )
+    assert disp["matched"] is True
+    assert disp["matched_by"] == "trigger"
+    assert disp["matched_keyword"] == "playbook=harbor-restart"

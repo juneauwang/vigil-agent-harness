@@ -9,7 +9,7 @@
 数据契约：:
 
     ~/.vigil/watch/inbox/<timestamp>.json
-    {"collected_at": "<iso>", "alerts": [{alertname, severity, instance, startsAt, state}], "processed": false}
+    {"collected_at": "<iso>", "alerts": [{alertname, severity, instance, annotations, startsAt, state}], "processed": false}
 
 - 有活跃告警 → 写一条 inbox；无告警 → 不写（零成本）；
 - 幂等/防重：按 alertname+instance 去重，已在**未处理** inbox 中的同键告警
@@ -119,10 +119,15 @@ def _fetch_alerts(alertmanager: str, prom_cfg: Dict[str, Any]) -> List[Dict[str,
             continue
         labels = alert.get("labels") or {}
         status = alert.get("status") or {}
+        annotations = alert.get("annotations") or {}
         alerts.append({
             "alertname": labels.get("alertname") or "?",
             "severity": labels.get("severity") or "-",
             "instance": labels.get("instance") or "-",
+            # annotations 透传（batch94，与 monitoring.fetch_active_alerts 对齐）：
+            # 下游消费层（watch_tools 分析/alert_runbook 匹配）结构化触发词可
+            # 声明 annotations 键；inbox 落盘多一个 key 对既有消费者无感。
+            "annotations": {str(k): str(v) for k, v in annotations.items()},
             "startsAt": alert.get("startsAt") or "-",
             "state": status.get("state") or "active",
         })
