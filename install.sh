@@ -35,12 +35,37 @@ if [ "$(id -u)" -eq 0 ]; then
   die "Do not run this as root. Vigil installs into your home directory only."
 fi
 
-command -v python3 >/dev/null 2>&1 || die "python3 not found — install Python $PYTHON_MIN+ first (https://www.python.org/downloads/)."
+# --- Python resolution ------------------------------------------------------
+# Vigil needs Python >= 3.10. If the system python is missing or too old, we
+# bootstrap a private one with uv (https://astral.sh/uv) — no root, no system
+# packages, works on any distro. This is the "environment has nothing" path
+# the one-liner exists for.
+PYTHON_BIN="$(command -v python3 || true)"
+if [ -n "$PYTHON_BIN" ]; then
+  PY_MAJOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.major)')"
+  PY_MINOR="$("$PYTHON_BIN" -c 'import sys; print(sys.version_info.minor)')"
+  if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
+    warn "system python3 is $PY_MAJOR.$PY_MINOR — Vigil needs $PYTHON_MIN+. Bootstrapping a private Python with uv..."
+    PYTHON_BIN=""
+  fi
+else
+  warn "python3 not found — bootstrapping a private Python with uv..."
+fi
 
-PY_MAJOR="$(python3 -c 'import sys; print(sys.version_info.major)')"
-PY_MINOR="$(python3 -c 'import sys; print(sys.version_info.minor)')"
-if [ "$PY_MAJOR" -lt 3 ] || { [ "$PY_MAJOR" -eq 3 ] && [ "$PY_MINOR" -lt 10 ]; }; then
-  die "python3 is $PY_MAJOR.$PY_MINOR — Vigil needs $PYTHON_MIN+."
+if [ -z "$PYTHON_BIN" ]; then
+  UV_BIN="${UV_BIN:-$HOME/.local/bin/uv}"
+  if [ ! -x "$UV_BIN" ] && ! command -v uv >/dev/null 2>&1; then
+    say "Installing uv (Python installer) to $HOME/.local/bin..."
+    mkdir -p "$HOME/.local/bin"
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$HOME/.local/bin" sh >/dev/null 2>&1 \
+      || die "uv bootstrap failed — install Python $PYTHON_MIN+ yourself (https://www.python.org/downloads/) and re-run."
+  fi
+  if [ -x "$UV_BIN" ]; then UV="$UV_BIN"; else UV="$(command -v uv)"; fi
+  say "Installing Python $PYTHON_MIN+ via uv (private to $HOME, system untouched)..."
+  "$UV" python install "$PYTHON_MIN" >/dev/null 2>&1 \
+    || die "uv python install failed — install Python $PYTHON_MIN+ yourself and re-run."
+  PYTHON_BIN="$("$UV" python find "$PYTHON_MIN")"
+  say "Using $( "$PYTHON_BIN" --version 2>&1 ) at $PYTHON_BIN"
 fi
 
 say "Installing Vigil $VIGIL_VERSION (venv: $VENV_DIR)"
@@ -58,7 +83,7 @@ fi
 mkdir -p "$VENV_DIR" "$BIN_DIR"
 if [ ! -x "$VENV_DIR/bin/python" ]; then
   say "Creating virtualenv..."
-  python3 -m venv "$VENV_DIR"
+  "$PYTHON_BIN" -m venv "$VENV_DIR"
 fi
 
 say "Installing vigil-agent-harness==$VIGIL_VERSION (PyPI)..."
