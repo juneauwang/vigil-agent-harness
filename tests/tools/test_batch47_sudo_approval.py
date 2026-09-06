@@ -243,3 +243,88 @@ class TestSudoExecHandlerApprovalChain:
         t.join(timeout=10)
         assert executed == [], "拒绝后命令不得执行"
         assert "BLOCKED" in seen["raw"]
+
+
+# ---------------------------------------------------------------------------
+# M2（任务十安全审查）—— yolo 不可跳过 {approve: required}/force_manual 强制人工门
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def _yolo(monkeypatch):
+    """会话 yolo 打开（进程 _YOLO_MODE_FROZEN 钉死 False，走可 monkeypatch 的缝）。"""
+    import tools.approval as approval_module
+    monkeypatch.setattr(approval_module, "_YOLO_MODE_FROZEN", False)
+    monkeypatch.setattr(approval_module, "is_current_session_yolo_enabled", lambda: True)
+    return approval_module
+
+
+class TestYoloVsRequiredConfirmation:
+    """矩阵 {approve: required} / force_manual 在 yolo 下必须仍走人工确认——
+    与 terminal 通道 _ops_confirmation_required 前置守卫同一不变量。
+    修复前：sudo/asset 通道经 _run_approval_gate 的 yolo 短路直接自动批准。"""
+
+    def test_yolo_required_still_prompts_web_chain(self, _yolo):
+        """yolo 开 + required：审批仍产生并落库（修复前：无审批直接放行）。"""
+        seen: dict = {}
+        t = _run_gate(_CONFIRM_DECISION, seen)
+        assert seen.get("approval_id"), "yolo 下强制人工门被跳过（M2 回归）"
+        approve_web_approval(seen["approval_id"], scope="once")
+        t.join(timeout=10)
+        assert seen["result"]["approved"] is True
+
+    def test_yolo_required_no_human_fails_closed(self, _yolo):
+        """yolo 开 + required + 无人在场 → fail-closed BLOCK（不自动批准）。"""
+        from tools.approval import request_ops_approval
+
+        result = request_ops_approval("sudo systemctl restart nginx", _CONFIRM_DECISION)
+        assert result["approved"] is False
+        assert "BLOCKED" in (result.get("message") or "")
+
+    def test_yolo_plain_approve_still_auto_skipped(self, _yolo):
+        """yolo 开 + 普通 approve 档：仍然自动放行（yolo 对可恢复审批照常生效）。"""
+        from tools.approval import request_ops_approval
+
+        result = request_ops_approval("sudo systemctl restart nginx", _PLAIN_DECISION)
+        assert result["approved"] is True
+
+    def test_yolo_force_manual_asset_fails_closed(self, _yolo):
+        """yolo 开 + 资产 force_manual → fail-closed（修复前：自动批准）。"""
+        from tools.approval import request_asset_approval
+
+        result = request_asset_approval(
+            asset_type="runbook", asset_name="prod-rotate",
+            description="高危资产创建", env="prod", force_manual=True)
+        assert result["approved"] is False
+        assert "BLOCKED" in (result.get("message") or "")
+
+    def test_yolo_plain_asset_auto_approved(self, _yolo):
+        """yolo 开 + 非强制资产 → 自动批准（可恢复审批，现状不变）。"""
+        from tools.approval import request_asset_approval
+
+        result = request_asset_approval(
+            asset_type="runbook", asset_name="dev-lint",
+            description="低风险资产", env="dev", force_manual=False)
+        assert result["approved"] is True
+
+    def test_cron_force_manual_blocked_even_in_approve_mode(self, _yolo, monkeypatch):
+        """cron + 强制人工：cron_mode: approve 也不放行（无人在场；terminal 通道
+        对 ops 审批本就无 cron_mode 逃生门，sudo 通道对齐）。"""
+        import tools.approval as approval_module
+        monkeypatch.setattr(approval_module, "_is_cron_approval_context", lambda: True)
+        monkeypatch.setattr(approval_module, "_get_cron_approval_mode", lambda: "approve")
+        from tools.approval import request_ops_approval
+        result = request_ops_approval("sudo systemctl restart nginx", _CONFIRM_DECISION)
+        assert result["approved"] is False
+        assert "BLOCKED" in (result.get("message") or "")
+
+    def test_cron_plain_approve_mode_still_auto_approves(self, monkeypatch):
+        """cron + 普通 approve 档 + cron_mode: approve：自动放行（现状不变）。"""
+        import tools.approval as approval_module
+        monkeypatch.setattr(approval_module, "_YOLO_MODE_FROZEN", False)
+        monkeypatch.setattr(approval_module, "is_current_session_yolo_enabled",
+                            lambda: False)
+        monkeypatch.setattr(approval_module, "_is_cron_approval_context", lambda: True)
+        monkeypatch.setattr(approval_module, "_get_cron_approval_mode", lambda: "approve")
+        from tools.approval import request_ops_approval
+        result = request_ops_approval("sudo systemctl restart nginx", _PLAIN_DECISION)
+        assert result["approved"] is True

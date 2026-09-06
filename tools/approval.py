@@ -416,6 +416,18 @@ _PROJECT_ENV_READ_PATH = (
     r'\.env(?!\.(?:example|sample|template|dist)\b)(?:\.[^/\s"\'`]+)*)'
 )
 
+# Sensitive-file READ gate, composed once / consumed twice: the
+# DANGEROUS_PATTERNS entry below enforces it on the terminal channel, and
+# detect_sensitive_file_read() re-uses the same fragments for the sudo_exec
+# channel so both execution paths enforce ONE identical credential-read gate
+# (M1, task-10 security review — no parallel list may be invented).
+_CREDENTIAL_READ_PATTERN = (
+    rf'\b(?:{_CREDENTIAL_READ_COMMANDS})\b.*'
+    rf'(?:{_CREDENTIAL_SYSTEM_FILES}|{_SSH_PRIVATE_KEYS}|{_KUBE_CONFIG_PATH}|'
+    rf'{_CREDENTIAL_FILES}|{_PROJECT_CREDENTIAL_DOTFILES}|'
+    rf'{_PROJECT_ENV_READ_PATH}|{_CREDENTIAL_NAMED_PATH})'
+)
+
 # Anchor for the cp/mv/install rule, where the sensitive path is only a write
 # target when it is the LAST argument (the destination). Requiring end-of-line
 # (or a command separator) keeps `cp config.yaml backup.yaml` — config.yaml as
@@ -1052,10 +1064,7 @@ DANGEROUS_PATTERNS = [
     # and `grep -c root /etc/shadow` (counts/metadata, no content echo) stay
     # outside the gate. Layer 2 (agent.redact) and the ops SOP are the
     # fallbacks when the command shape is opaque.
-    (rf'\b(?:{_CREDENTIAL_READ_COMMANDS})\b.*'
-     rf'(?:{_CREDENTIAL_SYSTEM_FILES}|{_SSH_PRIVATE_KEYS}|{_KUBE_CONFIG_PATH}|'
-     rf'{_CREDENTIAL_FILES}|{_PROJECT_CREDENTIAL_DOTFILES}|'
-     rf'{_PROJECT_ENV_READ_PATH}|{_CREDENTIAL_NAMED_PATH})',
+    (_CREDENTIAL_READ_PATTERN,
      "read credential file (may echo secrets)"),
     # Interpreter heredocs are handled by _execution_flag_findings() alongside
     # inline-exec flags; keep only shell heredocs regex-based here.
@@ -1126,6 +1135,10 @@ DANGEROUS_PATTERNS_COMPILED = [
     (re.compile(pattern, _RE_FLAGS), description)
     for pattern, description in DANGEROUS_PATTERNS
 ]
+
+# Compiled form of the shared credential-read gate for non-DANGEROUS_PATTERNS
+# consumers (sudo_exec channel via detect_sensitive_file_read below).
+_CREDENTIAL_READ_RE = re.compile(_CREDENTIAL_READ_PATTERN, _RE_FLAGS)
 
 
 def _legacy_pattern_key(pattern: str) -> str:
@@ -2367,6 +2380,30 @@ def detect_dangerous_command(command: str) -> tuple:
     return (False, None, None)
 
 
+def detect_sensitive_file_read(command: str) -> tuple:
+    """Detect a content-echoing read of a credential file (terminal-parity gate).
+
+    Built from the SAME ``_CREDENTIAL_*`` fragments and the SAME
+    deobfuscation variants as the ``read credential file (may echo
+    secrets)`` DANGEROUS_PATTERNS entry — the terminal channel enforces that
+    entry via ``check_all_command_guards``, and the sudo_exec channel calls
+    this function (M1, task-10 security review) so both execution paths
+    enforce one identical credential-read gate. Metadata-only reads
+    (``wc -c`` / ``grep -c``) and non-credential paths stay outside, exactly
+    as on the terminal channel.
+
+    Returns:
+        (hit, description) — description reuses the terminal pattern key so
+        messaging and audit stay consistent across channels.
+    """
+    if _command_parser_limit_exceeded(command):
+        return (True, _PARSER_LIMIT_DESCRIPTION)
+    for command_variant in _command_detection_variants(command):
+        if _CREDENTIAL_READ_RE.search(command_variant.lower()):
+            return (True, "read credential file (may echo secrets)")
+    return (False, None)
+
+
 # =========================================================================
 # Per-session approval state (thread-safe)
 # =========================================================================
@@ -3467,6 +3504,7 @@ def _run_approval_gate(
     fail_closed_when_no_human: bool = False,
     no_human_block_message: str = "",
     offer_learn: bool = False,
+    force_manual: bool = False,
 ) -> dict:
     """Shared human-approval gate for a flagged action (command or tool).
 
@@ -3508,6 +3546,17 @@ def _run_approval_gate(
             plugin-flagged action never runs ungated without a human.
         no_human_block_message: Message returned when
             ``fail_closed_when_no_human`` blocks.
+        offer_learn: When True (ops 自进化白名单候选且非强制人工门，CLI 层),
+            offer a "learn" choice — approve once AND record the user opt-in.
+        force_manual: When True this is a forced-human-confirmation gate
+            (matrix ``{approve: required}`` / prod mutating hard-gate /
+            asset ``force_manual``). It is NOT skippable by yolo — matching
+            the terminal channel's ``_ops_confirmation_required`` pre-guard —
+            and in a cron session it blocks regardless of
+            ``approvals.cron_mode`` (no human is present to confirm; the
+            terminal channel likewise has no cron_mode escape for ops
+            approvals). Plain approve-tier gates keep force_manual=False and
+            stay yolo-skippable. (M2, task-10 security review.)
 
     Returns:
         ``{"approved": bool, "message": str|None, ...}`` — shape shared with
@@ -3515,8 +3564,13 @@ def _run_approval_gate(
     """
     # --yolo bypasses all approval prompts (session- or process-scoped).
     # Hardline blocks are handled by the caller BEFORE this gate, so yolo
-    # here only skips the recoverable approval layer.
-    if _YOLO_MODE_FROZEN or is_current_session_yolo_enabled():
+    # here only skips the recoverable approval layer. force_manual gates
+    # (matrix {approve: required} / prod hard-gate / asset force_manual)
+    # are NOT skippable — same invariant as the terminal channel's
+    # _ops_confirmation_required pre-guard (M2, task-10 security review).
+    if not force_manual and (
+        _YOLO_MODE_FROZEN or is_current_session_yolo_enabled()
+    ):
         return {"approved": True, "message": None}
 
     session_key = get_current_session_key()
@@ -3534,12 +3588,19 @@ def _run_approval_gate(
     is_gateway = _is_gateway_approval_context()
 
     if not is_cli and not is_gateway:
-        # Cron sessions: respect cron_mode config
+        # Cron sessions: respect cron_mode config — but a forced-manual
+        # gate never auto-approves in cron: no human is present to confirm,
+        # and the terminal channel's ops-approval fail-closed has no
+        # cron_mode escape either (M2).
         if _is_cron_approval_context():
-            if _get_cron_approval_mode() == "deny":
+            _cron_denied = _get_cron_approval_mode() == "deny"
+            if _cron_denied or force_manual:
                 return {
                     "approved": False,
-                    "message": cron_deny_message,
+                    "message": (
+                        cron_deny_message if _cron_denied
+                        else (no_human_block_message or cron_deny_message)
+                    ),
                     "pattern_key": pattern_key,
                     "description": description,
                 }
@@ -3986,6 +4047,9 @@ def request_ops_approval(command: str, ops_decision: dict) -> dict:
         allow_permanent=allow_permanent,
         allow_session=allow_session,
         offer_learn=offer_learn,
+        # {approve: required} 强制人工确认不可被 yolo 跳过 —— 与 terminal 通道
+        # _ops_confirmation_required 同一不变量（M2，任务十安全审查）。
+        force_manual=require_confirmation,
         cron_deny_message=(
             f"BLOCKED: 提权命令 '{command}' 需要人工审批（{description}），"
             "但 cron 任务没有用户在场审批。请改用无需审批的替代命令；"
@@ -4076,6 +4140,8 @@ def request_asset_approval(
         approval_callback=approval_callback,
         allow_permanent=allow_permanent,
         allow_session=allow_session,
+        # force_manual（{approve: required} 高危资产）不可被 yolo 跳过（M2）。
+        force_manual=force_manual,
         cron_deny_message=(
             f"BLOCKED: {asset_type} 资产 '{asset_name}' 需要人工审批"
             f"（{description}），但 cron 任务没有用户在场审批——资产创建/变更"

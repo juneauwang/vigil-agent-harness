@@ -389,3 +389,135 @@ def test_remote_sudo_breaker_error_flows_ask_user_guidance(monkeypatch):
     topodisc._SSH_AUTH_FAILURES.clear()
     assert "请勿换用户名/换 key" in out
     assert "询问用户提供正确凭据" in out
+
+
+# ---------------------------------------------------------------------------
+# M1（任务十安全审查）——敏感文件读取门 + 输出脱敏
+# ---------------------------------------------------------------------------
+
+class TestSensitiveFileReadGate:
+    """sudo_exec 与 terminal 通道同门槛：凭据读取（shadow/私钥/kubeconfig/凭据
+    文件等）强制人工确认（require_confirmation 语义，yolo 不可跳过）；元数据
+    读取（wc -c / grep -c）照常直通；stdout/stderr 过 redact 再回会话。
+    测试中命令从不真正执行——执行层全部打桩，敏感路径只作为命令参数出现。"""
+
+    @pytest.fixture(autouse=True)
+    def _hermetic(self, monkeypatch):
+        import tools.approval as approval_module
+        from tools.approval import clear_web_approvals
+        from tools.terminal_tool import set_approval_callback
+        monkeypatch.setattr(approval_module, "_YOLO_MODE_FROZEN", False)
+        monkeypatch.setattr(approval_module, "is_current_session_yolo_enabled",
+                            lambda: False)
+        clear_web_approvals()
+        set_approval_callback(None)
+        yield
+        clear_web_approvals()
+        set_approval_callback(None)
+
+    def test_cat_shadow_blocked_when_matrix_allows(self, monkeypatch):
+        """M1 复现：矩阵判只读直通（None）+ cat /etc/shadow → 强制人工，
+        无人在场 fail-closed BLOCK，绝不执行。"""
+        monkeypatch.setattr(sudo_tool, "check_ops_command_permission",
+                            lambda *a, **k: None)
+        executed = []
+        monkeypatch.setattr(sudo_tool, "_run_local_sudo",
+                            lambda *a, **k: executed.append(a)
+                            or SimpleNamespace(returncode=0, stdout="", stderr=""))
+        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
+        out = _sudo_exec_handler(
+            {"host": "localhost", "command": "cat /etc/shadow", "env": "dev"})
+        assert "敏感文件读取" in out
+        assert "BLOCKED" in out
+        assert executed == [], "未获人工确认不得执行"
+
+    def test_yolo_cannot_skip_sensitive_read_gate(self, monkeypatch):
+        """yolo 开 + 敏感读取 → 仍强制人工（require_confirmation 不被 yolo
+        短路——M2 修复的 sudo 通道消费面），无人在场 fail-closed。"""
+        import tools.approval as approval_module
+        monkeypatch.setattr(approval_module, "_YOLO_MODE_FROZEN", False)
+        monkeypatch.setattr(approval_module, "is_current_session_yolo_enabled",
+                            lambda: True)
+        monkeypatch.setattr(sudo_tool, "check_ops_command_permission",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
+        out = _sudo_exec_handler(
+            {"host": "localhost", "command": "cat /etc/shadow", "env": "dev"})
+        assert "BLOCKED" in out
+
+    def test_sensitive_read_executes_after_human_approval(self, monkeypatch):
+        """与 terminal 一致的"可由人批准"语义：确认一次后执行，且弹的是
+        require_confirmation 门（不提供 session/永久选项）。"""
+        from tools.approval import (
+            reset_hermes_interactive_context,
+            set_hermes_interactive_context,
+        )
+        from tools.terminal_tool import set_approval_callback
+
+        prompts = []
+
+        def approve_once(command, description, **kwargs):
+            prompts.append((command, description, kwargs))
+            return "once"
+
+        monkeypatch.setattr(sudo_tool, "check_ops_command_permission",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
+        monkeypatch.setattr(sudo_tool, "_run_local_sudo",
+                            lambda *a, **k: SimpleNamespace(
+                                returncode=0, stdout="users-and-groups", stderr=""))
+        set_approval_callback(approve_once)
+        token = set_hermes_interactive_context(True)
+        try:
+            out = json.loads(_sudo_exec_handler(
+                {"host": "localhost", "command": "cat /etc/shadow", "env": "dev"}))
+        finally:
+            set_approval_callback(None)
+            reset_hermes_interactive_context(token)
+        assert out["status"] == "ok"
+        assert prompts, "敏感读取必须先过人工确认"
+        assert prompts[0][2].get("allow_session") is False
+        assert prompts[0][2].get("allow_permanent") is False
+
+    def test_metadata_reads_not_gated(self, monkeypatch):
+        """计数/元数据读取（terminal SOP 明确放行）不进门——直通执行。"""
+        from tools.terminal_tool import set_approval_callback
+
+        gate_calls = []
+        set_approval_callback(lambda *a, **kw: gate_calls.append(1) or "deny")
+        monkeypatch.setattr(sudo_tool, "check_ops_command_permission",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
+        monkeypatch.setattr(sudo_tool, "_run_local_sudo",
+                            lambda *a, **k: SimpleNamespace(
+                                returncode=0, stdout="42 /etc/shadow", stderr=""))
+        try:
+            out = json.loads(_sudo_exec_handler(
+                {"host": "localhost", "command": "wc -c /etc/shadow", "env": "dev"}))
+        finally:
+            set_approval_callback(None)
+        assert out["status"] == "ok"
+        assert gate_calls == [], "元数据读取不应触发审批"
+
+    def test_stdout_redacted_before_return(self, monkeypatch):
+        """M1 第 2 点：本通道 stdout 过 redact——登记的凭据值不得回进会话。"""
+        from agent.redact import register_credential_value
+
+        register_credential_value(SECRET)
+        monkeypatch.setattr(sudo_tool, "check_ops_command_permission",
+                            lambda *a, **k: None)
+        monkeypatch.setattr(sudo_tool, "_resolve_topology_credential",
+                            lambda host, **kw: {"type": "secret", "ref": "srv-pass"})
+        monkeypatch.setattr(
+            sudo_tool.subprocess, "run",
+            lambda argv, **kw: SimpleNamespace(
+                returncode=0, stdout=f"tcp 10.0.0.1:9100 token={SECRET}", stderr=""),
+        )
+        out = json.loads(_sudo_exec_handler(
+            {"host": "localhost", "command": "ss -tlnp", "env": "dev"}))
+        assert out["status"] == "ok"
+        assert SECRET not in out["stdout"]

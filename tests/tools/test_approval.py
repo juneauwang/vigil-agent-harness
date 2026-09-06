@@ -1707,3 +1707,51 @@ class TestCredentialFileReads:
             assert dangerous is False, command
             assert key is None, command
             assert desc is None, command
+
+
+# ---------------------------------------------------------------------------
+# detect_sensitive_file_read —— sudo 通道与 terminal 同源的凭据读取门（M1）
+# ---------------------------------------------------------------------------
+
+class TestDetectSensitiveFileRead:
+    @pytest.mark.parametrize("command", [
+        "cat /etc/shadow",
+        "sudo cat /etc/shadow",
+        "head -3 ~/.ssh/id_rsa",
+        "cat ~/.ssh/id_ed25519",
+        "cat /home/u/.kube/config",
+        "cat /root/.kube/config",
+        "cat .env",
+        "cat deploy/.env.production",
+        "cat /home/u/db-secrets.yaml",
+        "cat /etc/passwd",  # terminal 同款：passwd 在 _CREDENTIAL_SYSTEM_FILES 内
+        "od -c /etc/shadow",
+        "strings /run/secrets/db_pass",
+    ])
+    def test_sensitive_reads_detected(self, command):
+        hit, desc = approval_module.detect_sensitive_file_read(command)
+        assert hit is True
+        assert desc == "read credential file (may echo secrets)"
+
+    @pytest.mark.parametrize("command", [
+        "cat /etc/hosts",
+        "tail -5 /var/log/syslog",
+        "wc -c /etc/shadow",          # 计数/元数据不回显内容——terminal SOP 明确放行
+        "grep -c root /etc/shadow",   # grep 不在回显读取命令表
+        "file ~/.ssh/id_rsa",
+        "ls ~/.ssh",
+        "stat /etc/shadow",
+    ])
+    def test_metadata_and_benign_reads_pass(self, command):
+        hit, _desc = approval_module.detect_sensitive_file_read(command)
+        assert hit is False
+
+    def test_obfuscated_word_form_detected(self):
+        """与 terminal 危险模式同款去混淆：反斜杠切词不能绕过。"""
+        hit, _desc = approval_module.detect_sensitive_file_read("c\\at /etc/shadow")
+        assert hit is True
+
+    def test_parser_limit_fails_closed(self):
+        hit, desc = approval_module.detect_sensitive_file_read("cat /x" * 60_000)
+        assert hit is True
+        assert desc == approval_module._PARSER_LIMIT_DESCRIPTION

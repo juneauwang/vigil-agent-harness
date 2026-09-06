@@ -457,14 +457,39 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
 
     # 操作矩阵联动：``sudo <command>`` 过操作矩阵（classifier → 动作 × env；required 强制人工）。
     decision = check_ops_command_permission(f"sudo {command}", target_env=target_env)
-    if decision:
-        if decision.get("action") == "deny":
-            return tool_error(t("sudo.matrix_denied", "权限矩阵拒绝执行：{description}",
-                                description=decision.get("description") or "deny"))
-        if decision.get("action") == "approve":
-            err = _require_ops_approval(f"sudo {command}", decision)
-            if err:
-                return tool_error(err)
+    if decision and decision.get("action") == "deny":
+        return tool_error(t("sudo.matrix_denied", "权限矩阵拒绝执行：{description}",
+                            description=decision.get("description") or "deny"))
+
+    # M1（任务十安全审查）：敏感文件读取门——与 terminal 通道同源同门槛。
+    # terminal 上 `cat /etc/shadow` 类命令被 "read credential file" 危险模式
+    # 拦下人工审批（OPS-DELTA #5）；本通道此前只看操作矩阵，只读档直通 →
+    # 凭据明文经 stdout 回进会话。现在复用 approval.detect_sensitive_file_read
+    # （同一 _CREDENTIAL_* 片段、同一去混淆变体），命中即强制人工确认
+    # （require_confirmation：yolo / 会话白名单不可跳过，无人在场 fail-closed），
+    # 与 terminal 的"可由人批准放行"语义一致，只是每次都确认。
+    from tools.approval import detect_sensitive_file_read
+    sensitive_hit, _sensitive_desc = detect_sensitive_file_read(command)
+    if (sensitive_hit
+            and not (decision and decision.get("require_confirmation"))):
+        decision = {
+            "action": "approve",
+            "action_name": str((decision or {}).get("action_name") or "query"),
+            "env": str((decision or {}).get("env") or target_env or ""),
+            "require_confirmation": True,
+            "description": t(
+                "sudo.sensitive_read_gate",
+                "⚠ 敏感文件读取（与 terminal 通道同门槛）：sudo {command} 可能"
+                "回显凭据内容（shadow/私钥/kubeconfig/保险箱文件等），需人工"
+                "确认后才会执行",
+                command=command,
+            ),
+        }
+
+    if decision and decision.get("action") == "approve":
+        err = _require_ops_approval(f"sudo {command}", decision)
+        if err:
+            return tool_error(err)
 
     # 凭据解析：拓扑表 host 行 credential 引用（ssh_key/secret/askpass 三通道）。
     cred = _resolve_topology_credential(host, allow_fallback=False)
@@ -543,12 +568,16 @@ def _sudo_exec_handler(args: Dict[str, Any], **kwargs) -> str:
     except Exception:
         pass
 
+    # M1（任务十安全审查）第 2 点：本通道输出过 redact——sudo stdout/stderr
+    # 直接回进会话并落 state.db（scrub_secrets 清理的正是这类落库明文），
+    # 与 terminal/display 层共用 agent.redact（登记表值 + 键名形态打码）。
+    from agent.redact import redact_sensitive_text as _redact
     result_payload = {
         "status": "ok",
         "host": host or "local",
         "command": f"sudo -A {command}",
-        "stdout": (result.stdout or ""),
-        "stderr": (result.stderr or ""),
+        "stdout": _redact(result.stdout or "", force=True, credential_values=True),
+        "stderr": _redact(result.stderr or "", force=True, credential_values=True),
         "exit_code": result.returncode,
     }
     if credential_collected:
@@ -576,6 +605,8 @@ _SUDO_EXEC_SCHEMA = {
         "sh 前缀 / 管道到 sh / heredoc；useradd -s /bin/bash 这类参数值放行）、"
         "重定向到文件（> / >> / >&）、后台（&；&& 顺序连接放行）、多命令分隔（;）、"
         "命令替换（$()/反引号）、内嵌 sudo。"
+        "敏感文件读取（/etc/shadow、私钥、kubeconfig、凭据文件等）与 terminal "
+        "通道同门槛：强制人工确认后才执行。"
         "prod 环境变更类命令（重启/重建/配置下发）经人工审批门确认后才执行"
         "（web 弹窗 / CLI 提示）；只读诊断（ps/ss/vmstat/cat）直接执行。"
     ),
