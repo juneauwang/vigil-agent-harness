@@ -81,6 +81,15 @@ fi
 
 # ---------------------------------------------------------------- venv + pkg
 mkdir -p "$VENV_DIR" "$BIN_DIR"
+# Idempotency with a version guard: a venv left behind by an older run (or an
+# older script) may carry a too-old Python — rebuild it rather than reusing it
+# and letting pip fail confusingly on Requires-Python.
+if [ -x "$VENV_DIR/bin/python" ]; then
+  if ! "$VENV_DIR/bin/python" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" 2>/dev/null; then
+    warn "existing venv uses an old Python — rebuilding $VENV_DIR..."
+    rm -rf "$VENV_DIR"
+  fi
+fi
 if [ ! -x "$VENV_DIR/bin/python" ]; then
   say "Creating virtualenv..."
   "$PYTHON_BIN" -m venv "$VENV_DIR"
