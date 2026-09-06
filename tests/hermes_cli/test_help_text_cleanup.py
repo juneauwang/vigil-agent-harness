@@ -87,7 +87,7 @@ def test_help_output_has_no_hermes_home():
 
 def test_epilogue_ops_examples():
     """_EPILOGUE 含运维场景，不含上游模板。"""
-    assert "topo-discover -e prod -H 10.0.1.29" in _EPILOGUE
+    assert "topo-discover -e prod -H 198.51.100.29" in _EPILOGUE
     assert "vigil vssh node1" in _EPILOGUE
     assert "vigil watch status" in _EPILOGUE
     assert "vigil config set model.default deepseek-v4-flash" in _EPILOGUE
@@ -100,7 +100,7 @@ def test_help_output_examples_show_ops_scenarios():
     """行为探针：``vigil -h`` Examples 段含运维命令。"""
     proc = _run_cli("-h")
     assert proc.returncode == 0, proc.stderr
-    assert "topo-discover -e prod -H 10.0.1.29" in proc.stdout
+    assert "topo-discover -e prod -H 198.51.100.29" in proc.stdout
     assert "vigil vssh node1" in proc.stdout
 
 

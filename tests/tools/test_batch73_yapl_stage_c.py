@@ -46,7 +46,7 @@ TOPOLOGY = {
         {"name": "node-b", "env": "local", "cluster": "local",
          "endpoint": "10.0.0.11", "credentials": []},
         {"name": "dev-node", "env": "test", "cluster": "k3s-dev",
-         "endpoint": "10.0.1.1", "credentials": []},
+         "endpoint": "198.51.100.1", "credentials": []},
     ],
 }
 

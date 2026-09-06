@@ -63,7 +63,7 @@ exit 0
 def _k8s_target():
     return {"name": "argocd-redis", "type": "cache", "env": "prod",
             "cluster": "beijing_cluster", "managed_by": "kubectl",
-            "host": "39.106.217.32", "namespace": "argocd"}
+            "host": "203.0.113.32", "namespace": "argocd"}
 
 
 @pytest.fixture
@@ -179,16 +179,16 @@ clusters:
   env: prod
   host_groups: []
 hosts:
-- name: 39.106.217.32
+- name: 203.0.113.32
   type: host
   env: prod
   cluster: beijing_cluster
-  endpoint: 39.106.217.32
+  endpoint: 203.0.113.32
   os: Ubuntu 22.04
   credentials: []
 """, encoding="utf-8")
-    (home / "services" / "39.106.217.32.yaml").write_text("""
-host: 39.106.217.32
+    (home / "services" / "203.0.113.32.yaml").write_text("""
+host: 203.0.113.32
 services:
 - name: argocd-redis
   type: cache

@@ -196,16 +196,28 @@ def test_engine_success_event_sequence(ehome):
     assert events[1]["status"] == "ok"
 
 
-def test_engine_rollback_event_sequence(ehome):
-    from tools.runbook_exec import execute_runbook
-    from tools.runbook_tools import _load_runbook
+def test_engine_rollback_event_sequence(ehome, monkeypatch):
+    # task14（OPS-DELTA 批14）语义：rollback 步骤强制人工确认（force_manual），
+    # 无人在场（非交互、无 gateway）时审批门 fail-closed → 回滚步骤不执行、
+    # 事件序列退化为 step_failed→runbook_done。本测试的目的是引擎事件序列
+    # plumbing（rollback_start→step→rollback_done），因此按审批系统的既定
+    # 模式注册每线程审批回调 + VIGIL_INTERACTIVE=1 模拟"人在场确认"的交互
+    # 上下文，走真实的 _step_approval→request_ops_approval 强制人工门。
+    monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
+    from tools.terminal_tool import set_approval_callback
+    set_approval_callback(lambda command, description, **kwargs: "once")
+    try:
+        from tools.runbook_exec import execute_runbook
+        from tools.runbook_tools import _load_runbook
 
-    events = []
-    res = execute_runbook(
-        _load_runbook(ehome, "t-rb"), env="local", home=ehome,
-        runner=_boom_then_ok_runner(), exec_id="exec_test_2",
-        progress_callback=events.append,
-    )
+        events = []
+        res = execute_runbook(
+            _load_runbook(ehome, "t-rb"), env="local", home=ehome,
+            runner=_boom_then_ok_runner(), exec_id="exec_test_2",
+            progress_callback=events.append,
+        )
+    finally:
+        set_approval_callback(None)
     assert res["result"] == "rolled_back"
     types = [e["type"] for e in events]
     assert types == [

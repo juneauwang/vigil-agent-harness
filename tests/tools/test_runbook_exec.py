@@ -392,16 +392,16 @@ class TestExecutionEngine:
 
     def test_remote_host_with_own_ip_endpoint_not_local(self, mhome):
         """远端主机 endpoint == 自身 IP（host_name 同值）必须判 remote——不能因
-        endpoint==host_name 误判本地（2026-08-25 实测：阿里云 39.106.217.32
+        endpoint==host_name 误判本地（2026-08-25 实测：阿里云 203.0.113.32
         endpoint==host_name，旧代码 `e == host_name → local` 导致 kubectl 命令
         在本机执行，runbook 执行器全部走错机器 "timed out waiting for the
         condition"）。本机身份只认 hostname/网卡 IP，不认拓扑 host_name。"""
         from tools.runbook_exec import _is_local_endpoint
         # 远端公网 IP 作 endpoint 且 host_name 同名 → 不是本机身份 → remote
-        assert _is_local_endpoint("39.106.217.32", "39.106.217.32") is False
-        assert _is_local_endpoint("8.140.60.44", "8.140.60.44") is False
+        assert _is_local_endpoint("203.0.113.32", "203.0.113.32") is False
+        assert _is_local_endpoint("203.0.113.44", "203.0.113.44") is False
         # 带端口形态同样判 remote
-        assert _is_local_endpoint("39.106.217.32:22", "39.106.217.32") is False
+        assert _is_local_endpoint("203.0.113.32:22", "203.0.113.32") is False
         # 本机身份（hostname/网卡 IP/localhost）不受影响，仍判 local
         import socket
         assert _is_local_endpoint(socket.gethostname(), "anything") is True

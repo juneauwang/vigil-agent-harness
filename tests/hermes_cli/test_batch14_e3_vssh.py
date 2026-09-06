@@ -176,7 +176,7 @@ def test_resolve_topology_credential_plural_credentials(topo_home):
         "version: 4\n"
         "hosts:\n"
         "  - name: aliyun-1\n"
-        "    endpoint: 39.106.217.32\n"
+        "    endpoint: 203.0.113.32\n"
         "    credentials:\n"
         "      - type: ssh_key\n"
         "        ref: /home/wpwang/.ssh/aliyun_nopass.pem\n"
@@ -191,7 +191,7 @@ def test_resolve_topology_credential_plural_credentials(topo_home):
         "port": 22,
     }
     # endpoint 匹配同样生效
-    assert _resolve_topology_credential("39.106.217.32")["type"] == "ssh_key"
+    assert _resolve_topology_credential("203.0.113.32")["type"] == "ssh_key"
 
 
 def test_resolve_topology_credential_plural_mixed_picks_ssh_key(topo_home):
