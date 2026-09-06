@@ -812,12 +812,18 @@ def _scripts_dir(home: Path) -> Path:
 
 
 def _exec_script_asset(home: Path, spec: Dict[str, Any],
-                       timeout: int = _EXEC_TIMEOUT_S) -> Dict[str, Any]:
+                       timeout: int = _EXEC_TIMEOUT_S,
+                       target: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """run_script：只引用资产库脚本（§10.9 逃生舱受控），不内联。
 
     脚本资产 = ``~/.vigil/scripts/<name>.sh``（或裸名），审批标记在
     ``~/.vigil/scripts/.meta/<name>.json``（script_asset_create 落盘）。
     引用不存在 / 未经资产审批 / 内容哈希漂移 → 报错引导，不执行。
+
+    远端路线（batch94 PART E）：step target 解析为远端主机时，push-and-run——
+    本机资产库脚本 scp 上传远端临时路径（不可预测唯一名），0700 后经 SSH
+    执行（与普通命令步骤同一凭据/审批链），结束 best-effort 清理。资产校验
+    （审批标记 + 哈希）对远端执行同等生效——门在本机资产侧，不因目标远端而变。
     """
     name = str(spec.get("script_asset") or "").strip()
     from tools.script_assets import meta_dir, resolve_script_path, scripts_dir
@@ -855,6 +861,9 @@ def _exec_script_asset(home: Path, spec: Dict[str, Any],
                   "失效，需重新过资产审批（script_asset_create --force）", name=name)}
 
     args = [str(a) for a in (spec.get("args") or [])]
+    if target is not None and target.get("remote"):
+        return _exec_script_asset_remote(home, target, script_path, args,
+                                         timeout=timeout)
     argv = ["bash", str(script_path)] + args
     try:
         proc = subprocess.run(argv, capture_output=True,
@@ -871,12 +880,92 @@ def _exec_script_asset(home: Path, spec: Dict[str, Any],
             "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
 
 
+_SCRIPT_REMOTE_TIMEOUT_S = 60  # scp / 远端执行 / 清理各段超时
+
+
+def _exec_script_asset_remote(home: Path, target: Dict[str, Any],
+                              script_path: Path, args: List[str],
+                              timeout: int = _SCRIPT_REMOTE_TIMEOUT_S) -> Dict[str, Any]:
+    """资产脚本远端执行（push-and-run）：scp 上传 → 0700 + bash 执行 → 清理。
+
+    与普通命令步骤同一条远端链（_remote_ssh_argv 凭据解析 + _ssh_run），
+    不新增审批旁路。错误信息只带资产名与主机名，不带本地/远端路径（路径
+    可能内嵌参数值，审计面收缩）。
+    """
+    from tools.sudo_tool import _scp_argv_from_ssh, _ssh_run
+    import uuid as _uuid
+
+    name = script_path.name
+    host = str(target.get("host") or "")
+    try:
+        ssh_argv, ssh_env, _host = _remote_ssh_argv(target)
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": t(
+            "runbook_exec.remote_cred_failed",
+            "远端凭据解析失败：{exc}", exc=exc)}
+    remote_tmp = f"/tmp/vigil-script-{_uuid.uuid4().hex}.sh"
+
+    # 1) 上传（scp 与 transfer_file 上传方向同一 argv 构造）
+    scp_argv = _scp_argv_from_ssh(ssh_argv, script_path, remote_tmp)
+    try:
+        scp_proc = subprocess.run(scp_argv, capture_output=True,
+                                  text=True, encoding='utf-8', errors='replace',
+                                  timeout=timeout, env=ssh_env,
+                                  stdin=subprocess.DEVNULL)
+    except subprocess.TimeoutExpired:
+        return {"exit_code": 1, "stdout": "", "stderr": t(
+            "runbook_exec.script_remote_scp_timeout",
+            "脚本资产 {name!r} 上传 {host} 超时（{timeout}s）",
+            name=name, host=host, timeout=timeout), "timed_out": True}
+    except Exception as exc:
+        return {"exit_code": 1, "stdout": "", "stderr": t(
+            "runbook_exec.script_remote_scp_failed",
+            "脚本资产 {name!r} 上传 {host} 失败：{exc}",
+            name=name, host=host, exc=exc)}
+    if scp_proc.returncode != 0:
+        return {"exit_code": 1, "stdout": "",
+                "stderr": _clip(t("runbook_exec.script_remote_scp_failed",
+                                  "脚本资产 {name!r} 上传 {host} 失败：{exc}",
+                                  name=name, host=host,
+                                  exc=scp_proc.stderr.strip() or "scp exit non-zero"))}
+
+    # 2) 0700 后执行（远端 shell 串：shlex.quote 逐词引用，args 含空格安全）
+    q = shlex.quote
+    remote_cmd = (f"chmod 700 {q(remote_tmp)} && bash {q(remote_tmp)}"
+                  + "".join(f" {q(a)}" for a in args))
+    exec_err: Optional[Dict[str, Any]] = None
+    proc: Optional[subprocess.CompletedProcess] = None
+    try:
+        proc = _ssh_run(ssh_argv, ssh_env, remote_cmd, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        exec_err = {"exit_code": 1, "stdout": "", "stderr": t(
+            "runbook_exec.script_remote_timeout",
+            "脚本资产 {name!r} 远端执行超时（{timeout}s）",
+            name=name, timeout=timeout), "timed_out": True}
+    except Exception as exc:
+        exec_err = {"exit_code": 1, "stdout": "", "stderr": t(
+            "runbook_exec.script_remote_exec_failed",
+            "脚本资产 {name!r} 远端执行失败：{exc}", name=name, exc=exc)}
+    finally:
+        # 3) 清理（best-effort；失败在结果里附注，不静默）
+        try:
+            _ssh_run(ssh_argv, ssh_env, f"rm -f {q(remote_tmp)}",
+                     timeout=_SCRIPT_REMOTE_TIMEOUT_S)
+        except Exception:
+            pass
+    if exec_err is not None:
+        return exec_err
+    assert proc is not None
+    return {"exit_code": proc.returncode,
+            "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
+
+
 def _run_spec(home: Path, target: Dict[str, Any],
               spec: Dict[str, Any]) -> Dict[str, Any]:
     if "transfer" in spec:
         return _exec_transfer(home, spec["transfer"])
     if "script_asset" in spec:
-        return _exec_script_asset(home, spec)
+        return _exec_script_asset(home, spec, target=target)
     if spec.get("sudo"):
         cmd = spec["cmd"] if "cmd" in spec else " ".join(spec.get("argv") or [])
         return _exec_sudo(home, target, cmd)
