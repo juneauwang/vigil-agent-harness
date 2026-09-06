@@ -723,3 +723,486 @@ class TestMatrixMissingRefusal:
         # 不是矩阵缺失语义，错误信息不含矩阵未初始化指引）。
         assert err is None or "矩阵未初始化" not in err
         hc._LOAD_CONFIG_CACHE.clear()
+
+
+# ---------------------------------------------------------------------------
+# task16 M1：步骤 target 实体 env 范围一致性 + 矩阵门跟随实体真实 env
+# ---------------------------------------------------------------------------
+
+class TestTargetEnvScope:
+    """task16 M1（OPS-DELTA 审查 task12 #M1）：
+
+    (a) env:local runbook target 唯一名 prod 实体 → 步骤拒绝（修复前按 local
+        档 execute 自动放行——无人参与改 prod 的绕过路径）；
+    (b) 双环境同名实体仍经 scope 收敛正确解析（topo_ref 歧义收敛无回归）；
+    (c) runbook env 与实体 env 一致 → 行为与修复前完全一致；
+    (d) 子 runbook env 范围链（父 local → 子继承 local）同样拦截 prod target。
+    """
+
+    @pytest.fixture
+    def ehome(self, tmp_path, monkeypatch):
+        """local + prod 双环境拓扑：唯一名 prod 服务 billing + 双环境同名 web。"""
+        home = tmp_path / "vigil_home_envs"
+        home.mkdir(parents=True)
+        (home / "services").mkdir(parents=True)
+        (home / "entities").mkdir(parents=True)
+        (home / "runbooks").mkdir(parents=True)
+        monkeypatch.setenv("VIGIL_HOME", str(home))
+        (home / "topology.yaml").write_text("""
+version: 4
+environments:
+- name: local
+- name: prod
+clusters:
+- name: local
+  type: docker
+  env: local
+  host_groups: []
+- name: prod-cluster
+  type: k8s
+  env: prod
+  host_groups: []
+hosts:
+- name: dev-host-1
+  type: host
+  env: local
+  cluster: local
+  endpoint: 172.18.120.67
+  os: Ubuntu 24.04
+  credentials: []
+- name: prod-host-1
+  type: host
+  env: prod
+  cluster: prod-cluster
+  endpoint: 10.203.0.9
+  os: Ubuntu 24.04
+  credentials: []
+""", encoding="utf-8")
+        (home / "services" / "dev-host-1.yaml").write_text("""
+host: dev-host-1
+services:
+- name: nginx
+  type: gateway
+  managed_by: docker_compose
+  detail: entities/nginx.yaml
+- name: web
+  type: app
+  managed_by: docker
+""", encoding="utf-8")
+        (home / "services" / "prod-host-1.yaml").write_text("""
+host: prod-host-1
+services:
+- name: billing
+  type: db
+  managed_by: systemd
+- name: web
+  type: app
+  managed_by: docker
+""", encoding="utf-8")
+        (home / "entities" / "nginx.yaml").write_text("""
+name: nginx
+snapshot:
+  by_runtime:
+    docker_compose:
+      project: docker
+      services:
+      - name: docker-nginx-1
+""", encoding="utf-8")
+        # template2（local=全 execute 除高危 4；prod 大面积 required）——
+        # 正是审查报告里的利用形态模板。
+        from tools.matrix_data import template_matrix, write_matrix
+        write_matrix(template_matrix("template2"), home)
+        yield home
+
+    def _resolved_env(self, home, name):
+        """步骤 target 在权限语义下的真实 env（cluster env 优先链）。"""
+        from tools.topo_tools import load_topology
+        from tools.runbook_exec import resolve_target, _resolved_target_env
+        topo = load_topology(home)
+        return _resolved_target_env(topo, resolve_target(home, topo, name))
+
+    def test_a_local_runbook_prod_target_rejected(self, ehome):
+        """(a) env:local + 唯一名 prod 实体 → 步骤拒绝，命令一条不执行。"""
+        calls = []
+        data = {
+            "name": "env-bypass", "title": "EB", "version": 2,
+            "kind": "maintenance", "env": "local",
+            "steps": [{"id": "s", "title": "s", "action": "restart",
+                       "params": {"target": "billing"}}],
+        }
+        res = execute_runbook(data, home=ehome, runner=_ok_runner(calls))
+        assert res["result"] == "failed"
+        step = res["steps"][0]
+        assert step["status"] == "failed"
+        assert "env" in step["error"] and "prod" in step["error"]
+        assert "超出" in step["error"]
+        assert calls == [], "范围外实体必须拒绝在任何命令执行之前"
+        assert (ehome / "runtime" / "runbook_executions.jsonl").is_file()
+
+    def test_a_legacy_env_alias_still_rejected(self, ehome):
+        """声明 env:uat（归一化 prod 档）target local 实体 → 同样拒绝
+        （归一化比较，与校验器 clusters/hosts scope 同语义）。"""
+        data = {
+            "name": "uat-scope", "title": "US", "version": 2,
+            "kind": "maintenance", "env": "uat",
+            "steps": [{"id": "s", "title": "s", "action": "restart",
+                       "params": {"target": "nginx"}}],
+        }
+        res = execute_runbook(data, home=ehome, runner=_ok_runner())
+        assert res["result"] == "failed"
+        assert res["steps"][0]["status"] == "failed"
+        assert "local" in res["steps"][0]["error"]
+
+    def test_b_same_name_entities_disambiguated_by_scope(self, ehome):
+        """(b) 双环境同名 web：env/cluster scope 收敛到对应实体后一致放行。
+        （动作用 verify——template2 prod 档仅查询类 execute，restart@prod 会被
+        矩阵门拦，见 test_gate_env_follows_entity_env_when_no_declared_env。）"""
+        calls = []
+        data_local = {
+            "name": "web-local", "title": "WL", "version": 2,
+            "kind": "maintenance", "env": "local",
+            "steps": [{"id": "s", "title": "s", "action": "verify",
+                       "params": {"target": "web"}}],
+        }
+        res = execute_runbook(data_local, home=ehome, runner=_ok_runner(calls))
+        assert res["result"] == "ok"
+        assert res["steps"][0]["target"]["env"] == "local"
+        assert res["steps"][0]["target"]["host"] == "dev-host-1"
+
+        data_prod = {
+            "name": "web-prod", "title": "WP", "version": 2,
+            "kind": "maintenance", "env": "prod",
+            "clusters": ["prod-cluster"],
+            "steps": [{"id": "s", "title": "s", "action": "verify",
+                       "params": {"target": "web"}}],
+        }
+        res2 = execute_runbook(data_prod, home=ehome, runner=_ok_runner(calls))
+        assert res2["result"] == "ok"
+        assert res2["steps"][0]["target"]["env"] == "prod"
+        assert res2["steps"][0]["target"]["host"] == "prod-host-1"
+
+    def test_c_matching_env_unchanged(self, ehome):
+        """(c) env 匹配实体 env → 放行不变（local runbook + local nginx）。"""
+        calls = []
+        data = {
+            "name": "match", "title": "M", "version": 2,
+            "kind": "maintenance", "env": "local",
+            "steps": [{"id": "s", "title": "s", "action": "restart",
+                       "params": {"target": "nginx"}}],
+        }
+        res = execute_runbook(data, home=ehome, runner=_ok_runner(calls))
+        assert res["result"] == "ok"
+        assert res["steps"][0]["status"] == "ok"
+        assert len(calls) == 1
+
+    def _allow_runbook_action(self, home):
+        """template2 不配 runbook 动作（漏配默认 approve）——嵌套引用测试把它
+        设为 execute，避免父引用步骤被审批门拦住（与本测试无关的维度）。"""
+        from tools.matrix_data import load_matrix, set_level, write_matrix
+        m = load_matrix(home)
+        set_level(m, "local", "runbook", "execute")
+        write_matrix(m, home)
+
+    def test_d_sub_runbook_env_chain_enforced(self, ehome):
+        """(d) 父 env:local → 子 runbook（未声明 env，继承 local）步骤 target
+        prod 实体 → 子步骤拒绝、父引用步骤失败。"""
+        import yaml
+        child = {
+            "name": "child-rb", "title": "C", "version": 2,
+            "kind": "maintenance",
+            "steps": [{"id": "s", "title": "s", "action": "restart",
+                       "params": {"target": "billing"}}],
+        }
+        (ehome / "runbooks" / "child-rb.yaml").write_text(
+            yaml.safe_dump(child, allow_unicode=True, sort_keys=False),
+            encoding="utf-8")
+        self._allow_runbook_action(ehome)
+        data = {
+            "name": "parent-rb", "title": "P", "version": 2,
+            "kind": "maintenance", "env": "local",
+            "steps": [{"id": "nest", "title": "n", "action": "runbook",
+                       "params": {"ref": "child-rb", "type": "runbook"}}],
+        }
+        calls = []
+        res = execute_runbook(data, home=ehome, runner=_ok_runner(calls))
+        assert res["result"] == "failed"
+        nest = res["steps"][0]
+        assert nest["action"] == "runbook" and nest["ok"] is False
+        sub_steps = nest.get("sub_steps") or []
+        assert sub_steps and sub_steps[0]["status"] == "failed"
+        assert "prod" in sub_steps[0]["error"]
+        assert calls == [], "子 runbook 的范围外步骤不得产生任何命令"
+
+    def test_d_child_declared_env_conflict_still_rejected(self, ehome):
+        """(d) 子 runbook 显式声明 env:prod 超出父 local 范围 → 既有
+        _merge_sub_scope 约束仍然生效（范围合并先于步骤执行）。"""
+        import yaml
+        child = {
+            "name": "child-esc", "title": "CE", "version": 2,
+            "kind": "maintenance", "env": "prod",
+            "steps": [{"id": "s", "title": "s", "action": "restart",
+                       "params": {"target": "billing"}}],
+        }
+        (ehome / "runbooks" / "child-esc.yaml").write_text(
+            yaml.safe_dump(child, allow_unicode=True, sort_keys=False),
+            encoding="utf-8")
+        self._allow_runbook_action(ehome)
+        data = {
+            "name": "parent-esc", "title": "PE", "version": 2,
+            "kind": "maintenance", "env": "local",
+            "steps": [{"id": "nest", "title": "n", "action": "runbook",
+                       "params": {"ref": "child-esc", "type": "runbook"}}],
+        }
+        res = execute_runbook(data, home=ehome, runner=_ok_runner())
+        assert res["result"] == "failed"
+        assert "超出父范围" in (res["steps"][0].get("error") or "")
+
+    def test_gate_env_follows_entity_env_when_no_declared_env(self, ehome):
+        """未声明 env 的 runbook：scope 检查不触发（"默认不限制"语义），但
+        矩阵门 env 跟随实体真实 env——prod 实体按 prod 档裁决（template2 下
+        restart=required），无人在场 fail-closed blocked。修复前同一 runbook
+        按缺省 local 档（restart=execute）自动放行。"""
+        data = {
+            "name": "no-env", "title": "NE", "version": 2,
+            "kind": "maintenance",
+            "steps": [{"id": "s", "title": "s", "action": "restart",
+                       "params": {"target": "billing"}}],
+        }
+        calls = []
+        res = execute_runbook(data, home=ehome, runner=_ok_runner(calls))
+        step = res["steps"][0]
+        # required 档无人在场 → blocked；命令一条未跑（local 档会 execute 放行）
+        assert step["status"] == "blocked"
+        assert res["result"] == "failed"
+        assert calls == []
+
+    def test_rollback_step_env_scope_enforced(self, ehome):
+        """回滚场景步骤走同一 choke point：local runbook 失败触发的回滚里，
+        target prod 实体的回滚步骤同样拒绝 → 回滚失败强制 stop（人工介入）。
+        （范围检查先于回滚步骤的强制人工确认，无需审批桩。）"""
+        data = {
+            "name": "rb-scope", "title": "RS", "version": 2,
+            "kind": "maintenance", "env": "local",
+            "steps": [{"id": "q", "title": "q", "action": "query",
+                       "params": {"pattern": "x"},
+                       "on_failure": {"rollback": "rb-main"}}],
+            "rollback": [{"name": "rb-main", "steps": [
+                {"id": "r", "title": "r", "action": "restart",
+                 "params": {"target": "billing"}}]}],
+        }
+        res = execute_runbook(data, home=ehome, runner=lambda spec, target: {
+            "exit_code": 1, "stdout": "", "stderr": "boom"})
+        # 回滚已触发但其中的范围外步骤被拒 → 回滚失败 → 强制 stop（人工介入）。
+        assert res["result"] == "failed"
+        assert res["rolled_back"] is True  # 回滚已触发（但失败）
+        assert "rollback 失败" in (res.get("error") or "")
+        rb_block = res["steps"][-1]
+        assert rb_block["id"] == "__rollback__"
+        assert rb_block["ok"] is False
+        rb_step = rb_block["steps"][0]
+        assert rb_step["status"] == "failed"
+        assert "prod" in rb_step["error"]
+
+    def test_resolved_target_env_chain(self, ehome):
+        """_resolved_target_env 优先级链：cluster env > 实体 env > host env。"""
+        from tools.topo_tools import load_topology
+        from tools.runbook_exec import _resolved_target_env
+        topo = load_topology(ehome)
+        # billing：实体/host 无独立 env 冲突，cluster prod-cluster env=prod 权威
+        assert self._resolved_env(ehome, "billing") == "prod"
+        # nginx：cluster local env=local
+        assert self._resolved_env(ehome, "nginx") == "local"
+        # host 目标：cluster 行 env 权威
+        svc = resolve_target(ehome, topo, "prod-host-1")
+        assert _resolved_target_env(topo, svc) == "prod"
+        # 集群目标自身
+        cluster = resolve_target(ehome, topo, "prod-cluster")
+        assert _resolved_target_env(topo, cluster) == "prod"
+
+
+# ---------------------------------------------------------------------------
+# task16 M2：transfer_file 远→远直传目标操作数必须是 dst_host
+# ---------------------------------------------------------------------------
+
+class TestTransferRemoteToRemote:
+    """task16 M2（审查 task12 #M2）：A→B 的 scp 目标操作数此前误用 src_host
+    （A→B 实际变成往 A 自身拷贝、源主机名被当作用户名）。修复后目标主机必须是
+    dst_host（endpoint 取拓扑 B 行、user 取 B 端凭据）。"""
+
+    def test_dest_operand_uses_dst_host(self, mhome, monkeypatch):
+        import subprocess as sp
+        import tools.runbook_exec as rex
+        import hermes_cli.subcommands.vssh as vssh
+
+        captured: dict = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = list(argv)
+            return sp.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+        def fake_cred(host, allow_fallback=True):
+            assert allow_fallback is False
+            return {"type": "ssh_key", "ref": f"~/.ssh/{host}.pem",
+                    "user": f"user-{host}", "port": 22}
+
+        def fake_build_ssh_argv(host, *, user="", port=22, key=None, cred=None):
+            # vssh 真实形态：argv 尾元素是 user@host 目标（scp 拼装依赖此约定）。
+            return (["ssh", "-o", "IdentitiesOnly=yes", "-p", str(port),
+                     f"{user}@{host}"], {"VIGIL_TEST": "1"})
+
+        monkeypatch.setattr(vssh, "_resolve_topology_credential", fake_cred)
+        monkeypatch.setattr(vssh, "_build_ssh_argv", fake_build_ssh_argv)
+        monkeypatch.setattr(
+            rex, "_host_endpoint",
+            lambda host: "203.0.113.9" if host == "dst-host-b" else "203.0.113.8")
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        # _exec_transfer 接收 transfer 规格本体（_run_spec 剥掉 "transfer" 键）
+        spec = {
+            "source": {"host": "src-host-a", "path": "/data/a.tar.gz"},
+            "dest": {"host": "dst-host-b", "path": "/backup/a.tar.gz"},
+        }
+        res = rex._exec_transfer(mhome, spec)
+        assert res["exit_code"] == 0, res.get("stderr")
+        argv = captured["argv"]
+        assert argv[0] == "scp"
+        src_operand, dest_operand = argv[-2], argv[-1]
+        # 源操作数 = A 端 user@host:path
+        assert src_operand == "user-src-host-a@src-host-a:/data/a.tar.gz"
+        # 目标操作数 = B 端 user@B 的 endpoint:path——主机必须是 dst_host
+        assert dest_operand == "user-dst-host-b@203.0.113.9:/backup/a.tar.gz"
+        assert "src-host-a" not in dest_operand
+        assert "203.0.113.8" not in dest_operand
+
+    def test_dest_user_falls_back_root_without_dst_cred(self, mhome, monkeypatch):
+        """B 端无拓扑凭据 → user 回退 root（不新增硬前置），主机仍取 dst。"""
+        import subprocess as sp
+        import tools.runbook_exec as rex
+        import hermes_cli.subcommands.vssh as vssh
+
+        captured: dict = {}
+
+        def fake_run(argv, **kwargs):
+            captured["argv"] = list(argv)
+            return sp.CompletedProcess(argv, returncode=0, stdout="", stderr="")
+
+        def fake_cred(host, allow_fallback=True):
+            if host == "dst-host-b":
+                return None  # B 端凭据缺失
+            return {"type": "ssh_key", "ref": f"~/.ssh/{host}.pem",
+                    "user": f"user-{host}", "port": 22}
+
+        monkeypatch.setattr(vssh, "_resolve_topology_credential", fake_cred)
+        monkeypatch.setattr(
+            vssh, "_build_ssh_argv",
+            lambda host, *, user="", port=22, key=None, cred=None:
+                (["ssh", f"{user}@{host}"], {}))
+        monkeypatch.setattr(rex, "_host_endpoint", lambda host: "203.0.113.9")
+        monkeypatch.setattr(sp, "run", fake_run)
+
+        spec = {
+            "source": {"host": "src-host-a", "path": "/a"},
+            "dest": {"host": "dst-host-b", "path": "/b"},
+        }
+        res = rex._exec_transfer(mhome, spec)
+        assert res["exit_code"] == 0, res.get("stderr")
+        assert captured["argv"][-1] == "root@203.0.113.9:/b"
+
+
+# ---------------------------------------------------------------------------
+# task17 — ledger params/trigger_context 落盘前递归 redact（凭据明文永不落盘）
+# ---------------------------------------------------------------------------
+
+class TestLedgerRedaction:
+    SECRET = "sup3r-secret-token-xyz"
+
+    def test_secret_param_redacted_in_ledger(self, mhome):
+        """(a) params 携带 secret 形态值 → ledger JSONL 不含明文。"""
+        data = _rb()
+        data["steps"].append(
+            {"id": "q", "title": "q", "action": "query",
+             "params": {"target": "nginx", "pattern": f"password={self.SECRET}"}})
+        res = execute_runbook(data, home=mhome, runner=_ok_runner())
+        assert res["result"] == "ok"
+        raw = ledger_path(mhome).read_text(encoding="utf-8")
+        assert self.SECRET not in raw
+        rows = recent_executions(home=mhome)
+        top = next(r for r in rows if r["runbook"] == "t")
+        q_step = next(s for s in top["steps"] if s["id"] == "q")
+        assert q_step["params"]["pattern"] != f"password={self.SECRET}"
+
+    def test_trigger_context_secret_redacted_in_ledger(self, mhome):
+        """(b) trigger_context 携带敏感告警值 → ledger 不含明文。"""
+        data = {
+            "name": "tctx", "title": "TCTX", "version": 2, "kind": "incident",
+            "env": "local",
+            "steps": [{"id": "q", "title": "q", "action": "query",
+                       "params": {"target": "nginx",
+                                  "pattern": "{{ trigger_context.alertname }}"}}],
+        }
+        res = execute_runbook(
+            data, home=mhome, runner=_ok_runner(),
+            trigger_context={"alertname": f"TokenLeak token={self.SECRET}",
+                             "severity": "critical"})
+        assert res["result"] == "ok"
+        raw = ledger_path(mhome).read_text(encoding="utf-8")
+        assert self.SECRET not in raw
+        rows = recent_executions(home=mhome)
+        top = next(r for r in rows if r["runbook"] == "tctx")
+        # 键保留、形状完整：非敏感字段原值、敏感字段已打码
+        assert top["trigger_context"]["severity"] == "critical"
+        assert "alertname" in top["trigger_context"]
+        assert self.SECRET not in str(top["trigger_context"])
+
+    def test_benign_params_round_trip_unchanged(self, mhome):
+        """(c) 普通 params（路径/端口/标签形态）脱敏后原值落盘——无误伤。"""
+        data = _rb()
+        data["steps"].append(
+            {"id": "q", "title": "q", "action": "query",
+             "params": {"target": "nginx",
+                        "pattern": "port=9090 host=grafana.local prefix=/metrics"}})
+        res = execute_runbook(data, home=mhome, runner=_ok_runner())
+        assert res["result"] == "ok"
+        rows = recent_executions(home=mhome)
+        top = next(r for r in rows if r["runbook"] == "t")
+        q_step = next(s for s in top["steps"] if s["id"] == "q")
+        assert q_step["params"]["pattern"] == (
+            "port=9090 host=grafana.local prefix=/metrics")
+        backup = next(s for s in top["steps"] if s["id"] == "backup")
+        assert backup["params"]["dest"] == "/backup/nginx/config/latest"
+
+    def test_ledger_line_parseable_keys_intact(self, mhome):
+        """(d) 每行 JSON 可解析，顶层/步骤键形状不变（下游读取端兼容）。"""
+        execute_runbook(_rb(), home=mhome, runner=_ok_runner())
+        lines = ledger_path(mhome).read_text(encoding="utf-8").strip().splitlines()
+        assert lines
+        for line in lines:
+            row = json.loads(line)
+            for key in ("ts", "runbook", "env", "trigger_context", "result",
+                        "steps", "duration_s", "operator"):
+                assert key in row, key
+            for step in row["steps"]:
+                for key in ("id", "action", "status", "params"):
+                    assert key in step, key
+
+    def test_sub_runbook_trigger_context_redacted(self, mhome):
+        """子 runbook 账本条目的 trigger_context 同样脱敏（1325 同源）。"""
+        from tools.runbook_exec import _run_sub_runbook
+        sub_data = {
+            "name": "sub", "title": "SUB", "version": 2, "kind": "incident",
+            "env": "local",
+            "steps": [{"id": "q", "title": "q", "action": "query",
+                       "params": {"target": "nginx", "pattern": "x"}}],
+        }
+        _run_sub_runbook(
+            "sub", sub_data, env="local", home=mhome,
+            trigger_ctx={"alertname": f"Leak token={self.SECRET}"},
+            runner=lambda spec, target: {"exit_code": 0, "stdout": "200", "stderr": ""},
+            approve=lambda *a, **k: None, parent_scope=None,
+            scheduled=False, exec_id=None, emit=None,
+        )
+        raw = ledger_path(mhome).read_text(encoding="utf-8")
+        assert self.SECRET not in raw
+        rows = recent_executions(home=mhome)
+        sub_row = next(r for r in rows if r["runbook"] == "sub")
+        assert sub_row["trigger_context"]["alertname"] != f"Leak token={self.SECRET}"

@@ -10,7 +10,8 @@ JSONL + 通知）；逃生舱受控（run_script 只引用资产库脚本，不�
 矩阵）→ handler 生成命令 → 现有执行通道 → expect 检查 → 执行记录。
 
 执行记录：``~/.vigil/runtime/runbook_executions.jsonl``（JSONL，追加式，改后
-可被前端/审计查询）。stdout/stderr 截断 + 强制 redact（凭据明文永不落盘）。
+可被前端/审计查询）。stdout/stderr 截断 + 强制 redact；params/trigger_context
+（步骤/用户/告警侧提供值）落盘前递归 redact——凭据明文永不落盘（task17）。
 """
 
 from __future__ import annotations
@@ -70,6 +71,25 @@ def _redact(text: str) -> str:
         return str(text or "")
 
 
+def _redact_deep(value: Any) -> Any:
+    """递归 redact 一个 JSON 形态的值（dict/list 走结构、字符串叶子过
+    ``_redact`` + ``_SECRET_ASSIGN_RE``，与 ``_clip`` 同一"宁多掩不漏"待遇）。
+
+    键**原样保留**——只处理值，ledger/下游读取端的 JSON 形状不变。
+    用于 params / trigger_context 等步骤/用户/告警侧提供的值（task17：
+    落盘前脱敏，堵 "凭据明文永不落盘" 不变量在账本上的缺口）。非字符串
+    标量（int/float/bool/None）原样通过。
+    """
+    if isinstance(value, str):
+        text = _redact(value)
+        return _SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=***", text)
+    if isinstance(value, dict):
+        return {k: _redact_deep(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_redact_deep(v) for v in value]
+    return value
+
+
 def _clip(text: str, limit: int = _STDOUT_MAX_CHARS) -> str:
     text = _redact(text or "")
     text = _SECRET_ASSIGN_RE.sub(lambda m: f"{m.group(1)}=***", text)
@@ -89,7 +109,13 @@ def ledger_path(home: Optional[Path] = None) -> Path:
 
 
 def record_execution(home: Optional[Path], entry: Dict[str, Any]) -> None:
-    """追加一条执行记录（JSONL）。best-effort：失败只记日志，不阻断执行。"""
+    """追加一条执行记录（JSONL）。best-effort：失败只记日志，不阻断执行。
+
+    写盘前对整条 entry 做递归 redact（task17：凭据明文永不落盘的权威
+    choke point——params/trigger_context/commands desc 等一切步骤/用户/
+    告警侧提供值在此统一脱敏，键形状不变，下游读取端不受影响）。
+    """
+    entry = _redact_deep(entry)
     home = Path(home or _hermes_home()).resolve()
     path = ledger_path(home)
     try:
@@ -370,6 +396,66 @@ def resolve_target(home: Path, topo: Dict[str, Any],
         "remote": bool(endpoint and not _is_local_endpoint(endpoint, host_name)),
         "host_row": host_row,
     }
+
+
+def _resolved_target_env(topo: Dict[str, Any], target: Dict[str, Any]) -> str:
+    """target 实体在权限语义下的真实 env（task16 M1）。
+
+    与 ``tools.topo_tools._env_for_entity`` 同一优先级链（OPS-DELTA #101：
+    cluster env 是矩阵裁决依据）：所属 cluster 行 env > 实体 env > 所属 host
+    行 env；全部未知 → 空串（调用方退回 runbook 声明 env）。
+    """
+    cluster_name = str(target.get("cluster") or "").strip()
+    if cluster_name:
+        for c in topo.get("clusters") or []:
+            if isinstance(c, dict) and str(c.get("name") or "") == cluster_name \
+                    and c.get("env"):
+                return str(c["env"])
+    env = str(target.get("env") or "").strip()
+    if env:
+        return env
+    host_name = str(target.get("host") or "").strip()
+    if host_name:
+        for h in topo.get("hosts") or []:
+            if isinstance(h, dict) and str(h.get("name") or "") == host_name \
+                    and h.get("env"):
+                return str(h["env"])
+    return ""
+
+
+def _check_target_env_scope(topo: Dict[str, Any], target: Dict[str, Any],
+                            declared_env: str, ctx: str) -> Optional[str]:
+    """步骤 target 实体 env 与 runbook 声明 env 的一致性检查（task16 M1）。
+
+    语义与校验器 clusters/hosts scope 检查（``_validate_runbook_v2`` 引用层）
+    一致：``_normalize_runbook_env`` 归一化档位后比较（uat→prod、staging→dev）；
+    实体侧 env 未知（实体/集群/host 都未声明）→ 不排除——与 topo_ref._in_scope
+    "未知不参与收敛"同口径，此时交由矩阵门按声明 env 裁决。返回拒绝文案，
+    None = 放行。runbook 未声明 env 时不调用（缺省 = 不限，与校验器仅在
+    env 显式存在时才检查一致）。
+    """
+    from tools.runbook_tools import _normalize_runbook_env
+    declared_tier = _normalize_runbook_env(declared_env)
+    if not declared_tier:
+        return None
+    actual = _resolved_target_env(topo, target)
+    if not actual:
+        return None
+    actual_tier = _normalize_runbook_env(actual)
+    if not actual_tier:
+        return None
+    if actual_tier == declared_tier:
+        return None
+    return t(
+        "runbook_exec.target_env_mismatch",
+        "{ctx} 的 target {name} 实际 env={actual}（档位 {actual_tier}），超出 "
+        "runbook 声明范围 env={declared}（档位 {declared_tier}）——步骤已拒绝"
+        "（env 范围是矩阵裁决的前提，不允许借声明低档位 env 操作高档位实体）；"
+        "请把 target 改为声明范围内的实体，或将 runbook env 改为目标所在环境",
+        ctx=ctx, name=str(target.get("name") or ""), actual=actual,
+        actual_tier=actual_tier, declared=str(declared_env),
+        declared_tier=declared_tier,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -667,19 +753,24 @@ def _exec_transfer(home: Path, spec: Dict[str, Any],
 
     try:
         if src_host and dst_host:
-            # 远→远直传：A 端 key 认证发起（B 需信任 A，否则报错引导分两步）。
+            # 远→远直传：本机 scp 用 A 端凭据/选项发起（B 需信任 A 的 key，否则
+            # 报错引导分两步）。目标操作数必须构造自 dst_host（user 取 B 端拓扑
+            # 凭据，endpoint 取拓扑 B 行）——task16 M2 修复前误用 src_host，
+            # A→B 实际变成往 A 自身拷贝、且源主机名被当作用户名。
             cred_a = _resolve_topology_credential(src_host, allow_fallback=False)
             user_a = str((cred_a or {}).get("user") or "root")
             port_a = int((cred_a or {}).get("port") or 22)
             ssh_argv_a, ssh_env_a = _build_ssh_argv(src_host, user=user_a,
                                                     port=port_a, cred=cred_a)
+            cred_b = _resolve_topology_credential(dst_host, allow_fallback=False)
+            user_b = str((cred_b or {}).get("user") or "root")
             prefix = ["scp"]
             for piece in ssh_argv_a[1:-1]:
                 if piece == "-p" and prefix[-1] == "scp":
                     pass
                 prefix.append(piece)
             argv = prefix + [f"{ssh_argv_a[-1]}:{src_path}",
-                             f"{src_host}@{_host_endpoint(src_host)}:{dst_path}"]
+                             f"{user_b}@{_host_endpoint(dst_host)}:{dst_path}"]
             env = ssh_env_a
         elif src_host:
             argv, env = _scp_argv_for(src_host, dst_path, src_path, upload=False)
@@ -814,7 +905,8 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
                   phase: str = "runbook",
                   scheduled: bool = False,
                   exec_id: Optional[str] = None,
-                  depth: int = 0) -> Dict[str, Any]:
+                  depth: int = 0,
+                  declared_env: str = "") -> Dict[str, Any]:
     """执行单个步骤并发出进度事件（OPS-DELTA #80）。
 
     ``emit(type, fields)`` 收到事件字段（step_id/title/action/target/status/
@@ -822,6 +914,8 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
     标记 runbook / rollback，供 UI 区分回滚步骤。``scheduled``/``exec_id``
     透传给嵌套执行（子 runbook 引用 / 编译工具调用，YAPL 阶段 C）。``depth``
     嵌套深度（顶层 0；子 runbook 引用每层 +1，超过 _MAX_NESTING_DEPTH 拒绝）。
+    ``declared_env`` = runbook 执行链上声明的 env 范围（task16 M1：空串 =
+    链上无人声明，不做 target env 一致性检查）。
     """
     step_id = str(step.get("id") or "")
     if emit is not None:
@@ -837,7 +931,8 @@ def _run_one_step(step: Dict[str, Any], *, env: str, home: Path,
                                trigger_ctx=trigger_ctx, runner=runner,
                                approve=approve, where=where, scope=scope,
                                phase=phase, scheduled=scheduled,
-                               exec_id=exec_id, depth=depth)
+                               exec_id=exec_id, depth=depth,
+                               declared_env=declared_env)
     if emit is not None:
         emit("step_done" if entry.get("ok") else "step_failed", {
             "step_id": step_id,
@@ -947,7 +1042,8 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                        phase: str = "runbook",
                        scheduled: bool = False,
                        exec_id: Optional[str] = None,
-                       depth: int = 0) -> Dict[str, Any]:
+                       depth: int = 0,
+                       declared_env: str = "") -> Dict[str, Any]:
     step_id = str(step.get("id") or "")
     action = str(step.get("action") or "")
     ctx = f"{where}步骤 {step_id!r}"
@@ -955,7 +1051,9 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
     try:
         params = substitute_params(step.get("params") or {}, step_values,
                                    trigger_ctx, ctx)
-        entry["params"] = params
+        # task17：账本/展示侧的 params 是脱敏副本；工作变量 params 保持原值
+        # （target 解析、命令生成、{{ steps... }} 后续替换需要真实值）。
+        entry["params"] = _redact_deep(params)
         if action == "runbook":
             # YAPL 主框架阶段 C（OPS-DELTA #88）：第 24 动作——嵌套引用。
             # 子 runbook / 编译工具调用走内联分派（不需要 target 解析 + 矩阵
@@ -968,6 +1066,7 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                 depth=depth,
             )
         target: Dict[str, Any] = {}
+        gate_env = env
         if "target" in params:
             from tools.topo_tools import load_topology
             topo = load_topology(home)
@@ -980,6 +1079,22 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
             entry["target"] = {"name": target.get("name"), "type": target.get("type"),
                                "env": target.get("env"), "host": target.get("host"),
                                "managed_by": target.get("managed_by")}
+            # M1 范围一致性检查（task16）：target 实体的真实 env（cluster env >
+            # 实体 env > host env）必须落在 runbook 声明 env 内——堵住"声明
+            # env:local 的 runbook 对唯一名 prod 实体按 local 档自动放行"的
+            # 跨档位绕过。校验器只查 clusters/hosts scope，步骤 target 由此
+            # 运行时 choke point 统一覆盖（全部动作种类 + 回滚步骤 + 嵌套
+            # 子 runbook 步骤）。
+            if declared_env:
+                scope_err = _check_target_env_scope(topo, target, declared_env, ctx)
+                if scope_err:
+                    entry.update({"status": "failed", "ok": False,
+                                  "error": scope_err})
+                    return entry
+            # 矩阵门 env 跟随实体真实 env（scope 检查已保证归一化后与声明一致；
+            # 实体 env 未知时退回执行 env）——legacy env 名（uat 等）声明的
+            # runbook 也按实体真实档位查矩阵，不再漏配成保守 approve。
+            gate_env = _resolved_target_env(topo, target) or env
         # 审批门（batch78，OPS-DELTA #93）：rollback 场景步骤强制人工确认——
         # 防用户对"恢复性"操作惯性批准（rollout undo 是 L3 高风险操作，实证
         # expect 误判触发回滚且被批准）。desc 加 ⚠ 回滚前缀 + force_confirmation
@@ -997,7 +1112,7 @@ def _run_one_step_impl(step: Dict[str, Any], *, env: str, home: Path,
                              scene=scene or t("runbook_exec.scene_default", "（默认）"),
                              desc=approve_desc)
             force_confirmation = True
-        approve_err = approve(env, action, approve_desc,
+        approve_err = approve(gate_env, action, approve_desc,
                               force_confirmation=force_confirmation)
         if approve_err:
             entry.update({"status": "blocked", "ok": False, "error": approve_err})
@@ -1102,7 +1217,8 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
                            scope: Optional[Dict[str, Any]] = None,
                            emit: Optional[Callable[[str, Dict[str, Any]], None]] = None,
                            phase: str = "rollback",
-                           depth: int = 0) -> Dict[str, Any]:
+                           depth: int = 0,
+                           declared_env: str = "") -> Dict[str, Any]:
     scenarios = data.get("rollback") or []
     scenario = None
     if scenario_name:
@@ -1125,7 +1241,8 @@ def _run_rollback_scenario(data: Dict[str, Any], scenario_name: Optional[str],
         res = _run_one_step(step, env=env, home=home, step_values=step_values,
                             trigger_ctx=trigger_ctx, runner=runner, approve=approve,
                             where=f"rollback[{scenario.get('name')}]", scope=scope,
-                            emit=emit, phase=phase, depth=depth)
+                            emit=emit, phase=phase, depth=depth,
+                            declared_env=declared_env)
         rb_results.append(res)
         if not res.get("ok"):
             return {"ok": False, "results": rb_results,
@@ -1233,6 +1350,9 @@ def _run_sub_runbook(ref: str, sub_data: Dict[str, Any], *, env: str, home: Path
         scope=sub_scope, emit=_sub_emit, scheduled=scheduled, exec_id=exec_id,
         where=f"子 runbook {ref} ",
         depth=depth,
+        # 子步骤的声明 env = 合并后 scope 的 env（子声明优先、受父约束——
+        # 只有链上真有人声明过才有值；全链未声明 = 空串 = 不做一致性检查）。
+        declared_env=str(sub_scope.get("env") or ""),
     )
     entry: Dict[str, Any] = {
         "ts": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -1240,10 +1360,10 @@ def _run_sub_runbook(ref: str, sub_data: Dict[str, Any], *, env: str, home: Path
         "version": str(sub_data.get("version") or "2"),
         "env": sub_env,
         "source": trigger_ctx.get("source"),
-        "trigger_context": {
+        "trigger_context": _redact_deep({
             k: (v if isinstance(v, (dict, list)) else str(v))
             for k, v in trigger_ctx.items()
-        },
+        }),
         "result": status,
         "error": _clip(error or "", 4000),
         "rolled_back": rolled_back,
@@ -1382,7 +1502,8 @@ def _run_steps_loop(data: Dict[str, Any], *, env: str, home: Path,
                     scheduled: bool = False,
                     exec_id: Optional[str] = None,
                     depth: int = 0,
-                    where: str = "runbook ") -> tuple:
+                    where: str = "runbook ",
+                    declared_env: str = "") -> tuple:
     """执行 steps 循环（on_failure 四形态 + 回滚联动）。返回
     (results, status, error, rolled_back)。父 runbook 与嵌套子 runbook 共用
     ——子失败时子的 on_failure 先生效（stop/rollback 子自己的场景），子最终
@@ -1404,7 +1525,8 @@ def _run_steps_loop(data: Dict[str, Any], *, env: str, home: Path,
         res = _run_one_step(step, env=env, home=home, step_values=step_values,
                             trigger_ctx=trigger_ctx, runner=runner, approve=approve,
                             where=where, scope=scope, emit=emit, phase="runbook",
-                            scheduled=scheduled, exec_id=exec_id, depth=depth)
+                            scheduled=scheduled, exec_id=exec_id, depth=depth,
+                            declared_env=declared_env)
         results.append(res)
         if res.get("ok"):
             continue
@@ -1429,7 +1551,8 @@ def _run_steps_loop(data: Dict[str, Any], *, env: str, home: Path,
             rb = _run_rollback_scenario(
                 data, scene, env=env, home=home, step_values=step_values,
                 trigger_ctx=trigger_ctx, runner=runner, approve=approve,
-                scope=scope, emit=emit, depth=depth)
+                scope=scope, emit=emit, depth=depth,
+                declared_env=declared_env)
             status = "rolled_back" if rb.get("ok") else "failed"
             if not rb.get("ok"):
                 error = f"{error}；{rb.get('error')}"
@@ -1494,6 +1617,10 @@ def execute_runbook(
     home = Path(home or _hermes_home()).resolve()
     name = str(data.get("name") or "")
     rb_env = str(env or data.get("env") or "local").strip() or "local"
+    # M1（task16）：声明范围 env（显式入参 > runbook 字段）。缺省不用 "local"
+    # 兜底——runbook 未声明 env 时按 schema 语义"默认不限制"，不做 target
+    # env 一致性检查（此时矩阵门 env 跟随实体真实 env，仍是 prod 档裁决）。
+    declared_env = str(env or "").strip() or str(data.get("env") or "").strip()
     scheduled = bool(scheduled)
     version = str(data.get("version") or "v0.2")
     scope: Optional[Dict[str, Any]] = None
@@ -1614,6 +1741,7 @@ def execute_runbook(
             data, env=rb_env, home=home, step_values=step_values,
             trigger_ctx=trigger_ctx, runner=_runner, approve=_approve,
             scope=scope, emit=_emit, scheduled=scheduled, exec_id=exec_id,
+            declared_env=declared_env,
         )
 
         _emit("runbook_done", {
@@ -1629,10 +1757,10 @@ def execute_runbook(
             "runbook": name,
             "env": rb_env,
             "source": trigger_ctx.get("source"),
-            "trigger_context": {
+            "trigger_context": _redact_deep({
                 k: (v if isinstance(v, (dict, list)) else str(v))
                 for k, v in trigger_ctx.items()
-            },
+            }),
             "result": status,
             "error": _clip(error or "", 4000),
             "rolled_back": rolled_back,

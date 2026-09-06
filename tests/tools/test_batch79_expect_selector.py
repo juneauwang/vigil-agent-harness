@@ -200,8 +200,11 @@ services:
     from tools.matrix_data import template_matrix, write_matrix
     m = template_matrix("template1")
     from tools.matrix_data import set_level
+    # 拓扑是 prod 环境（beijing_cluster）——task16 M1 后矩阵门 env 跟随实体
+    # 真实 env，scale/query 的 execute 档要配在 prod 档（env:local 声明不再
+    # 能借 local 档操作 prod 实体）。
     for act in ("scale", "query"):
-        set_level(m, "local", act, "execute")
+        set_level(m, "prod", act, "execute")
     write_matrix(m, home)
     yield home
 
@@ -227,7 +230,9 @@ def test_e2e_scale_expect_pod_with_recommended_label(mhome, monkeypatch):
 
     data = {
         "name": "redis-restore", "title": "R", "version": 2, "kind": "incident",
-        "env": "local",
+        # 目标实体在 prod（beijing_cluster）——runbook 如实声明 env（task16 M1：
+        # env:local 借道操作 prod 实体会被范围一致性检查拒绝）。
+        "env": "prod",
         "steps": [
             {"id": "restore", "title": "恢复", "action": "scale",
              "params": {"target": "argocd-redis", "replicas": 1},
