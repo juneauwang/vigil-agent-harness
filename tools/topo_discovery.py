@@ -2046,3 +2046,234 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
         "kept": kept,
         "merged": bool(host_exists and not force),
     }
+
+
+# ---------------------------------------------------------------------------
+# terraform.tfstate 同步源 + 漂移报告（拓扑自维护，任务18）
+#
+# 解析器与 _parse_kubectl 同层：只读解析、不落盘。行形状 = v0.4 第一层 host 行
+# （type=host / source=terraform / managed_by=terraform）。合并遵循既有
+# same-name-no-overwrite 语义：同名既有行（manual/discovered）一个字段都不覆盖；
+# 新行带 needs_review=true 走人工 review。漂移报告只列建议——绝不自动应用、
+# 绝不自动删除消失行（人工 review 流）。
+# ---------------------------------------------------------------------------
+
+# 常见云主机 resource 类型（terraform show -json 的 type 字段，前缀匹配）。
+_TFSTATE_HOST_TYPE_PREFIXES = (
+    "alicloud_instance",
+    "aws_instance",
+    "azurerm_linux_virtual_machine",
+    "azurerm_windows_virtual_machine",
+    "azurerm_virtual_machine",
+)
+# 各家 provider 的 IP 属性名（逐候选键探测，缺属性 = None，不猜）。
+_TFSTATE_PUBLIC_IP_KEYS = ("public_ip", "public_ip_address")
+_TFSTATE_PRIVATE_IP_KEYS = ("private_ip", "private_ip_address")
+# env 来自 tag 约定（env / Environment / environment 任一命中）。
+_TFSTATE_ENV_TAG_KEYS = ("env", "Environment", "environment")
+
+
+def _tfstate_is_host_resource(rtype: str) -> bool:
+    rtype = str(rtype or "")
+    return any(rtype.startswith(p) for p in _TFSTATE_HOST_TYPE_PREFIXES)
+
+
+def _tfstate_first_attr(values: Dict[str, Any], keys) -> str:
+    for key in keys:
+        val = values.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+def _tfstate_iter_resources(module: Any):
+    """遍历 root_module（含 child_modules 递归）下的全部 resources。"""
+    if not isinstance(module, dict):
+        return
+    for res in module.get("resources") or []:
+        if isinstance(res, dict):
+            yield res
+    for child in module.get("child_modules") or []:
+        yield from _tfstate_iter_resources(child)
+
+
+def parse_tfstate(text: str) -> List[Dict[str, Any]]:
+    """terraform.tfstate / ``terraform show -json`` 输出 → v0.4 host 行列表。
+
+    只映射常见云主机资源族（alicloud/aws/azurerm），其余资源（安全组、VPC、
+    数据源……）忽略。属性缺失（无 IP / 无 tags）不炸——行仍产出，endpoint
+    置 None 交人工 review。坏 JSON / 非 dict → 空列表（调用方报"无可同步行"）。
+
+    行字段：name / type=host / env / endpoint（公网优先，缺省私网）/ public_ip
+    / private_ip / tf_address（resource 地址，溯源）/ source=terraform /
+    managed_by=terraform / needs_review=True / last_verified。
+    """
+    import json as _json
+
+    try:
+        data = _json.loads(text or "{}")
+    except (ValueError, TypeError):
+        return []
+    if not isinstance(data, dict):
+        return []
+    root = ((data.get("values") or {}).get("root_module")) or {}
+    today = _dt.date.today().isoformat()
+    rows: Dict[str, Dict[str, Any]] = {}
+    for res in _tfstate_iter_resources(root):
+        rtype = str(res.get("type") or "")
+        if not _tfstate_is_host_resource(rtype):
+            continue
+        values = res.get("values") or {}
+        if not isinstance(values, dict):
+            continue
+        tags = values.get("tags") if isinstance(values.get("tags"), dict) else {}
+        # 名称链：values.instance_name（alicloud）→ values.name（azurerm 等）→
+        # tags.Name（aws 惯例）→ address 资源标签（最后一个 . 段）。
+        address_label = str(res.get("address") or "").rsplit(".", 1)[-1]
+        name = (_tfstate_first_attr(values, ("instance_name", "name"))
+                or str(tags.get("Name") or tags.get("name") or "")
+                or address_label)
+        name = _sanitize_name(name)
+        if not name:
+            continue
+        public_ip = _tfstate_first_attr(values, _TFSTATE_PUBLIC_IP_KEYS)
+        private_ip = _tfstate_first_attr(values, _TFSTATE_PRIVATE_IP_KEYS)
+        env = ""
+        for tag_key in _TFSTATE_ENV_TAG_KEYS:
+            val = tags.get(tag_key)
+            if isinstance(val, str) and val.strip():
+                env = val.strip()
+                break
+        rows[name] = {
+            "name": name,
+            "type": "host",
+            "env": env,
+            "endpoint": public_ip or private_ip or None,
+            "public_ip": public_ip or None,
+            "private_ip": private_ip or None,
+            "tf_address": str(res.get("address") or ""),
+            "source": "terraform",
+            "managed_by": "terraform",
+            "needs_review": True,
+            "last_verified": today,
+        }
+    return [rows[name] for name in sorted(rows)]
+
+
+def topo_drift_report(home: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """本次发现的 host 行对照现有 topology.yaml → 漂移报告（只读，不落盘）。
+
+    - ``added``：拓扑中不存在 → 建议新增（apply 只写这些，且永不覆盖同名行）；
+    - ``changed``：同名但 endpoint/env 不同 → 逐字段列出 old/new，**不写入**，
+      人工走 topo_update；
+    - ``vanished``：拓扑中 source=terraform 的行本次未出现 → 标记待人工复核，
+      **绝不自动删除**；
+    - ``unchanged``：同名且关键字段一致的数量。
+    """
+    from tools.topo_tools import load_topology
+
+    topo = load_topology(home)
+    existing = [h for h in (topo or {}).get("hosts") or []
+                if isinstance(h, dict) and h.get("name")]
+    existing_by_name = {str(h.get("name")): h for h in existing}
+    current_names = {str(r.get("name")) for r in rows}
+
+    added = [dict(r) for r in rows if str(r.get("name")) not in existing_by_name]
+    changed: List[Dict[str, Any]] = []
+    unchanged = 0
+    for row in rows:
+        name = str(row.get("name"))
+        old = existing_by_name.get(name)
+        if old is None:
+            continue
+        diffs = []
+        for field in ("endpoint", "env"):
+            new_val = row.get(field)
+            old_val = old.get(field)
+            if (new_val or None) != (old_val or None):
+                diffs.append({"field": field, "old": old_val, "new": new_val})
+        if diffs:
+            changed.append({"name": name, "changes": diffs})
+        else:
+            unchanged += 1
+    vanished = [
+        {"name": str(h.get("name")), "endpoint": h.get("endpoint"),
+         "source": h.get("source")}
+        for h in existing
+        if h.get("source") == "terraform" and str(h.get("name")) not in current_names
+    ]
+    return {
+        "added": added,
+        "changed": changed,
+        "vanished": vanished,
+        "unchanged": unchanged,
+        "total_discovered": len(rows),
+    }
+
+
+def write_drift_report(home: Path, report: Dict[str, Any]) -> Path:
+    """漂移报告落 ``<home>/runtime/topo_drift.json``（最新一份，覆盖写）。"""
+    out_dir = Path(home) / "runtime"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    payload = dict(report)
+    payload["ts"] = _now_iso()
+    path = out_dir / "topo_drift.json"
+    path.write_text(_json_dumps_pretty(payload), encoding="utf-8")
+    return path
+
+
+def _json_dumps_pretty(payload: Dict[str, Any]) -> str:
+    import json as _json
+    return _json.dumps(payload, ensure_ascii=False, indent=2, default=str)
+
+
+def apply_tfstate_rows(home: Path, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """把新增 host 行追加进 topology.yaml（同名既有行绝不触碰）。
+
+    只写 :func:`topo_drift_report` 判定为 added 的行（内部重算，调用方无需
+    传报告）。新行 needs_review=true；不修改 environments/clusters（那些
+    归 ops-init / 手工维护）。返回 ``{"applied": [name], "skipped": [name]}``。
+    """
+    import yaml as _yaml
+
+    home = Path(home)
+    topo_path = home / "topology.yaml"
+    if topo_path.is_file():
+        try:
+            topo = _yaml.safe_load(topo_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            raise DiscoveryError(f"topology.yaml 解析失败：{exc}") from exc
+        if not isinstance(topo, dict) or not _topo_layered(topo):
+            raise DiscoveryError(
+                "现有 topology.yaml 是 schema v0.1（扁平 core_entities）。"
+                "tfstate 同步只写 v0.4；请先迁移后再同步。"
+            )
+    else:
+        topo = {"version": 4, "updated_at": _dt.date.today().isoformat(),
+                "environments": [], "hosts": [], "clusters": []}
+
+    hosts = [h for h in topo.get("hosts") or [] if isinstance(h, dict)]
+    existing_names = {str(h.get("name")) for h in hosts}
+    added: List[Dict[str, Any]] = []
+    skipped: List[str] = []
+    for row in rows:
+        name = str(row.get("name"))
+        if not name or name in existing_names:
+            skipped.append(name)
+            continue
+        new_row = dict(row)
+        new_row["needs_review"] = True
+        new_row.setdefault("last_verified", _dt.date.today().isoformat())
+        hosts.append(new_row)
+        existing_names.add(name)
+        added.append(name)
+
+    if added:
+        topo["hosts"] = hosts
+        topo["version"] = 4
+        topo["updated_at"] = _dt.date.today().isoformat()
+        topo_path.write_text(
+            _yaml.safe_dump(topo, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+    return {"applied": added, "skipped": skipped}

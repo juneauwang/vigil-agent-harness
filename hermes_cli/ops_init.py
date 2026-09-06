@@ -84,6 +84,11 @@ ops:
 {environments}
   topology:
     enabled: true
+    # 拓扑自维护（任务18）：tfstate 同步 + 漂移报告（vigil topo-sync）。
+    # 周期重扫 opt-in：rescan_interval 置空 = 不重扫（默认）；注册：
+    #   vigil topo-sync --schedule 24h
+    rescan_interval: ""   # 如 "24h"（cron no_agent job，漂移报告只读不写拓扑）
+    tfstate_paths: []     # terraform show -json / tfstate 文件列表，如 ["/srv/infra/prod.tfstate"]
   runbooks:
     enabled: true
   prometheus:

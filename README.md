@@ -314,8 +314,8 @@ Vigil 的数据目录为 `~/.vigil`（可用 `VIGIL_HOME` 覆盖）。
 - [x] Web 控制台（对话/拓扑/监控/runbook/审批/审计）
 - [x] 运行轨迹审计（append-only 事件日志 + 查询/回放/裁剪）
 - [x] 反馈闭环（`runbook_create`：跑通的任务沉淀为结构化 runbook）
-- [ ] 同步 adapter（terraform.tfstate / k8s API）
-- [ ] 周期性拓扑发现（discover 定时重扫 + 差异报告）
+- [x] 同步 adapter（terraform.tfstate / k8s API——`vigil topo-sync` + SSH kubectl 发现）
+- [x] 周期性拓扑发现（topo-sync 漂移报告 + cron 周期重扫，opt-in 默认关）
 
 ## License
 
