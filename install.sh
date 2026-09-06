@@ -24,7 +24,7 @@ PYTHON_MIN="3.10"
 VENV_DIR="${VIGIL_VENV_DIR:-$HOME/.local/share/vigil/venv}"
 BIN_DIR="$HOME/.local/bin"
 LAUNCHER="$BIN_DIR/vigil"
-REPO_URL="https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/v1.0"
+REPO_URL="https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/master"
 
 say()  { printf '\033[1;34m[vigil]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[vigil]\033[0m %s\n' "$*"; }

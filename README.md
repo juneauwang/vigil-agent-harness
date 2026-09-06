@@ -151,7 +151,7 @@ runbook 执行链（操作矩阵逐动作裁决 + 审批门 + 审计），匹配
 **30 秒安装（Linux / macOS，自动建 venv + 预装 tirith 安全扫描器）：**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/v1.0/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/juneauwang/vigil-agent-harness/master/install.sh | bash
 ```
 
 > 国内网络若 GitHub 下载 tirith 失败：脚本会提示，Vigil 本体照常可用（首次扫描自动重试补装），或开 VPN 后重跑脚本（幂等）。
