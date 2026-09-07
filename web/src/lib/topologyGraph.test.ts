@@ -178,11 +178,14 @@ describe("拓扑图数据模型（批三十五）", () => {
 });
 
 describe("节点状态着色", () => {
-  it("running 绿 / stopped 灰 / 关键链路琥珀优先", () => {
-    expect(nodeToneClass("running")).toContain("emerald");
+  // task28 P0.3：节点配色收敛到全局状态 token（CSS 变量），断言随实现同步。
+  it("running 绿 token / stopped 灰 / 关键链路琥珀（warn token）优先", () => {
+    expect(nodeToneClass("running")).toContain("var(--vigil-ok)");
     expect(nodeToneClass("stopped")).toContain("vigil-card");
-    expect(nodeToneClass("degraded")).toContain("amber");
-    expect(nodeToneClass("running", true)).toContain("amber");
+    expect(nodeToneClass("degraded")).toContain("var(--vigil-warn)");
+    expect(nodeToneClass("running", true)).toContain("var(--vigil-warn)");
     expect(nodeToneClass(undefined)).toContain("vigil-card");
+    // 不再有 tailwind 字面状态色（P0.3 收敛）
+    expect(nodeToneClass("running")).not.toContain("emerald");
   });
 });

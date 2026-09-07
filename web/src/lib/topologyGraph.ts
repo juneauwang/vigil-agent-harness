@@ -230,14 +230,16 @@ export function kindLabel(kind: GraphNodeKind): string {
 
 /** 节点状态着色：关键链路琥珀优先；running 绿 / warn 琥珀 / error 红 / 其余灰。 */
 export function nodeToneClass(status?: string, keyPath = false): string {
-  if (keyPath) return "border-amber-500/60 bg-amber-500/10";
+  // task28 P0.3：图节点配色收敛到全局状态 token（CSS 变量），不再各写一套
+  // tailwind 字面色。keyPath 琥珀是语义标记（请求路径上的服务），归 warn 档。
+  if (keyPath) return "border-[var(--vigil-warn)]/60 bg-[var(--vigil-warn)]/10";
   switch (statusTone(status)) {
     case "ok":
-      return "border-emerald-500/60 bg-emerald-500/10";
+      return "border-[var(--vigil-ok)]/60 bg-[var(--vigil-ok)]/10";
     case "warn":
-      return "border-amber-500/60 bg-amber-500/10";
+      return "border-[var(--vigil-warn)]/60 bg-[var(--vigil-warn)]/10";
     case "error":
-      return "border-red-500/60 bg-red-500/10";
+      return "border-[var(--vigil-error)]/60 bg-[var(--vigil-error)]/10";
     default:
       return "border-[var(--vigil-border)] bg-[var(--vigil-card)]";
   }

@@ -487,9 +487,9 @@ export default function MonitoringPage() {
                   />
                 </label>
                 {settingsErr ? (
-                  <div className="text-red-500">{settingsErr}</div>
+                  <div className="text-[var(--vigil-error)]">{settingsErr}</div>
                 ) : settingsMsg ? (
-                  <div className="text-emerald-500">{settingsMsg}</div>
+                  <div className="text-[var(--vigil-ok)]">{settingsMsg}</div>
                 ) : null}
                 <div className="flex items-center gap-2">
                   <button

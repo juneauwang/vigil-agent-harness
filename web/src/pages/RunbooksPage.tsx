@@ -571,11 +571,11 @@ function RunbookProgressPanel({
           key={`banner-${i}`}
           className={`rounded border px-2 py-1 text-xs ${
             b.type === "rollback_start"
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+              ? "border-[var(--vigil-warn)]/40 bg-[var(--vigil-warn)]/10 text-[var(--vigil-warn)]"
               : b.type === "rollback_done"
                 ? b.status === "ok"
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                  : "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400"
+                  ? "border-[var(--vigil-warn)]/40 bg-[var(--vigil-warn)]/10 text-[var(--vigil-warn)]"
+                  : "border-[var(--vigil-error)]/40 bg-[var(--vigil-error)]/10 text-[var(--vigil-error)]"
                 : "border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]"
           }`}
         >
@@ -1269,9 +1269,9 @@ export default function RunbooksPage() {
                       <td className="text-right text-xs">{a.use_count}</td>
                       <td className="text-xs">
                         {a.covered ? (
-                          <span className="font-medium text-emerald-600 dark:text-emerald-400">{t("runbooks.coveredYes")}</span>
+                          <span className="font-medium text-[var(--vigil-ok)]">{t("runbooks.coveredYes")}</span>
                         ) : (
-                          <span className="font-medium text-amber-600 dark:text-amber-400">{t("runbooks.coveredNo")}</span>
+                          <span className="font-medium text-[var(--vigil-warn)]">{t("runbooks.coveredNo")}</span>
                         )}
                       </td>
                       <td className="text-xs text-[var(--vigil-muted)]">
@@ -1282,7 +1282,7 @@ export default function RunbooksPage() {
                 </tbody>
               </table>
               {coverage.usage.gaps.length > 0 ? (
-                <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+                <div className="mt-3 rounded border border-[var(--vigil-warn)]/30 bg-[var(--vigil-warn)]/5 p-3 text-xs">
                   <div className="mb-2 font-semibold">{t("runbooks.gapsPrefix")}</div>
                   <div className="space-y-1.5">
                     {coverage.usage.gaps.map((g) => (

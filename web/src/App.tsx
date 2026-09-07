@@ -100,10 +100,11 @@ export default function App() {
   const { dark, toggle } = useConsoleTheme();
 
   // Header data: env label (first cluster) + API health + uptime
-  const [headerMeta, setHeaderMeta] = useState<{ env: string; apiOk: boolean; uptime: string }>({
+  const [headerMeta, setHeaderMeta] = useState<{ env: string; apiOk: boolean; uptime: string; version: string }>({
     env: "",
     apiOk: true,
     uptime: "-",
+    version: "",
   });
   useEffect(() => {
     let alive = true;
@@ -115,6 +116,7 @@ export default function App() {
         setHeaderMeta({
           apiOk: h?.ok !== false,
           uptime: formatUptime(h?.uptime_seconds),
+          version: h?.version ?? "",
           env:
             topoResp && topoResp.ok && topoResp.data && topoResp.data.clusters.length > 0
               ? topoResp.data.clusters[0].name
@@ -175,8 +177,8 @@ export default function App() {
           )}
         </div>
 
-        <form onSubmit={goSearch} className="relative hidden w-full max-w-md flex-1 sm:block">
-          <div className="flex h-8 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-3 focus-within:border-[var(--vigil-primary)]">
+        <form onSubmit={goSearch} className="relative hidden w-full max-w-xl flex-1 sm:block">
+          <div className="flex h-8 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-3 transition-[border-color,box-shadow] ease-out duration-150 focus-within:border-[var(--vigil-primary)] focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--vigil-primary)_22%,transparent)]">
             <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
             <input
               value={globalQuery}
@@ -254,10 +256,11 @@ export default function App() {
                     if (active) navigate("/overview");
                   }}
                   className={cn(
-                    "flex h-10 items-center rounded-md transition-colors",
+                    "flex h-10 items-center rounded-md",
+                    "transition-[background-color,color,box-shadow] ease-out duration-150",
                     collapsed ? "w-10 justify-center" : "w-[176px] gap-2 px-2.5",
                     active
-                      ? "bg-[var(--vigil-primary)]/10 text-[var(--vigil-primary)]"
+                      ? "bg-gradient-to-r from-[var(--vigil-primary)]/12 to-transparent text-[var(--vigil-primary)] shadow-[inset_3px_0_0_var(--vigil-primary)]"
                       : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]",
                   )}
                 >
@@ -268,7 +271,7 @@ export default function App() {
             })}
           </nav>
 
-          <div className="flex justify-center pt-2">
+          <div className="flex flex-col items-center gap-1.5 pt-2">
             <button
               type="button"
               onClick={toggleCollapsed}
@@ -277,6 +280,19 @@ export default function App() {
             >
               {collapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
             </button>
+            {/* task28 P0.2：侧栏页脚版本行（版本读自 /api/status，不进 i18n 硬编码） */}
+            {headerMeta.version ? (
+              <span
+                data-testid="sidebar-version"
+                title={headerMeta.version}
+                className={cn(
+                  "font-mono text-[10px] leading-none text-[var(--vigil-muted)]",
+                  collapsed && "sr-only",
+                )}
+              >
+                v{headerMeta.version}
+              </span>
+            ) : null}
           </div>
         </aside>
 

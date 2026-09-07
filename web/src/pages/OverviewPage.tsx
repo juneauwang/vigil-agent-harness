@@ -178,10 +178,10 @@ export default function OverviewPage() {
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
         <MetricCard tone="sky" icon={<Boxes className="size-4" />} label="Nodes" value={stats.nodes} sub={view ? `clusters ${view.clusters.length}` : undefined} />
         <MetricCard tone="emerald" icon={<Server className="size-4" />} label="Services" value={stats.services} />
-        <MetricCard tone="amber" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub={t("overview.metricRunbooksSub")} />
+        <MetricCard tone="violet" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub={t("overview.metricRunbooksSub")} />
         <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={incidentCount ?? 0} sub={incidentCount === null ? t("overview.incidentSubNull") : "watch inbox"} />
         <MetricCard
-          tone="violet"
+          tone="amber"
           icon={<TriangleAlert className="size-4" />}
           label={t("overview.riskTitle")}
           value={coverage ? coverage.high_risk.uncovered.length : 0}
@@ -211,7 +211,7 @@ export default function OverviewPage() {
                   {t("topology.kind.cluster")}
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="size-2.5 rounded-sm border border-emerald-500/60 bg-emerald-500/10" />
+                  <span className="size-2.5 rounded-sm border border-[var(--vigil-ok)]/60 bg-[var(--vigil-ok)]/10" />
                   {t("topology.kind.host")}
                 </span>
                 <span className="flex items-center gap-1.5">
@@ -219,7 +219,7 @@ export default function OverviewPage() {
                   {t("topology.kind.service")}
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="size-2.5 rounded-sm border border-amber-500/60 bg-amber-500/10" />
+                  <span className="size-2.5 rounded-sm border border-[var(--vigil-warn)]/60 bg-[var(--vigil-warn)]/10" />
                   {t("overview.legendDeps")}
                 </span>
               </div>
