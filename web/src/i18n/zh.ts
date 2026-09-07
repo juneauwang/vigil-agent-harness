@@ -566,6 +566,25 @@ const zh = {
     approvalScopeSession: "该审批不支持 session 作用域（prod 变更确认门只允许 once）",
     approvalScopePermanent: "该审批不支持 permanent 作用域",
   },
+
+  // task27 PART A：raw YAML 编辑抽屉
+  yamlEditor: {
+    drawerAria: "编辑 {{name}} 的 YAML 源文件",
+    maskCloseAria: "点击遮罩关闭编辑器",
+    closeAria: "关闭编辑器",
+    editorAria: "YAML 编辑区",
+    editAria: "编辑 YAML 源文件",
+    loading: "加载原文…",
+    save: "保存",
+    cancel: "取消",
+    closeConfirm: "有未保存的修改，确认放弃并关闭？",
+    dirtyHint: "有未保存的修改",
+    validationFailed: "校验失败，未保存（错误按行号标注）",
+    lineRef: "第 {{line}} 行",
+    savedWithWarnings:
+      "已保存，但自动执行授权已失效——该 runbook 重新过资产审批前不会再无人值守执行",
+    loadFailedPrefix: "YAML 加载失败：",
+  },
 };
 
 export default zh;

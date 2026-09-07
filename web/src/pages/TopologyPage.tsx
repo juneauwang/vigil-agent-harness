@@ -11,12 +11,14 @@ import {
   Network,
   Search,
   Server,
+  SquarePen,
   Trash2,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "@/lib/api";
 import TopologyGraph from "@/components/TopologyGraph";
 import DetailDrawer from "@/components/DetailDrawer";
+import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
 import { EnvBadge, StatusPill } from "@/components/StatusBits";
 import { cn, lastSeenInfo, matchesSearch, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
 import type { GraphEntityRef } from "@/lib/topologyGraph";
@@ -39,6 +41,23 @@ function DetailButton({ onClick }: { onClick: () => void }) {
       aria-label={t("topology.detailAria")}
     >
       {t("topology.detailBtn")}
+    </button>
+  );
+}
+
+/** task27 PART A: 实体事实源 YAML 编辑入口（小图标按钮，行内/卡片头部）。 */
+function EditYamlButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid="topo-edit-yaml"
+      aria-label={t("yamlEditor.editAria")}
+      title={t("yamlEditor.editAria")}
+      className="vigil-btn h-6 px-1.5 text-xs"
+    >
+      <SquarePen className="size-3.5" />
     </button>
   );
 }
@@ -89,14 +108,19 @@ function Facts({ card }: { card: TopologyCard }) {
 
 function ServiceRow({
   svc,
+  hostName,
   q,
   filter,
   onDetail,
+  onEdit,
 }: {
   svc: TopologyService;
+  /** 所属 host 名（服务事实源 entityId 需要三段：service:<host>:<name>）。 */
+  hostName: string;
   q: string;
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
+  onEdit: (entityId: string, title: string) => void;
 }) {
   const { t } = useTranslation();
   const card = svc.card;
@@ -126,7 +150,8 @@ function ServiceRow({
         </span>
       )}
       <StatusPill status={card.status} />
-      <div className="ml-auto min-w-0">
+      <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        <EditYamlButton onClick={() => onEdit(`service:${hostName}:${card.name}`, card.name)} />
         <DetailButton onClick={() => onDetail({ kind: "service", name: card.name, card, detail: svc.detail })} />
       </div>
     </div>
@@ -138,11 +163,13 @@ function HostCard({
   q,
   filter,
   onDetail,
+  onEdit,
 }: {
   host: TopologyHost;
   q: string;
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
+  onEdit: (entityId: string, title: string) => void;
 }) {
   const { t } = useTranslation();
   const card = host.card;
@@ -171,7 +198,8 @@ function HostCard({
             <Link2 className="size-3" /> {t("topology.keyPath")}
           </span>
         )}
-        <div className="ml-auto min-w-0">
+        <div className="ml-auto flex min-w-0 items-center gap-1.5">
+          <EditYamlButton onClick={() => onEdit(`host:${card.name}`, card.name)} />
           <DetailButton onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })} />
         </div>
       </div>
@@ -188,9 +216,11 @@ function HostCard({
             <ServiceRow
               key={svc.card.name}
               svc={svc}
+              hostName={card.name}
               q={q}
               filter={filter}
               onDetail={onDetail}
+              onEdit={onEdit}
             />
           ))
         )}
@@ -204,11 +234,13 @@ function CrossCard({
   q,
   filter,
   onDetail,
+  onEdit,
 }: {
   svc: TopologyService;
   q: string;
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
+  onEdit: (entityId: string, title: string) => void;
 }) {
   const card = svc.card;
   if (!matchesSearch(card, q)) return null;
@@ -225,7 +257,8 @@ function CrossCard({
         <EnvBadge env={card.env} />
         <StatusPill status={card.status} />
         {card.on_key_path && <Link2 className="size-3 text-amber-500" />}
-        <div className="ml-auto min-w-0">
+        <div className="ml-auto flex min-w-0 items-center gap-1.5">
+          <EditYamlButton onClick={() => onEdit(`cross_host:${card.name}`, card.name)} />
           <DetailButton onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })} />
         </div>
       </div>
@@ -238,17 +271,23 @@ function CrossCard({
 function ListRow({
   card,
   kind,
+  entityId,
   onFocus,
+  onEdit,
 }: {
   card: TopologyCard;
   kind: string;
+  /** 事实源 entityId（host:<name> / service:<host>:<name> / cross_host:<name>）；空 = 不给编辑入口。 */
+  entityId?: string;
   onFocus: (name: string) => void;
+  onEdit?: (entityId: string, title: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       id={`topo-row-${card.name}`}
       onClick={() => onFocus(card.name)}
-      className="grid cursor-pointer grid-cols-[1fr_auto_auto_auto_1fr_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm last:border-b-0 hover:bg-[var(--vigil-muted-bg)]"
+      className="grid cursor-pointer grid-cols-[1fr_auto_auto_auto_1fr_auto_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm last:border-b-0 hover:bg-[var(--vigil-muted-bg)]"
     >
       <span className="flex items-center gap-1.5 truncate">
         {card.on_key_path && <Link2 className="size-3 shrink-0 text-amber-500" />}
@@ -269,6 +308,23 @@ function ListRow({
         </span>
       )}
       <StatusPill status={card.status} />
+      <span className="justify-self-end">
+        {entityId && onEdit ? (
+          <button
+            type="button"
+            data-testid="topo-edit-yaml"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(entityId, card.name);
+            }}
+            aria-label={t("yamlEditor.editAria")}
+            title={t("yamlEditor.editAria")}
+            className="rounded p-1 text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]"
+          >
+            <SquarePen className="size-3.5" />
+          </button>
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -282,6 +338,8 @@ export default function TopologyPage() {
   const [filter, setFilter] = useState<StatusFilterId>("all");
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
+  // task27 PART A: raw YAML 编辑抽屉（host/service/cross 档案 + cluster→topology.yaml）。
+  const [editTarget, setEditTarget] = useState<YamlEditorTarget | null>(null);
   const [resetting, setResetting] = useState(false);
   // Batch 49: graph ↔ list sync — clicking a graph node scrolls the list to
   // that row; clicking a list row highlights the node in the graph
@@ -293,6 +351,15 @@ export default function TopologyPage() {
     const el = document.getElementById(`topo-row-${focused}`);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focused]);
+
+  const loadTopology = () => {
+    api
+      .getTopology()
+      .then((resp) => {
+        if (resp.ok && resp.data) setView(resp.data);
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
     let alive = true;
@@ -310,6 +377,16 @@ export default function TopologyPage() {
       alive = false;
     };
   }, []);
+
+  // task27 PART A: 打开实体事实源编辑抽屉；保存成功后重新拉取拓扑视图。
+  const openYamlEditor = (entityId: string, title: string) => {
+    setEditTarget({
+      title,
+      subtitle: entityId.startsWith("cluster:") ? "topology.yaml" : entityId,
+      load: () => api.getTopologyEntityRawYaml(entityId),
+      save: (text) => api.putTopologyEntityRawYaml(entityId, text),
+    });
+  };
 
   const q = query.trim().toLowerCase();
 
@@ -517,7 +594,13 @@ export default function TopologyPage() {
                     <div className="rounded border border-[var(--vigil-border)]/70">
                       {visibleHosts.map((host) => (
                         <div key={host.card.name}>
-                          <ListRow card={host.card} kind="host" onFocus={setFocused} />
+                          <ListRow
+                            card={host.card}
+                            kind="host"
+                            entityId={`host:${host.card.name}`}
+                            onFocus={setFocused}
+                            onEdit={openYamlEditor}
+                          />
                           {host.services
                             .filter(
                               (s) =>
@@ -525,7 +608,14 @@ export default function TopologyPage() {
                                 statusMatchesFilter(s.card.status, filter),
                             )
                             .map((s) => (
-                              <ListRow key={s.card.name} card={s.card} kind="service" onFocus={setFocused} />
+                              <ListRow
+                                key={s.card.name}
+                                card={s.card}
+                                kind="service"
+                                entityId={`service:${host.card.name}:${s.card.name}`}
+                                onFocus={setFocused}
+                                onEdit={openYamlEditor}
+                              />
                             ))}
                         </div>
                       ))}
@@ -536,7 +626,14 @@ export default function TopologyPage() {
                             statusMatchesFilter(c.card.status, filter),
                         )
                         .map((c) => (
-                          <ListRow key={c.card.name} card={c.card} kind="cross_host" onFocus={setFocused} />
+                          <ListRow
+                            key={c.card.name}
+                            card={c.card}
+                            kind="cross_host"
+                            entityId={`cross_host:${c.card.name}`}
+                            onFocus={setFocused}
+                            onEdit={openYamlEditor}
+                          />
                         ))}
                     </div>
                   </div>
@@ -564,6 +661,8 @@ export default function TopologyPage() {
                     <span className="text-xs font-normal text-[var(--vigil-muted)]">
                       {t("topology.hostCountSuffix", { n: group.hosts.length })}
                     </span>
+                    {/* task27 PART A: 集群事实源 = topology.yaml 整文件 */}
+                    <EditYamlButton onClick={() => openYamlEditor(`cluster:${group.name}`, group.name)} />
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {group.hosts.map((host) => (
@@ -573,6 +672,7 @@ export default function TopologyPage() {
                         q={q}
                         filter={filter}
                         onDetail={setDrawer}
+                        onEdit={openYamlEditor}
                       />
                     ))}
                   </div>
@@ -587,7 +687,14 @@ export default function TopologyPage() {
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                     {view.cross_host.map((svc) => (
-                      <CrossCard key={svc.card.name} svc={svc} q={q} filter={filter} onDetail={setDrawer} />
+                      <CrossCard
+                        key={svc.card.name}
+                        svc={svc}
+                        q={q}
+                        filter={filter}
+                        onDetail={setDrawer}
+                        onEdit={openYamlEditor}
+                      />
                     ))}
                   </div>
                 </section>
@@ -599,6 +706,13 @@ export default function TopologyPage() {
       ) : null}
 
       <DetailDrawer entity={drawer} onClose={() => setDrawer(null)} />
+
+      {/* task27 PART A: raw YAML 编辑抽屉（保存成功 → 重新拉取拓扑视图） */}
+      <YamlEditorDrawer
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => loadTopology()}
+      />
     </div>
   );
 }

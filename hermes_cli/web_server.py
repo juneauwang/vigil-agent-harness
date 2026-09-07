@@ -704,7 +704,9 @@ async def auth_middleware(request: Request, call_next):
     is_ops_public = (
         path == "/api/topology"
         or path == "/api/runbooks"
-        or path.startswith("/api/runbooks/")
+        # raw YAML 编辑端点（/raw 结尾）返回未脱敏原文且可写——绝不随
+        # runbooks/ 前缀进公开豁免，一律走 session token（见 yaml editor API）。
+        or (path.startswith("/api/runbooks/") and not path.endswith("/raw"))
     )
     if (
         path.startswith("/api/")
@@ -3603,6 +3605,429 @@ async def get_ops_runbook_detail(name: str):
     if data is None:
         return {"ok": False, "error": f"runbook 不存在: {name}"}
     return {"ok": True, "data": data}
+
+
+# ---------------------------------------------------------------------------
+# Raw YAML 编辑器 API（task27 PART A）：runbook / 拓扑实体的原始 YAML 读写。
+#
+# RAW round-trip：GET 返回磁盘原文（字节不改动），PUT 原样写入——绝不走
+# parse→dict→yaml.dump 回写（会毁注释/键序/手工排版）。写入前四道门：
+# 路径白名单（runbooks/*.yaml、entities/*.yaml、单个 topology.yaml；
+# resolve + within-dir 拒绝穿越/符号链接逃逸；目标必须已存在）→ UTF-8 严格
+# 解码（拒二进制）→ YAML 语法解析（解析的是副本，落盘的是原文）→ 既有语义
+# 校验器（runbook: _validate_runbook 全链含 alert_auto_run；topology: 加载
+# 路径同款结构语义——load_topology/_load_entity_file 本身就是拓扑的
+# schema 门，没有更复杂的独立校验器）。鉴权与其它 mutating 端点同款
+# （_require_token；/api/runbooks/ 前缀的公开只读豁免显式排除 /raw）。
+# 审计走 trajectory record_event（type=yaml_raw_save，before/after 行数差）。
+# 热生效：拓扑 / runbook 列表/详情读取端每次请求直接读盘（无内存缓存），
+# 落盘即生效；runbook schedule 变化由 register_runbook_schedule 重新同步
+# cron 注册（与 runbook_create 落盘后同一路径）。
+# ---------------------------------------------------------------------------
+
+_YAML_RAW_SESSION = "yaml-editor"
+_YAML_RAW_MAX_BYTES = 1_000_000
+_TOPOLOGY_FILENAME = "topology.yaml"
+_QUOTED_TOKEN_RE = re.compile(r"[「'\"‘“]([^'\"」’”]{1,120})['\"」’”]")
+
+
+def _entities_dir(home: Path) -> Path:
+    return home / "entities"
+
+
+def _within_whitelist(path: Path, root: Path) -> bool:
+    """resolve（跟随符号链接）后必须仍在白名单目录内——穿越/软链逃逸全拦。"""
+    try:
+        path.resolve().relative_to(root.resolve())
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def _runbook_yaml_path(home: Path, name: str) -> Optional[Path]:
+    """白名单解析 runbooks/<name>.yaml；不存在/越界 → None（不创建新文件）。"""
+    if not name or not _RUNBOOK_NAME_RE.match(name) or name in (".", ".."):
+        return None
+    path = (_runbooks_dir(home) / f"{name}.yaml").resolve()
+    if not _within_whitelist(path, _runbooks_dir(home)) or not path.is_file():
+        return None
+    return path
+
+
+def _read_yaml_raw(path: Path) -> Optional[str]:
+    try:
+        return path.read_bytes().decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def _resolve_topology_entity_target(home: Path, entity_id: str):
+    """entityId → (kind, display_name, yaml_path)；未知/越界/档案缺失 → None。
+
+    编辑目标 = 节点事实源文件（与读取端完全同款解析）：
+    - host:<name> / cross_host:<name> / service:<host>:<name> → 实体档案
+      entities/*.yaml（tools.topo_tools._resolve_entity_detail 同款：显式
+      detail 字段优先，否则 entities/<name>.yaml；此处白名单收紧到 entities/
+      目录内 *.yaml——detail 指向目录外的实体一律拒编）；存量 *.yaml.yaml
+      双后缀兼容候选沿用 _entity_detail_candidates（写回实际被读取的那个）。
+    - cluster:<name> / topology → topology.yaml 整文件。集群行是 topology.yaml
+      clusters: 段内的一行：RAW round-trip 语义下"段切片"编辑需要文本手术，
+      必然破坏原文保真承诺——整文件才是该节点事实源的完整单元（文件是小型
+      一层表，校验器也按整文件语义跑）。
+    """
+    from tools.topo_tools import (
+        _entity_detail_candidates,
+        _load_host_index,
+        _resolve_entity_detail,
+        load_topology,
+    )
+
+    parts = (entity_id or "").split(":")
+    kind = parts[0]
+    topo = load_topology(home)
+    if topo is None:
+        return None
+
+    if kind in ("cluster", "topology"):
+        if kind == "cluster":
+            if len(parts) != 2:
+                return None
+            name = parts[1]
+            if not any(isinstance(c, dict) and str(c.get("name") or "") == name
+                       for c in topo.get("clusters") or []):
+                return None
+        else:
+            name = _TOPOLOGY_FILENAME
+        return (kind, name, home / _TOPOLOGY_FILENAME)
+
+    if kind in ("host", "cross_host", "service"):
+        row = None
+        name = ""
+        if kind in ("host", "cross_host"):
+            if len(parts) != 2:
+                return None
+            name = parts[1]
+            pool = topo.get("hosts" if kind == "host" else "cross_host") or []
+            row = next((r for r in pool
+                        if isinstance(r, dict) and str(r.get("name") or "") == name),
+                       None)
+        else:
+            if len(parts) != 3:
+                return None
+            host_name, name = parts[1], parts[2]
+            host = next((r for r in topo.get("hosts") or []
+                         if isinstance(r, dict) and str(r.get("name") or "") == host_name),
+                        None)
+            if host is None:
+                return None
+            index = _load_host_index(home, host) or {}
+            row = next((r for r in index.get("services") or []
+                        if isinstance(r, dict) and str(r.get("name") or "") == name),
+                       None)
+        if row is None:
+            return None
+        path = _resolve_entity_detail(home, row)
+        if path is None or path.suffix.lower() not in (".yaml", ".yml") \
+                or not _within_whitelist(path, _entities_dir(home)):
+            return None
+        existing = next((c for c in _entity_detail_candidates(path) if c.is_file()), None)
+        if existing is None:
+            return None  # 白名单内档案不存在 → 不从编辑器创建
+        return (kind, name, existing)
+
+    return None
+
+
+def _parse_yaml_copy(text: str) -> tuple:
+    """解析原文副本供校验。返回 (data, errors)；语法错时 errors 含行列。"""
+    try:
+        return yaml.safe_load(text), []
+    except yaml.YAMLError as exc:
+        mark = getattr(exc, "problem_mark", None) or getattr(exc, "context_mark", None)
+        message = str(getattr(exc, "problem", None) or exc).splitlines()[0]
+        return None, [{
+            "line": (mark.line + 1) if mark is not None else 1,
+            "column": (mark.column + 1) if mark is not None else None,
+            "message": message,
+        }]
+
+
+def _map_error_line(message: str, text: str) -> int:
+    """校验器 message → 原文行号（best-effort）：取首个引号包裹的标识符，
+    逐行搜原文；找不到回落第 1 行（消息本身完整保留）。"""
+    match = _QUOTED_TOKEN_RE.search(message or "")
+    if match:
+        needle = match.group(1)
+        for i, line in enumerate(text.splitlines(), 1):
+            if needle in line:
+                return i
+    return 1
+
+
+def _map_key_line(key: str, text: str) -> int:
+    for i, line in enumerate(text.splitlines(), 1):
+        stripped = line.lstrip()
+        if stripped.startswith(f"{key}:"):
+            return i
+    return 1
+
+
+def _validate_topology_doc(data: Any, text: str, *, whole_file: bool) -> List[Dict[str, Any]]:
+    """拓扑 YAML 语义门 = 加载路径同款结构要求（消费端按此遍历）。
+
+    实体档案：顶层映射（_load_entity_file 非 dict → detail 不渲染）。
+    topology.yaml 整文件：顶层映射 + hosts/cross_host/clusters/environments
+    段存在时必须是列表（load_topology/build_view/topo_first_layer 全部按
+    列表遍历；写成映射/标量会让整张拓扑从 UI 消失）。
+    """
+    if not isinstance(data, dict):
+        return [{"line": 1, "message": "顶层必须是 YAML 映射（顶层必须是键值结构）"}]
+    if not whole_file:
+        return []
+    for section in ("hosts", "cross_host", "clusters", "environments"):
+        value = data.get(section)
+        if value is not None and not isinstance(value, list):
+            return [{
+                "line": _map_key_line(section, text),
+                "message": f"{section} 段必须是列表（收到 {type(value).__name__}）",
+            }]
+    return []
+
+
+def _validate_runbook_text(text: str, name: str, home: Path) -> List[Dict[str, Any]]:
+    """原文 → 语法解析（副本）→ _validate_runbook 全链。返回结构化错误列表。"""
+    data, errors = _parse_yaml_copy(text)
+    if errors:
+        return errors
+    if not isinstance(data, dict):
+        return [{"line": 1, "message": "顶层必须是 YAML 映射（顶层必须是键值结构）"}]
+    try:
+        from tools.runbook_tools import _validate_runbook
+        _validate_runbook(data, name, home)
+    except ValueError as exc:
+        message = str(exc)
+        return [{"line": _map_error_line(message, text), "message": message}]
+    return []
+
+
+def _runbook_save_warnings(data: Dict[str, Any]) -> List[Dict[str, str]]:
+    """带 schedule / alert_auto_run 的 runbook 手改后：引擎 fail-closed 语义
+    （_check_scheduled_exemption 内容哈希漂移检测）判定豁免失效 → 编辑器只
+    报告不阻断（人工是作者，不重放资产审批门）。"""
+    auto_exec = bool(data.get("alert_auto_run")) or isinstance(data.get("schedule"), dict)
+    if not auto_exec:
+        return []
+    try:
+        from tools.runbook_exec import _check_scheduled_exemption
+        reason = _check_scheduled_exemption(data)
+    except Exception:
+        return []
+    if not reason:
+        return []
+    return [{"code": "auto_exec_approval_invalidated", "message": reason}]
+
+
+def _atomic_write_yaml(path: Path, text: str) -> None:
+    """同目录临时文件 + os.replace 原子落位；保留既有文件的权限位。"""
+    payload = text.encode("utf-8")
+    try:
+        mode = stat.S_IMODE(path.stat().st_mode)
+    except OSError:
+        mode = 0o644
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(payload)
+        os.chmod(tmp_path, mode)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _diff_summary(before: str, after: str) -> Dict[str, int]:
+    import difflib
+
+    b_lines, a_lines = before.splitlines(), after.splitlines()
+    matcher = difflib.SequenceMatcher(a=b_lines, b=a_lines, autojunk=False)
+    added = removed = 0
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag in ("insert", "replace"):
+            added += j2 - j1
+        if tag in ("delete", "replace"):
+            removed += i2 - i1
+    return {
+        "before_lines": len(b_lines),
+        "after_lines": len(a_lines),
+        "added": added,
+        "removed": removed,
+    }
+
+
+def _audit_yaml_raw_save(kind: str, rel_name: str, before: str, after: str) -> None:
+    """成功保存 → trajectory 审计（文件/来源/前后行差；best-effort 不阻断）。"""
+    try:
+        from agent.trajectory import record_event
+        diff = _diff_summary(before, after)
+        record_event(
+            type="yaml_raw_save",
+            session_id=_YAML_RAW_SESSION,
+            tool="web_yaml_editor",
+            action=f"{kind}: {rel_name}",
+            result=(f"ok +{diff['added']}/-{diff['removed']} 行"
+                    f"（{diff['before_lines']} → {diff['after_lines']}）"),
+            approval="",
+            meta={"source": "ui", "file": rel_name, "kind": kind, **diff},
+        )
+    except Exception:
+        _log.exception("yaml raw save audit event failed")
+
+
+def _reject_raw_body(body: bytes) -> Optional[JSONResponse]:
+    """UTF-8 严格解码（拒二进制垃圾）+ 大小上限。"""
+    if len(body) > _YAML_RAW_MAX_BYTES:
+        return JSONResponse(
+            status_code=413,
+            content=_api_error("payload_too_large", "YAML 文本超过大小上限（1MB）"),
+        )
+    try:
+        body.decode("utf-8")
+    except UnicodeDecodeError:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error("invalid_encoding", "请求体必须是 UTF-8 文本"),
+        )
+    return None
+
+
+@app.get("/api/runbooks/{name}/raw")
+async def get_runbook_raw_yaml(name: str, request: Request = None):
+    """原始 runbook YAML（未脱敏原文，text/yaml）。鉴权：_require_token。"""
+    _require_token(request)
+    home = Path(get_hermes_home())
+
+    def _load() -> Optional[str]:
+        path = _runbook_yaml_path(home, name)
+        return _read_yaml_raw(path) if path is not None else None
+
+    text = await run_in_threadpool(_load)
+    if text is None:
+        return JSONResponse(
+            status_code=404,
+            content=_api_error("not_found", f"runbook 不存在或不可编辑: {name}"),
+        )
+    return Response(content=text, media_type="text/yaml; charset=utf-8")
+
+
+@app.put("/api/runbooks/{name}/raw")
+async def put_runbook_raw_yaml(name: str, request: Request = None):
+    """保存 runbook 原文：校验（语法 + _validate_runbook 全链）→ 原样原子
+    落盘 → schedule cron 同步 → 审计。校验失败 422 {errors:[{line,...}]}，
+    不落盘；人工是作者——不重放资产审批，但 schedule/alert_auto_run 的
+    自动执行豁免按引擎 fail-closed 语义失效，响应 warnings 明示。"""
+    _require_token(request)
+    home = Path(get_hermes_home())
+    body = await request.body()
+    too_large_or_binary = _reject_raw_body(body)
+    if too_large_or_binary is not None:
+        return too_large_or_binary
+
+    def _target() -> Optional[Path]:
+        return _runbook_yaml_path(home, name)
+
+    path = await run_in_threadpool(_target)
+    if path is None:
+        return JSONResponse(
+            status_code=404,
+            content=_api_error("not_found", f"runbook 不存在或不可编辑: {name}"),
+        )
+    text = body.decode("utf-8")
+    errors = await run_in_threadpool(_validate_runbook_text, text, name, home)
+    if errors:
+        return JSONResponse(status_code=422, content={"ok": False, "errors": errors})
+
+    def _save() -> str:
+        before = _read_yaml_raw(path) or ""
+        _atomic_write_yaml(path, text)
+        return before
+
+    before = await run_in_threadpool(_save)
+
+    data, _ = _parse_yaml_copy(text)
+    warnings = _runbook_save_warnings(data or {})
+    try:
+        from tools.runbook_schedule import register_runbook_schedule
+        await run_in_threadpool(register_runbook_schedule, name,
+                                (data or {}).get("schedule"), home)
+    except Exception:
+        _log.exception("runbook schedule re-sync failed after raw save")
+    _audit_yaml_raw_save("runbook", f"runbooks/{path.name}", before, text)
+    return {"ok": True, "warnings": warnings}
+
+
+@app.get("/api/topology/entities/{entity_id}/raw")
+async def get_topology_entity_raw_yaml(entity_id: str, request: Request = None):
+    """拓扑实体事实源原始 YAML（host/service/cross → entities/*.yaml；
+    cluster/topology → topology.yaml 整文件）。鉴权：_require_token。"""
+    _require_token(request)
+    home = Path(get_hermes_home())
+
+    def _load():
+        target = _resolve_topology_entity_target(home, entity_id)
+        return _read_yaml_raw(target[2]) if target is not None else None
+
+    text = await run_in_threadpool(_load)
+    if text is None:
+        return JSONResponse(
+            status_code=404,
+            content=_api_error("not_found", f"实体不存在或不可编辑: {entity_id}"),
+        )
+    return Response(content=text, media_type="text/yaml; charset=utf-8")
+
+
+@app.put("/api/topology/entities/{entity_id}/raw")
+async def put_topology_entity_raw_yaml(entity_id: str, request: Request = None):
+    """保存拓扑实体/拓扑表原文：加载路径同款结构校验 → 原样原子落盘 →
+    审计。不落盘于任何校验失败；拓扑读取端逐请求读盘，落盘即热生效。"""
+    _require_token(request)
+    home = Path(get_hermes_home())
+    body = await request.body()
+    too_large_or_binary = _reject_raw_body(body)
+    if too_large_or_binary is not None:
+        return too_large_or_binary
+
+    def _target():
+        return _resolve_topology_entity_target(home, entity_id)
+
+    target = await run_in_threadpool(_target)
+    if target is None:
+        return JSONResponse(
+            status_code=404,
+            content=_api_error("not_found", f"实体不存在或不可编辑: {entity_id}"),
+        )
+    kind, display_name, path = target
+    text = body.decode("utf-8")
+    data, errors = _parse_yaml_copy(text)
+    if not errors:
+        errors = _validate_topology_doc(data, text, whole_file=path.name == _TOPOLOGY_FILENAME)
+    if errors:
+        return JSONResponse(status_code=422, content={"ok": False, "errors": errors})
+
+    def _save() -> str:
+        before = _read_yaml_raw(path) or ""
+        _atomic_write_yaml(path, text)
+        return before
+
+    before = await run_in_threadpool(_save)
+    rel_name = _TOPOLOGY_FILENAME if path.name == _TOPOLOGY_FILENAME \
+        else f"entities/{path.name}"
+    _audit_yaml_raw_save(kind, rel_name, before, text)
+    return {"ok": True, "warnings": []}
 
 
 # runbook 执行进度事件流（OPS-DELTA #80）：进程内事件总线，按 exec_id 索引。

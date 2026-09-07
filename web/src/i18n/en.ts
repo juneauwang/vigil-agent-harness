@@ -574,6 +574,25 @@ const en = {
     approvalScopeSession: "This approval does not support the session scope (the prod change confirmation gate only allows once)",
     approvalScopePermanent: "This approval does not support the permanent scope",
   },
+
+  // task27 PART A: raw YAML editor drawer
+  yamlEditor: {
+    drawerAria: "Edit YAML source of {{name}}",
+    maskCloseAria: "Click the overlay to close the editor",
+    closeAria: "Close editor",
+    editorAria: "YAML editor area",
+    editAria: "Edit YAML source",
+    loading: "Loading source…",
+    save: "Save",
+    cancel: "Cancel",
+    closeConfirm: "Discard unsaved changes and close?",
+    dirtyHint: "Unsaved changes",
+    validationFailed: "Validation failed — nothing was saved (errors annotated by line)",
+    lineRef: "L{{line}}",
+    savedWithWarnings:
+      "Saved, but the auto-execution authorization is now invalidated — this runbook needs re-approval before it can run unattended again",
+    loadFailedPrefix: "Failed to load YAML: ",
+  },
 };
 
 export default en;

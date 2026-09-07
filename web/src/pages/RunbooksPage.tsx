@@ -16,6 +16,7 @@ import {
   Lock,
   MessageSquareText,
   Play,
+  SquarePen,
   Terminal,
   TriangleAlert,
   Zap,
@@ -32,6 +33,7 @@ import type {
   RunbookStepResult,
   RunbookSummary,
 } from "@/lib/api";
+import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
 import { DetailTree } from "@/components/DetailTree";
 import { EmptyState } from "@/components/EmptyState";
 import { cn, yamlPreview } from "@/lib/ops";
@@ -669,6 +671,8 @@ export default function RunbooksPage() {
   const [coverageOpen, setCoverageOpen] = useState(false);
   // task19 F2: per-gap copy feedback ("已复制" for ~2s after a copy).
   const [copiedGap, setCopiedGap] = useState<string | null>(null);
+  // task27 PART A: raw YAML 编辑抽屉（每行 edit 按钮 + 详情头 edit 按钮）。
+  const [editTarget, setEditTarget] = useState<YamlEditorTarget | null>(null);
   const navigate = useNavigate();
 
   // task19 F2: gap → chat bridge — a ready-to-send prompt built from the gap
@@ -828,6 +832,34 @@ export default function RunbooksPage() {
     startRunningStream(execId);
   };
 
+  // task27 PART A: 打开 runbook 原文编辑抽屉；保存成功后刷新列表 + 详情，
+  // 让页面立即反映落盘内容（读取端无缓存，重新 fetch 即可）。
+  const openYamlEditor = (name: string, title?: string) => {
+    setEditTarget({
+      title: title || name,
+      subtitle: `runbooks/${name}.yaml`,
+      load: () => api.getRunbookRawYaml(name),
+      save: (text) => api.putRunbookRawYaml(name, text),
+    });
+  };
+
+  const refreshAfterSave = () => {
+    api
+      .getRunbooks()
+      .then((resp) => {
+        if (resp.ok && resp.data) setList(resp.data.runbooks);
+      })
+      .catch(() => {});
+    if (selected) {
+      api
+        .getRunbook(selected)
+        .then((resp: RunbookDetailResponse) => {
+          if (resp.ok && resp.data) setDetail(resp.data);
+        })
+        .catch(() => {});
+    }
+  };
+
   useEffect(() => {
     let alive = true;
     api
@@ -904,6 +936,7 @@ export default function RunbooksPage() {
                     <th>kind</th>
                     <th className="text-right">{t("runbooks.thSteps")}</th>
                     <th className="text-right">{t("runbooks.thUpdated")}</th>
+                    <th aria-label={t("yamlEditor.editAria")} />
                   </tr>
                 </thead>
                 <tbody>
@@ -925,6 +958,21 @@ export default function RunbooksPage() {
                           <Clock className="size-3" />
                           {rb.updated_at ? String(rb.updated_at).slice(0, 10) : "-"}
                         </span>
+                      </td>
+                      <td className="text-right">
+                        <button
+                          type="button"
+                          data-testid={`runbook-edit-${rb.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openYamlEditor(rb.name, rb.title);
+                          }}
+                          aria-label={t("yamlEditor.editAria")}
+                          title={t("yamlEditor.editAria")}
+                          className="rounded p-1 text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]"
+                        >
+                          <SquarePen className="size-3.5" />
+                        </button>
                       </td>
                     </tr>
                   ))}
@@ -960,10 +1008,26 @@ export default function RunbooksPage() {
                   <h2 className="text-base font-semibold">{String(detail.title ?? detail.name ?? "")}</h2>
                   <EnvTag env={String(detail.env ?? "")} />
                   <KindTag kind={String(detail.kind ?? "")} checklist={Boolean(detail.checklist)} />
+                  {String(detail.name) ? (
+                    <button
+                      type="button"
+                      data-testid="runbook-edit-detail"
+                      onClick={() => openYamlEditor(String(detail.name), String(detail.title ?? detail.name))}
+                      aria-label={t("yamlEditor.editAria")}
+                      title={t("yamlEditor.editAria")}
+                      className="vigil-btn ml-auto border border-[var(--vigil-border)] px-2.5 py-1 text-xs"
+                    >
+                      <SquarePen className="mr-1 inline size-3.5" />
+                      {t("yamlEditor.editAria")}
+                    </button>
+                  ) : null}
                   {String(detail.version) === "2" ? (
                     <button
                       type="button"
-                      className="vigil-btn ml-auto border border-[var(--vigil-primary)]/40 px-3 py-1 text-xs"
+                      className={cn(
+                        "vigil-btn border border-[var(--vigil-primary)]/40 px-3 py-1 text-xs",
+                        !String(detail.name) && "ml-auto",
+                      )}
                       onClick={() => setExecModal(true)}
                       disabled={execRunning}
                     >
@@ -1224,6 +1288,13 @@ export default function RunbooksPage() {
           onConfirm={runSelected}
         />
       )}
+
+      {/* task27 PART A: raw YAML 编辑抽屉（保存成功 → 刷新页面数据） */}
+      <YamlEditorDrawer
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => refreshAfterSave()}
+      />
     </div>
   );
 }
