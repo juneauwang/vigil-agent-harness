@@ -262,6 +262,9 @@ _DEFAULT_CREATE_SCHEMA = {
         "on_failure = stop/continue(只读动作)/rollback/{rollback: 场景名}；\n"
         "- triggers 双形态（字符串或 {alertname, severity}），checklist 用 schedule"
         "（{cron, timezone}）替代 triggers；\n"
+        "- alert_auto_run: true = 显式授权告警自动执行（须已有 triggers；默认缺省"
+        "= 只建议不执行，既有 runbook 不受影响）；可选 alert_auto_severity 限定\n"
+        "severity 列表；与 schedule 互斥；\n"
         "- 变量引用 {{ steps.<id>.params.<key> }} / {{ trigger_context.<字段> }}；\n"
         "- 无 permission 字段（权限=操作矩阵唯一裁决）；run_script.script 只引用资产。\n"
         "v0.2 创建/变更会触发资产审批（YAPL §11.4）：矩阵判 {approve: required} 高危"
@@ -349,6 +352,18 @@ _DEFAULT_CREATE_SCHEMA = {
             "on_failure": {
                 "type": ["string", "object"],
                 "description": "runbook 级默认失败处理（v0.2）：stop/continue/rollback/{rollback: 场景名}。",
+            },
+            "alert_auto_run": {
+                "type": "boolean",
+                "description": "显式授权告警自动执行（v0.2）：true = 匹配告警出现时无人值守自动执行"
+                "本 runbook（须已有 triggers；可选 alert_auto_severity 限定 severity；与 schedule "
+                "互斥）。默认缺省 = 只产出建议不执行。授权随资产审批落盘（改授权需重新审批）。",
+            },
+            "alert_auto_severity": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "alert_auto_run 的可选 severity 白名单（如 [critical, warning]）："
+                "alert.severity ∈ 列表才允许自动执行。",
             },
             "overwrite": {
                 "type": "boolean",
@@ -708,6 +723,51 @@ def _validate_triggers_v2(triggers: Any, name: str) -> None:
         raise ValueError(f"runbook {name} 的 triggers 每项必须是字符串或对象")
 
 
+def _validate_alert_auto_run(data: Dict[str, Any], name: str) -> None:
+    """alert_auto_run（任务25）：告警自动派发的**显式授权**字段。
+
+    语义：true = 作者声明"本 runbook 可在匹配告警出现时无人值守自动执行"
+    （autonomous duty loop 的 authoring-time 人工授权）。缺省/false = 现状
+    建议闭环（只提示不执行），对既有 runbook 零影响。
+
+    约束：
+    - 必须有可匹配信号：triggers 非空（无信号的自动执行声明是校验错误）；
+    - 与 schedule 互斥（checklist 定时物不吃告警触发）；
+    - 可选 alert_auto_severity 限定允许自动执行的 severity 列表；
+    - 资产审批覆盖：字段进 runbook 内容，runbook_create/update 落盘必过
+      既有资产审批并重写 approved_at/approved_by/approved_version（内容
+      哈希含本字段）——改授权 = 重新人工审批，豁免哈希漂移即失效。
+    """
+    flag = data.get("alert_auto_run")
+    if not isinstance(flag, bool):
+        raise ValueError(
+            f"runbook {name} 的 alert_auto_run 必须是布尔值"
+            "（true = 显式授权告警自动执行；缺省/false = 只建议不执行）"
+        )
+    if not flag:
+        return
+    if data.get("schedule"):
+        raise ValueError(
+            f"runbook {name} 的 alert_auto_run 与 schedule 互斥"
+            "（checklist 用 schedule 定时，不吃告警触发）"
+        )
+    triggers = data.get("triggers") or []
+    if not triggers:
+        raise ValueError(
+            f"runbook {name} 声明了 alert_auto_run 但没有 triggers——自动执行必须有"
+            "可匹配信号（字符串/结构化触发词）；先声明 triggers 或删除 alert_auto_run"
+        )
+    _validate_triggers_v2(triggers, name)
+    severity = data.get("alert_auto_severity")
+    if severity is not None:
+        if (not isinstance(severity, list) or not severity
+                or not all(isinstance(s, str) and s.strip() for s in severity)):
+            raise ValueError(
+                f"runbook {name} 的 alert_auto_severity 必须是非空字符串数组"
+                "（如 [critical, warning]——alert.severity 需 ∈ 列表才允许自动执行）"
+            )
+
+
 def _iter_param_strings(params: Dict[str, Any]):
     """遍历 params 值中的字符串（含嵌套 dict/list），供变量引用解析。
 
@@ -1002,6 +1062,8 @@ def _validate_runbook_v2(data: Dict[str, Any], name: str,
         _validate_triggers_v2(data.get("triggers"), name)
     if "schedule" in data and data.get("schedule") is not None:
         _validate_schedule(data.get("schedule"), name)
+    if data.get("alert_auto_run") is not None:
+        _validate_alert_auto_run(data, name)
     seen_ids: set = set()
     for s in steps:
         if isinstance(s, dict) and isinstance(s.get("id"), str):
@@ -1870,6 +1932,8 @@ def runbook_create(
     hosts: Optional[List[str]] = None,
     schedule: Optional[Dict[str, Any]] = None,
     on_failure: Optional[Any] = None,
+    alert_auto_run: Optional[bool] = None,
+    alert_auto_severity: Optional[List[str]] = None,
     home: Optional[Path] = None,
 ) -> str:
     """Create/overwrite a structured runbook (runbooks/<name>.yaml, v0.1/v0.2).
@@ -1943,6 +2007,10 @@ def runbook_create(
             data["schedule"] = schedule
         if on_failure is not None:
             data["on_failure"] = on_failure
+        if alert_auto_run is not None:
+            data["alert_auto_run"] = bool(alert_auto_run)
+        if alert_auto_severity:
+            data["alert_auto_severity"] = [str(s) for s in alert_auto_severity]
         data["steps"] = steps
         if rollback:
             data["rollback"] = rollback

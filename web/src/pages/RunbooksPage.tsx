@@ -18,6 +18,7 @@ import {
   Play,
   Terminal,
   TriangleAlert,
+  Zap,
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -241,6 +242,7 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
     "name", "title", "version", "env", "kind", "checklist", "triggers",
     "summary", "steps", "rollback", "updated_at", "note",
     "clusters", "host_groups", "hosts", "schedule", "on_failure",
+    "alert_auto_run", "alert_auto_severity",
   ]);
   const schedule = data.schedule as Record<string, unknown> | undefined;
   const clusters = (data.clusters as string[] | undefined) ?? [];
@@ -264,6 +266,19 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
 
       <div className="flex flex-wrap items-center gap-2">
         <OnFailureTag value={data.on_failure} />
+        {data.alert_auto_run === true ? (
+          <span
+            className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]"
+            title={t("runbooks.autoRunHint", {
+              sev: Array.isArray(data.alert_auto_severity) && data.alert_auto_severity.length
+                ? data.alert_auto_severity.join(", ")
+                : "",
+            })}
+          >
+            <Zap className="size-3" />
+            {t("runbooks.autoRunBadge")}
+          </span>
+        ) : null}
         {schedule ? (
           <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
             <Clock className="size-3" />

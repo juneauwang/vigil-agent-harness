@@ -2466,6 +2466,17 @@ DEFAULT_CONFIG = {
         "watch": {
             "enabled": False,     # 值守采集（vigil watch install 常驻服务）：显式 true + alertmanager 配置后才采集
         },
+        "alerts": {
+            "auto_dispatch": {
+                # 告警自动派发（任务25 autonomous duty loop）：显式 opt-in。
+                # 仅当活跃告警匹配到 alert_auto_run: true 授权（随资产审批落盘）
+                # 的 runbook 时，经 scheduled 豁免通道执行；未授权命中维持建议
+                # 闭环。注册：vigil alerts auto-dispatch --schedule 5m
+                "enabled": False,     # 默认关：无显式授权配置 = 永不自动执行
+                "interval": "5m",     # 注册 cron no_agent job 的周期
+                "max_per_tick": 3,    # 单 tick 最多自动派发次数（防告警风暴）
+            },
+        },
         "permissions": {
             "enabled": True,
             "env": "test",

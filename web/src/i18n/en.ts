@@ -192,6 +192,8 @@ const en = {
     schemaDeclarative: " (declarative actions)",
     updatedAt: "Updated:",
     triggersTitle: "Triggers",
+    autoRunBadge: "Alert auto-run authorized",
+    autoRunHint: "Runs unattended on matching alerts via the pre-approved exemption channel{{sev}} (severity scope: {{sev}}; empty = unrestricted)",
     stepsTitle: "Steps ({{n}})",
     rollbackTitle: "Rollback plan",
     rollbackScene: "Scenario {{n}}",

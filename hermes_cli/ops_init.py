@@ -97,6 +97,15 @@ ops:
     vault_path: ""      # 可选：本机保险箱 JSON 凭据条目 {{"user": ..., "pass": ...}}
   watch:
     enabled: false      # 值守采集（vigil watch install 常驻服务）：显式 true + alertmanager 配置后才采集
+  alerts:
+    auto_dispatch:
+      # 告警自动派发（任务25）：活跃告警匹配 alert_auto_run: true 授权的
+      # runbook 时经 scheduled 豁免通道自动执行（事后审计）。opt-in：
+      # enabled: false（默认）= 只建议不执行。注册：
+      #   vigil alerts auto-dispatch --schedule 5m
+      enabled: false
+      interval: "5m"    # cron no_agent job 周期（enabled 时用）
+      max_per_tick: 3   # 单 tick 派发上限（防告警风暴）
   permissions:
     enabled: true
     env: {env}

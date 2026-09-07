@@ -193,6 +193,8 @@ const zh = {
     schemaDeclarative: "（声明式动作）",
     updatedAt: "更新:",
     triggersTitle: "触发条件",
+    autoRunBadge: "告警自动执行已授权",
+    autoRunHint: "匹配告警出现时经预审豁免通道自动执行{{sev}}（severity 限定：{{sev}}；无限定 = 不限）",
     stepsTitle: "步骤（{{n}}）",
     rollbackTitle: "回滚预案",
     rollbackScene: "场景 {{n}}",
