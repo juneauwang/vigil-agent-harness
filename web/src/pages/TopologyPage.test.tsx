@@ -16,6 +16,10 @@ class ResizeObserverStub {
 if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 }
+// jsdom 未实现 scrollIntoView（task29 PART C：节点点击 → focused 列表滚动）。
+if (typeof Element.prototype.scrollIntoView === "undefined") {
+  Element.prototype.scrollIntoView = () => {};
+}
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -670,6 +674,124 @@ describe("TopologyPage 搜索 → 卡片/列表联动（task29 PART B）", () =>
         listBtn.click();
       });
       expect(container.querySelector('[data-testid="topo-list-search-empty"]')?.textContent).toContain("no-such-entity");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+});
+
+// ── task29 PART C: 图节点详情抽屉的『编辑 YAML 源文件』按钮 ──
+describe("TopologyPage 图节点编辑入口（task29 PART C）", () => {
+  async function mountInteractive() {
+    vi.clearAllMocks();
+    vi.mocked(api.getTopology).mockResolvedValue({ ok: true, data: VIEW, error: "" });
+    vi.mocked(api.getTopologyEntityRawYaml).mockResolvedValue("name: node1\n" as never);
+    vi.mocked(api.putTopologyEntityRawYaml).mockResolvedValue({ ok: true, warnings: [] } as never);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <TopologyPage />
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    return { container, root };
+  }
+
+  function clickNode(container: HTMLElement, name: string) {
+    const node = [...container.querySelectorAll(".react-flow__node")].find(
+      (n) => (n.textContent ?? "").includes(name),
+    ) as HTMLElement;
+    expect(node).toBeTruthy();
+    node.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  }
+
+  it("点 host 节点 → 详情抽屉出现且带编辑按钮；点击打开 YAML 抽屉（host:<name>）并关闭详情", async () => {
+    const { container, root } = await mountInteractive();
+    try {
+      act(() => clickNode(container, "node1"));
+      await act(async () => {});
+      const drawer = container.querySelector('[data-testid="drawer-edit-yaml"]');
+      expect(drawer).toBeTruthy();
+      // 详情抽屉先于编辑抽屉打开
+      expect(container.querySelector('[data-testid="yaml-editor-drawer"]')).toBeNull();
+
+      await act(async () => {
+        (drawer as HTMLElement).click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      // 编辑抽屉打开 + 详情抽屉关闭（避免保存后残留旧数据）
+      expect(api.getTopologyEntityRawYaml).toHaveBeenCalledWith("host:node1");
+      expect(container.querySelector('[data-testid="yaml-editor-drawer"]')).toBeTruthy();
+      expect(container.querySelector('[data-testid="drawer-edit-yaml"]')).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("点 service 节点 → entityId 为三段 service:<host>:<name>", async () => {
+    const { container, root } = await mountInteractive();
+    try {
+      act(() => clickNode(container, "prometheus"));
+      await act(async () => {});
+      const btn = container.querySelector('[data-testid="drawer-edit-yaml"]') as HTMLElement;
+      await act(async () => {
+        btn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(api.getTopologyEntityRawYaml).toHaveBeenCalledWith("service:node1:prometheus");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("点 cluster 节点 → entityId 为 cluster:<name>（topology.yaml 整文件）", async () => {
+    const { container, root } = await mountInteractive();
+    try {
+      act(() => clickNode(container, "k8s-prod"));
+      await act(async () => {});
+      const btn = container.querySelector('[data-testid="drawer-edit-yaml"]') as HTMLElement;
+      await act(async () => {
+        btn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(api.getTopologyEntityRawYaml).toHaveBeenCalledWith("cluster:k8s-prod");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("保存成功 → 编辑抽屉关闭 + 拓扑视图刷新（与卡片/列表入口同一保存流）", async () => {
+    const { container, root } = await mountInteractive();
+    try {
+      act(() => clickNode(container, "node1"));
+      await act(async () => {});
+      const btn = container.querySelector('[data-testid="drawer-edit-yaml"]') as HTMLElement;
+      await act(async () => {
+        btn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const saveBtn = container.querySelector<HTMLButtonElement>('[data-testid="yaml-editor-save"]')!;
+      await act(async () => {
+        saveBtn.click();
+        await Promise.resolve();
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(api.putTopologyEntityRawYaml).toHaveBeenCalledOnce();
+      expect(api.getTopology).toHaveBeenCalledTimes(2); // 初次 + 保存后刷新
+      expect(container.querySelector('[data-testid="yaml-editor-drawer"]')).toBeNull();
     } finally {
       act(() => root.unmount());
       container.remove();

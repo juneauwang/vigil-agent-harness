@@ -255,6 +255,28 @@ export function entityFromNode(node: TopologyFlowNode): GraphEntityRef {
   return { kind, name, card, detail, hostName };
 }
 
+/**
+ * task29 PART C：实体 → raw-YAML API 的 entityId（唯一解析器）。
+ * host → `host:<name>`；service → `service:<host>:<name>`（三段，hostName
+ * 缺失时由 card.cluster 兜底）；cross_host → `cross_host:<name>`；
+ * cluster → `cluster:<name>`（服务端解析为 topology.yaml 整文件）。卡片/
+ * 列表/图抽屉的编辑入口一律走这里，不再各自拼字符串。
+ */
+export function entityRawId(
+  entity: Pick<GraphEntityRef, "kind" | "name" | "hostName">,
+): string {
+  switch (entity.kind) {
+    case "host":
+      return `host:${entity.name}`;
+    case "service":
+      return `service:${entity.hostName ?? ""}:${entity.name}`;
+    case "cross_host":
+      return `cross_host:${entity.name}`;
+    case "cluster":
+      return `cluster:${entity.name}`;
+  }
+}
+
 export function buildGraphModel(view: TopologyView): TopologyGraphModel {
   const kpNames = new Set(view.key_path_entity_names ?? []);
   const clusterMeta = new Map(view.clusters.map((c) => [c.name, c]));

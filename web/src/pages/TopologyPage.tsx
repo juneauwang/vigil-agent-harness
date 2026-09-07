@@ -22,7 +22,7 @@ import DetailDrawer from "@/components/DetailDrawer";
 import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
 import { EnvBadge, StatusDot, StatusPill } from "@/components/StatusBits";
 import { cn, lastSeenInfo, matchesSearch, statusAccentClass, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
-import type { GraphEntityRef } from "@/lib/topologyGraph";
+import { entityRawId, type GraphEntityRef } from "@/lib/topologyGraph";
 
 const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; key: string }> = [
   { id: "all", key: "topology.filter.all" },
@@ -155,7 +155,7 @@ function ServiceRow({
       )}
       <StatusPill status={card.status} />
       <div className="ml-auto flex min-w-0 items-center gap-1.5">
-        <EditYamlButton onClick={() => onEdit(`service:${hostName}:${card.name}`, card.name)} />
+        <EditYamlButton onClick={() => onEdit(entityRawId({ kind: "service", name: card.name, hostName }), card.name)} />
         <DetailButton onClick={() => onDetail({ kind: "service", name: card.name, card, detail: svc.detail })} />
       </div>
     </div>
@@ -213,7 +213,7 @@ function HostCard({
           </span>
         )}
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
-          <EditYamlButton onClick={() => onEdit(`host:${card.name}`, card.name)} />
+          <EditYamlButton onClick={() => onEdit(entityRawId({ kind: "host", name: card.name }), card.name)} />
           <DetailButton onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })} />
         </div>
       </div>
@@ -277,7 +277,7 @@ function CrossCard({
         <StatusPill status={card.status} />
         {card.on_key_path && <Link2 className="size-3 text-amber-500" />}
         <div className="ml-auto flex min-w-0 items-center gap-1.5">
-          <EditYamlButton onClick={() => onEdit(`cross_host:${card.name}`, card.name)} />
+          <EditYamlButton onClick={() => onEdit(entityRawId({ kind: "cross_host", name: card.name }), card.name)} />
           <DetailButton onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })} />
         </div>
       </div>
@@ -679,7 +679,7 @@ export default function TopologyPage() {
                           <ListRow
                             card={host.card}
                             kind="host"
-                            entityId={`host:${host.card.name}`}
+                            entityId={entityRawId({ kind: "host", name: host.card.name })}
                             onFocus={setFocused}
                             onEdit={openYamlEditor}
                           />
@@ -694,7 +694,7 @@ export default function TopologyPage() {
                                 key={s.card.name}
                                 card={s.card}
                                 kind="service"
-                                entityId={`service:${host.card.name}:${s.card.name}`}
+                                entityId={entityRawId({ kind: "service", name: s.card.name, hostName: host.card.name })}
                                 onFocus={setFocused}
                                 onEdit={openYamlEditor}
                               />
@@ -712,7 +712,7 @@ export default function TopologyPage() {
                             key={c.card.name}
                             card={c.card}
                             kind="cross_host"
-                            entityId={`cross_host:${c.card.name}`}
+                            entityId={entityRawId({ kind: "cross_host", name: c.card.name })}
                             onFocus={setFocused}
                             onEdit={openYamlEditor}
                           />
@@ -753,7 +753,7 @@ export default function TopologyPage() {
                       {t("topology.hostCountSuffix", { n: group.hosts.length })}
                     </span>
                     {/* task27 PART A: 集群事实源 = topology.yaml 整文件 */}
-                    <EditYamlButton onClick={() => openYamlEditor(`cluster:${group.name}`, group.name)} />
+                    <EditYamlButton onClick={() => openYamlEditor(entityRawId({ kind: "cluster", name: group.name }), group.name)} />
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {group.hosts.map((host) => (
@@ -806,7 +806,17 @@ export default function TopologyPage() {
         </div>
       ) : null}
 
-      <DetailDrawer entity={drawer} onClose={() => setDrawer(null)} />
+      <DetailDrawer
+        entity={drawer}
+        onClose={() => setDrawer(null)}
+        onEdit={(entity) => {
+          // task29 PART C：图节点详情 → 同一 raw-YAML 编辑抽屉（entityId 走
+          // entityRawId 唯一解析器，与卡片/列表按钮同源）；关闭详情避免编辑
+          // 保存后抽屉里残留旧数据。
+          setDrawer(null);
+          openYamlEditor(entityRawId(entity), entity.name);
+        }}
+      />
 
       {/* task27 PART A: raw YAML 编辑抽屉（保存成功 → 重新拉取拓扑视图） */}
       <YamlEditorDrawer
