@@ -1455,18 +1455,18 @@ KUBE2 = (
 # control-plane=.10 / worker=.20（角色标签 + InternalIP）
 NODES_WITH_CP = (
     '{"items":['
-    '{"metadata":{"name":"cp","labels":{"node-role.kubernetes.io/control-plane":""}},'
+    '{"kind":"Node","metadata":{"name":"cp","labels":{"node-role.kubernetes.io/control-plane":""}},'
     '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.10"}]}},'
-    '{"metadata":{"name":"w1","labels":{}},'
+    '{"kind":"Node","metadata":{"name":"w1","labels":{}},'
     '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.20"}]}}'
     ']}'
 )
 # 无 control-plane 角色节点（两台都无标签）
 NODES_NO_CP = (
     '{"items":['
-    '{"metadata":{"name":"w1","labels":{}},'
+    '{"kind":"Node","metadata":{"name":"w1","labels":{}},'
     '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.20"}]}},'
-    '{"metadata":{"name":"w2","labels":{}},'
+    '{"kind":"Node","metadata":{"name":"w2","labels":{}},'
     '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.30"}]}}'
     ']}'
 )
@@ -1497,7 +1497,8 @@ def test_k8s_worker_first_cp_second_reconciled(tmp_path):
 
     d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
                          runner=_k8s_runner("203.0.113.10", with_cp_label=True))
-    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+    # task30：接管路径的 probes 文案带了接管说明，语义仍是 CP 归属
+    assert "control-plane" in d_cp["probes"]["k8s-attribution"]
     assert _k8s_names(d_cp) == {"grafana", "kube-dns"}
 
     stripped = reconcile_k8s_cluster_claims([d_worker, d_cp])
@@ -1629,3 +1630,162 @@ def test_write_discovery_merge_path_dedupes_against_existing_and_batch(tmp_path)
     names = [s["name"] for s in index["services"]]
     assert names == ["svc-a", "svc-b"]
     assert index["services"][0]["managed_by"] == "manual"  # 存量不覆盖
+
+
+# ---------------------------------------------------------------------------
+# task30 PART A：归属持久化（跨进程）+ 成员 guard
+# ---------------------------------------------------------------------------
+
+def test_k8s_claim_persists_across_processes(tmp_path):
+    """(a) 两次独立 discover（reset 模拟新进程、同一 home）：持久声明被尊重——
+    非归属主机不再复制；归属主机重扫保持归属并刷新 last_verified。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+
+    # run 1：control-plane 扫描 → 归属 + 持久化
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                         home=home)
+    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+    state_file = home / "runtime" / "k8s_cluster_claims.json"
+    assert state_file.is_file()
+    import os as _os
+    assert (_os.stat(state_file).st_mode & 0o777) == 0o600
+    state = yaml.safe_load(state_file.read_text(encoding="utf-8"))
+    assert state["clusters"]["k3s-prod"]["host"] == "203.0.113.10"
+    assert state["clusters"]["k3s-prod"]["is_control_plane"] is True
+
+    # run 2（新进程语义）：reset 清内存；worker 扫描 → 磁盘播种声明挡住复制
+    from tools.topo_discovery import reset_k8s_cluster_claims
+    reset_k8s_cluster_claims()
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                             home=home)
+    assert "skipped" in d_worker["probes"]["k8s-attribution"]
+    assert "持久声明" in d_worker["probes"]["k8s-attribution"]
+    assert _k8s_names(d_worker) == set()
+
+    # run 3（新进程语义）：归属主机自己重扫 → 保持归属 + 刷新
+    reset_k8s_cluster_claims()
+    d_cp2 = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                          runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                          home=home)
+    assert d_cp2["probes"]["k8s-attribution"] == "owner-refresh（归属保持）"
+    assert _k8s_names(d_cp2) == {"grafana", "kube-dns"}
+
+
+def test_k8s_non_member_host_never_attributed(tmp_path):
+    """(b) kubectl context 指向远程集群但本机不是成员（laptop 场景）→
+    服务集不归属、不落声明，probes 记录跳过原因。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    # 节点表 = 远程集群（.10/.20）；扫描主机 .99 不在其中
+    d = discover_host("203.0.113.99", "prod", cluster="beijing",
+                      runner=_k8s_runner("203.0.113.99", with_cp_label=True),
+                      home=home)
+    assert d["probes"]["k8s-role"].startswith("non-member")
+    assert "非成员" in d["probes"]["k8s-attribution"]
+    assert _k8s_names(d) == set()
+    # 不产生归属声明
+    state_file = home / "runtime" / "k8s_cluster_claims.json"
+    assert not state_file.exists()
+
+
+def test_k8s_member_worker_claims_when_no_claim(tmp_path):
+    """(c) 成员主机（worker）在无声明时正常归属（首个成功者语义）。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                      home=home)
+    assert d["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d) == {"grafana", "kube-dns"}
+    state = yaml.safe_load(
+        (home / "runtime" / "k8s_cluster_claims.json").read_text(encoding="utf-8"))
+    assert state["clusters"]["k3s-prod"]["host"] == "203.0.113.20"
+
+
+def test_k8s_owner_failure_moves_claim(tmp_path):
+    """(d) 归属主机后续扫描 kubectl 失效 → 声明让位，下一个成员接管。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    from tools.topo_discovery import reset_k8s_cluster_claims, _load_k8s_claims_disk
+
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                         home=home)
+    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+
+    reset_k8s_cluster_claims()
+    # 归属主机 kubectl 失效（比如被降权/节点下线）
+    failing_cp = FakeRunner(**{"kubectl": ("", 127), "kubectl version": ("", 127)})
+    discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                  runner=failing_cp, home=home)
+    assert "k3s-prod" not in _load_k8s_claims_disk(home), "归属主机失效后声明必须让位"
+
+    # 同批次（同一进程状态）内 worker 接管
+    d_w = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                        runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                        home=home)
+    assert d_w["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d_w) == {"grafana", "kube-dns"}
+    assert _load_k8s_claims_disk(home)["k3s-prod"]["host"] == "203.0.113.20"
+
+
+def test_k8s_owner_left_cluster_clears_claim(tmp_path):
+    """(d') 归属主机重扫但已不在成员表（集群重建/迁移）→ 声明失效让位。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    from tools.topo_discovery import reset_k8s_cluster_claims, _load_k8s_claims_disk
+
+    discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                  runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                  home=home)
+    reset_k8s_cluster_claims()
+    # 归属主机仍在扫，但节点表里已经没有它（被移出集群）
+    discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                  runner=_k8s_runner("203.0.113.10", with_cp_label=False),
+                  home=home)
+    assert "k3s-prod" not in _load_k8s_claims_disk(home)
+
+
+def test_k8s_seeded_claim_not_stolen_by_cp_across_processes(tmp_path):
+    """接管规则边界：磁盘播种的声明（归属 worker）不被后到 CP 抢——接管仅在
+    归属主机失效时发生（task30 选定的简单规则，报告里已声明）。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    from tools.topo_discovery import (  # noqa: F401
+        _load_k8s_claims_disk,
+        reset_k8s_cluster_claims,
+    )
+
+    discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                  runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                  home=home)  # worker 首个成功 → 归属（无 CP 在场）
+    reset_k8s_cluster_claims()
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                         home=home)
+    assert "skipped" in d_cp["probes"]["k8s-attribution"]
+    assert _k8s_names(d_cp) == set()
+    assert _load_k8s_claims_disk(home)["k3s-prod"]["host"] == "203.0.113.20"
+
+
+def test_k8s_membership_topology_fallback(tmp_path):
+    """nodes 探针不可用但拓扑 host 行声明了 cluster 归属 → 视为成员可归属。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    (home / "topology.yaml").write_text(
+        "version: 4\n"
+        "hosts:\n"
+        "  - {name: 203.0.113.20, type: host, env: prod, cluster: k3s-prod}\n"
+        "clusters: []\n",
+        encoding="utf-8",
+    )
+    runner = _k8s_runner("203.0.113.20", with_cp_label=True)
+    runner.probes["kubectl get nodes"] = ("", 127)  # 探针失败 → 回退拓扑声明
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=runner, home=home)
+    assert d["probes"]["k8s-role"] == "member（拓扑 host 行 cluster 声明）"
+    assert d["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d) == {"grafana", "kube-dns"}

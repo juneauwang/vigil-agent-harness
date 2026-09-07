@@ -296,7 +296,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         try:
             discovery = discover_host(
                 host, args.env, creds, cluster=args.cluster,
-                skip_unidentified=args.skip_unidentified
+                skip_unidentified=args.skip_unidentified, home=home
             )
             successes.append({"host": host, "discovery": discovery})
             _print_summary(discovery)
