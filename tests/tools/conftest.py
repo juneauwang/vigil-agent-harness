@@ -67,3 +67,14 @@ def disable_lazy_stt_install():
     """
     with patch("tools.transcription_tools._try_lazy_install_stt", return_value=False):
         yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_k8s_cluster_claims():
+    """task29 PART A：k8s 集群归属登记是进程级状态——每个测试前复位，
+    防止同文件内先到的测试占住集群键、后到的发现被错误跳过 k8s 枚举。"""
+    from tools.topo_discovery import reset_k8s_cluster_claims
+
+    reset_k8s_cluster_claims()
+    yield
+    reset_k8s_cluster_claims()

@@ -22,6 +22,7 @@ from tools.topo_discovery import (
     DiscoveryError,
     ProbeResult,
     discover_host,
+    reconcile_k8s_cluster_claims,
     write_discovery,
 )
 
@@ -1259,15 +1260,25 @@ def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path)
 
 
 def test_write_discovery_new_host_append_unchanged(tmp_path):
-    """新 host 追加（现状行为不变）：互不干扰、topology hosts 段逐条追加。"""
+    """新 host 追加：互不干扰、topology hosts 段逐条追加。
+
+    task29 PART A 语义变更：同批次同集群（default）的第二台主机不再复制
+    k8s 服务集（归属 node-a）——node-b 的 3 条中 grafana 不再重复，appended
+    = 2（harbor/db 本地 docker 行照常）。
+    """
     home = tmp_path / "hermes_home"
     home.mkdir()
     r1 = write_discovery(home, _discovery("node-a"))
     r2 = write_discovery(home, _discovery("node-b"))
     assert r1["merged"] is False and r2["merged"] is False
-    assert r1["appended"] == 3 and r2["appended"] == 3
+    assert r1["appended"] == 3
+    assert r2["appended"] == 2  # grafana（kubectl 行）归属 node-a，node-b 不复制
     topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
     assert [h["name"] for h in topo["hosts"]] == ["node-a", "node-b"]
+    na = yaml.safe_load((home / "services" / "node-a.yaml").read_text(encoding="utf-8"))
+    nb = yaml.safe_load((home / "services" / "node-b.yaml").read_text(encoding="utf-8"))
+    assert "grafana" in {s["name"] for s in na["services"]}
+    assert "grafana" not in {s["name"] for s in nb["services"]}
 
 
 def test_write_discovery_dry_run_not_applied_by_cli(tmp_path, monkeypatch):
@@ -1425,3 +1436,196 @@ def test_write_discovery_backfills_reachability_onto_existing_rows(tmp_path):
     # 新行：直接带标记。
     assert rows["argocd-server"]["reachability"] == "external"
     assert rows["argocd-lb"]["reachability"] == "external"
+
+
+# ---------------------------------------------------------------------------
+# task29 PART A：k8s Service 集群级归属（防逐主机复制）+ 写入方去重
+# ---------------------------------------------------------------------------
+
+KUBE2 = (
+    '{"items":['
+    '{"kind":"Service","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"ports":[{"port":3000,"nodePort":30030}]}},'
+    '{"kind":"Service","metadata":{"name":"kube-dns","namespace":"kube-system"},'
+    '"spec":{"ports":[{"port":53,"nodePort":30053}]}},'
+    '{"kind":"Deployment","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"template":{"spec":{"containers":[{"image":"grafana/grafana:10"}]}}}}'
+    ']}'
+)
+# control-plane=.10 / worker=.20（角色标签 + InternalIP）
+NODES_WITH_CP = (
+    '{"items":['
+    '{"metadata":{"name":"cp","labels":{"node-role.kubernetes.io/control-plane":""}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.10"}]}},'
+    '{"metadata":{"name":"w1","labels":{}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.20"}]}}'
+    ']}'
+)
+# 无 control-plane 角色节点（两台都无标签）
+NODES_NO_CP = (
+    '{"items":['
+    '{"metadata":{"name":"w1","labels":{}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.20"}]}},'
+    '{"metadata":{"name":"w2","labels":{}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.30"}]}}'
+    ']}'
+)
+
+
+def _k8s_runner(host_ip, *, with_cp_label):
+    """kubectl 可达主机的 runner：服务枚举 + 节点表（自判定角色）。"""
+    return FakeRunner(**{
+        "kubectl get nodes": NODES_WITH_CP if with_cp_label else NODES_NO_CP,
+        "kubectl version": "",
+        "kubectl": KUBE2,
+        "docker ps": ("", 127),
+        "compose ls": ("", 127),
+    })
+
+
+def _k8s_names(disc):
+    return {s["name"] for s in disc["services"]
+            if s.get("managed_by") == "kubectl"}
+
+
+def test_k8s_worker_first_cp_second_reconciled(tmp_path):
+    """worker 先扫（临时归属）→ control-plane 后到接管 → 对账剥离 worker 行。"""
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=_k8s_runner("203.0.113.20", with_cp_label=True))
+    assert d_worker["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d_worker) == {"grafana", "kube-dns"}
+
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True))
+    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+    assert _k8s_names(d_cp) == {"grafana", "kube-dns"}
+
+    stripped = reconcile_k8s_cluster_claims([d_worker, d_cp])
+    assert stripped == [{
+        "host": "203.0.113.20", "cluster": "k3s-prod",
+        "owner": "203.0.113.10", "removed": 2,
+    }]
+    # worker 的 kubectl 行被剥离，非 k8s（docker/systemd）行不动
+    assert _k8s_names(d_worker) == set()
+    assert "grafana" not in d_worker["details"]
+    # 端口可见性保留：NodePort 不因归属跳过变成 unidentified 噪音
+    assert "unidentified-30030" not in {s["name"] for s in d_worker["pending_review"]}
+
+    # 落盘：同一集群服务集只落主人一份
+    home = tmp_path
+    write_discovery(home, d_cp)
+    write_discovery(home, d_worker)
+    cp_index = yaml.safe_load((home / "services" / "203.0.113.10.yaml").read_text())
+    w_index = yaml.safe_load((home / "services" / "203.0.113.20.yaml").read_text())
+    cp_names = {s["name"] for s in cp_index["services"]}
+    w_names = {s["name"] for s in w_index["services"]}
+    assert {"grafana", "kube-dns"} <= cp_names
+    assert not ({"grafana", "kube-dns"} & w_names)
+
+
+def test_k8s_cp_first_worker_gets_no_duplicate():
+    """control-plane 先扫 → 直接归属；worker 完全不产 k8s 行（无需对账）。"""
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True))
+    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=_k8s_runner("203.0.113.20", with_cp_label=True))
+    assert "skipped" in d_worker["probes"]["k8s-attribution"]
+    assert _k8s_names(d_worker) == set()
+    # compose 冲突退让仍拿得到全集群 k8s 服务名（名字集补齐）
+    assert not reconcile_k8s_cluster_claims([d_worker, d_cp])
+
+
+def test_k8s_no_control_plane_first_successful_owns(tmp_path):
+    """集群里没有 control-plane 节点 → 首个枚举成功的主机归属，第二台跳过。"""
+    d_w1 = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.20", with_cp_label=False))
+    assert d_w1["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d_w1) == {"grafana", "kube-dns"}
+
+    d_w2 = discover_host("203.0.113.30", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.30", with_cp_label=False))
+    assert "skipped" in d_w2["probes"]["k8s-attribution"]
+    assert _k8s_names(d_w2) == set()
+    assert not reconcile_k8s_cluster_claims([d_w1, d_w2])
+
+
+def test_k8s_non_k8s_services_on_worker_untouched(tmp_path):
+    """worker 的 docker/systemd 本地服务不受归属剥离影响。"""
+    worker_runner = _k8s_runner("203.0.113.20", with_cp_label=True)
+    worker_runner.probes["docker ps"] = DOCKER_PS
+    worker_runner.probes["compose ls"] = COMPOSE_LS
+    worker_runner.probes["ss -tlnp"] = SS_TLNP
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=worker_runner)
+    assert {"harbor", "db"} <= {s["name"] for s in d_worker["services"]}
+
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True))
+    reconcile_k8s_cluster_claims([d_worker, d_cp])
+    names = {s["name"] for s in d_worker["services"]}
+    assert {"harbor", "db"} <= names
+    assert _k8s_names(d_worker) == set()
+
+    home = tmp_path
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts: []\nclusters: []\n", encoding="utf-8")
+    write_discovery(home, d_cp)
+    write_discovery(home, d_worker)
+    w_index = yaml.safe_load((home / "services" / "203.0.113.20.yaml").read_text())
+    w_names = {s["name"] for s in w_index["services"]}
+    assert {"harbor", "db"} <= w_names
+    assert not ({"grafana", "kube-dns"} & w_names)
+
+
+def test_write_discovery_dedupes_duplicate_names_in_one_fragment(tmp_path):
+    """写入方按 (host 文件, name) 去重：同一片段内重名只落首见（防御性）。"""
+    base = {"name": "svc-a", "type": "app", "managed_by": "kubectl"}
+    dup = dict(base, endpoint="203.0.113.20:30030")  # 同名不同 endpoint（老路径复制的形态）
+    svc_b = {"name": "svc-b", "type": "app", "managed_by": "systemd"}
+    disc = {
+        "version": 4,
+        "host": {"name": "node1", "type": "host", "env": "test", "cluster": "default"},
+        "services": [base, dup, svc_b],
+        "details": {},
+    }
+    result = write_discovery(tmp_path, disc)
+    assert result["appended"] == 2
+    index = yaml.safe_load((tmp_path / "services" / "node1.yaml").read_text())
+    names = [s["name"] for s in index["services"]]
+    assert names == ["svc-a", "svc-b"]
+
+
+def test_write_discovery_merge_path_dedupes_against_existing_and_batch(tmp_path):
+    """合并路径：存量同名跳过（原语义）+ 片段内新重名也只落一条。"""
+    home = tmp_path
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts: []\nclusters: []\n", encoding="utf-8")
+    existing_index = {
+        "host": "node1",
+        "updated_at": "2026-09-07",
+        "services": [{"name": "svc-a", "type": "app", "managed_by": "manual"}],
+    }
+    (home / "services").mkdir()
+    (home / "services" / "node1.yaml").write_text(
+        yaml.safe_dump(existing_index), encoding="utf-8")
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts:\n  - {name: node1, type: host, env: test}\nclusters: []\n",
+        encoding="utf-8")
+
+    svc_a2 = {"name": "svc-a", "type": "app", "managed_by": "kubectl"}
+    svc_b = {"name": "svc-b", "type": "app", "managed_by": "systemd"}
+    svc_b2 = dict(svc_b)  # 片段内新重名
+    disc = {
+        "version": 4,
+        "host": {"name": "node1", "type": "host", "env": "test", "cluster": "default"},
+        "services": [svc_a2, svc_b, svc_b2],
+        "details": {},
+    }
+    result = write_discovery(home, disc)
+    assert result["appended"] == 1  # 只追加 svc-b；svc-a 存量保留、svc-b2 重名跳过
+    index = yaml.safe_load((home / "services" / "node1.yaml").read_text())
+    names = [s["name"] for s in index["services"]]
+    assert names == ["svc-a", "svc-b"]
+    assert index["services"][0]["managed_by"] == "manual"  # 存量不覆盖

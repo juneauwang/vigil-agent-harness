@@ -1349,6 +1349,122 @@ def _service_from_container(c: Dict[str, Any], host: str, env: str,
     return svc
 
 
+# ---------------------------------------------------------------------------
+# k8s 集群服务集归属登记（task29 PART A）
+#
+# k8s Service 是集群级资源：从 control-plane 和从 worker 枚举得到同一集合
+# （仅 endpoint IP 不同）。discover_host 逐主机独立调用，这里用进程内登记把
+# 每个集群的 k8s 服务行归属到唯一主机：control-plane（kubectl get nodes 自
+# 匹配 InternalIP 判定）优先，否则首个 kubectl 枚举成功的主机；先到的非
+# control-plane 归属是临时的，后到的 control-plane 会接管——接管后由
+# reconcile_k8s_cluster_claims() 在批次落盘前从临时归属者的片段里剥离
+# kubectl 服务行（write_discovery 在整个 host 循环之后才跑，磁盘不会出现
+# 两份）。测试用 reset_k8s_cluster_claims() 复位。
+# ---------------------------------------------------------------------------
+
+_K8S_CLUSTER_CLAIMS: Dict[str, Dict[str, Any]] = {}
+
+
+def reset_k8s_cluster_claims() -> None:
+    """清空进程内 k8s 归属登记（测试/新发现批次入口）。"""
+    _K8S_CLUSTER_CLAIMS.clear()
+
+
+def _parse_kubectl_node_control_planes(output: str) -> List[str]:
+    """``kubectl get nodes -o json`` → control-plane/master 节点 InternalIP 列表。
+
+    角色标签：node-role.kubernetes.io/control-plane（新）/
+    node-role.kubernetes.io/master（老）。解析失败 → 空列表（保守：视为
+    无法判定，全部按非 control-plane 走 first-successful 语义）。
+    """
+    try:
+        data = json.loads(output or "{}")
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    ips: List[str] = []
+    for node in data.get("items") or []:
+        if not isinstance(node, dict):
+            continue
+        labels = ((node.get("metadata") or {}).get("labels") or {})
+        if not any(
+            str(k).startswith("node-role.kubernetes.io/control-plane")
+            or str(k).startswith("node-role.kubernetes.io/master")
+            for k in labels
+        ):
+            continue
+        for addr in ((node.get("status") or {}).get("addresses") or []):
+            if isinstance(addr, dict) and addr.get("type") == "InternalIP" \
+                    and addr.get("address"):
+                ips.append(str(addr["address"]))
+    return ips
+
+
+def _detect_control_plane_role(runner: Callable[[str], ProbeResult],
+                               host: str, probes: Dict[str, str]) -> bool:
+    """本扫描主机是否集群 control-plane（best-effort，失败保守 False）。
+
+    任何能跑 kubectl 的节点都能看到全集群节点表（含角色标签 + InternalIP），
+    自匹配即可判定本机角色——不需要登录 control-plane。
+    """
+    res = _probe(runner, "kubectl get nodes -o json 2>/dev/null")
+    if not res.ok:
+        probes["k8s-role"] = "unknown（kubectl get nodes 不可用）"
+        return False
+    cp_ips = _parse_kubectl_node_control_planes(res.stdout)
+    is_cp = str(host) in cp_ips
+    probes["k8s-role"] = "control-plane" if is_cp else "worker"
+    return is_cp
+
+
+def reconcile_k8s_cluster_claims(
+    discoveries: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """批次落盘前对账 k8s 归属：剥离被接管主机的 kubectl 服务行（原地修改）。
+
+    discover_host 逐主机独立返回：先到的临时归属者（worker）返回值可能已带
+    k8s 服务行/档案，随后 control-plane 接管登记——落盘前把非最终归属者片段
+    里的 kubectl 行剥掉（services 行 + 同名 details），防同一集群服务集双写。
+    control-plane 先到时登记不被接管，本函数幂等无事发生。
+
+    Returns:
+        每个被剥离片段一条 ``{"host", "cluster", "owner", "removed"}``。
+    """
+    stripped: List[Dict[str, Any]] = []
+    for disc in discoveries or []:
+        if not isinstance(disc, dict):
+            continue
+        host_row = disc.get("host") or {}
+        host_name = str(host_row.get("name") or "")
+        key = str(host_row.get("cluster") or "default")
+        claim = _K8S_CLUSTER_CLAIMS.get(key)
+        if not claim or not host_name or host_name == str(claim.get("host")):
+            continue
+        services = [s for s in disc.get("services") or [] if isinstance(s, dict)]
+        k8s_names = {
+            str(s.get("name")) for s in services
+            if str(s.get("managed_by") or "") == "kubectl"
+        }
+        if not k8s_names:
+            continue
+        disc["services"] = [
+            s for s in services
+            if str(s.get("managed_by") or "") != "kubectl"
+        ]
+        details = disc.get("details")
+        if isinstance(details, dict):
+            for n in k8s_names:
+                details.pop(n, None)
+        stripped.append({
+            "host": host_name,
+            "cluster": key,
+            "owner": str(claim.get("host")),
+            "removed": len(k8s_names),
+        })
+    return stripped
+
+
 def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                   *, cluster: str = "", runner: Optional[Callable[[str], ProbeResult]] = None,
                   skip_unidentified: bool = False) -> Dict[str, Any]:
@@ -1476,6 +1592,16 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
             probes["docker"] = reason[-1][:120] if reason else "docker 不可用（exit!=0）"
 
     # 2) k8s 枚举消费（probe 已先行）。deploy 喂档案；svc 一条服务行（9.3）。
+    #    task29 PART A：k8s Service 是集群级资源——每个 kubectl 可达主机各自
+    #    枚举会把同一集合逐主机复制一份（live 事故：两主机各 43 条、仅
+    #    endpoint IP 不同；监控 92 行 43 重复 → React key 冲突）。进程内归属
+    #    登记制：control-plane 优先归属，否则首个 kubectl 枚举成功的主机；
+    #    非归属主机不产服务行/实体档案/helm 关联，但保留 ①服务端口进
+    #    seen_ports（NodePort 在每个节点都真实监听，否则 ss 探针会给 worker
+    #    补一堆 unidentified pending_review）、②服务名进 compose 冲突退让。
+    #    先到 worker 被后到 control-plane 接管时，由
+    #    reconcile_k8s_cluster_claims() 在批次落盘前剥离临时归属者的行
+    #    （CLI 在整个 host 循环结束、write_discovery 之前调用）。
     k8s_deploys: Dict[str, Dict[str, Any]] = {
         f"{r.get('namespace')}/{r['name']}": r
         for r in k8s_rows if r["kind"] == "k8s-deploy"
@@ -1497,79 +1623,106 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
             detected = bool(k3s_git.stdout.strip() or rancher_dir.stdout.strip())
             runtime = "k3s" if detected else "kubernetes"
             probes["k3s"] = "detected" if detected else "not-detected(standard-kubernetes)"
-        for row in k8s_rows:
-            if row["kind"] != "k8s-service":
-                continue
-            for p in row.get("ports") or []:
-                seen_ports.add(p)
-            name = row["name"]
-            if name in [s["name"] for s in services]:
-                # 与 compose 聚合实体同名 → compose 已退让项目名，正常不会命中；
-                # 多 namespace 同名 svc 仍是首见优先（现有行为，不在本批范围）。
-                continue
-            node_port = row.get("ports")[0] if row.get("ports") else None
-            detail_path = _entity_filename(cluster, host, name, env)
-            image = ""
-            dep = k8s_deploys.get(f"{row.get('namespace')}/{name}")
-            if dep:
-                image = dep.get("image") or ""
-            service_type = _classify_service_type(name, image)
-            svc = {
-                "name": name,
-                "type": service_type,
-                "managed_by": "kubectl",
-                "reachability": str(row.get("reachability") or "external"),
-                "endpoint": f"{host}:{node_port}" if node_port else None,
-                "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
-                "log_paths": [],
-                "depends_on": [],
-                "source": "discovered",
-                "last_verified": _dt.date.today().isoformat(),
-                "needs_review": True,
-                "detail": detail_path,
+        # 归属判定（runtime 检测对所有 kubectl 可达主机都要——worker 也是
+        # k8s runtime；只有服务行/档案的消费按归属门控）。
+        k8s_self_is_cp = _detect_control_plane_role(runner, host, probes)
+        k8s_claim = _K8S_CLUSTER_CLAIMS.get(cluster_display)
+        k8s_emit = k8s_claim is None or (
+            k8s_self_is_cp and not k8s_claim.get("is_control_plane"))
+        if k8s_emit:
+            _K8S_CLUSTER_CLAIMS[cluster_display] = {
+                "host": _safe_filename(host),
+                "is_control_plane": k8s_self_is_cp,
+                "svc_names": set(k8s_svc_names),
             }
-            services.append(svc)
-            deployments = []
-            if dep:
-                deployments.append({"name": dep["name"], "replicas": 0, "ready": 0})
-            details[name] = {
-                "name": name,
-                "detail": detail_path,
-                "version": _image_version(image),
-                "updated_at": _dt.date.today().isoformat(),
-                "checks": [],
-                "snapshot": {
-                    "captured_at": _now_iso(),
+            probes["k8s-attribution"] = (
+                "control-plane" if k8s_self_is_cp else "first-successful")
+        else:
+            # compose 项目命名冲突退让仍需要全集群 k8s 服务名（本机枚举只
+            # 对主人有意义，但名字集对任何主机都该完整）。
+            k8s_svc_names = set(k8s_svc_names) | set(k8s_claim.get("svc_names") or set())
+            probes["k8s-attribution"] = (
+                f"skipped（集群 k8s 服务集归属 {k8s_claim.get('host')}）")
+        # 端口可见性按主机无条件保留：NodePort/ExternalIP 在每个节点都监听。
+        for row in k8s_rows:
+            if row["kind"] == "k8s-service":
+                for p in row.get("ports") or []:
+                    seen_ports.add(p)
+        if k8s_emit:
+            for row in k8s_rows:
+                if row["kind"] != "k8s-service":
+                    continue
+                name = row["name"]
+                if name in [s["name"] for s in services]:
+                    # 与 compose 聚合实体同名 → compose 已退让项目名，正常不会命中；
+                    # 多 namespace 同名 svc 仍是首见优先（现有行为，不在本批范围）。
+                    continue
+                node_port = row.get("ports")[0] if row.get("ports") else None
+                detail_path = _entity_filename(cluster, host, name, env)
+                image = ""
+                dep = k8s_deploys.get(f"{row.get('namespace')}/{name}")
+                if dep:
+                    image = dep.get("image") or ""
+                service_type = _classify_service_type(name, image)
+                svc = {
+                    "name": name,
+                    "type": service_type,
+                    "managed_by": "kubectl",
+                    "reachability": str(row.get("reachability") or "external"),
+                    "endpoint": f"{host}:{node_port}" if node_port else None,
+                    "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
+                    "log_paths": [],
+                    "depends_on": [],
                     "source": "discovered",
-                    "common": {
-                        "version": _image_version(image),
-                        "config_dir": "",
-                        "log_dir": "",
-                        "data_dir": "",
-                        "mode": "single",
-                    },
-                    "by_type": {},
-                    "by_runtime": {
-                        "kubectl": {
-                            "namespace": row.get("namespace", ""),
-                            "deployments": deployments,
-                            "pvc": [],
+                    "last_verified": _dt.date.today().isoformat(),
+                    "needs_review": True,
+                    "detail": detail_path,
+                }
+                services.append(svc)
+                deployments = []
+                if dep:
+                    deployments.append({"name": dep["name"], "replicas": 0, "ready": 0})
+                details[name] = {
+                    "name": name,
+                    "detail": detail_path,
+                    "version": _image_version(image),
+                    "updated_at": _dt.date.today().isoformat(),
+                    "checks": [],
+                    "snapshot": {
+                        "captured_at": _now_iso(),
+                        "source": "discovered",
+                        "common": {
+                            "version": _image_version(image),
+                            "config_dir": "",
+                            "log_dir": "",
+                            "data_dir": "",
+                            "mode": "single",
+                        },
+                        "by_type": {},
+                        "by_runtime": {
+                            "kubectl": {
+                                "namespace": row.get("namespace", ""),
+                                "deployments": deployments,
+                                "pvc": [],
+                            },
                         },
                     },
-                },
-                "notes": "",
-            }
-            svc_ns[name] = row.get("namespace", "")
+                    "notes": "",
+                }
+                svc_ns[name] = row.get("namespace", "")
         # helm release 探测（kubectl 可用且 helm 存在时）：k8s service 条目不变，
         # release 细节写实体档案 by_runtime.helm.releases；失败 skipped 不阻塞。
-        helm_res = _probe(runner, "helm list -A -o json 2>/dev/null")
-        if helm_res.ok:
-            releases = _parse_helm_list(helm_res.stdout)
-            probes["helm"] = f"ok({len(releases)} releases)"
-            _attach_helm_releases(releases, svc_ns, details,
-                                  cluster=cluster, host=host, env=env)
-        else:
-            probes["helm"] = "skipped（helm 不可用）"
+        # task29 PART A：helm release 也是集群级组件 → 只由归属主机探测落档，
+        # 非归属主机跳过（与 k8s 服务行同一归属语义）。
+        if k8s_emit:
+            helm_res = _probe(runner, "helm list -A -o json 2>/dev/null")
+            if helm_res.ok:
+                releases = _parse_helm_list(helm_res.stdout)
+                probes["helm"] = f"ok({len(releases)} releases)"
+                _attach_helm_releases(releases, svc_ns, details,
+                                      cluster=cluster, host=host, env=env)
+            else:
+                probes["helm"] = "skipped（helm 不可用）"
 
     # 2.5) ss 监听端口探测（先于 systemd：供无端口系统服务过滤 + 未识别端口补条目）。
     ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
@@ -1955,13 +2108,22 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
     merged_rows: List[Dict[str, Any]] = (
         list(existing_rows) if (host_exists and not force) else []
     )
+    # task29 PART A（防御性）：写入方按 (host 文件, name) 去重——合并路径的
+    # existing_names 只挡"新 vs 磁盘存量"，挡不住同一发现片段/老代码路径产出
+    # 的片段内重名（如跨主机复制来的服务集被手工并进一个片段）。监控按
+    # (host, name) 消费，重复键会让列表渲染异常——数据层清干净，不留兜底给
+    # 读取端。首个同名保留（与 k8s/compose/systemd 各自的"首见优先"一致）。
+    merged_names = {
+        str(r.get("name")) for r in merged_rows
+        if isinstance(r, dict) and r.get("name")
+    }
     appended = 0
     for svc in discovery.get("services") or []:
         if not isinstance(svc, dict):
             continue
         row = dict(svc)
         row.pop("_host", None)
-        if str(row.get("name")) in existing_names:
+        if str(row.get("name")) in merged_names:
             # 同名跳过：保留现有行（含手动 endpoint/type/managed_by），不覆盖。
             # 例外：reachability（内/外部可达标记）——现有行缺省而本次发现带值
             # 时回填；否则老拓扑里的 ClusterIP 服务永远等不到标记，监控误报
@@ -1974,6 +2136,7 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
                         break
             continue
         merged_rows.append(row)
+        merged_names.add(str(row.get("name")))
         appended += 1
     kept = len(existing_rows) if (host_exists and not force) else 0
 
