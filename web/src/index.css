@@ -146,6 +146,15 @@ body {
 }
 .vigil-input:focus { border-color: var(--vigil-primary); }
 
+/* task27 PART C：带左侧内嵌图标的输入框（图标 absolute left-2.5 → 占位
+   10–24px，30px 左净空 = 10px 图标起点 + 14px 图标宽 + 6px 间隙）。
+   必须用本类而不是 tailwind pl-* 工具类：.vigil-input 是非 layered 规则，
+   CSS 级联中非 layered 恒胜 @layer utilities——pl-8 会被 .vigil-input 的
+   `padding: 0 10px` 吞掉，左净空失效，图标与输入文字重叠（本 bug 根因）。 */
+.vigil-input-icon {
+  padding-left: 30px;
+}
+
 .vigil-badge {
   display: inline-flex;
   align-items: center;
