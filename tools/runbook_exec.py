@@ -211,7 +211,7 @@ def _is_local_endpoint(endpoint: Any, host_name: str) -> bool:
     if not e or e in ("localhost", "127.0.0.1", "::1"):
         return True
     # 只比本机身份（hostname/DNS/网卡 IP）——不能和拓扑 host_name 比！
-    # （2026-08-25 实测：阿里云主机 endpoint=39.106.217.32 == host_name，
+    # （2026-08-25 实测：阿里云主机 endpoint=203.0.113.32 == host_name，
     # 旧代码 `e == host_name → local` 误判本地，kubectl 命令在本机跑导致
     # "timed out waiting for the condition"，runbook 执行器全部走错机器。）
     if e in _local_host_names():
