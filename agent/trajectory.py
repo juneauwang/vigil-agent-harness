@@ -7,6 +7,7 @@ the file-write logic live here.
 
 import json
 import logging
+import os
 from datetime import datetime
 from typing import Any, Dict, List
 
@@ -115,7 +116,15 @@ def _read_existing_count(path: Path) -> int:
 def _write_event_locked(path: Path, event: Dict[str, Any]) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8") as f:
+        # 0600 creation + repair-on-open（task11 D3）：事件含命令行/描述，可能
+        # 内嵌敏感值，umask 默认 0644 世界可读不可接受——与 secret 类文件约定
+        # 对齐（0700 目录 / 0600 文件）。fchmod 兼修既有 0644 旧文件。
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
+        with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(event, ensure_ascii=False) + "\n")
     except Exception as _exc:
         logger.warning("Failed to write trajectory event %s: %s", path, _exc)

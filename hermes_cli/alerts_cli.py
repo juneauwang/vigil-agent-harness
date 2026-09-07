@@ -127,8 +127,16 @@ def _run_history(args) -> int:
 
 
 def run_alerts_command(args) -> int:
-    """`vigil alerts` 分发：默认/显式 list 列活跃告警 + 建议；history 回看审计。"""
+    """`vigil alerts` 分发：默认/显式 list 列活跃告警 + 建议；history 回看审计；
+    auto-dispatch 注册/注销告警自动派发（任务25，opt-in 默认关）。"""
     sub = str(getattr(args, "alerts_command", "") or "").strip()
     if sub == "history":
         return _run_history(args)
+    if sub == "auto-dispatch":
+        from hermes_cli.alert_autodispatch import (
+            register_alert_autodispatch_schedule,
+        )
+        register_alert_autodispatch_schedule(
+            str(getattr(args, "schedule", "") or ""))
+        return _STATUS_OK
     return _run_list(args)

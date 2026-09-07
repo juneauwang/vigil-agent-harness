@@ -232,3 +232,25 @@ def test_approval_approved_emits_approved(tmp_path, monkeypatch):
     ]
     assert [e["approval"] for e in approvals] == ["requested", "approved"]
     assert approvals[-1]["action"] == "rm -rf /tmp/trajectory-approval-test"
+
+
+# ---------------------------------------------------------------------------
+# batch94 D3 — 轨迹事件文件 0600 创建 + 既有宽松档位修复
+# ---------------------------------------------------------------------------
+
+def test_event_file_created_0600(tmp_path):
+    trajectory_mod.record_event(type="tool_call", session_id="perm-a",
+                                action="echo hi")
+    path = tmp_path / "trajectory" / "perm-a.jsonl"
+    assert path.is_file()
+    assert (path.stat().st_mode & 0o777) == 0o600
+
+
+def test_event_file_repairs_legacy_0644(tmp_path):
+    path = tmp_path / "trajectory" / "perm-b.jsonl"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{}\n", encoding="utf-8")
+    os.chmod(path, 0o644)
+    trajectory_mod.record_event(type="tool_call", session_id="perm-b",
+                                action="echo hi")
+    assert (path.stat().st_mode & 0o777) == 0o600

@@ -52,7 +52,7 @@ exit 0
 def _k8s_target():
     return {"name": "argocd-redis", "type": "cache", "env": "prod",
             "cluster": "beijing_cluster", "managed_by": "kubectl",
-            "host": "39.106.217.32", "namespace": "argocd"}
+            "host": "203.0.113.32", "namespace": "argocd"}
 
 
 @pytest.fixture

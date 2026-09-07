@@ -137,23 +137,25 @@ def _structured_trigger_matches(t: Dict[str, Any], alert: Dict[str, Any]) -> boo
 
 
 def _runbook_trigger_hit(rb: Dict[str, Any], corpus: str,
-                         alert: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
-    """runbook 触发词命中 → (keyword 展示串, 形态, 命中文本)。
+                         alert: Dict[str, Any]) -> Optional[Tuple[Tuple[int, int], str, str]]:
+    """runbook 触发词命中 → (排序键, keyword 展示串, 形态, 命中文本)。
 
     字符串触发词：关键词出现在告警语料中（子串，casefold）。结构化触发词：逐字段
     精确匹配。多条命中取最具体：结构化（作者精确声明）> 字符串；同类取关键词最长
-    （最少歧义）。
+    （最少歧义）。排序键是 (形态秩, 长度) 元组——形态秩 structured=1 > string=0
+    （此前是 "str:"/"obj:" 前缀字符串直接倒序，字典序 s>o 导致字符串永远压过
+    结构化，与文档"结构化 > 字符串"相反，batch94 修正）。
     """
-    candidates: List[Tuple[str, str, str]] = []  # (排序键, keyword, 形态)
+    candidates: List[Tuple[Tuple[int, int], str, str]] = []
     for t in rb.get("triggers") or []:
         if isinstance(t, str):
             kw = t.strip()
             if kw and kw.lower() in corpus:
-                candidates.append((f"str:{len(kw):04d}", kw, "trigger"))
+                candidates.append(((0, len(kw)), kw, "trigger"))
         elif isinstance(t, dict) and t:
             if _structured_trigger_matches(t, alert):
                 kw = ",".join(f"{k}={v}" for k, v in sorted(t.items()))
-                candidates.append((f"obj:{len(t):04d}", kw, "structured"))
+                candidates.append(((1, len(t)), kw, "structured"))
     if not candidates:
         return None
     candidates.sort(key=lambda c: c[0], reverse=True)
@@ -205,7 +207,7 @@ def match_alert_to_runbook(alert: Dict[str, Any],
         }
 
     # 信号 1：triggers 精确命中（最高置信）。
-    trigger_hits: List[Tuple[Tuple[str, str, str], Dict[str, Any]]] = []
+    trigger_hits: List[Tuple[Tuple[int, int], str, str, Dict[str, Any]]] = []
     for rb in runbooks:
         hit = _runbook_trigger_hit(rb, corpus, alert)
         if hit is not None:

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, useLocation } from "react-router";
 import ChatPage from "./ChatPage";
 import { api } from "@/lib/api";
 import type { ChatSessionSummary, ChatHistoryMessage } from "@/lib/api";
@@ -88,6 +88,7 @@ async function mountWith(
   busySessionId?: string,
   historyFor?: (id: string) => ChatHistoryMessage[],
   initialEntry = "/chat",
+  onLocation?: (search: string) => void,
 ) {
   const busy = new Set(busySessionId ? [busySessionId] : sessions.filter((s) => s.busy).map((s) => s.id));
   apiMock.getModels.mockResolvedValue(MODELS);
@@ -126,6 +127,7 @@ async function mountWith(
   await act(async () => {
     root.render(
       <MemoryRouter initialEntries={[initialEntry]}>
+        {onLocation && <LocationProbe onLocation={onLocation} />}
         <ChatPage />
       </MemoryRouter>,
     );
@@ -133,6 +135,12 @@ async function mountWith(
   await act(async () => {
     await vi.advanceTimersByTimeAsync(0);
   });
+}
+
+function LocationProbe({ onLocation }: { onLocation: (search: string) => void }) {
+  const loc = useLocation();
+  onLocation(`${loc.pathname}${loc.search}`);
+  return null;
 }
 
 function sessionSelect(): HTMLSelectElement {
@@ -687,5 +695,47 @@ describe("批六十四 chat 用量面板", () => {
     const sel = sessionSelect();
     expect(sel.value).toBe("A");
     expect(container.textContent).not.toContain("error");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task19 F2 — Runbooks 缺口 → chat 桥：?prompt= 深链预填（镜像 ?sid= 的 replace 清理）
+// ---------------------------------------------------------------------------
+
+describe("ChatPage ?prompt= prefill (task19 F2)", () => {
+  it("mount 时预填草稿并清除 prompt 参数", async () => {
+    let search = "";
+    const prompt = "帮 reboot (5 uses) 写一个 runbook";
+    await mountWith(
+      [SESSION_B],
+      undefined,
+      undefined,
+      `/chat?prompt=${encodeURIComponent(prompt)}`,
+      (s) => {
+        search = s;
+      },
+    );
+    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    expect(input.value).toBe(prompt);
+    // 参数用完即清（replace，不污染历史），?sid= 语义不受影响
+    expect(search).toBe("/chat");
+  });
+
+  it("busy 会话挂载时不预填（静默忽略，参数同样清除）", async () => {
+    let search = "";
+    await mountWith(
+      [SESSION_A],
+      "A",
+      undefined,
+      `/chat?prompt=${encodeURIComponent("busy case prompt")}`,
+      (s) => {
+        search = s;
+      },
+    );
+    const inputs = Array.from(
+      container.querySelectorAll<HTMLInputElement>("input[placeholder]"),
+    );
+    expect(inputs.some((i) => i.value === "busy case prompt")).toBe(false);
+    expect(search).toBe("/chat");
   });
 });

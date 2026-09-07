@@ -1,20 +1,24 @@
 import { Fragment, useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { translateBackendMessage } from "@/lib/backendMsg";
 import {
   BookOpen,
+  Check,
   ChevronDown,
   ChevronRight,
+  ClipboardCopy,
   Clock,
   FileText,
   ListChecks,
   Loader2,
   Lock,
+  MessageSquareText,
   Play,
   Terminal,
   TriangleAlert,
+  Zap,
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
@@ -238,6 +242,7 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
     "name", "title", "version", "env", "kind", "checklist", "triggers",
     "summary", "steps", "rollback", "updated_at", "note",
     "clusters", "host_groups", "hosts", "schedule", "on_failure",
+    "alert_auto_run", "alert_auto_severity",
   ]);
   const schedule = data.schedule as Record<string, unknown> | undefined;
   const clusters = (data.clusters as string[] | undefined) ?? [];
@@ -261,6 +266,19 @@ function RunbookDetail({ data }: { data: Record<string, unknown> }) {
 
       <div className="flex flex-wrap items-center gap-2">
         <OnFailureTag value={data.on_failure} />
+        {data.alert_auto_run === true ? (
+          <span
+            className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]"
+            title={t("runbooks.autoRunHint", {
+              sev: Array.isArray(data.alert_auto_severity) && data.alert_auto_severity.length
+                ? data.alert_auto_severity.join(", ")
+                : "",
+            })}
+          >
+            <Zap className="size-3" />
+            {t("runbooks.autoRunBadge")}
+          </span>
+        ) : null}
         {schedule ? (
           <span className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-muted)]">
             <Clock className="size-3" />
@@ -646,6 +664,31 @@ export default function RunbooksPage() {
   // Batch 81: execution-level concurrency lock snapshot (same runbook / same target cannot dispatch concurrently).
   const [locks, setLocks] = useState<RunbookLock[]>([]);
   const [coverage, setCoverage] = useState<RunbookCoverageResponse["data"] | null>(null);
+  // task19 F1: coverage card collapses by default — the long `runbooks` column
+  // pushed the runbook content below out of view. Stats stay in the header.
+  const [coverageOpen, setCoverageOpen] = useState(false);
+  // task19 F2: per-gap copy feedback ("已复制" for ~2s after a copy).
+  const [copiedGap, setCopiedGap] = useState<string | null>(null);
+  const navigate = useNavigate();
+
+  // task19 F2: gap → chat bridge — a ready-to-send prompt built from the gap
+  // action + use count, either copied to the clipboard or deep-linked into
+  // /chat?prompt= (ChatPage prefills the draft and clears the param).
+  const gapPrompt = (action: string, useCount: number) =>
+    t("runbooks.gapPrompt", { action, n: useCount });
+
+  const copyGapPrompt = async (action: string, useCount: number) => {
+    try {
+      await navigator.clipboard.writeText(gapPrompt(action, useCount));
+      setCopiedGap(action);
+      window.setTimeout(
+        () => setCopiedGap((current) => (current === action ? null : current)),
+        2000,
+      );
+    } catch {
+      // clipboard unavailable (permission / non-secure context) — silent
+    }
+  };
   const [runningEvents, setRunningEvents] = useState<Record<string, RunbookProgressEvent[]>>({});
   const [expandedRunning, setExpandedRunning] = useState<Set<string>>(new Set());
   const streamAbortRef = useRef<AbortController | null>(null);
@@ -1063,28 +1106,44 @@ export default function RunbooksPage() {
         </div>
       </div>
 
-      {/* Batch 81: Runbook coverage (audit action usage × runbook coverage, read-only stats) */}
+      {/* Batch 81: Runbook coverage (audit action usage × runbook coverage, read-only stats).
+          task19 F1: default COLLAPSED — header keeps title + stats + toggle; the
+          detail table + gaps section only render expanded. */}
       <div className="vigil-card p-5">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="text-sm font-semibold">{t("runbooks.coverageTitle")}</h3>
           <span className="text-[10px] text-[var(--vigil-muted)]">
             {coverage ? t("runbooks.coverageMeta", { n: coverage.usage.window_days }) : t("common.loading")}
           </span>
+          {coverage && coverage.usage.total_unique > 0 && (
+            <>
+              <div className="flex flex-wrap items-center gap-3 text-xs text-[var(--vigil-muted)]">
+                <span>{t("runbooks.statActions", { n: coverage.usage.total_unique })}</span>
+                <span>{t("runbooks.statCovered", { n: coverage.usage.covered_unique })}</span>
+                <span>{t("runbooks.statPct", { pct: coverage.usage.coverage_pct })}</span>
+                <span>{t("runbooks.statScanned", { n: coverage.usage.audit_events_scanned })}</span>
+              </div>
+              <button
+                type="button"
+                aria-expanded={coverageOpen}
+                data-testid="coverage-toggle"
+                onClick={() => setCoverageOpen((v) => !v)}
+                className="ml-auto inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-2 py-1 text-[11px] text-[var(--vigil-muted)] transition-colors hover:text-[var(--vigil-text)]"
+              >
+                {coverageOpen ? <ChevronDown className="size-3" /> : <ChevronRight className="size-3" />}
+                {coverageOpen ? t("runbooks.coverageCollapse") : t("runbooks.coverageExpand")}
+              </button>
+            </>
+          )}
         </div>
         {coverage ? (
           coverage.usage.total_unique === 0 ? (
             <p className="mt-3 text-xs text-[var(--vigil-muted)]">
               {t("runbooks.coverageEmpty")}
             </p>
-          ) : (
+          ) : !coverageOpen ? null : (
             <>
-              <div className="mt-3 flex flex-wrap gap-4 text-xs text-[var(--vigil-muted)]">
-                <span>{t("runbooks.statActions", { n: coverage.usage.total_unique })}</span>
-                <span>{t("runbooks.statCovered", { n: coverage.usage.covered_unique })}</span>
-                <span>{t("runbooks.statPct", { pct: coverage.usage.coverage_pct })}</span>
-                <span>{t("runbooks.statScanned", { n: coverage.usage.audit_events_scanned })}</span>
-              </div>
-              <table className="vigil-table mt-3">
+              <table className="vigil-table mt-3" data-testid="coverage-table">
                 <thead>
                   <tr>
                     <th>{t("runbooks.thAction")}</th>
@@ -1114,8 +1173,40 @@ export default function RunbooksPage() {
               </table>
               {coverage.usage.gaps.length > 0 ? (
                 <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
-                  <span className="font-semibold">{t("runbooks.gapsPrefix")}</span>
-                  {coverage.usage.gaps.map((g) => t("runbooks.gapItem", { action: g.action, n: g.use_count })).join(t("runbooks.gapsJoiner"))}
+                  <div className="mb-2 font-semibold">{t("runbooks.gapsPrefix")}</div>
+                  <div className="space-y-1.5">
+                    {coverage.usage.gaps.map((g) => (
+                      <div key={g.action} className="flex flex-wrap items-center gap-2">
+                        <span className="text-[var(--vigil-text)]">
+                          {t("runbooks.gapItem", { action: g.action, n: g.use_count })}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void copyGapPrompt(g.action, g.use_count)}
+                          data-testid={`gap-copy-${g.action}`}
+                          className="inline-flex items-center gap-1 rounded border border-[var(--vigil-border)] px-1.5 py-0.5 text-[11px] text-[var(--vigil-muted)] transition-colors hover:text-[var(--vigil-text)]"
+                        >
+                          {copiedGap === g.action ? (
+                            <>
+                              <Check className="size-3" /> {t("runbooks.gapCopied")}
+                            </>
+                          ) : (
+                            <>
+                              <ClipboardCopy className="size-3" /> {t("runbooks.gapCopy")}
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => navigate(`/chat?prompt=${encodeURIComponent(gapPrompt(g.action, g.use_count))}`)}
+                          data-testid={`gap-chat-${g.action}`}
+                          className="inline-flex items-center gap-1 rounded border border-sky-500/40 px-1.5 py-0.5 text-[11px] text-sky-600 transition-colors hover:bg-sky-500/10 dark:text-sky-400"
+                        >
+                          <MessageSquareText className="size-3" /> {t("runbooks.gapToChat")}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               ) : null}
             </>

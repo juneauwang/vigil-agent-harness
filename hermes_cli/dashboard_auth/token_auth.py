@@ -80,11 +80,9 @@ def clear_token_routes() -> None:
         _token_routes.clear()
 
 
-def _client_ip(request: Request) -> str:
-    fwd = request.headers.get("x-forwarded-for", "")
-    if fwd:
-        return fwd.split(",")[0].strip()
-    return request.client.host if request.client else ""
+# Trusted-proxy-aware resolution shared across the auth stack (task11 D1):
+# XFF is honored only from loopback/security.trusted_proxies peers.
+from hermes_cli.dashboard_auth.client_ip import client_ip as _client_ip  # noqa: E402
 
 
 def extract_bearer_token(request: Request) -> str:

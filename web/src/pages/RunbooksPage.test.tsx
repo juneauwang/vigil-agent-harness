@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router";
 import RunbooksPage from "./RunbooksPage";
 import { api } from "@/lib/api";
 
@@ -369,12 +369,23 @@ describe("批次八十一 RunbooksPage 锁定 + 覆盖率", () => {
     expect(text).toContain("Runbook 覆盖率");
     expect(text).toContain("动作 2");
     expect(text).toContain("覆盖率 50%");
-    expect(text).toContain("restart");
-    expect(text).toContain("reboot");
-    expect(text).toContain("已覆盖");
-    expect(text).toContain("未覆盖");
-    expect(text).toContain("建议沉淀 runbook");
-    expect(text).toContain("reboot（5 次）");
+    // task19 F1：默认折叠——覆盖明细表不渲染，点「展开」后才出现。
+    expect(container.querySelector('[data-testid="coverage-table"]')).toBeNull();
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="coverage-toggle"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
+    await act(async () => {
+      toggle!.click();
+    });
+    const expandedText = container.textContent ?? "";
+    expect(container.querySelector('[data-testid="coverage-table"]')).toBeTruthy();
+    expect(toggle!.getAttribute("aria-expanded")).toBe("true");
+    expect(expandedText).toContain("restart");
+    expect(expandedText).toContain("reboot");
+    expect(expandedText).toContain("已覆盖");
+    expect(expandedText).toContain("未覆盖");
+    expect(expandedText).toContain("建议沉淀 runbook");
+    expect(expandedText).toContain("reboot（5 次）");
   });
 
   it("覆盖率空态（无审计数据）引导不崩", async () => {
@@ -390,5 +401,145 @@ describe("批次八十一 RunbooksPage 锁定 + 覆盖率", () => {
     const text = container.textContent ?? "";
     expect(text).toContain("Runbook 覆盖率");
     expect(text).toContain("暂无审计数据");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// task19 F2 — 缺口 → chat 桥（复制提示词 + /chat?prompt= 深链）
+// ---------------------------------------------------------------------------
+
+const COVERAGE_WITH_GAP = {
+  ok: true,
+  data: {
+    high_risk: { total: 1, covered: 0, uncovered: ["reboot"], coverage_pct: 0 },
+    usage: {
+      window_days: 30,
+      audit_events_scanned: 42,
+      actions: [{ action: "reboot", use_count: 5, covered: false, runbooks: [] }],
+      total_unique: 1,
+      covered_unique: 0,
+      coverage_pct: 0,
+      gaps: [{ action: "reboot", use_count: 5, covered: false, runbooks: [] }],
+    },
+  },
+} as never;
+
+function renderWithRoutes(
+  page: React.ReactElement,
+  { initialEntry = "/runbooks" }: { initialEntry?: string } = {},
+) {
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  const locations: string[] = [];
+  function LocationProbe() {
+    const loc = useLocation();
+    locations.push(`${loc.pathname}${loc.search}`);
+    return null;
+  }
+  act(() => {
+    root.render(
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <LocationProbe />
+        <Routes>
+          <Route path="/chat" element={<div data-testid="chat-target" />} />
+          <Route path="*" element={page} />
+        </Routes>
+      </MemoryRouter>,
+    );
+  });
+  return { container, root, locations };
+}
+
+describe("RunbooksPage coverage collapse + gap bridge (task19)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(api.getRunbookExecutions).mockResolvedValue({
+      ok: true,
+      data: { count: 0, executions: [] },
+    } as never);
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "reboot-drill", title: "重启演练", step_count: 1 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V2_RUNBOOK } as never);
+    vi.mocked(api.getRunbookCoverage).mockResolvedValue(COVERAGE_WITH_GAP);
+  });
+
+  it("F1: 默认折叠（表不渲染 + 统计仍在头部），点开显示明细与缺口", async () => {
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // 头部统计保留（task19 F1：折叠后统计仍在卡片头）
+    expect(container.textContent).toContain("Runbook 覆盖率");
+    expect(container.textContent).toContain("动作 1");
+    expect(container.textContent).toContain("扫描审计事件 42");
+    expect(container.textContent).not.toContain("已复制");
+
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="coverage-toggle"]');
+    expect(toggle).toBeTruthy();
+    expect(toggle!.getAttribute("aria-expanded")).toBe("false");
+    // 折叠态：覆盖明细表不渲染
+    expect(container.querySelector('[data-testid="coverage-table"]')).toBeNull();
+
+    await act(async () => {
+      toggle!.click();
+    });
+    expect(toggle!.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[data-testid="coverage-table"]')).toBeTruthy();
+    expect(container.textContent).toContain("reboot");
+    expect(container.textContent).toContain("高频未覆盖，建议沉淀 runbook");
+  });
+
+  it("F2: 复制按钮把可发送提示词放进剪贴板并反馈已复制", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.assign(navigator, { clipboard: { writeText } });
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="coverage-toggle"]')!;
+    await act(async () => {
+      toggle.click();
+    });
+
+    const copyBtn = container.querySelector<HTMLButtonElement>('[data-testid="gap-copy-reboot"]')!;
+    expect(copyBtn.textContent).toContain("复制");
+    await act(async () => {
+      copyBtn.click();
+      await Promise.resolve();
+    });
+    expect(writeText).toHaveBeenCalledTimes(1);
+    const prompt = writeText.mock.calls[0][0] as string;
+    expect(prompt).toContain("reboot");
+    expect(prompt).toContain("5 uses");
+    expect(prompt).toContain("runbook_create");
+    expect(container.textContent).toContain("已复制");
+  });
+
+  it("F2: 去 Chat 生成 → /chat?prompt=<编码后的提示词>", async () => {
+    const { container, locations } = renderWithRoutes(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const toggle = container.querySelector<HTMLButtonElement>('[data-testid="coverage-toggle"]')!;
+    await act(async () => {
+      toggle.click();
+    });
+    const chatBtn = container.querySelector<HTMLButtonElement>('[data-testid="gap-chat-reboot"]')!;
+    expect(chatBtn.textContent).toContain("去 Chat 生成");
+    await act(async () => {
+      chatBtn.click();
+    });
+    expect(container.querySelector('[data-testid="chat-target"]')).toBeTruthy();
+    const last = locations[locations.length - 1];
+    expect(last.startsWith("/chat?prompt=")).toBe(true);
+    const prompt = decodeURIComponent(last.slice("/chat?prompt=".length));
+    expect(prompt).toContain("reboot");
+    expect(prompt).toContain("5 uses");
   });
 });

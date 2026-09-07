@@ -195,3 +195,42 @@ def test_owner_check_blocks_other_owner(vault_home, monkeypatch):
     monkeypatch.setattr(os, "getuid", lambda: real_getuid() + 1)
     with pytest.raises(PermissionError):
         cv.retrieve("owned")
+
+
+# ---------------------------------------------------------------------------
+# batch94 D4 — store() 原子落位：0600 起步、不跟符号链接
+# ---------------------------------------------------------------------------
+
+def test_store_replaces_preexisting_symlink_without_following(vault_home):
+    """目标路径被预置符号链接时：写入绝不落到链接目标，链接被常规文件
+    原子顶替。"""
+    victim = vault_home / "victim.txt"
+    victim.write_text("do-not-touch", encoding="utf-8")
+    path = _secret_path(vault_home, "linked_cred")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() or path.is_symlink():
+        path.unlink()
+    path.symlink_to(victim)
+
+    cv.store("linked_cred", "V@ultValue123", source="user")
+
+    # 链接目标未被改写
+    assert victim.read_text(encoding="utf-8") == "do-not-touch"
+    # 目录项已是常规文件（非链接），内容/权限正确
+    assert not path.is_symlink()
+    assert path.is_file()
+    assert path.read_text(encoding="utf-8") == "V@ultValue123"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_store_upgrades_preexisting_world_readable_file(vault_home):
+    """预存 0644 文件 → store() 后落位 0600（无写后 chmod 窗口）。"""
+    path = _secret_path(vault_home, "legacy_cred")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("stale", encoding="utf-8")
+    os.chmod(path, 0o644)
+
+    cv.store("legacy_cred", "N3wV@lue6789", source="user")
+
+    assert path.read_text(encoding="utf-8") == "N3wV@lue6789"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

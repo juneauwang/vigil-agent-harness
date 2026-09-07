@@ -6,7 +6,7 @@
 # What this does (read before you pipe):
 #   1. Detects python3 (>= 3.10) — Vigil is a Python package, nothing to dodge here.
 #   2. Creates an isolated venv at ~/.local/share/vigil/venv (system Python untouched).
-#   3. Installs the pinned PyPI release: vigil-agent-harness==1.0.2
+#   3. Installs the pinned PyPI release: vigil-agent-harness==1.0.3
 #   4. Symlinks the launcher to ~/.local/bin/vigil (add to PATH if missing).
 #   5. Pre-installs the tirith security scanner (~/.vigil/bin/tirith, from GitHub
 #      releases, SHA-256 verified) so the FIRST scanned command doesn't hit a
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-VIGIL_VERSION="1.0.2"
+VIGIL_VERSION="1.0.3"
 PYTHON_MIN="3.11"
 VENV_DIR="${VIGIL_VENV_DIR:-$HOME/.local/share/vigil/venv}"
 BIN_DIR="$HOME/.local/bin"
@@ -114,8 +114,11 @@ if timeout 180 "$VENV_DIR/bin/python" -c "from tools.tirith_security import _ins
   say "tirith ready."
 else
   warn "tirith download failed (GitHub releases may be unreachable from your network)."
-  warn "Vigil still works; the first scanned command will warn and retry. Fix your"
-  warn "network (VPN / HTTPS_PROXY) and re-run this script — it is idempotent."
+  warn "On a restricted network (e.g. mainland China), set a download mirror and re-run:"
+  warn "  export TIRITH_DOWNLOAD_MIRROR=https://ghproxy.com   # or your GitHub mirror"
+  warn "The env var is picked up by this script's pre-install and by runtime auto-install."
+  warn "Vigil still works; the first scanned command will warn and retry. This script is"
+  warn "idempotent."
 fi
 
 # ---------------------------------------------------------------- done

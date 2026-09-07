@@ -40,7 +40,7 @@ def _inherited_flag(parser, *args, **kwargs):
 _EPILOGUE = """
 Examples:
     vigil chat                       启动会话（默认即完整 ops harness）
-    vigil topo-discover -e prod -H 10.0.1.29   自动发现主机拓扑（SSH 扫描）
+    vigil topo-discover -e prod -H 198.51.100.29   自动发现主机拓扑（SSH 扫描）
     vigil watch status               查看值守巡检状态
     vigil vssh node1                 带凭据注入的 SSH（密码不进命令行）
     vigil config set model.default deepseek-v4-flash   配置模型

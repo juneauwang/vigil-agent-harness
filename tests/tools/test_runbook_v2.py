@@ -42,7 +42,7 @@ TOPOLOGY = {
          "role": ["worker"], "runtime": ["k3s"]},
         {"name": "node2", "env": "prod", "cluster": "k3s-prod", "endpoint": "10.0.0.2",
          "role": ["worker"], "runtime": ["k3s"]},
-        {"name": "dev-node", "env": "test", "cluster": "k3s-dev", "endpoint": "10.0.1.1"},
+        {"name": "dev-node", "env": "test", "cluster": "k3s-dev", "endpoint": "198.51.100.1"},
     ],
 }
 SERVICES = {

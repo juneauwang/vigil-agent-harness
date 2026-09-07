@@ -834,3 +834,46 @@ def test_humanize_non_registration_403_passthrough():
         )
         is None
     )
+
+
+# ---------------------------------------------------------------------------
+# batch94 D2 — loopback callback page HTML-escapes the reflected error param
+# ---------------------------------------------------------------------------
+
+class TestCallbackPageEscapesReflectedError:
+    """The loopback OAuth callback page echoes ``?error=`` back into HTML.
+    Unescaped, a crafted link injects markup into the loopback origin
+    (reflected XSS); the escaped page must render it as inert text."""
+
+    def _serve_get(self, query: str) -> str:
+        import io
+        from unittest.mock import MagicMock
+
+        handler_cls, _result = _make_callback_handler()
+        handler = object.__new__(handler_cls)
+        handler.path = f"/callback?{query}"
+        handler.request_version = "HTTP/1.1"  # end_headers() reads this
+        handler.send_response = MagicMock()
+        handler.send_header = MagicMock()
+        handler.end_headers = MagicMock()
+        buf = io.BytesIO()
+        handler.wfile = buf
+        handler.do_GET()
+        return buf.getvalue().decode()
+
+    def test_error_param_renders_inert(self):
+        body = self._serve_get("error=" + "<script>alert(1)</script>")
+        assert "<script>alert(1)</script>" not in body
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in body
+
+    def test_error_param_with_attribute_payload_renders_inert(self):
+        body = self._serve_get(
+            "error=" + "<img src=x onerror=alert(1)>"
+        )
+        assert "<img " not in body
+        assert "onerror" in body  # present as escaped text, not markup
+
+    def test_successful_code_flow_page_unchanged(self):
+        body = self._serve_get("code=abc&state=xyz")
+        assert "Authorization Successful" in body
+        assert "<script>" not in body

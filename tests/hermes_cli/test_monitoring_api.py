@@ -409,6 +409,30 @@ def test_alerts_maps_fields_and_filters_resolved(env_home, client, monkeypatch):
     assert "job" in first["labels"]
 
 
+def test_alerts_annotations_carried_through(env_home, client, monkeypatch):
+    """batch94 C2：annotations 全量透传（此前丢弃 → 结构化触发词在真实管道
+    永远无法命中）。"""
+    _write_cfg(env_home)
+    from tools import prom_tools as pt
+
+    payload = [{
+        "status": {"state": "active"},
+        "labels": {"alertname": "HarborUnhealthy", "severity": "critical",
+                   "instance": "harbor:443"},
+        "annotations": {"summary": "harbor down",
+                        "playbook": "harbor-restart",
+                        "runbook_url": "http://ops/runbook"},
+        "startsAt": "2026-08-23T10:00:00Z",
+    }]
+    monkeypatch.setattr(pt, "_http_get", lambda url, params, auth: _fake_resp(200, payload))
+    resp = client.get("/api/monitoring/alerts")
+    assert resp.status_code == 200
+    first = resp.json()["data"]["alerts"][0]
+    assert first["annotations"]["playbook"] == "harbor-restart"
+    assert first["annotations"]["runbook_url"] == "http://ops/runbook"
+    assert first["summary"] == "harbor down"
+
+
 def test_alerts_upstream_error_502(env_home, client, monkeypatch):
     _write_cfg(env_home)
     import httpx
@@ -530,3 +554,44 @@ def test_triage_upstream_error_502(env_home, client, monkeypatch):
     resp = client.get("/api/monitoring/alerts/triage")
     assert resp.status_code == 502
     assert "refused" in resp.json()["error"]["message"]
+
+
+# ---------------------------------------------------------------------------
+# batch94 C2 — 端到端：Alertmanager annotations → fetch_active_alerts →
+# alert_runbook 结构化触发词命中（真实管道此前断链）
+# ---------------------------------------------------------------------------
+
+def test_annotations_end_to_end_into_matcher(env_home, monkeypatch):
+    _write_cfg(env_home)
+    (env_home / "runbooks").mkdir(exist_ok=True)
+    (env_home / "runbooks" / "ann-playbook.yaml").write_text("""\
+name: ann-playbook
+title: 注解路由 SOP
+kind: incident
+env: prod
+summary: 按 annotations.playbook 路由。
+triggers:
+  - {playbook: harbor-restart}
+steps:
+  - id: check
+    title: 探查
+    action: query
+    params: {pattern: harbor}
+""", encoding="utf-8")
+    from tools import prom_tools as pt
+    from tools import alert_runbook as ar
+
+    payload = [{
+        "status": {"state": "active"},
+        "labels": {"alertname": "HarborUnhealthy", "severity": "critical",
+                   "instance": "harbor:443"},
+        "annotations": {"summary": "harbor down", "playbook": "harbor-restart"},
+        "startsAt": "2026-08-23T10:00:00Z",
+    }]
+    monkeypatch.setattr(pt, "_http_get", lambda url, params, auth: _fake_resp(200, payload))
+    alerts = mon.fetch_active_alerts()["alerts"]
+    assert alerts[0]["annotations"]["playbook"] == "harbor-restart"
+    disp = ar.match_alert_to_runbook(alerts[0], home=env_home)
+    assert disp["matched"] is True
+    assert disp["matched_by"] == "trigger"
+    assert disp["matched_keyword"] == "playbook=harbor-restart"

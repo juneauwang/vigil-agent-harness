@@ -441,6 +441,10 @@ def fetch_active_alerts() -> Dict[str, Any]:
             "severity": str(labels.get("severity") or "info"),
             "instance": str(labels.get("instance") or ""),
             "labels": {str(k): str(v) for k, v in labels.items() if k != "alertname"},
+            # annotations 全量透传（batch94）：alert_runbook 结构化触发词可声明
+            # annotations 键（_structured_trigger_matches 查 labels+annotations），
+            # 此前丢弃导致真实管道里这类结构化触发词永远无法命中。
+            "annotations": {str(k): str(v) for k, v in annotations.items()},
             "summary": str(annotations.get("summary") or "").strip(),
             "startsAt": a.get("startsAt") or "",
             "state": str(status.get("state") or ""),

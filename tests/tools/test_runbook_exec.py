@@ -392,16 +392,16 @@ class TestExecutionEngine:
 
     def test_remote_host_with_own_ip_endpoint_not_local(self, mhome):
         """远端主机 endpoint == 自身 IP（host_name 同值）必须判 remote——不能因
-        endpoint==host_name 误判本地（2026-08-25 实测：阿里云 39.106.217.32
+        endpoint==host_name 误判本地（2026-08-25 实测：阿里云 203.0.113.32
         endpoint==host_name，旧代码 `e == host_name → local` 导致 kubectl 命令
         在本机执行，runbook 执行器全部走错机器 "timed out waiting for the
         condition"）。本机身份只认 hostname/网卡 IP，不认拓扑 host_name。"""
         from tools.runbook_exec import _is_local_endpoint
         # 远端公网 IP 作 endpoint 且 host_name 同名 → 不是本机身份 → remote
-        assert _is_local_endpoint("39.106.217.32", "39.106.217.32") is False
-        assert _is_local_endpoint("8.140.60.44", "8.140.60.44") is False
+        assert _is_local_endpoint("203.0.113.32", "203.0.113.32") is False
+        assert _is_local_endpoint("203.0.113.44", "203.0.113.44") is False
         # 带端口形态同样判 remote
-        assert _is_local_endpoint("39.106.217.32:22", "39.106.217.32") is False
+        assert _is_local_endpoint("203.0.113.32:22", "203.0.113.32") is False
         # 本机身份（hostname/网卡 IP/localhost）不受影响，仍判 local
         import socket
         assert _is_local_endpoint(socket.gethostname(), "anything") is True
@@ -1206,3 +1206,192 @@ class TestLedgerRedaction:
         rows = recent_executions(home=mhome)
         sub_row = next(r for r in rows if r["runbook"] == "sub")
         assert sub_row["trigger_context"]["alertname"] != f"Leak token={self.SECRET}"
+
+
+# ---------------------------------------------------------------------------
+# batch94 PART E — run_script 远端路线（scp 上传 + ssh 执行 + 清理）
+# ---------------------------------------------------------------------------
+
+def _write_asset(home, name, content="#!/bin/bash\necho ok\n"):
+    """直写资产 + 预审标记（script_asset_create 走 tirith/审批门，测试直写）。"""
+    from tools.script_assets import meta_dir, scripts_dir
+    sd = scripts_dir(home)
+    sd.mkdir(parents=True, exist_ok=True)
+    path = sd / f"{name}.sh"
+    path.write_text(content, encoding="utf-8")
+    md = meta_dir(home)
+    md.mkdir(parents=True, exist_ok=True)
+    content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
+    (md / f"{path.name}.json").write_text(json.dumps({
+        "approved_at": "2026-09-06T00:00:00+08:00",
+        "approved_by": "tester",
+        "approved_version": content_hash,
+    }), encoding="utf-8")
+    return path
+
+
+class TestScriptAssetRemote:
+    def _stub_transport(self, monkeypatch):
+        """打桩 ssh/scp：记录 argv，不发真实网络。返回 (calls, scp_calls)。"""
+        import subprocess as _sp
+        from tools import runbook_exec as rex
+        from tools import sudo_tool as st
+        calls, scp_calls = [], []
+
+        def _fake_ssh_run(ssh_argv, ssh_env, remote_cmd, timeout=60):
+            calls.append({"argv": list(ssh_argv), "cmd": remote_cmd})
+            return _sp.CompletedProcess(list(ssh_argv) + [remote_cmd], 0,
+                                        stdout="remote-ok", stderr="")
+
+        def _fake_run(argv, **kwargs):
+            scp_calls.append([str(a) for a in argv])
+            return _sp.CompletedProcess(list(argv), 0, stdout="", stderr="")
+
+        monkeypatch.setattr(rex, "_remote_ssh_argv",
+                            lambda target: (["ssh", "-o", "IdentitiesOnly=yes",
+                                             "-p", "22", "root@node2"], {}, "node2"))
+        monkeypatch.setattr(rex.subprocess, "run", _fake_run)
+        monkeypatch.setattr(st, "_ssh_run", _fake_ssh_run)
+        return calls, scp_calls
+
+    def test_remote_target_builds_scp_then_ssh_to_target_host(self, mhome, monkeypatch):
+        from tools import runbook_exec as rex
+        path = _write_asset(mhome, "disk-diag")
+        calls, scp_calls = self._stub_transport(monkeypatch)
+
+        res = rex._run_spec(mhome, {"host": "node2", "remote": True},
+                            {"script_asset": "disk-diag", "args": ["--fast"]})
+
+        assert res["exit_code"] == 0
+        assert res["stdout"] == "remote-ok"
+        # scp：目的端 = target 主机解析出的 user@host，源 = 本机资产路径
+        assert scp_calls and scp_calls[0][0] == "scp"
+        assert scp_calls[0][-2] == str(path)
+        assert scp_calls[0][-1].startswith("root@node2:")
+        # ssh 执行：chmod 0700 + bash 远端临时唯一路径 + 参数逐词引用
+        assert len(calls) == 2
+        exec_cmd = calls[0]["cmd"]
+        import re as _re
+        m = _re.search(r"vigil-script-[0-9a-f]{32}\.sh", exec_cmd)
+        assert m, exec_cmd
+        tmp = m.group(0)
+        assert exec_cmd.startswith(f"chmod 700 /tmp/{tmp} && bash /tmp/{tmp}")
+        assert " --fast" in exec_cmd
+        # 清理：rm -f 同一远端临时路径
+        assert calls[1]["cmd"] == f"rm -f /tmp/{tmp}"
+
+    def test_cleanup_runs_even_when_remote_exec_fails(self, mhome, monkeypatch):
+        import subprocess as _sp
+        from tools import runbook_exec as rex
+        from tools import sudo_tool as st
+        _write_asset(mhome, "disk-diag")
+        calls = []
+
+        def _fail_then_record(ssh_argv, ssh_env, remote_cmd, timeout=60):
+            if remote_cmd.startswith("rm -f"):
+                calls.append({"cmd": remote_cmd})
+                return _sp.CompletedProcess([], 0, stdout="", stderr="")
+            calls.append({"cmd": remote_cmd})
+            raise _sp.TimeoutExpired(cmd="ssh", timeout=timeout)
+
+        monkeypatch.setattr(rex, "_remote_ssh_argv",
+                            lambda target: (["ssh", "-p", "22", "root@node2"], {}, "node2"))
+        monkeypatch.setattr(rex.subprocess, "run",
+                            lambda argv, **k: _sp.CompletedProcess(list(argv), 0))
+        monkeypatch.setattr(st, "_ssh_run", _fail_then_record)
+
+        res = rex._run_spec(mhome, {"host": "node2", "remote": True},
+                            {"script_asset": "disk-diag"})
+        assert res["exit_code"] == 1 and res.get("timed_out") is True
+        assert [c["cmd"] for c in calls][0].startswith("chmod 700")
+        assert [c["cmd"] for c in calls][-1].startswith("rm -f /tmp/vigil-script-")
+
+    def test_scp_failure_reports_asset_name_without_local_path(self, mhome, monkeypatch):
+        import subprocess as _sp
+        from tools import runbook_exec as rex
+        _write_asset(mhome, "disk-diag")
+
+        def _fail_run(argv, **kwargs):
+            return _sp.CompletedProcess(list(argv), 1, stdout="", stderr="Permission denied")
+
+        monkeypatch.setattr(rex, "_remote_ssh_argv",
+                            lambda target: (["ssh", "-p", "22", "root@node2"], {}, "node2"))
+        monkeypatch.setattr(rex.subprocess, "run", _fail_run)
+
+        res = rex._run_spec(mhome, {"host": "node2", "remote": True},
+                            {"script_asset": "disk-diag"})
+        assert res["exit_code"] == 1
+        assert "disk-diag" in res["stderr"]
+        assert str(mhome) not in res["stderr"]  # 本地路径不进报错（可能内嵌值）
+
+    def test_local_target_unchanged(self, mhome, monkeypatch):
+        """local target：行为逐字节不变——本机 subprocess bash <资产路径>，无 scp/ssh。"""
+        import subprocess as _sp
+        from tools import runbook_exec as rex
+        from tools import sudo_tool as st
+        path = _write_asset(mhome, "disk-diag")
+        local_calls, ssh_calls = [], []
+
+        def _fake_run(argv, **kwargs):
+            local_calls.append([str(a) for a in argv])
+            return _sp.CompletedProcess(list(argv), 0, stdout="local-ok", stderr="")
+
+        monkeypatch.setattr(rex.subprocess, "run", _fake_run)
+        monkeypatch.setattr(st, "_ssh_run",
+                            lambda *a, **k: (_ for _ in ()).throw(
+                                AssertionError("local target must not ssh")))
+
+        res = rex._run_spec(mhome, {"remote": False},
+                            {"script_asset": "disk-diag", "args": ["x"]})
+        assert res == {"exit_code": 0, "stdout": "local-ok", "stderr": ""}
+        assert local_calls == [["bash", str(path), "x"]]
+
+    def test_matrix_gate_applies_to_remote_script_steps(self, mhome, monkeypatch):
+        """(d) 审批/矩阵路径对远端步骤不变：run_script=required 时远端目标同样
+        被门拦截，runner（→ scp/ssh）根本不被触达。"""
+        from tools import runbook_exec as rex
+        from tools import sudo_tool as st
+        from tools.matrix_data import write_matrix
+        _write_asset(mhome, "disk-diag")
+        # node2：公网占位 endpoint → resolve 为 remote 目标
+        (mhome / "topology.yaml").write_text("""
+version: 4
+environments:
+- name: local
+clusters:
+- name: local
+  type: docker
+  env: local
+  host_groups: []
+hosts:
+- name: node2
+  type: host
+  env: local
+  cluster: local
+  endpoint: 203.0.113.44
+  os: Ubuntu 24.04
+  credentials: []
+""", encoding="utf-8")
+        write_matrix({
+            "schema_version": 1,
+            "matrix": {"local": {"run_script": "required"}},
+        }, mhome)
+
+        def _no_transport(*a, **k):
+            raise AssertionError("blocked step must not reach scp/ssh")
+
+        monkeypatch.setattr(st, "_ssh_run", _no_transport)
+        monkeypatch.setattr(rex, "_remote_ssh_argv", _no_transport)
+
+        res = rex.execute_runbook({
+            "name": "t-rs", "title": "T", "version": 2, "kind": "maintenance",
+            "env": "local", "on_failure": "stop",
+            "steps": [{"id": "s1", "title": "远端脚本", "action": "run_script",
+                       "params": {"script": "disk-diag", "target": "node2"}}],
+        }, home=mhome, runner=lambda spec, target: {
+            "exit_code": 0, "stdout": "ok", "stderr": ""})
+        # 步骤级 blocked → runbook 级 failed 收场，错误指向强制人工门；
+        # 关键不变量：门在 runner 之前，scp/ssh 传输层根本未被触达。
+        assert res["result"] in ("blocked", "failed")
+        assert "需要人工审批" in res["error"]
+        assert "run_script@local" in res["error"]
