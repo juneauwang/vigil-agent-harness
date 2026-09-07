@@ -339,3 +339,76 @@ describe("TopologyPage raw YAML 编辑（task27 PART A）", () => {
     }
   });
 });
+
+// ── task27 PART B2: 搜索 → 图节点降透明度 + 命中统计/空结果提示 ──
+describe("TopologyPage 搜索高亮（task27 PART B2）", () => {
+  function typeSearch(container: HTMLElement, value: string) {
+    const input = container.querySelector<HTMLInputElement>('[data-testid="topology-search"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  it("搜索不命中的图节点加 opacity-30（命中节点保持不透明）", async () => {
+    vi.mocked(api.getTopology).mockResolvedValue({ ok: true, data: VIEW, error: "" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter>
+            <TopologyPage />
+          </MemoryRouter>,
+        );
+      });
+      await act(async () => {});
+      // 无查询：图节点无降透明类（opacity-30 在自定义节点根 div，不在 rf 包装层）
+      expect(container.querySelectorAll(".opacity-30").length).toBe(0);
+      act(() => typeSearch(container, "prometheus"));
+      await act(async () => {});
+      const nodes = [...container.querySelectorAll(".react-flow__node")];
+      expect(nodes.length).toBeGreaterThan(1);
+      const dimmed = nodes.filter((n) => n.querySelector(".opacity-30"));
+      const lit = nodes.filter((n) => !n.querySelector(".opacity-30"));
+      // service(prometheus) 命中保持高亮；host/cluster 不命中变暗
+      expect(dimmed.length).toBeGreaterThan(0);
+      expect(lit.length).toBeGreaterThan(0);
+      const litText = lit.map((n) => n.textContent ?? "").join("");
+      expect(litText).toContain("prometheus");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("命中数提示 + 空结果提示渲染", async () => {
+    vi.mocked(api.getTopology).mockResolvedValue({ ok: true, data: VIEW, error: "" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter>
+            <TopologyPage />
+          </MemoryRouter>,
+        );
+      });
+      await act(async () => {});
+      expect(container.querySelector('[data-testid="topo-search-hint"]')).toBeNull();
+
+      act(() => typeSearch(container, "prometheus"));
+      await act(async () => {});
+      const hint = container.querySelector('[data-testid="topo-search-hint"]');
+      expect(hint?.textContent).toContain("1 / 3");
+
+      act(() => typeSearch(container, "no-such-entity"));
+      await act(async () => {});
+      expect(container.querySelector('[data-testid="topo-search-hint"]')?.textContent).toContain("no-such-entity");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+});

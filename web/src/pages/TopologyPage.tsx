@@ -13,6 +13,7 @@ import {
   Server,
   SquarePen,
   Trash2,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "@/lib/api";
@@ -430,6 +431,29 @@ export default function TopologyPage() {
     return n;
   }, [view]);
 
+  // task27 B2: 搜索命中统计（语料 = 全部节点 name/type/env：clusters+hosts+services+cross）
+  // + 第一个命中名（Enter 聚焦：列表滚动 + 图高亮 ring，是最廉价的聚焦路径）。
+  const searchMatch = useMemo(() => {
+    if (!view || !q) return null;
+    let total = 0;
+    let matched = 0;
+    let first: string | null = null;
+    const count = (card: { name: string; type?: string; env?: string }) => {
+      total += 1;
+      if (matchesSearch(card, q)) {
+        matched += 1;
+        if (first === null) first = card.name;
+      }
+    };
+    for (const c of view.clusters) count({ name: c.name, env: c.env });
+    for (const h of view.hosts) {
+      count(h.card);
+      for (const svc of h.services) count(svc.card);
+    }
+    for (const c of view.cross_host) count(c.card);
+    return { total, matched, first };
+  }, [view, q]);
+
   /** Batch 85: clear ALL topology data (destructive; confirm dialog + auditing owned by the backend). */
   const handleReset = async () => {
     if (!view) return;
@@ -512,15 +536,30 @@ export default function TopologyPage() {
             </button>
           </div>
 
-          {/* Search */}
+          {/* Search（task27 B2: Enter 聚焦首个命中 + 清除按钮 + 命中数提示） */}
           <div className="flex h-8 w-56 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
             <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && searchMatch?.first) setFocused(searchMatch.first);
+                if (e.key === "Escape") setQuery("");
+              }}
               placeholder={t("topology.searchPlaceholder")}
+              data-testid="topology-search"
               className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
             />
+            {query ? (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label={t("common.searchClearAria")}
+                className="rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
           </div>
 
           {/* Batch 85: clear-topology entry (destructive, confirm dialog) */}
@@ -552,6 +591,21 @@ export default function TopologyPage() {
             <span>{t("topology.servicesCount", { n: view.hosts.reduce((n, h) => n + h.services.length, 0) })}</span>
             <span>{t("topology.crossCount", { n: view.cross_host.length })}</span>
             <span>{t("topology.depCount", { n: depCount })}</span>
+            {searchMatch ? (
+              <span
+                data-testid="topo-search-hint"
+                className={cn(
+                  "rounded px-1.5 py-px text-[11px]",
+                  searchMatch.matched === 0
+                    ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-muted)]"
+                    : "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]",
+                )}
+              >
+                {searchMatch.matched === 0
+                  ? t("topology.searchEmpty", { query: query.trim() })
+                  : t("topology.searchMatched", { matched: searchMatch.matched, total: searchMatch.total })}
+              </span>
+            ) : null}
           </div>
 
           <div className="vigil-card mb-4 p-3">
@@ -567,6 +621,7 @@ export default function TopologyPage() {
               onSelect={setDrawer}
               onNodeFocus={setFocused}
               focusedName={focused}
+              searchQuery={query}
             />
           </div>
 

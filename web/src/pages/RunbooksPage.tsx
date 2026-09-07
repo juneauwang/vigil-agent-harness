@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
@@ -16,6 +16,7 @@ import {
   Lock,
   MessageSquareText,
   Play,
+  Search,
   SquarePen,
   Terminal,
   TriangleAlert,
@@ -673,6 +674,8 @@ export default function RunbooksPage() {
   const [copiedGap, setCopiedGap] = useState<string | null>(null);
   // task27 PART A: raw YAML 编辑抽屉（每行 edit 按钮 + 详情头 edit 按钮）。
   const [editTarget, setEditTarget] = useState<YamlEditorTarget | null>(null);
+  // task27 PART B1: 列表搜索（name/title/summary/triggers 子串，大小写不敏感）。
+  const [search, setSearch] = useState("");
   const navigate = useNavigate();
 
   // task19 F2: gap → chat bridge — a ready-to-send prompt built from the gap
@@ -723,6 +726,19 @@ export default function RunbooksPage() {
 
   // Batch 81: locked executions without a live stream (scheduled/background/LLM) → show only the lock badge, not expandable.
   const lockOnly = locks.filter((l) => !running.some((r) => r.exec_id === l.exec_id));
+
+  // task27 PART B1: 搜索语料 = 列表行已渲染的字段（name/title/summary/triggers/env），
+  // 大小写不敏感子串；空查询 = 全量。
+  const filteredRunbooks = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!list) return null;
+    if (!needle) return list;
+    return list.filter((rb) =>
+      `${rb.name} ${rb.title} ${rb.summary ?? ""} ${(rb.triggers ?? []).join(" ")} ${rb.env ?? ""}`
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [list, search]);
 
   // Batch 80: abort in-progress progress streams on unmount (server-side execution unaffected).
   useEffect(() => {
@@ -926,7 +942,32 @@ export default function RunbooksPage() {
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(320px,420px)_1fr]">
         {/* Compact table */}
         <div className="scroll-thin min-h-0 overflow-y-auto">
+          {/* task27 PART B1: 列表搜索框（样式与拓扑页搜索框一致） */}
+          <div className="mb-2 flex h-8 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
+            <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setSearch("");
+              }}
+              placeholder={t("runbooks.searchPlaceholder")}
+              data-testid="runbook-search"
+              className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
+            />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label={t("common.searchClearAria")}
+                className="rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
           {list && list.length > 0 ? (
+            filteredRunbooks && filteredRunbooks.length > 0 ? (
             <div className="vigil-card">
               <table className="vigil-table">
                 <thead>
@@ -940,7 +981,7 @@ export default function RunbooksPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {list.map((rb) => (
+                  {(filteredRunbooks ?? list).map((rb) => (
                     <tr
                       key={rb.name}
                       onClick={() => setSelected(rb.name)}
@@ -979,6 +1020,11 @@ export default function RunbooksPage() {
                 </tbody>
               </table>
             </div>
+            ) : (
+              <div className="vigil-card border-dashed p-6 text-center text-sm text-[var(--vigil-muted)]" data-testid="runbook-search-empty">
+                {t("runbooks.searchEmpty", { query: search.trim() })}
+              </div>
+            )
           ) : (
             <EmptyState
               title={t("runbooks.emptyTitle")}

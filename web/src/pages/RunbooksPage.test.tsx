@@ -643,3 +643,58 @@ describe("RunbooksPage raw YAML 编辑（task27 PART A）", () => {
     expect(api.getRunbooks).toHaveBeenCalledTimes(2);
   });
 });
+
+// ── task27 PART B1: 列表搜索过滤 ──
+describe("RunbooksPage 搜索（task27 PART B1）", () => {
+  function typeSearch(container: HTMLElement, value: string) {
+    const input = container.querySelector<HTMLInputElement>('[data-testid="runbook-search"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  async function mountTwo() {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: {
+        count: 2,
+        runbooks: [
+          { name: "harbor-restart", title: "Harbor 服务异常恢复", summary: "harbor 恢复", triggers: ["harbor healthcheck failed"], step_count: 2 },
+          { name: "db-failover", title: "数据库主备切换", summary: "数据库切换", triggers: ["db master down"], step_count: 1 },
+        ],
+      },
+    } as never);
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return container;
+  }
+
+  it("命中名称/标题的行保留，未命中行隐藏；空查询显示全量", async () => {
+    const container = await mountTwo();
+    expect(container.textContent).toContain("harbor-restart");
+    expect(container.textContent).toContain("db-failover");
+
+    act(() => typeSearch(container, "harbor"));
+    expect(container.textContent).toContain("harbor-restart");
+    expect(container.textContent).not.toContain("db-failover");
+
+    act(() => typeSearch(container, ""));
+    expect(container.textContent).toContain("db-failover");
+  });
+
+  it("triggers 也进语料；无命中渲染空结果提示", async () => {
+    const container = await mountTwo();
+    act(() => typeSearch(container, "db master down"));
+    expect(container.textContent).toContain("db-failover");
+    // harbor 行被隐藏（详情面板保留选中 runbook，不算列表行）
+    expect(container.querySelector('[data-testid="runbook-edit-harbor-restart"]')).toBeNull();
+    expect(container.querySelector('[data-testid="runbook-edit-db-failover"]')).toBeTruthy();
+
+    act(() => typeSearch(container, "no-such-runbook"));
+    expect(container.querySelector('[data-testid="runbook-search-empty"]')).toBeTruthy();
+    expect(container.textContent).toContain("no-such-runbook");
+  });
+});

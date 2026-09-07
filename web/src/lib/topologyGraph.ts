@@ -39,6 +39,8 @@ export interface GraphNodeData extends GraphEntityRef {
   keyPath: boolean;
   /** 批四十九：列表中选中/图中点选的高亮标记（列表 ↔ 图联动）。 */
   selected?: boolean;
+  /** task27 B2：搜索不命中 → 节点降透明度（filter/highlight，不改布局）。 */
+  dim?: boolean;
   // react-flow v12 Node<T> 要求 data 满足 Record<string, unknown>。
   [key: string]: unknown;
 }

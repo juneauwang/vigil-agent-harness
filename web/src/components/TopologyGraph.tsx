@@ -26,7 +26,7 @@ import {
   type GraphEntityRef,
   type TopologyFlowNode,
 } from "@/lib/topologyGraph";
-import { lastSeenInfo } from "@/lib/ops";
+import { lastSeenInfo, matchesSearch } from "@/lib/ops";
 import { EnvBadge, StatusDot } from "@/components/StatusBits";
 import { cn } from "@/lib/ops";
 
@@ -46,7 +46,7 @@ import { cn } from "@/lib/ops";
 
 function ClusterNodeView({ data }: NodeProps<TopologyFlowNode>) {
   const { t } = useTranslation();
-  const { name, card, keyPath, selected } = data;
+  const { name, card, keyPath, selected, dim } = data;
   return (
     <div
       title={`${kindLabel("cluster")} ${name}${card.status ? ` · ${card.status}` : ""}`}
@@ -54,6 +54,7 @@ function ClusterNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex h-9 w-[396px] items-center gap-2 rounded-md border px-2.5 text-xs font-semibold text-[var(--vigil-text)]",
         keyPath ? "border-amber-500/60 bg-amber-500/10" : "border-[var(--vigil-border)] bg-[var(--vigil-card)]",
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        dim && "opacity-30",
       )}
     >
       <Handle type="target" position={Position.Left} />
@@ -68,7 +69,7 @@ function ClusterNodeView({ data }: NodeProps<TopologyFlowNode>) {
 
 function HostNodeView({ data }: NodeProps<TopologyFlowNode>) {
   const { t } = useTranslation();
-  const { name, card, keyPath, selected } = data;
+  const { name, card, keyPath, selected, dim } = data;
   const activity = lastSeenInfo(card.last_seen);
   const port = portLabel(card);
   return (
@@ -78,6 +79,7 @@ function HostNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex w-[180px] flex-col gap-0.5 rounded-md border px-2.5 py-2 text-xs",
         nodeToneClass(card.status, keyPath),
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        dim && "opacity-30",
       )}
     >
       <Handle type="target" position={Position.Left} />
@@ -107,7 +109,7 @@ function HostNodeView({ data }: NodeProps<TopologyFlowNode>) {
 }
 
 function ServiceNodeView({ data }: NodeProps<TopologyFlowNode>) {
-  const { name, card, hostName, keyPath, selected } = data;
+  const { name, card, hostName, keyPath, selected, dim } = data;
   const port = portLabel(card);
   return (
     <div
@@ -116,6 +118,7 @@ function ServiceNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex w-[124px] items-center gap-1.5 rounded border px-2 py-1.5 text-[11px]",
         nodeToneClass(card.status, keyPath),
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        dim && "opacity-30",
       )}
     >
       <StatusDot status={card.status} />
@@ -131,7 +134,7 @@ function ServiceNodeView({ data }: NodeProps<TopologyFlowNode>) {
 
 function CrossHostNodeView({ data }: NodeProps<TopologyFlowNode>) {
   const { t } = useTranslation();
-  const { name, card, keyPath, selected } = data;
+  const { name, card, keyPath, selected, dim } = data;
   return (
     <div
       title={`${kindLabel("cross_host")} ${name}${card.type ? ` · ${card.type}` : ""}${card.status ? ` · ${card.status}` : ""}`}
@@ -139,6 +142,7 @@ function CrossHostNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex w-[180px] items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs",
         nodeToneClass(card.status, keyPath),
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        dim && "opacity-30",
       )}
     >
       <StatusDot status={card.status} />
@@ -185,6 +189,7 @@ export default function TopologyGraph({
   onSelect,
   onNodeFocus,
   focusedName,
+  searchQuery,
   className,
 }: {
   view: TopologyView;
@@ -193,6 +198,8 @@ export default function TopologyGraph({
   onNodeFocus?: (name: string) => void;
   /** Node name highlighted in the graph from outside (list selection). */
   focusedName?: string | null;
+  /** task27 B2: 搜索词 — 不命中的节点降透明度（filter/highlight only，不动布局）。 */
+  searchQuery?: string;
   className?: string;
 }) {
   const { t } = useTranslation();
@@ -207,15 +214,20 @@ export default function TopologyGraph({
     const filtered = filterGraphModel(base, cluster);
     return layoutForceGraph(filtered);
   }, [view, cluster]);
+  const needle = (searchQuery ?? "").trim().toLowerCase();
   const model = useMemo(
     () => ({
       ...baseModel,
       nodes: baseModel.nodes.map((n) => ({
         ...n,
-        data: { ...n.data, selected: focusedName != null && n.data.name === focusedName },
+        data: {
+          ...n.data,
+          selected: focusedName != null && n.data.name === focusedName,
+          dim: Boolean(needle) && !matchesSearch(n.data.card, needle),
+        },
       })),
     }),
-    [baseModel, focusedName],
+    [baseModel, focusedName, needle],
   );
   // Batch 49 fix: controlled mode requires onNodesChange, otherwise drags are
   // immediately overwritten by props (nodes feel undraggable). useNodesState
@@ -254,7 +266,7 @@ export default function TopologyGraph({
       isFirstLayout.current = false;
       return;
     }
-    setNodes(baseModel.nodes.map((n) => ({ ...n, data: { ...n.data, selected: false } })));
+    setNodes(baseModel.nodes.map((n) => ({ ...n, data: { ...n.data, selected: false, dim: false } })));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cluster, setNodes]);
   // focusedName change → update only the selected highlight, never position (keeps drags).
@@ -263,7 +275,7 @@ export default function TopologyGraph({
       prev.map((n) => {
         const fresh = model.nodes.find((m) => m.id === n.id);
         if (!fresh) return n;
-        return { ...n, data: { ...n.data, selected: fresh.data.selected } };
+        return { ...n, data: { ...n.data, selected: fresh.data.selected, dim: fresh.data.dim } };
       }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
