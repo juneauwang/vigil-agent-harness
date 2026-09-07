@@ -1789,3 +1789,140 @@ def test_k8s_membership_topology_fallback(tmp_path):
     assert d["probes"]["k8s-role"] == "member（拓扑 host 行 cluster 声明）"
     assert d["probes"]["k8s-attribution"] == "first-successful"
     assert _k8s_names(d) == {"grafana", "kube-dns"}
+
+
+# ---------------------------------------------------------------------------
+# task30 PART B：pod 运行节点采集（数据面位置 runtime_nodes）
+# ---------------------------------------------------------------------------
+
+KUBE_SEL = (
+    '{"items":['
+    '{"kind":"Service","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"ports":[{"port":3000,"nodePort":30030}],"selector":{"app":"grafana"}}},'
+    '{"kind":"Service","metadata":{"name":"kube-dns","namespace":"kube-system"},'
+    '"spec":{"ports":[{"port":53,"nodePort":30053}],"selector":{"k8s-app":"kube-dns"}}},'
+    '{"kind":"Service","metadata":{"name":"lonely","namespace":"monitoring"},'
+    '"spec":{"ports":[{"port":80,"nodePort":30080}],"selector":{"app":"lonely"}}},'
+    '{"kind":"Service","metadata":{"name":"ext-dns","namespace":"monitoring"},'
+    '"spec":{"type":"ExternalName"}},'
+    '{"kind":"Deployment","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"template":{"spec":{"containers":[{"image":"grafana/grafana:10"}]}}}}'
+    ']}'
+)
+# grafana 副本跨 node1/node2；notready/pending 不算"当前运行"；lonely 无副本。
+PODS = (
+    '{"items":['
+    '{"kind":"Pod","metadata":{"name":"g1","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{"nodeName":"node2"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},'
+    '{"kind":"Pod","metadata":{"name":"g2","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{"nodeName":"node1"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},'
+    '{"kind":"Pod","metadata":{"name":"nr","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{"nodeName":"node3"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}},'
+    '{"kind":"Pod","metadata":{"name":"pend","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{},"status":{"phase":"Pending","conditions":[]}},'
+    '{"kind":"Pod","metadata":{"name":"d1","namespace":"kube-system","labels":{"k8s-app":"kube-dns"}},'
+    '"spec":{"nodeName":"node2"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}'
+    ']}'
+)
+
+
+def _pods_runner(**overrides):
+    probes = {
+        "kubectl get pods": PODS,
+        "kubectl get nodes": NODES_NO_CP,
+        "kubectl version": "",
+        "kubectl": KUBE_SEL,
+        "docker ps": ("", 127),
+        "compose ls": ("", 127),
+    }
+    probes.update(overrides)
+    return FakeRunner(**probes)
+
+
+def _row(disc, name):
+    return next(s for s in disc["services"] if s["name"] == name)
+
+
+def test_k8s_runtime_nodes_multi_node_ready_only():
+    """(a)+(b) selector join：多副本跨节点都进列表；只统计 Ready pod
+    （notready/pending 不算"当前运行"）。"""
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=_pods_runner())
+    row = _row(d, "grafana")
+    assert row["runtime_nodes"] == ["node1", "node2"]
+    assert _row(d, "kube-dns")["runtime_nodes"] == ["node2"]
+    # L3 档案镜像同带该字段
+    assert d["details"]["grafana"]["snapshot"]["by_runtime"]["kubectl"]["runtime_nodes"] == [
+        "node1", "node2"]
+    assert d["probes"]["kubectl-pods"].startswith("ok(")
+
+
+def test_k8s_runtime_nodes_zero_replica_and_no_selector():
+    """(c)+(d) 零就绪副本 → []（显式空标记）；无 selector（ExternalName/
+    headless）→ [] 不炸——字段对 k8s 行统一存在。"""
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=_pods_runner())
+    assert _row(d, "lonely")["runtime_nodes"] == []
+    assert _row(d, "ext-dns")["runtime_nodes"] == []
+
+
+def test_k8s_runtime_nodes_absent_on_non_k8s_rows():
+    """(e) 非 k8s 服务行（docker compose/systemd）不带该字段。"""
+    worker_runner = _pods_runner()
+    worker_runner.probes["docker ps"] = DOCKER_PS
+    worker_runner.probes["compose ls"] = COMPOSE_LS
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=worker_runner)
+    harbor = _row(d, "harbor")
+    assert harbor["managed_by"] == "docker_compose"
+    assert "runtime_nodes" not in harbor
+
+
+def test_k8s_runtime_nodes_backfill_on_merge(tmp_path):
+    """(f) 合并回填：存量行缺 runtime_nodes → 补；已有值 → 不覆盖
+    （可能是人工维护的节点清单）；其余字段不被回填动作波及。"""
+    from tools.topo_discovery import write_discovery as _wd
+
+    home = tmp_path
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts: []\nclusters: []\n", encoding="utf-8")
+    svc = {"name": "grafana", "type": "monitor", "managed_by": "kubectl",
+           "endpoint": "203.0.113.10:30030"}
+    d1 = {"version": 4,
+          "host": {"name": "node1", "type": "host", "env": "prod", "cluster": "c1"},
+          "services": [svc], "details": {}}
+    _wd(home, d1)
+    index = yaml.safe_load((home / "services" / "node1.yaml").read_text(encoding="utf-8"))
+    assert "runtime_nodes" not in index["services"][0]  # 旧格式存量行
+
+    # 下次发现的同mer名行带 runtime_nodes → 回填；新行原样带
+    d2 = {"version": 4,
+          "host": {"name": "node1", "type": "host", "env": "prod", "cluster": "c1"},
+          "services": [
+              dict(svc, runtime_nodes=["node1", "node2"]),
+              {"name": "kube-dns", "type": "monitor", "managed_by": "kubectl",
+               "runtime_nodes": ["node2"]},
+          ],
+          "details": {}}
+    _wd(home, d2)
+    rows = {r["name"]: r for r in yaml.safe_load(
+        (home / "services" / "node1.yaml").read_text(encoding="utf-8"))["services"]}
+    assert rows["grafana"]["runtime_nodes"] == ["node1", "node2"]  # 回填
+    assert rows["grafana"]["endpoint"] == "203.0.113.10:30030"     # 其余字段不动
+
+    # 已有值不被覆盖（人工维护的节点清单保留）
+    d3 = {"version": 4,
+          "host": {"name": "node1", "type": "host", "env": "prod", "cluster": "c1"},
+          "services": [dict(svc, runtime_nodes=["node9"])],
+          "details": {}}
+    _wd(home, d3)
+    rows = {r["name"]: r for r in yaml.safe_load(
+        (home / "services" / "node1.yaml").read_text(encoding="utf-8"))["services"]}
+    assert rows["grafana"]["runtime_nodes"] == ["node1", "node2"]
+
+
+def test_card_fields_passthrough_runtime_nodes():
+    """API 卡片视图透传 runtime_nodes（非 k8s 行缺字段 → 空列表归一）。"""
+    from hermes_cli.subcommands.topo_export import _card_fields
+    assert _card_fields({"name": "x", "runtime_nodes": ["n1"]})["runtime_nodes"] == ["n1"]
+    assert _card_fields({"name": "x"})["runtime_nodes"] == []

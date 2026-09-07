@@ -767,9 +767,13 @@ def _parse_kubectl(output: str) -> List[Dict[str, Any]]:
                     if port:
                         ports.append(int(port))
             reachability = "external" if (has_node_port or not ports) else "internal"
+            selector = (item.get("spec") or {}).get("selector")
             rows.append({"kind": "k8s-service", "name": name, "namespace": namespace,
                          "ports": sorted(set(ports)),
-                         "reachability": reachability})
+                         "reachability": reachability,
+                         # task30 PART B：pod 定位用 label selector（headless/
+                         # ExternalName 等无 selector → {}，运行节点列表为空）。
+                         "selector": dict(selector) if isinstance(selector, dict) else {}})
         elif kind == "deployment":
             containers = (((item.get("spec") or {}).get("template") or {})
                           .get("spec") or {}).get("containers") or []
@@ -777,6 +781,60 @@ def _parse_kubectl(output: str) -> List[Dict[str, Any]]:
             rows.append({"kind": "k8s-deploy", "name": name, "namespace": namespace,
                          "image": image})
     return rows
+
+
+def _parse_kubectl_pods(output: str) -> List[Dict[str, Any]]:
+    """``kubectl get pods -A -o json`` → [{namespace, labels, node, ready}]。
+
+    task30 PART B：一条集群级探针拿全部 pod 的调度节点（比逐 service
+    get pods -l 便宜且稳定——N 服务 = 1 条命令），join 在发现侧按
+    (namespace, selector 全匹配) 完成。node 缺失（未调度/Pending）不收。
+    """
+    try:
+        data = json.loads(output or "{}")
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    pods: List[Dict[str, Any]] = []
+    for item in data.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("metadata") or {}
+        node = str(((item.get("spec") or {}).get("nodeName")) or "")
+        if not node:
+            continue  # 未调度（Pending 无节点）不参与运行节点定位
+        conditions = ((item.get("status") or {}).get("conditions") or [])
+        ready = any(
+            isinstance(c, dict) and c.get("type") == "Ready" and c.get("status") == "True"
+            for c in conditions
+        )
+        pods.append({
+            "namespace": str(meta.get("namespace") or ""),
+            "labels": dict(meta.get("labels") or {}),
+            "node": node,
+            "ready": ready,
+        })
+    return pods
+
+
+def _runtime_nodes_for(selector: Dict[str, Any], namespace: str,
+                       pods: List[Dict[str, Any]]) -> List[str]:
+    """Service selector + pod 列表 → 该服务当前就绪副本所在的节点名（去重排序）。
+
+    只统计 Ready pod（"副本当前运行在哪"是数据面问题，未就绪副本不算）；
+    selector 缺失（headless/ExternalName）或零就绪副本 → []（显式空标记，
+    字段仍在——消费端无需区分"没采到"和"没有副本"以外的第三态）。
+    """
+    if not selector:
+        return []
+    nodes = {
+        p["node"]
+        for p in pods
+        if p["namespace"] == namespace and p["ready"]
+        and all(p["labels"].get(k) == v for k, v in selector.items())
+    }
+    return sorted(nodes)
 
 
 # ---------------------------------------------------------------------------
@@ -1851,6 +1909,13 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                 for p in row.get("ports") or []:
                     seen_ports.add(p)
         if k8s_emit:
+            # task30 PART B：数据面定位——一条集群级 pods 探针（比逐 service
+            # get pods -l 便宜：N 服务 = 1 条命令），join 出每个 Service 就绪
+            # 副本所在节点。best-effort：探针失败 → runtime_nodes 全 []，不阻塞。
+            pods_res = _probe(runner, "kubectl get pods -A -o json 2>/dev/null")
+            k8s_pods = _parse_kubectl_pods(pods_res.stdout) if pods_res.ok else []
+            probes["kubectl-pods"] = (
+                f"ok({len(k8s_pods)} pods)" if pods_res.ok else "skipped（pods 枚举不可用）")
             for row in k8s_rows:
                 if row["kind"] != "k8s-service":
                     continue
@@ -1866,6 +1931,8 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                 if dep:
                     image = dep.get("image") or ""
                 service_type = _classify_service_type(name, image)
+                runtime_nodes = _runtime_nodes_for(
+                    row.get("selector") or {}, row.get("namespace", ""), k8s_pods)
                 svc = {
                     "name": name,
                     "type": service_type,
@@ -1875,6 +1942,9 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                     "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
                     "log_paths": [],
                     "depends_on": [],
+                    # task30 PART B：数据面位置（就绪副本所在节点）——Service 行
+                    # 留在归属主机的管理面语义不变，pod 实际运行节点是行属性。
+                    "runtime_nodes": runtime_nodes,
                     "source": "discovered",
                     "last_verified": _dt.date.today().isoformat(),
                     "needs_review": True,
@@ -1906,6 +1976,8 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                                 "namespace": row.get("namespace", ""),
                                 "deployments": deployments,
                                 "pvc": [],
+                                # task30 PART B：档案层同带运行节点（L3 是事实层）。
+                                "runtime_nodes": runtime_nodes,
                             },
                         },
                     },
@@ -2335,6 +2407,14 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
                     if (isinstance(existing_row, dict)
                             and str(existing_row.get("name")) == str(row.get("name"))):
                         existing_row.setdefault("reachability", row["reachability"])
+                        break
+            # task30 PART B：runtime_nodes 回填——字段比合并语义新，只在存量行
+            # 缺失时补（setdefault），绝不覆盖已有值（可能是人工维护的节点清单）。
+            if row.get("runtime_nodes") is not None:
+                for existing_row in merged_rows:
+                    if (isinstance(existing_row, dict)
+                            and str(existing_row.get("name")) == str(row.get("name"))):
+                        existing_row.setdefault("runtime_nodes", row["runtime_nodes"])
                         break
             continue
         merged_rows.append(row)

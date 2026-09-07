@@ -167,6 +167,9 @@ def _card_fields(row: Dict[str, Any]) -> Dict[str, Any]:
         "extra_ports": row.get("extra_ports") or [],
         "log_paths": row.get("log_paths") or [],
         "depends_on": row.get("depends_on") or [],
+        # task30 PART B：数据面位置（k8s 服务的就绪副本所在节点；非 k8s 行
+        # 无此字段 → 空列表）。API 侧透传，UI 消费由维护者后续决定。
+        "runtime_nodes": row.get("runtime_nodes") or [],
     }
 
 
