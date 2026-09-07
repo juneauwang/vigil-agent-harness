@@ -333,9 +333,17 @@ function ListRow({
 export default function TopologyPage() {
   const { t } = useTranslation();
   const [searchParams] = useSearchParams();
+  // task27 PART D: 顶栏全局搜索提交 → /topology?q=...。query 此前只在
+  // useState 初始化器里读一次 URL 参数——组件已挂载时（再次提交搜索 /
+  // 参数变化）新 q 永远进不了过滤器。订阅参数变化显式同步。
+  const urlQuery = searchParams.get("q") ?? "";
   const [view, setView] = useState<TopologyView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
+  // URL ?q= 变化（含顶栏搜索再提交 / 他页跳转）→ 覆盖页内搜索框并应用过滤。
+  useEffect(() => {
+    setQuery(urlQuery);
+  }, [urlQuery]);
   const [filter, setFilter] = useState<StatusFilterId>("all");
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);

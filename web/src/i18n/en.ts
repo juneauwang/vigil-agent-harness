@@ -15,7 +15,7 @@ const en = {
     language: "Language",
     langZh: "中文",
     langEn: "EN",
-    searchPlaceholder: "Search hosts / services / commands…",
+    searchPlaceholder: "Search topology entities (hosts / services)…",
     searchClearAria: "Clear search",
     apiHealthTitle: "API health check",
     approvalsBadgeTitle: "Pending approvals (click to open the approval center)",

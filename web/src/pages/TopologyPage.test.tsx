@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter } from "react-router";
+import { MemoryRouter, Route, Routes, useNavigate } from "react-router";
 import TopologyPage from "./TopologyPage";
 import { api } from "@/lib/api";
 import type { TopologyView } from "@/lib/api";
@@ -406,6 +406,83 @@ describe("TopologyPage 搜索高亮（task27 PART B2）", () => {
       act(() => typeSearch(container, "no-such-entity"));
       await act(async () => {});
       expect(container.querySelector('[data-testid="topo-search-hint"]')?.textContent).toContain("no-such-entity");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+});
+
+// ── task27 PART D: 顶栏搜索 → /topology?q= 过滤生效（断链修复）──
+// 根因：页内 query 只在 useState 初始化器读一次 URL 参数——组件已挂载时
+// 再次提交搜索（参数变化）不生效。修复 = 订阅 ?q= 显式同步进页内搜索框。
+describe("TopologyPage 顶栏搜索断链修复（task27 PART D）", () => {
+  function NavigateButton({ to, label }: { to: string; label: string }) {
+    const navigate = useNavigate();
+    return (
+      <button type="button" data-testid={label} onClick={() => navigate(to)}>
+        go
+      </button>
+    );
+  }
+
+  async function mountWithRouter(initial: string[]) {
+    vi.mocked(api.getTopology).mockResolvedValue({ ok: true, data: VIEW, error: "" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={initial}>
+          <NavigateButton to="/topology?q=prometheus" label="nav-search" />
+          <Routes>
+            <Route path="/topology" element={<TopologyPage />} />
+          </Routes>
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    return { container, root };
+  }
+
+  it("带 ?q= 首次进入：过滤已应用且页内搜索框反映查询", async () => {
+    const { container, root } = await mountWithRouter(["/topology?q=prometheus"]);
+    try {
+      const input = container.querySelector<HTMLInputElement>('[data-testid="topology-search"]')!;
+      expect(input.value).toBe("prometheus");
+      // 命中提示渲染（1 host + 1 service + 1 cluster = total 3）
+      expect(container.querySelector('[data-testid="topo-search-hint"]')?.textContent).toContain("1 / 3");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("已挂载时再次提交搜索（?q 变化）→ 过滤实时更新（原断链场景）", async () => {
+    const { container, root } = await mountWithRouter(["/topology", "/topology"]);
+    try {
+      // 初始无查询：无命中提示
+      expect(container.querySelector('[data-testid="topo-search-hint"]')).toBeNull();
+      // 模拟顶栏搜索提交：导航到 /topology?q=prometheus
+      const nav = container.querySelector<HTMLButtonElement>('[data-testid="nav-search"]')!;
+      await act(async () => {
+        nav.click();
+        await Promise.resolve();
+      });
+      const input = container.querySelector<HTMLInputElement>('[data-testid="topology-search"]')!;
+      expect(input.value).toBe("prometheus");
+      expect(container.querySelector('[data-testid="topo-search-hint"]')?.textContent).toContain("1 / 3");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("无结果查询：空结果提示渲染（不再是『看似没反应』）", async () => {
+    const { container, root } = await mountWithRouter(["/topology?q=nonsense-entity"]);
+    try {
+      const hint = container.querySelector('[data-testid="topo-search-hint"]');
+      expect(hint?.textContent).toContain("nonsense-entity");
     } finally {
       act(() => root.unmount());
       container.remove();

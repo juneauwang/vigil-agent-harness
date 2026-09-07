@@ -16,7 +16,7 @@ const zh = {
     language: "语言",
     langZh: "中",
     langEn: "EN",
-    searchPlaceholder: "搜索主机 / 服务 / 命令…",
+    searchPlaceholder: "搜索拓扑实体（主机 / 服务）…",
     searchClearAria: "清除搜索",
     apiHealthTitle: "服务健康检查",
     approvalsBadgeTitle: "待审批（点击进入审批中心）",
