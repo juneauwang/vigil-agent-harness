@@ -54,6 +54,7 @@ function ClusterNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex h-9 w-[396px] items-center gap-2 rounded-md border px-2.5 text-xs font-semibold text-[var(--vigil-text)]",
         keyPath ? "border-amber-500/60 bg-amber-500/10" : "border-[var(--vigil-border)] bg-[var(--vigil-card)]",
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        "transition-[box-shadow,transform,border-color] ease-out duration-150 hover:ring-2 hover:ring-[color-mix(in_srgb,var(--vigil-primary)_50%,transparent)]",
         dim && "opacity-30",
       )}
     >
@@ -79,6 +80,7 @@ function HostNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex w-[180px] flex-col gap-0.5 rounded-md border px-2.5 py-2 text-xs",
         nodeToneClass(card.status, keyPath),
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        "transition-[box-shadow,transform,border-color] ease-out duration-150 hover:ring-2 hover:ring-[color-mix(in_srgb,var(--vigil-primary)_50%,transparent)]",
         dim && "opacity-30",
       )}
     >
@@ -118,6 +120,7 @@ function ServiceNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex w-[124px] items-center gap-1.5 rounded border px-2 py-1.5 text-[11px]",
         nodeToneClass(card.status, keyPath),
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        "transition-[box-shadow,transform,border-color] ease-out duration-150 hover:ring-2 hover:ring-[color-mix(in_srgb,var(--vigil-primary)_50%,transparent)]",
         dim && "opacity-30",
       )}
     >
@@ -142,6 +145,7 @@ function CrossHostNodeView({ data }: NodeProps<TopologyFlowNode>) {
         "flex w-[180px] items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs",
         nodeToneClass(card.status, keyPath),
         selected && "ring-2 ring-[var(--vigil-primary)]",
+        "transition-[box-shadow,transform,border-color] ease-out duration-150 hover:ring-2 hover:ring-[color-mix(in_srgb,var(--vigil-primary)_50%,transparent)]",
         dim && "opacity-30",
       )}
     >
@@ -214,6 +218,9 @@ export default function TopologyGraph({
     const filtered = filterGraphModel(base, cluster);
     return layoutForceGraph(filtered);
   }, [view, cluster]);
+  // task28 P1.2：节点 hover → 该节点 + 相连边高亮（加粗/主色），其余边微暗。
+  // 只改边样式，不动布局引擎。
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const needle = (searchQuery ?? "").trim().toLowerCase();
   const model = useMemo(
     () => ({
@@ -345,7 +352,18 @@ export default function TopologyGraph({
         key={cluster}
         nodes={nodes}
         onNodesChange={onNodesChange}
-        edges={model.edges}
+        edges={model.edges.map((e) => {
+          if (hoveredId === null) return e;
+          const connected = e.source === hoveredId || e.target === hoveredId;
+          return {
+            ...e,
+            style: connected
+              ? { strokeWidth: 2.5, stroke: "var(--vigil-primary)" }
+              : { opacity: 0.35 },
+          };
+        })}
+        onNodeMouseEnter={(_, node) => setHoveredId(String(node.id))}
+        onNodeMouseLeave={() => setHoveredId(null)}
         nodeTypes={nodeTypes}
         onNodeClick={handleNodeClick}
         onMoveEnd={handleMoveEnd}

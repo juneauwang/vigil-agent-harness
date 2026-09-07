@@ -489,3 +489,56 @@ describe("TopologyPage 顶栏搜索断链修复（task27 PART D）", () => {
     }
   });
 });
+
+// ── task28 P1.2: 实体卡左侧 4px 状态条（状态 token 着色）+ 列表行状态点 ──
+describe("TopologyPage 状态条（task28 P1.2）", () => {
+  it("故障实体的卡片左条用 error token，正常用 ok token；卡片有 hover 抬升类", async () => {
+    const viewDown: TopologyView = {
+      ...VIEW,
+      hosts: [
+        {
+          card: { name: "node1", env: "prod", cluster: "k8s-prod", status: "down" },
+          services: [],
+          services_missing: true,
+        },
+        {
+          card: { name: "node2", env: "prod", cluster: "k8s-prod", status: "running" },
+          services: [],
+          services_missing: true,
+        },
+      ],
+    };
+    vi.mocked(api.getTopology).mockResolvedValue({ ok: true, data: viewDown, error: "" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter>
+            <TopologyPage />
+          </MemoryRouter>,
+        );
+      });
+      await act(async () => {});
+      const downCard = container.querySelector("#topo-row-node1") as HTMLElement;
+      const okCard = container.querySelector("#topo-row-node2") as HTMLElement;
+      expect(downCard.className).toContain("border-l-4");
+      expect(downCard.className).toContain("border-l-[var(--vigil-error)]");
+      expect(okCard.className).toContain("border-l-[var(--vigil-ok)]");
+      expect(downCard.className).toContain("vigil-card-interactive");
+      // 离线（无服务 host 卡为空状态推导）列表视图：行内有状态点
+      const listBtn = [...container.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === "列表视图",
+      ) as HTMLButtonElement;
+      await act(async () => {
+        listBtn.click();
+      });
+      const row = container.querySelector("#topo-row-node1") as HTMLElement;
+      expect(row.querySelector(".vigil-status-dot")).toBeTruthy();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+});

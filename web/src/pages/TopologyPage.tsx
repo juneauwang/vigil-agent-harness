@@ -20,8 +20,8 @@ import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "
 import TopologyGraph from "@/components/TopologyGraph";
 import DetailDrawer from "@/components/DetailDrawer";
 import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
-import { EnvBadge, StatusPill } from "@/components/StatusBits";
-import { cn, lastSeenInfo, matchesSearch, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
+import { EnvBadge, StatusDot, StatusPill } from "@/components/StatusBits";
+import { cn, lastSeenInfo, matchesSearch, statusAccentClass, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
 import type { GraphEntityRef } from "@/lib/topologyGraph";
 
 const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; key: string }> = [
@@ -186,7 +186,11 @@ function HostCard({
   return (
     <div
       id={`topo-row-${card.name}`}
-      className={cn("vigil-card cursor-pointer p-3.5", card.on_key_path && "border-amber-500/50")}
+      className={cn(
+        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5",
+        statusAccentClass(card.status),
+        card.on_key_path && "[border-right-color:var(--vigil-warn)]/50 [border-top-color:var(--vigil-warn)]/50 [border-bottom-color:var(--vigil-warn)]/50",
+      )}
       onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -249,7 +253,11 @@ function CrossCard({
   return (
     <div
       id={`topo-row-${card.name}`}
-      className={cn("vigil-card cursor-pointer p-3.5", card.on_key_path && "border-amber-500/50")}
+      className={cn(
+        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5",
+        statusAccentClass(card.status),
+        card.on_key_path && "[border-right-color:var(--vigil-warn)]/50 [border-top-color:var(--vigil-warn)]/50 [border-bottom-color:var(--vigil-warn)]/50",
+      )}
       onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -288,9 +296,10 @@ function ListRow({
     <div
       id={`topo-row-${card.name}`}
       onClick={() => onFocus(card.name)}
-      className="grid cursor-pointer grid-cols-[1fr_auto_auto_auto_1fr_auto_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm last:border-b-0 hover:bg-[var(--vigil-muted-bg)]"
+      className="grid cursor-pointer grid-cols-[1fr_auto_auto_auto_1fr_auto_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm tabular-nums transition-colors ease-out duration-150 last:border-b-0 hover:bg-[var(--vigil-muted-bg)]"
     >
       <span className="flex items-center gap-1.5 truncate">
+        <StatusDot status={card.status} />
         {card.on_key_path && <Link2 className="size-3 shrink-0 text-amber-500" />}
         <span className="font-medium">{card.name}</span>
       </span>
