@@ -125,14 +125,17 @@ function ServiceRow({
 }) {
   const { t } = useTranslation();
   const card = svc.card;
-  if (!matchesSearch(card, q)) return null;
+  // task29 PART B：搜索不命中 → 与图一致的 dim（不隐藏、布局稳定）；状态
+  // 过滤器维持既有隐藏语义。
   if (!statusMatchesFilter(card.status, filter)) return null;
+  const searchDimmed = Boolean(q) && !matchesSearch(card, q);
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-2 rounded px-2 py-1 text-sm",
+        "flex flex-wrap items-center gap-2 rounded px-2 py-1 text-sm transition-opacity ease-out duration-150",
         "odd:bg-[var(--vigil-muted-bg)]",
         card.on_key_path && "ring-1 ring-inset ring-amber-500/40",
+        searchDimmed && "opacity-30",
       )}
     >
       <span className="font-medium">{card.name}</span>
@@ -174,22 +177,28 @@ function HostCard({
 }) {
   const { t } = useTranslation();
   const card = host.card;
-  const anyServiceVisible = host.services.some(
-    (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
+  // task29 PART B：搜索对卡片视图 = 与图一致的 dim（不隐藏、布局稳定）；
+  // 状态过滤器维持既有隐藏语义。宿主卡在自身与所有（状态可见）服务都不
+  // 命中时才整卡变暗——opacity 会继承到子行，服务行命中时保持宿主卡可读，
+  // 是嵌套 DOM 下最接近图"逐节点 dim"的等价物。
+  const statusVisibleServices = host.services.filter(
+    (s) => statusMatchesFilter(s.card.status, filter),
   );
-  if (!matchesSearch(card, q)) return null;
-  if (!statusMatchesFilter(card.status, filter) && !anyServiceVisible) return null;
-  const visibleServices = host.services.filter(
-    (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
-  );
+  const anyServiceVisible = statusVisibleServices.some((s) => matchesSearch(s.card, q));
+  const hostMatched = matchesSearch(card, q);
+  if (!statusMatchesFilter(card.status, filter) && statusVisibleServices.length === 0) {
+    return null;
+  }
+  const searchDimmed = Boolean(q) && !hostMatched && !anyServiceVisible;
 
   return (
     <div
       id={`topo-row-${card.name}`}
       className={cn(
-        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5",
+        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5 transition-opacity ease-out duration-150",
         statusAccentClass(card.status),
         card.on_key_path && "[border-right-color:var(--vigil-warn)]/50 [border-top-color:var(--vigil-warn)]/50 [border-bottom-color:var(--vigil-warn)]/50",
+        searchDimmed && "opacity-30",
       )}
       onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })}
     >
@@ -212,12 +221,12 @@ function HostCard({
       <ActivityLine lastSeen={card.last_seen} />
       <div className="border-t border-dashed border-[var(--vigil-border)] pt-2">
         <div className="mb-1 text-[11px] text-[var(--vigil-muted)]">
-          {visibleServices.length > 0 ? t("topology.servicesWithCount", { n: visibleServices.length }) : t("topology.kind.service")}
+          {statusVisibleServices.length > 0 ? t("topology.servicesWithCount", { n: statusVisibleServices.length }) : t("topology.kind.service")}
         </div>
-        {visibleServices.length === 0 ? (
+        {statusVisibleServices.length === 0 ? (
           <div className="text-xs italic text-[var(--vigil-muted)]">{t("topology.noServices")}</div>
         ) : (
-          visibleServices.map((svc) => (
+          statusVisibleServices.map((svc) => (
             <ServiceRow
               key={svc.card.name}
               svc={svc}
@@ -248,15 +257,16 @@ function CrossCard({
   onEdit: (entityId: string, title: string) => void;
 }) {
   const card = svc.card;
-  if (!matchesSearch(card, q)) return null;
   if (!statusMatchesFilter(card.status, filter)) return null;
+  const searchDimmed = Boolean(q) && !matchesSearch(card, q);
   return (
     <div
       id={`topo-row-${card.name}`}
       className={cn(
-        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5",
+        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5 transition-opacity ease-out duration-150",
         statusAccentClass(card.status),
         card.on_key_path && "[border-right-color:var(--vigil-warn)]/50 [border-top-color:var(--vigil-warn)]/50 [border-bottom-color:var(--vigil-warn)]/50",
+        searchDimmed && "opacity-30",
       )}
       onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })}
     >
@@ -711,6 +721,15 @@ export default function TopologyPage() {
                   </div>
                 );
               })}
+              {/* task29 PART B：列表视图搜索无命中 → 空结果态 */}
+              {searchMatch && searchMatch.matched === 0 ? (
+                <p
+                  className="px-2 py-4 text-center text-sm text-[var(--vigil-muted)]"
+                  data-testid="topo-list-search-empty"
+                >
+                  {t("topology.searchEmpty", { query: query.trim() })}
+                </p>
+              ) : null}
               {view.hosts.length === 0 && (
                 <p className="px-2 py-4 text-sm italic text-[var(--vigil-muted)]">
                   {t("topology.noHosts")}
@@ -750,6 +769,16 @@ export default function TopologyPage() {
                   </div>
                 </section>
               ))}
+
+              {/* task29 PART B：卡片视图搜索无命中 → 空结果态（此前是空白区） */}
+              {searchMatch && searchMatch.matched === 0 ? (
+                <div
+                  className="vigil-card border-dashed p-10 text-center text-sm text-[var(--vigil-muted)]"
+                  data-testid="topo-card-search-empty"
+                >
+                  {t("topology.searchEmpty", { query: query.trim() })}
+                </div>
+              ) : null}
 
               {view.cross_host.length > 0 && (
                 <section className="mb-6">

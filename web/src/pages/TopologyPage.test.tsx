@@ -542,3 +542,137 @@ describe("TopologyPage 状态条（task28 P1.2）", () => {
     }
   });
 });
+
+// ── task29 PART B: 搜索过滤卡片/列表视图（图已 dim，卡片改用同一 dim 约定）──
+describe("TopologyPage 搜索 → 卡片/列表联动（task29 PART B）", () => {
+  /** 两台主机：node1（带命中服务 prometheus）+ node2（不命中）。 */
+  const VIEW2: TopologyView = {
+    ...VIEW,
+    hosts: [
+      VIEW.hosts[0],
+      {
+        card: { name: "node2", env: "prod", cluster: "k8s-prod", status: "running", endpoint: "203.0.113.11" },
+        services: [],
+        services_missing: true,
+      },
+    ],
+  };
+
+  function typeSearch(container: HTMLElement, value: string) {
+    const input = container.querySelector<HTMLInputElement>('[data-testid="topology-search"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  async function mountPage(data: TopologyView = VIEW2) {
+    vi.clearAllMocks();
+    vi.mocked(api.getTopology).mockResolvedValue({ ok: true, data, error: "" });
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <MemoryRouter>
+          <TopologyPage />
+        </MemoryRouter>,
+      );
+    });
+    await act(async () => {});
+    return { container, root };
+  }
+
+  it("卡片视图：不命中的卡片 dim（opacity-30）但不从 DOM 消失（与图同一约定）；命中的服务行保持不透明", async () => {
+    const { container, root } = await mountPage();
+    try {
+      act(() => typeSearch(container, "prometheus"));
+      await act(async () => {});
+      const node1Card = container.querySelector("#topo-row-node1") as HTMLElement;
+      const node2Card = container.querySelector("#topo-row-node2") as HTMLElement;
+      // 都在 DOM（不隐藏、布局稳定）
+      expect(node1Card).toBeTruthy();
+      expect(node2Card).toBeTruthy();
+      // node2 自身与其服务都不命中 → 整卡 dim；node1 有命中服务 → 不 dim
+      expect(node2Card.className).toContain("opacity-30");
+      expect(node1Card.className).not.toContain("opacity-30");
+      // 命中的服务行不 dim（宿主卡未 dim，行自身命中）
+      const svcRow = node1Card.querySelector(".opacity-30");
+      expect(svcRow).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("列表视图：搜索隐藏不命中的行（表格自然过滤）", async () => {
+    const { container, root } = await mountPage();
+    try {
+      const listBtn = [...container.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === "列表视图",
+      ) as HTMLButtonElement;
+      await act(async () => {
+        listBtn.click();
+      });
+      expect(container.querySelector("#topo-row-node1")).toBeTruthy();
+      expect(container.querySelector("#topo-row-node2")).toBeTruthy();
+
+      act(() => typeSearch(container, "node1"));
+      await act(async () => {});
+      expect(container.querySelector("#topo-row-node1")).toBeTruthy();
+      expect(container.querySelector("#topo-row-node2")).toBeNull();
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("激活查询下切换视图，过滤保持生效", async () => {
+    const { container, root } = await mountPage();
+    try {
+      act(() => typeSearch(container, "prometheus"));
+      const listBtn = [...container.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === "列表视图",
+      ) as HTMLButtonElement;
+      await act(async () => {
+        listBtn.click();
+      });
+      // 切到列表视图：查询仍在搜索框里、行被过滤
+      const input = container.querySelector<HTMLInputElement>('[data-testid="topology-search"]')!;
+      expect(input.value).toBe("prometheus");
+      expect(container.querySelector("#topo-row-node2")).toBeNull();
+      const cardBtn = [...container.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === "卡片视图",
+      ) as HTMLButtonElement;
+      await act(async () => {
+        cardBtn.click();
+      });
+      // 切回卡片：dim 仍生效
+      const node2Card = container.querySelector("#topo-row-node2") as HTMLElement;
+      expect(node2Card.className).toContain("opacity-30");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it("卡片/列表视图各自的空结果态渲染", async () => {
+    const { container, root } = await mountPage();
+    try {
+      act(() => typeSearch(container, "no-such-entity"));
+      await act(async () => {});
+      expect(container.querySelector('[data-testid="topo-card-search-empty"]')?.textContent).toContain("no-such-entity");
+      expect(container.querySelector('[data-testid="topo-card-search-empty"]')?.className).not.toContain("opacity-30");
+
+      const listBtn = [...container.querySelectorAll("button")].find(
+        (b) => b.getAttribute("aria-label") === "列表视图",
+      ) as HTMLButtonElement;
+      await act(async () => {
+        listBtn.click();
+      });
+      expect(container.querySelector('[data-testid="topo-list-search-empty"]')?.textContent).toContain("no-such-entity");
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+});
