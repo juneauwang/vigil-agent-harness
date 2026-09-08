@@ -350,3 +350,115 @@ class TestVaultInjection:
         assert "凭据" in result
         assert "不是合法 JSON" in result
         assert fake.calls == []  # 凭据解析失败 → 不发请求
+
+
+# ---------------------------------------------------------------------------
+# task32 PART B：命名 API-source registry（多 Prometheus 实例）
+# ---------------------------------------------------------------------------
+
+class TestSourceRegistry:
+    def test_legacy_only_default_source_unchanged(self, prom_home, client):
+        """(a) legacy 单源配置：source 缺省/default → 行为与引入前一致。"""
+        _, write = prom_home
+        write({"endpoint": PROM_ENDPOINT, "alertmanager": ALERTMANAGER})
+        fake = client(_FakeResp(json_data={
+            "status": "success",
+            "data": {"resultType": "vector", "result": [
+                {"metric": {"__name__": "up"}, "value": [1720000000.0, "1"]}]},
+        }))
+        out = pt.prom_query("up")
+        assert "up = 1" in out
+        assert fake.calls[0][0].startswith(PROM_ENDPOINT)
+        # 显式传 source="default" 亦同
+        out2 = pt.prom_query("up", source="default")
+        assert "up = 1" in out2
+
+    def test_named_source_own_endpoint_and_auth(self, prom_home, client):
+        """(b) 命名源：query 打到该源 endpoint + 该源 vault 认证。"""
+        from tools.credential_vault import store
+
+        _, write = prom_home
+        write({
+            "endpoint": PROM_ENDPOINT,
+            "sources": {
+                "dcgm": {"endpoint": "http://127.0.0.1:9101",
+                         "vault_path": "dcgm_auth"},
+            },
+        })
+        store("dcgm_auth", json.dumps({"user": "dcgm_u", "pass": "dcgm_pw"}))
+        fake = client(_FakeResp(json_data={
+            "status": "success",
+            "data": {"resultType": "vector", "result": [
+                {"metric": {"__name__": "DCGM_FI_DEV_GPU_UTIL"}, "value": [1720000000.0, "37"]}]},
+        }))
+        out = pt.prom_query("DCGM_FI_DEV_GPU_UTIL", source="dcgm")
+        assert "DCGM_FI_DEV_GPU_UTIL" in out
+        url, _params, headers = fake.calls[-1]
+        assert url.startswith("http://127.0.0.1:9101/api/v1/query")
+        assert headers.get("Authorization") == "Basic " + __import__("base64").b64encode(
+            b"dcgm_u:dcgm_pw").decode()
+
+    def test_unknown_source_loud_error_lists_names(self, prom_home):
+        """(c) 未知名 → 报错列出可用名（绝不静默回退 default）。"""
+        _, write = prom_home
+        write({"endpoint": PROM_ENDPOINT,
+               "sources": {"dcgm": {"endpoint": "http://127.0.0.1:9101"}}})
+        out = pt.prom_query("up", source="telgraf")  # typo
+        assert "未知 source" in out
+        assert "telgraf" in out
+        assert "dcgm" in out and "default" in out
+
+    def test_default_name_reserved_in_sources(self, prom_home):
+        """(d) sources 里占用保留名 default → 显式报错。"""
+        _, write = prom_home
+        write({"endpoint": PROM_ENDPOINT,
+               "sources": {"default": {"endpoint": "http://127.0.0.1:9199"}}})
+        out = pt.prom_query("up", source="default")
+        # sources 块存在即校验：default 解析走 legacy 字段，但保留名占用是
+        # 显式配置错误（任何 source 参数下都报）
+        assert "保留名" in out
+        out2 = pt.alert_query(source="default")
+        assert "保留名" in out2
+
+    def test_bad_source_shape_loud_error(self, prom_home):
+        _, write = prom_home
+        write({"endpoint": PROM_ENDPOINT, "sources": {"bad name!": {"endpoint": "x"}}})
+        out = pt.prom_query("up", source="bad name!")
+        assert "非法" in out
+
+    def test_alert_query_named_source(self, prom_home, client):
+        """(f) alert_query 接受 source → 打到该源的 alertmanager。"""
+        _, write = prom_home
+        write({
+            "endpoint": PROM_ENDPOINT,
+            "alertmanager": ALERTMANAGER,
+            "sources": {"telegraf": {
+                "endpoint": "http://127.0.0.1:9102",
+                "alertmanager": "http://127.0.0.1:9094",
+            }},
+        })
+        fake = client(_FakeResp(json_data=[
+            {"status": {"state": "active"},
+             "labels": {"alertname": "HighLatency", "severity": "warning"},
+             "annotations": {"summary": "latency high"},
+             "startsAt": "2026-09-09T10:00:00Z"},
+        ]))
+        out = pt.alert_query(source="telegraf")
+        assert "HighLatency" in out
+        assert fake.calls[-1][0] == "http://127.0.0.1:9094/api/v2/alerts"
+
+    def test_named_source_missing_endpoint_loud(self, prom_home):
+        _, write = prom_home
+        write({"endpoint": PROM_ENDPOINT, "sources": {"empty": {}}})
+        out = pt.prom_query("up", source="empty")
+        assert "缺少 endpoint" in out
+
+    def test_config_set_nested_source_key(self, prom_home):
+        """CLI 授权路径：vigil config set 的 set_config_value 支持嵌套源键。"""
+        from hermes_cli.config import set_config_value
+        home, write = prom_home
+        write({"endpoint": PROM_ENDPOINT})
+        set_config_value("ops.prometheus.sources.dcgm.endpoint", "http://127.0.0.1:9101")
+        import yaml as _yaml
+        cfg = _yaml.safe_load((home / "config.yaml").read_text(encoding="utf-8"))
+        assert cfg["ops"]["prometheus"]["sources"]["dcgm"]["endpoint"] == "http://127.0.0.1:9101"
