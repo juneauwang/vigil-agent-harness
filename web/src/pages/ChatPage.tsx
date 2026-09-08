@@ -885,6 +885,9 @@ export default function ChatPage() {
   const [analytics, setAnalytics] = useState<UsageAnalyticsResponse | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const abortRefs = useRef<Record<string, AbortController>>({});
+  // task31 PART C：busy 提交的排队发送（打断收尾后回放；每会话一条队列）。
+  const pendingSendsRef = useRef<Record<string, string[]>>({});
+  const pendingDrainRef = useRef<Record<string, boolean>>({});
   const loadedRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -1179,44 +1182,6 @@ export default function ChatPage() {
     [],
   );
 
-  const send = useCallback(
-    async (e: FormEvent) => {
-      e.preventDefault();
-      const text = draft.trim();
-      const sid = activeId;
-      const st = (sid && states[sid]) || createChatState();
-      if (!text || !sid || chatInputDisabled(st) || activeBusy) return;
-      setDraft("");
-      setError(null);
-      setStopWarning(null);
-      setStates((prev) => ({ ...prev, [sid]: pushUserMessage(prev[sid] ?? createChatState(), text) }));
-      const ctrl = new AbortController();
-      abortRefs.current[sid] = ctrl;
-      try {
-        await api.chatStream(sid, text, (ev) => {
-          setStates((prev) => ({
-            ...prev,
-            [sid]: applyChatEvent(prev[sid] ?? createChatState(), {
-              type: ev.type,
-              data: (ev.data ?? {}) as Record<string, unknown>,
-            }),
-          }));
-        }, ctrl.signal);
-        void refreshSessions();
-      } catch (err) {
-        if (err instanceof Error && err.name === "AbortError") return;
-        const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
-        setStates((prev) => ({
-          ...prev,
-          [sid]: applyChatEvent(prev[sid] ?? createChatState(), { type: "chat:error", data: { message: msg } }),
-        }));
-      } finally {
-        if (abortRefs.current[sid] === ctrl) delete abortRefs.current[sid];
-      }
-    },
-    [activeId, draft, refreshSessions, states, activeBusy],
-  );
-
   // task31 PART B/C：共享取消路径——stop 按钮与"输入即中断"都走这里，绝不分叉。
   // 可靠性守则：interrupt 请求失败重试一次（409 not_busy/agent_not_ready 视为
   // 已收敛 = 会话本就没在跑）；仍失败也照样 abort SSE + 本地强制复位 +
@@ -1258,6 +1223,104 @@ export default function ChatPage() {
       void verifyBusyCleared(sid, setStates, setStopWarning, setBusyMap);
     },
     [refreshSessions, t],
+  );
+
+  // task31 PART C：单 turn 发起（供空闲 send 与 busy 中断后的排队回放共用）。
+  // 返回 null = 正常收尾/主动中止；字符串 = 失败错误码（busy → 排队重试）。
+  const startTurn = useCallback(
+    async (sid: string, text: string): Promise<string | null> => {
+      const ctrl = new AbortController();
+      abortRefs.current[sid] = ctrl;
+      try {
+        await api.chatStream(sid, text, (ev) => {
+          setStates((prev) => ({
+            ...prev,
+            [sid]: applyChatEvent(prev[sid] ?? createChatState(), {
+              type: ev.type,
+              data: (ev.data ?? {}) as Record<string, unknown>,
+            }),
+          }));
+        }, ctrl.signal);
+        void refreshSessions();
+        return null;
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") return null;
+        const code = err instanceof ApiError ? err.code : "error";
+        const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
+        setStates((prev) => ({
+          ...prev,
+          [sid]: applyChatEvent(prev[sid] ?? createChatState(), { type: "chat:error", data: { message: msg } }),
+        }));
+        return code;
+      } finally {
+        if (abortRefs.current[sid] === ctrl) delete abortRefs.current[sid];
+      }
+    },
+    [refreshSessions],
+  );
+
+  // task31 PART C：pending-send 队列——busy 提交在打断收尾期间排队，逐条回放，
+  // 绝不吞消息。409 busy（后端 interrupt 收尾 ≤5s 窗口）就地重试；最终失败把
+  // 文本放回输入框（永不丢）。
+  const drainPendingSends = useCallback(
+    async (sid: string) => {
+      if (pendingDrainRef.current[sid]) return; // 本会话已在排空（防重入）
+      pendingDrainRef.current[sid] = true;
+      try {
+        for (;;) {
+          const queue = pendingSendsRef.current[sid] ?? [];
+          const text = queue[0];
+          if (text === undefined) break;
+          setStates((prev) => ({
+            ...prev,
+            [sid]: pushUserMessage(prev[sid] ?? createChatState(), text),
+          }));
+          let code = await startTurn(sid, text);
+          let tries = 0;
+          while (code === "busy" && tries < 3) {
+            tries += 1;
+            await new Promise((r) => setTimeout(r, 1000));
+            code = await startTurn(sid, text);
+          }
+          pendingSendsRef.current[sid] = queue.slice(1);
+          if (code !== null) {
+            setDraft((prev) => (prev ? `${text}\n${prev}` : text));
+            setError(i18n.t("chat.pendingSendFailed"));
+            break;
+          }
+        }
+      } finally {
+        pendingDrainRef.current[sid] = false;
+      }
+    },
+    [startTurn],
+  );
+
+  const send = useCallback(
+    async (e: FormEvent) => {
+      e.preventDefault();
+      const text = draft.trim();
+      const sid = activeId;
+      if (!text || !sid || busyAction) return;
+      const busy = chatInputDisabled((states[sid] ?? createChatState())) || activeBusy;
+      if (!busy) {
+        // 空闲路径：与既有行为逐字节一致。
+        setDraft("");
+        setError(null);
+        setStopWarning(null);
+        setStates((prev) => ({ ...prev, [sid]: pushUserMessage(prev[sid] ?? createChatState(), text) }));
+        await startTurn(sid, text);
+        return;
+      }
+      // task31 PART C：busy 提交 = 打断当前 turn（与 stop 按钮同一条共享取消
+      // 路径 interruptActiveTurn），新消息在同一会话排队紧接着发（CLI 语义；
+      // 中断标记由 markTurnInterrupted 落在被打断回合上）。
+      setDraft("");
+      pendingSendsRef.current[sid] = [...(pendingSendsRef.current[sid] ?? []), text];
+      await interruptActiveTurn(sid);
+      await drainPendingSends(sid);
+    },
+    [draft, activeId, states, busyAction, activeBusy, startTurn, interruptActiveTurn, drainPendingSends],
   );
 
   const stopTurn = useCallback(async () => {
@@ -1380,7 +1443,9 @@ export default function ChatPage() {
     [modelSelections, sessions, modelOptions, t],
   );
 
-  const disabled = chatInputDisabled(activeState) || activeBusy || !activeId || busyAction;
+  // task31 PART C：busy 不再禁输入——CLI 语义，busy 提交 = 打断 + 发送。
+  // busyAction（审批/clarify 弹卡）仍独占输入。
+  const disabled = !activeId || busyAction;
 
   // task19 F2: Runbooks gap → chat bridge. A `?prompt=` deep-link prefills the
   // draft once the composer can accept it (never clobbers an existing draft —
@@ -1652,7 +1717,15 @@ export default function ChatPage() {
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            placeholder={disabled ? (busyAction ? t("chat.placeholderCreating") : t("chat.placeholderBusy")) : t("chat.placeholder")}
+            placeholder={
+              disabled
+                ? busyAction
+                  ? t("chat.placeholderCreating")
+                  : t("chat.placeholderBusy")
+                : activeBusy
+                  ? t("chat.placeholderInterrupt")
+                  : t("chat.placeholder")
+            }
             disabled={disabled}
             spellCheck={false}
             className="h-9 min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
