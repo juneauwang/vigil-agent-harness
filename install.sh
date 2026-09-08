@@ -6,7 +6,7 @@
 # What this does (read before you pipe):
 #   1. Detects python3 (>= 3.10) — Vigil is a Python package, nothing to dodge here.
 #   2. Creates an isolated venv at ~/.local/share/vigil/venv (system Python untouched).
-#   3. Installs the pinned PyPI release: vigil-agent-harness==1.0.4
+#   3. Installs the pinned PyPI release: vigil-agent-harness==1.0.5
 #   4. Symlinks the launcher to ~/.local/bin/vigil (add to PATH if missing).
 #   5. Pre-installs the tirith security scanner (~/.vigil/bin/tirith, from GitHub
 #      releases, SHA-256 verified) so the FIRST scanned command doesn't hit a
@@ -19,7 +19,7 @@
 
 set -euo pipefail
 
-VIGIL_VERSION="1.0.4"
+VIGIL_VERSION="1.0.5"
 PYTHON_MIN="3.11"
 VENV_DIR="${VIGIL_VENV_DIR:-$HOME/.local/share/vigil/venv}"
 BIN_DIR="$HOME/.local/bin"
