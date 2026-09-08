@@ -487,9 +487,9 @@ export default function MonitoringPage() {
                   />
                 </label>
                 {settingsErr ? (
-                  <div className="text-red-500">{settingsErr}</div>
+                  <div className="text-[var(--vigil-error)]">{settingsErr}</div>
                 ) : settingsMsg ? (
-                  <div className="text-emerald-500">{settingsMsg}</div>
+                  <div className="text-[var(--vigil-ok)]">{settingsMsg}</div>
                 ) : null}
                 <div className="flex items-center gap-2">
                   <button
@@ -600,7 +600,7 @@ export default function MonitoringPage() {
                 value={promql}
                 onChange={(e) => setPromql(e.target.value)}
                 placeholder={t("monitoring.promqlPlaceholder")}
-                className="vigil-input w-full rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] py-1.5 pl-8 pr-3 text-xs outline-none focus:border-[var(--vigil-primary)]"
+                className="vigil-input vigil-input-icon w-full rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] py-1.5 pr-3 text-xs outline-none focus:border-[var(--vigil-primary)]"
               />
             </div>
             <input

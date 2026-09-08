@@ -96,6 +96,20 @@ export function statusDotClass(status?: string): string {
   }
 }
 
+/** task28 P0.3/P1.2：实体卡左侧 4px 状态条的颜色类（与 pill/dot 同一 token 源）。 */
+export function statusAccentClass(status?: string): string {
+  switch (statusTone(status)) {
+    case "ok":
+      return "border-l-[var(--vigil-ok)]";
+    case "warn":
+      return "border-l-[var(--vigil-warn)]";
+    case "error":
+      return "border-l-[var(--vigil-error)]";
+    default:
+      return "border-l-[var(--vigil-offline)]";
+  }
+}
+
 export function envClass(env?: string): string {
   switch ((env ?? "").trim().toLowerCase()) {
     case "prod":

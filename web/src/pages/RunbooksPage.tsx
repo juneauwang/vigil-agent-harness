@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
@@ -16,6 +16,8 @@ import {
   Lock,
   MessageSquareText,
   Play,
+  Search,
+  SquarePen,
   Terminal,
   TriangleAlert,
   Zap,
@@ -32,6 +34,7 @@ import type {
   RunbookStepResult,
   RunbookSummary,
 } from "@/lib/api";
+import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
 import { DetailTree } from "@/components/DetailTree";
 import { EmptyState } from "@/components/EmptyState";
 import { cn, yamlPreview } from "@/lib/ops";
@@ -568,11 +571,11 @@ function RunbookProgressPanel({
           key={`banner-${i}`}
           className={`rounded border px-2 py-1 text-xs ${
             b.type === "rollback_start"
-              ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
+              ? "border-[var(--vigil-warn)]/40 bg-[var(--vigil-warn)]/10 text-[var(--vigil-warn)]"
               : b.type === "rollback_done"
                 ? b.status === "ok"
-                  ? "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-                  : "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400"
+                  ? "border-[var(--vigil-warn)]/40 bg-[var(--vigil-warn)]/10 text-[var(--vigil-warn)]"
+                  : "border-[var(--vigil-error)]/40 bg-[var(--vigil-error)]/10 text-[var(--vigil-error)]"
                 : "border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)]"
           }`}
         >
@@ -669,6 +672,10 @@ export default function RunbooksPage() {
   const [coverageOpen, setCoverageOpen] = useState(false);
   // task19 F2: per-gap copy feedback ("已复制" for ~2s after a copy).
   const [copiedGap, setCopiedGap] = useState<string | null>(null);
+  // task27 PART A: raw YAML 编辑抽屉（每行 edit 按钮 + 详情头 edit 按钮）。
+  const [editTarget, setEditTarget] = useState<YamlEditorTarget | null>(null);
+  // task27 PART B1: 列表搜索（name/title/summary/triggers 子串，大小写不敏感）。
+  const [search, setSearch] = useState("");
   const navigate = useNavigate();
 
   // task19 F2: gap → chat bridge — a ready-to-send prompt built from the gap
@@ -719,6 +726,19 @@ export default function RunbooksPage() {
 
   // Batch 81: locked executions without a live stream (scheduled/background/LLM) → show only the lock badge, not expandable.
   const lockOnly = locks.filter((l) => !running.some((r) => r.exec_id === l.exec_id));
+
+  // task27 PART B1: 搜索语料 = 列表行已渲染的字段（name/title/summary/triggers/env），
+  // 大小写不敏感子串；空查询 = 全量。
+  const filteredRunbooks = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    if (!list) return null;
+    if (!needle) return list;
+    return list.filter((rb) =>
+      `${rb.name} ${rb.title} ${rb.summary ?? ""} ${(rb.triggers ?? []).join(" ")} ${rb.env ?? ""}`
+        .toLowerCase()
+        .includes(needle),
+    );
+  }, [list, search]);
 
   // Batch 80: abort in-progress progress streams on unmount (server-side execution unaffected).
   useEffect(() => {
@@ -828,6 +848,34 @@ export default function RunbooksPage() {
     startRunningStream(execId);
   };
 
+  // task27 PART A: 打开 runbook 原文编辑抽屉；保存成功后刷新列表 + 详情，
+  // 让页面立即反映落盘内容（读取端无缓存，重新 fetch 即可）。
+  const openYamlEditor = (name: string, title?: string) => {
+    setEditTarget({
+      title: title || name,
+      subtitle: `runbooks/${name}.yaml`,
+      load: () => api.getRunbookRawYaml(name),
+      save: (text) => api.putRunbookRawYaml(name, text),
+    });
+  };
+
+  const refreshAfterSave = () => {
+    api
+      .getRunbooks()
+      .then((resp) => {
+        if (resp.ok && resp.data) setList(resp.data.runbooks);
+      })
+      .catch(() => {});
+    if (selected) {
+      api
+        .getRunbook(selected)
+        .then((resp: RunbookDetailResponse) => {
+          if (resp.ok && resp.data) setDetail(resp.data);
+        })
+        .catch(() => {});
+    }
+  };
+
   useEffect(() => {
     let alive = true;
     api
@@ -894,7 +942,32 @@ export default function RunbooksPage() {
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(320px,420px)_1fr]">
         {/* Compact table */}
         <div className="scroll-thin min-h-0 overflow-y-auto">
+          {/* task27 PART B1: 列表搜索框（样式与拓扑页搜索框一致） */}
+          <div className="mb-2 flex h-8 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
+            <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setSearch("");
+              }}
+              placeholder={t("runbooks.searchPlaceholder")}
+              data-testid="runbook-search"
+              className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
+            />
+            {search ? (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                aria-label={t("common.searchClearAria")}
+                className="rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
+          </div>
           {list && list.length > 0 ? (
+            filteredRunbooks && filteredRunbooks.length > 0 ? (
             <div className="vigil-card">
               <table className="vigil-table">
                 <thead>
@@ -904,10 +977,11 @@ export default function RunbooksPage() {
                     <th>kind</th>
                     <th className="text-right">{t("runbooks.thSteps")}</th>
                     <th className="text-right">{t("runbooks.thUpdated")}</th>
+                    <th aria-label={t("yamlEditor.editAria")} />
                   </tr>
                 </thead>
                 <tbody>
-                  {list.map((rb) => (
+                  {(filteredRunbooks ?? list).map((rb) => (
                     <tr
                       key={rb.name}
                       onClick={() => setSelected(rb.name)}
@@ -926,11 +1000,31 @@ export default function RunbooksPage() {
                           {rb.updated_at ? String(rb.updated_at).slice(0, 10) : "-"}
                         </span>
                       </td>
+                      <td className="text-right">
+                        <button
+                          type="button"
+                          data-testid={`runbook-edit-${rb.name}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            openYamlEditor(rb.name, rb.title);
+                          }}
+                          aria-label={t("yamlEditor.editAria")}
+                          title={t("yamlEditor.editAria")}
+                          className="rounded p-1 text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]"
+                        >
+                          <SquarePen className="size-3.5" />
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
+            ) : (
+              <div className="vigil-card border-dashed p-6 text-center text-sm text-[var(--vigil-muted)]" data-testid="runbook-search-empty">
+                {t("runbooks.searchEmpty", { query: search.trim() })}
+              </div>
+            )
           ) : (
             <EmptyState
               title={t("runbooks.emptyTitle")}
@@ -960,10 +1054,26 @@ export default function RunbooksPage() {
                   <h2 className="text-base font-semibold">{String(detail.title ?? detail.name ?? "")}</h2>
                   <EnvTag env={String(detail.env ?? "")} />
                   <KindTag kind={String(detail.kind ?? "")} checklist={Boolean(detail.checklist)} />
+                  {String(detail.name) ? (
+                    <button
+                      type="button"
+                      data-testid="runbook-edit-detail"
+                      onClick={() => openYamlEditor(String(detail.name), String(detail.title ?? detail.name))}
+                      aria-label={t("yamlEditor.editAria")}
+                      title={t("yamlEditor.editAria")}
+                      className="vigil-btn ml-auto border border-[var(--vigil-border)] px-2.5 py-1 text-xs"
+                    >
+                      <SquarePen className="mr-1 inline size-3.5" />
+                      {t("yamlEditor.editAria")}
+                    </button>
+                  ) : null}
                   {String(detail.version) === "2" ? (
                     <button
                       type="button"
-                      className="vigil-btn ml-auto border border-[var(--vigil-primary)]/40 px-3 py-1 text-xs"
+                      className={cn(
+                        "vigil-btn border border-[var(--vigil-primary)]/40 px-3 py-1 text-xs",
+                        !String(detail.name) && "ml-auto",
+                      )}
                       onClick={() => setExecModal(true)}
                       disabled={execRunning}
                     >
@@ -1159,9 +1269,9 @@ export default function RunbooksPage() {
                       <td className="text-right text-xs">{a.use_count}</td>
                       <td className="text-xs">
                         {a.covered ? (
-                          <span className="font-medium text-emerald-600 dark:text-emerald-400">{t("runbooks.coveredYes")}</span>
+                          <span className="font-medium text-[var(--vigil-ok)]">{t("runbooks.coveredYes")}</span>
                         ) : (
-                          <span className="font-medium text-amber-600 dark:text-amber-400">{t("runbooks.coveredNo")}</span>
+                          <span className="font-medium text-[var(--vigil-warn)]">{t("runbooks.coveredNo")}</span>
                         )}
                       </td>
                       <td className="text-xs text-[var(--vigil-muted)]">
@@ -1172,7 +1282,7 @@ export default function RunbooksPage() {
                 </tbody>
               </table>
               {coverage.usage.gaps.length > 0 ? (
-                <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+                <div className="mt-3 rounded border border-[var(--vigil-warn)]/30 bg-[var(--vigil-warn)]/5 p-3 text-xs">
                   <div className="mb-2 font-semibold">{t("runbooks.gapsPrefix")}</div>
                   <div className="space-y-1.5">
                     {coverage.usage.gaps.map((g) => (
@@ -1224,6 +1334,13 @@ export default function RunbooksPage() {
           onConfirm={runSelected}
         />
       )}
+
+      {/* task27 PART A: raw YAML 编辑抽屉（保存成功 → 刷新页面数据） */}
+      <YamlEditorDrawer
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => refreshAfterSave()}
+      />
     </div>
   );
 }

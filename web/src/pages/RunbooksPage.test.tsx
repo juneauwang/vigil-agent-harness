@@ -21,7 +21,22 @@ vi.mock("@/lib/api", async (importOriginal) => {
       runRunbook: vi.fn(),
       runbookProgressStream: vi.fn(),
       getRunbookCoverage: vi.fn(),
+      getRunbookRawYaml: vi.fn(),
+      putRunbookRawYaml: vi.fn(),
     },
+  };
+});
+
+// CodeMirror 6 在 jsdom 下缺 DOM API——抽屉集成测试用 textarea 桩。
+vi.mock("@uiw/react-codemirror", async () => {
+  const { createElement } = await import("react");
+  return {
+    default: (props: { value: string; onChange: (v: string) => void }) =>
+      createElement("textarea", {
+        "aria-label": "yaml-stub",
+        value: props.value,
+        onChange: (e: { target: { value: string } }) => props.onChange(e.target.value),
+      }),
   };
 });
 
@@ -541,5 +556,145 @@ describe("RunbooksPage coverage collapse + gap bridge (task19)", () => {
     const prompt = decodeURIComponent(last.slice("/chat?prompt=".length));
     expect(prompt).toContain("reboot");
     expect(prompt).toContain("5 uses");
+  });
+});
+
+// ── task27 PART A: raw YAML 编辑入口（行内 edit 按钮 → 抽屉 → 保存刷新）──
+describe("RunbooksPage raw YAML 编辑（task27 PART A）", () => {
+  it("每个 runbook 行渲染 edit 按钮 → 打开抽屉并加载原文", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "harbor-restart", title: "Harbor 服务异常恢复", step_count: 2 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V1_RUNBOOK } as never);
+    vi.mocked(api.getRunbookRawYaml).mockResolvedValue("# c\nname: harbor-restart\n" as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const editBtn = container.querySelector<HTMLButtonElement>('[data-testid="runbook-edit-harbor-restart"]')!;
+    expect(editBtn).toBeTruthy();
+    await act(async () => {
+      editBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.getRunbookRawYaml).toHaveBeenCalledWith("harbor-restart");
+    expect(container.querySelector('[data-testid="yaml-editor-drawer"]')).toBeTruthy();
+    const textarea = container.querySelector("textarea");
+    expect((textarea as HTMLTextAreaElement).value).toContain("# c");
+  });
+
+  it("详情头 edit 按钮存在（v0.1 也可编辑，紧邻执行按钮区域）", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "harbor-restart", title: "Harbor 服务异常恢复", step_count: 2 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V1_RUNBOOK } as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(container.querySelector<HTMLButtonElement>('[data-testid="runbook-edit-detail"]')).toBeTruthy();
+  });
+
+  it("保存成功 → putRunbookRawYaml 携带编辑后文本，页面数据刷新", async () => {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: { count: 1, runbooks: [{ name: "harbor-restart", title: "Harbor 服务异常恢复", step_count: 2 }] },
+    } as never);
+    vi.mocked(api.getRunbook).mockResolvedValue({ ok: true, data: V1_RUNBOOK } as never);
+    vi.mocked(api.getRunbookRawYaml).mockResolvedValue("name: harbor-restart\n" as never);
+    vi.mocked(api.putRunbookRawYaml).mockResolvedValue({ ok: true, warnings: [] } as never);
+
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const editBtn = container.querySelector<HTMLButtonElement>('[data-testid="runbook-edit-harbor-restart"]')!;
+    await act(async () => {
+      editBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const textarea = container.querySelector("textarea") as HTMLTextAreaElement;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(textarea, "name: harbor-restart\ntitle: edited\n");
+      textarea.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const saveBtn = container.querySelector<HTMLButtonElement>('[data-testid="yaml-editor-save"]')!;
+    await act(async () => {
+      saveBtn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.putRunbookRawYaml).toHaveBeenCalledWith("harbor-restart", "name: harbor-restart\ntitle: edited\n");
+    // 保存成功 → 抽屉关闭 + 列表刷新
+    expect(container.querySelector('[data-testid="yaml-editor-drawer"]')).toBeNull();
+    expect(api.getRunbooks).toHaveBeenCalledTimes(2);
+  });
+});
+
+// ── task27 PART B1: 列表搜索过滤 ──
+describe("RunbooksPage 搜索（task27 PART B1）", () => {
+  function typeSearch(container: HTMLElement, value: string) {
+    const input = container.querySelector<HTMLInputElement>('[data-testid="runbook-search"]')!;
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }
+
+  async function mountTwo() {
+    vi.mocked(api.getRunbooks).mockResolvedValue({
+      ok: true,
+      data: {
+        count: 2,
+        runbooks: [
+          { name: "harbor-restart", title: "Harbor 服务异常恢复", summary: "harbor 恢复", triggers: ["harbor healthcheck failed"], step_count: 2 },
+          { name: "db-failover", title: "数据库主备切换", summary: "数据库切换", triggers: ["db master down"], step_count: 1 },
+        ],
+      },
+    } as never);
+    const container = render(<RunbooksPage />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return container;
+  }
+
+  it("命中名称/标题的行保留，未命中行隐藏；空查询显示全量", async () => {
+    const container = await mountTwo();
+    expect(container.textContent).toContain("harbor-restart");
+    expect(container.textContent).toContain("db-failover");
+
+    act(() => typeSearch(container, "harbor"));
+    expect(container.textContent).toContain("harbor-restart");
+    expect(container.textContent).not.toContain("db-failover");
+
+    act(() => typeSearch(container, ""));
+    expect(container.textContent).toContain("db-failover");
+  });
+
+  it("triggers 也进语料；无命中渲染空结果提示", async () => {
+    const container = await mountTwo();
+    act(() => typeSearch(container, "db master down"));
+    expect(container.textContent).toContain("db-failover");
+    // harbor 行被隐藏（详情面板保留选中 runbook，不算列表行）
+    expect(container.querySelector('[data-testid="runbook-edit-harbor-restart"]')).toBeNull();
+    expect(container.querySelector('[data-testid="runbook-edit-db-failover"]')).toBeTruthy();
+
+    act(() => typeSearch(container, "no-such-runbook"));
+    expect(container.querySelector('[data-testid="runbook-search-empty"]')).toBeTruthy();
+    expect(container.textContent).toContain("no-such-runbook");
   });
 });

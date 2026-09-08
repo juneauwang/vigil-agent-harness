@@ -25,6 +25,7 @@ from tools.topo_discovery import (
     _make_askpass_script,
     _sanitize_name,
     discover_host,
+    reconcile_k8s_cluster_claims,
     write_discovery,
 )
 
@@ -209,6 +210,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="交互提示输入加密私钥 passphrase（需配合 --key）")
     parser.add_argument("--sudo-password", action="store_true",
                         help="交互提示输入 sudo 密码，用于 docker/kubectl 等提权探测")
+    parser.add_argument("--cluster", default="",
+                        help="集群名（多集群批次必须显式区分——k8s 服务集按集群归属唯一主机）")
     parser.add_argument("--skip-unidentified", action="store_true",
                         help="跳过 ss 端口扫描生成的 unidentified 服务")
     parser.add_argument("--dry-run", action="store_true", help="只展示发现结果，不落盘")
@@ -292,7 +295,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     for host in hosts:
         try:
             discovery = discover_host(
-                host, args.env, creds, skip_unidentified=args.skip_unidentified
+                host, args.env, creds, cluster=args.cluster,
+                skip_unidentified=args.skip_unidentified, home=home
             )
             successes.append({"host": host, "discovery": discovery})
             _print_summary(discovery)
@@ -304,6 +308,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         _print_batch_summary(successes, failures)
     if not successes:
         return 1
+
+    # task29 PART A：k8s Service 是集群级资源——归属登记制下，后到的
+    # control-plane 会接管先到 worker 的临时归属；落盘前对账，把被接管
+    # 主机片段里的 kubectl 服务行剥掉（同一集群服务集只落主人一份）。
+    for stripped in reconcile_k8s_cluster_claims(
+            [item["discovery"] for item in successes]):
+        print(f"· k8s 服务集归属：{stripped['host']} 的 {stripped['removed']} 条 "
+              f"kubectl 服务行移交 {stripped['owner']}（集群 {stripped['cluster']}）")
 
     if args.dry_run:
         print("\n· --dry-run：未写入任何文件。")

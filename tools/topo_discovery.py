@@ -767,9 +767,13 @@ def _parse_kubectl(output: str) -> List[Dict[str, Any]]:
                     if port:
                         ports.append(int(port))
             reachability = "external" if (has_node_port or not ports) else "internal"
+            selector = (item.get("spec") or {}).get("selector")
             rows.append({"kind": "k8s-service", "name": name, "namespace": namespace,
                          "ports": sorted(set(ports)),
-                         "reachability": reachability})
+                         "reachability": reachability,
+                         # task30 PART B：pod 定位用 label selector（headless/
+                         # ExternalName 等无 selector → {}，运行节点列表为空）。
+                         "selector": dict(selector) if isinstance(selector, dict) else {}})
         elif kind == "deployment":
             containers = (((item.get("spec") or {}).get("template") or {})
                           .get("spec") or {}).get("containers") or []
@@ -777,6 +781,60 @@ def _parse_kubectl(output: str) -> List[Dict[str, Any]]:
             rows.append({"kind": "k8s-deploy", "name": name, "namespace": namespace,
                          "image": image})
     return rows
+
+
+def _parse_kubectl_pods(output: str) -> List[Dict[str, Any]]:
+    """``kubectl get pods -A -o json`` → [{namespace, labels, node, ready}]。
+
+    task30 PART B：一条集群级探针拿全部 pod 的调度节点（比逐 service
+    get pods -l 便宜且稳定——N 服务 = 1 条命令），join 在发现侧按
+    (namespace, selector 全匹配) 完成。node 缺失（未调度/Pending）不收。
+    """
+    try:
+        data = json.loads(output or "{}")
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    pods: List[Dict[str, Any]] = []
+    for item in data.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        meta = item.get("metadata") or {}
+        node = str(((item.get("spec") or {}).get("nodeName")) or "")
+        if not node:
+            continue  # 未调度（Pending 无节点）不参与运行节点定位
+        conditions = ((item.get("status") or {}).get("conditions") or [])
+        ready = any(
+            isinstance(c, dict) and c.get("type") == "Ready" and c.get("status") == "True"
+            for c in conditions
+        )
+        pods.append({
+            "namespace": str(meta.get("namespace") or ""),
+            "labels": dict(meta.get("labels") or {}),
+            "node": node,
+            "ready": ready,
+        })
+    return pods
+
+
+def _runtime_nodes_for(selector: Dict[str, Any], namespace: str,
+                       pods: List[Dict[str, Any]]) -> List[str]:
+    """Service selector + pod 列表 → 该服务当前就绪副本所在的节点名（去重排序）。
+
+    只统计 Ready pod（"副本当前运行在哪"是数据面问题，未就绪副本不算）；
+    selector 缺失（headless/ExternalName）或零就绪副本 → []（显式空标记，
+    字段仍在——消费端无需区分"没采到"和"没有副本"以外的第三态）。
+    """
+    if not selector:
+        return []
+    nodes = {
+        p["node"]
+        for p in pods
+        if p["namespace"] == namespace and p["ready"]
+        and all(p["labels"].get(k) == v for k, v in selector.items())
+    }
+    return sorted(nodes)
 
 
 # ---------------------------------------------------------------------------
@@ -1349,9 +1407,278 @@ def _service_from_container(c: Dict[str, Any], host: str, env: str,
     return svc
 
 
+# ---------------------------------------------------------------------------
+# k8s 集群服务集归属（task29 进程内登记 + task30 持久化 + 成员 guard）
+#
+# task29 只解决单进程内的复制；live 事故暴露两个洞：
+# 1. 跨进程——归属只在内存，分两次 discover（localhost 一次 + --hosts 一次）
+#    各自把同一集群服务集归给自己的首台 kubectl 成功主机；
+# 2. 非成员归属——本机 kubectl context 恰好指向远程集群时，本机会把远程集群
+#    的服务集安到 自己头上（endpoint 全变成无意义的本机 IP）。
+# 对策（task30）：
+# - 持久化：``<home>/runtime/k8s_cluster_claims.json``（JSON、0600、同目录
+#   临时文件 + os.replace 原子落位；runtime 状态目录惯例同
+#   alert_autodispatch_state.json）。进程启动首次访问时把磁盘声明播种进
+#   进程内登记（source=seeded）；本进程内新建/接管/刷新即写穿磁盘。
+# - 成员 guard：本机身份（endpoint/host 名 + hostname -I 地址）必须出现在
+#   集群节点表（节点名或任一地址）才算成员；非成员绝不归属/登记（nodes
+#   探针失败时回退拓扑 host 行的 cluster 声明；再不行按"无法判定"保守放行
+#   并记 probes——首次接入新集群仍可用）。
+# - 接管规则（选定，刻意简单）：持久声明成立（归属主机未失效）就不动；
+#   接管仅当归属主机自己被扫描出 kubectl 枚举失败 / 已不在成员表（clear
+#   让位，之后首个成功枚举的成员归属）。本进程内的 control-plane 抢占
+#   （task29 语义）只对本进程新建的声明（source=runtime）生效，永不抢
+#   磁盘播种的声明。不建 HA 多 CP 心跳。
+# 测试复位：reset_k8s_cluster_claims()。
+# ---------------------------------------------------------------------------
+
+_K8S_CLUSTER_CLAIMS: Dict[str, Dict[str, Any]] = {}
+_K8S_CLAIMS_SEEDED_HOMES: set = set()
+
+
+def reset_k8s_cluster_claims() -> None:
+    """清空进程内 k8s 归属登记（测试/新发现批次入口；含播种标记）。"""
+    _K8S_CLUSTER_CLAIMS.clear()
+    _K8S_CLAIMS_SEEDED_HOMES.clear()
+
+
+def _parse_kubectl_nodes(output: str) -> List[Dict[str, Any]]:
+    """``kubectl get nodes -o json`` → [{name, ips, is_control_plane}]。
+
+    角色标签：node-role.kubernetes.io/control-plane（新）/
+    node-role.kubernetes.io/master（老）。解析失败 → []（调用方视为无法判定）。
+    """
+    try:
+        data = json.loads(output or "{}")
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    nodes: List[Dict[str, Any]] = []
+    for item in data.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        # 只认 Node——同一条 kubectl 通道可能喂进来别的资源 JSON（复用 runner
+        # 的测试/网关代理都干得出来），Service/Deployment 不是节点。
+        if str(item.get("kind") or "").lower() != "node":
+            continue
+        meta = item.get("metadata") or {}
+        labels = meta.get("labels") or {}
+        ips = [
+            str(addr.get("address"))
+            for addr in ((item.get("status") or {}).get("addresses") or [])
+            if isinstance(addr, dict) and addr.get("address")
+        ]
+        nodes.append({
+            "name": str(meta.get("name") or ""),
+            "ips": ips,
+            "is_control_plane": any(
+                str(k).startswith("node-role.kubernetes.io/control-plane")
+                or str(k).startswith("node-role.kubernetes.io/master")
+                for k in labels
+            ),
+        })
+    return nodes
+
+
+def _self_identifiers(runner: Callable[[str], ProbeResult], host: str) -> set:
+    """本机身份集：endpoint/host 名 + ``hostname -I`` 的全部地址。
+
+    带 -I 是关键：SSH 端点常用公网 IP，而节点表 InternalIP 是内网地址——
+    只拿 endpoint 匹配会把真正的 control-plane 误判成非成员。
+    """
+    ids = {str(host)}
+    res = _probe(runner, "hostname -I 2>/dev/null")
+    if res.ok:
+        ids.update(res.stdout.split())
+    return ids
+
+
+def _probe_k8s_membership(runner: Callable[[str], ProbeResult],
+                          host: str, probes: Dict[str, str]) -> tuple:
+    """节点表探测 → (is_control_plane, is_member)。
+
+    is_member 三值：True / False（确定性非成员——kubectl 能用但节点表里没有
+    本机）/ None（无法判定：nodes 探针失败或节点表为空，调用方走回退）。
+    """
+    res = _probe(runner, "kubectl get nodes -o json 2>/dev/null")
+    if not res.ok:
+        probes["k8s-role"] = "unknown（kubectl get nodes 不可用）"
+        return False, None
+    nodes = _parse_kubectl_nodes(res.stdout)
+    if not nodes:
+        probes["k8s-role"] = "unknown（节点表为空/不可解析）"
+        return False, None
+    self_ids = _self_identifiers(runner, host)
+    is_member = False
+    is_cp = False
+    for node in nodes:
+        if {node["name"], *node["ips"]} & self_ids:
+            is_member = True
+            if node["is_control_plane"]:
+                is_cp = True
+    probes["k8s-role"] = ("control-plane" if is_cp else "worker") if is_member \
+        else "non-member（kubectl context 指向的集群节点表里没有本机）"
+    return is_cp, is_member
+
+
+def _topology_declares_membership(home, host: str, cluster: str) -> bool:
+    """成员证据回退：拓扑 host 行（name + cluster 字段）声明本机属于该集群。"""
+    if not home:
+        return False
+    path = Path(home) / "topology.yaml"
+    if not path.is_file():
+        return False
+    try:
+        topo = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return False
+    for row in (topo.get("hosts") or [] if isinstance(topo, dict) else []):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("name") or "") == _safe_filename(host) \
+                and str(row.get("cluster") or "default") == cluster:
+            return True
+    return False
+
+
+def _k8s_claims_path(home) -> Path:
+    return Path(home) / "runtime" / "k8s_cluster_claims.json"
+
+
+def _load_k8s_claims_disk(home) -> Dict[str, Dict[str, Any]]:
+    if not home:
+        return {}
+    try:
+        data = json.loads(_k8s_claims_path(home).read_text(encoding="utf-8"))
+        clusters = data.get("clusters") if isinstance(data, dict) else None
+        return clusters if isinstance(clusters, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_k8s_claims_disk(home, clusters: Dict[str, Dict[str, Any]]) -> None:
+    """原子写（同目录临时文件 + os.replace）+ 0600；失败只记日志不影响发现。"""
+    if not home:
+        return
+    path = _k8s_claims_path(home)
+    payload = {"version": 1, "updated_at": _now_iso(), "clusters": clusters}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent),
+                                   prefix=f".{path.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(payload, ensure_ascii=False, indent=1))
+            os.chmod(tmp, 0o600)
+            os.replace(tmp, path)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+    except Exception as exc:
+        logger.warning("k8s cluster claims 持久化失败（不影响发现）: %s", exc)
+
+
+def _seed_k8s_claims(home) -> None:
+    """磁盘声明播种进进程内登记（每进程每 home 一次；setdefault 不覆盖本进程
+    已有的运行时声明——播种发生在首次访问，理论上先于任何 runtime 声明）。"""
+    if not home or home in _K8S_CLAIMS_SEEDED_HOMES:
+        return
+    _K8S_CLAIMS_SEEDED_HOMES.add(home)
+    for key, claim in _load_k8s_claims_disk(home).items():
+        if isinstance(claim, dict) and claim.get("host"):
+            merged = dict(claim)
+            if isinstance(merged.get("svc_names"), list):
+                merged["svc_names"] = set(merged["svc_names"])
+            merged["source"] = "seeded"
+            _K8S_CLUSTER_CLAIMS.setdefault(key, merged)
+
+
+def _persist_k8s_claim(cluster: str, home) -> None:
+    """进程内声明写穿磁盘（声明/接管/刷新共用）。"""
+    claim = _K8S_CLUSTER_CLAIMS.get(cluster)
+    if not home or not claim:
+        return
+    cleaned = {k: v for k, v in claim.items() if k != "source"}
+    if isinstance(cleaned.get("svc_names"), set):
+        cleaned["svc_names"] = sorted(cleaned["svc_names"])
+    clusters = _load_k8s_claims_disk(home)
+    clusters[cluster] = cleaned
+    _save_k8s_claims_disk(home, clusters)
+
+
+def _clear_k8s_claim(cluster: str, home) -> None:
+    """声明失效让位（归属主机 kubectl 失效 / 已非成员）：内存 + 磁盘同清。"""
+    _K8S_CLUSTER_CLAIMS.pop(cluster, None)
+    if not home:
+        return
+    clusters = _load_k8s_claims_disk(home)
+    if cluster in clusters:
+        clusters.pop(cluster, None)
+        _save_k8s_claims_disk(home, clusters)
+
+
+def _clear_k8s_claim_if_owner(cluster: str, host: str, home) -> None:
+    """仅当本机是声明归属者时清声明（kubectl 枚举失败路径用）。"""
+    claim = _K8S_CLUSTER_CLAIMS.get(cluster)
+    if claim and claim.get("host") == _safe_filename(host):
+        _clear_k8s_claim(cluster, home)
+
+
+def reconcile_k8s_cluster_claims(
+    discoveries: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """批次落盘前对账 k8s 归属：剥离被接管主机的 kubectl 服务行（原地修改）。
+
+    discover_host 逐主机独立返回：先到的临时归属者（worker）返回值可能已带
+    k8s 服务行/档案，随后 control-plane 接管登记——落盘前把非最终归属者片段
+    里的 kubectl 行剥掉（services 行 + 同名 details），防同一集群服务集双写。
+    control-plane 先到 / 持久声明挡住时本函数幂等无事发生。
+
+    Returns:
+        每个被剥离片段一条 ``{"host", "cluster", "owner", "removed"}``。
+    """
+    stripped: List[Dict[str, Any]] = []
+    for disc in discoveries or []:
+        if not isinstance(disc, dict):
+            continue
+        host_row = disc.get("host") or {}
+        host_name = str(host_row.get("name") or "")
+        key = str(host_row.get("cluster") or "default")
+        claim = _K8S_CLUSTER_CLAIMS.get(key)
+        if not claim or not host_name or host_name == str(claim.get("host")):
+            continue
+        services = [s for s in disc.get("services") or [] if isinstance(s, dict)]
+        k8s_names = {
+            str(s.get("name")) for s in services
+            if str(s.get("managed_by") or "") == "kubectl"
+        }
+        if not k8s_names:
+            continue
+        disc["services"] = [
+            s for s in services
+            if str(s.get("managed_by") or "") != "kubectl"
+        ]
+        details = disc.get("details")
+        if isinstance(details, dict):
+            for n in k8s_names:
+                details.pop(n, None)
+        stripped.append({
+            "host": host_name,
+            "cluster": key,
+            "owner": str(claim.get("host")),
+            "removed": len(k8s_names),
+        })
+    return stripped
+
+
 def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
                   *, cluster: str = "", runner: Optional[Callable[[str], ProbeResult]] = None,
-                  skip_unidentified: bool = False) -> Dict[str, Any]:
+                  skip_unidentified: bool = False,
+                  home: Optional[Path] = None) -> Dict[str, Any]:
     """发现一台主机的 v0.4 schema 片段。
 
     Args:
@@ -1362,6 +1689,8 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
       runner: 可注入的执行器（测试用）；默认远程 ``_build_ssh_runner``，本机
         （localhost/127.0.0.1/::1/空）``_build_local_runner``。
       skip_unidentified: 为 True 时跳过 ss 端口扫描补出的 unidentified 服务。
+      home: VIGIL_HOME——k8s 集群归属持久化（runtime/k8s_cluster_claims.json）
+        的读写根；None = 仅进程内登记（不持久）。
 
     Returns:
       v0.4 片段 dict：``{version, source, last_verified, needs_review, host,
@@ -1429,6 +1758,10 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
             probes["kubectl"] = "权限不足（可加 --sudo-password 重试）"
         else:
             probes["kubectl"] = "skipped（kubectl 不可用）"
+        # task30 PART A：归属主机自己 kubectl 失效 → 声明让位（接管规则 =
+        # 仅归属主机失效时移动；之后首个成功枚举的成员接手）。
+        _seed_k8s_claims(home)
+        _clear_k8s_claim_if_owner(cluster_display, host, home)
     k8s_svc_names = {
         r["name"] for r in k8s_rows if r["kind"] == "k8s-service"
     }
@@ -1476,6 +1809,16 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
             probes["docker"] = reason[-1][:120] if reason else "docker 不可用（exit!=0）"
 
     # 2) k8s 枚举消费（probe 已先行）。deploy 喂档案；svc 一条服务行（9.3）。
+    #    task29 PART A：k8s Service 是集群级资源——每个 kubectl 可达主机各自
+    #    枚举会把同一集合逐主机复制一份（live 事故：两主机各 43 条、仅
+    #    endpoint IP 不同；监控 92 行 43 重复 → React key 冲突）。进程内归属
+    #    登记制：control-plane 优先归属，否则首个 kubectl 枚举成功的主机；
+    #    非归属主机不产服务行/实体档案/helm 关联，但保留 ①服务端口进
+    #    seen_ports（NodePort 在每个节点都真实监听，否则 ss 探针会给 worker
+    #    补一堆 unidentified pending_review）、②服务名进 compose 冲突退让。
+    #    先到 worker 被后到 control-plane 接管时，由
+    #    reconcile_k8s_cluster_claims() 在批次落盘前剥离临时归属者的行
+    #    （CLI 在整个 host 循环结束、write_discovery 之前调用）。
     k8s_deploys: Dict[str, Dict[str, Any]] = {
         f"{r.get('namespace')}/{r['name']}": r
         for r in k8s_rows if r["kind"] == "k8s-deploy"
@@ -1497,79 +1840,163 @@ def discover_host(host: str, env: str, creds: Optional[Dict[str, Any]] = None,
             detected = bool(k3s_git.stdout.strip() or rancher_dir.stdout.strip())
             runtime = "k3s" if detected else "kubernetes"
             probes["k3s"] = "detected" if detected else "not-detected(standard-kubernetes)"
-        for row in k8s_rows:
-            if row["kind"] != "k8s-service":
-                continue
-            for p in row.get("ports") or []:
-                seen_ports.add(p)
-            name = row["name"]
-            if name in [s["name"] for s in services]:
-                # 与 compose 聚合实体同名 → compose 已退让项目名，正常不会命中；
-                # 多 namespace 同名 svc 仍是首见优先（现有行为，不在本批范围）。
-                continue
-            node_port = row.get("ports")[0] if row.get("ports") else None
-            detail_path = _entity_filename(cluster, host, name, env)
-            image = ""
-            dep = k8s_deploys.get(f"{row.get('namespace')}/{name}")
-            if dep:
-                image = dep.get("image") or ""
-            service_type = _classify_service_type(name, image)
-            svc = {
-                "name": name,
-                "type": service_type,
-                "managed_by": "kubectl",
-                "reachability": str(row.get("reachability") or "external"),
-                "endpoint": f"{host}:{node_port}" if node_port else None,
-                "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
-                "log_paths": [],
-                "depends_on": [],
-                "source": "discovered",
+        # 归属判定（runtime 检测对所有 kubectl 可达主机都要——worker 也是
+        # k8s runtime；只有服务行/档案的消费按归属门控）。
+        # task30 PART A：成员 guard（节点表自匹配，失败回退拓扑 host 行 cluster
+        # 声明）+ 持久声明优先（跨进程不重复归属；接管仅当归属主机失效）。
+        is_cp, is_member = _probe_k8s_membership(runner, host, probes)
+        _seed_k8s_claims(home)
+        if is_member is None and home is not None:
+            is_member = _topology_declares_membership(home, host, cluster_display)
+            if is_member:
+                probes["k8s-role"] = "member（拓扑 host 行 cluster 声明）"
+        self_key = _safe_filename(host)
+        claim = _K8S_CLUSTER_CLAIMS.get(cluster_display)
+        if claim is not None and claim.get("host") == self_key and is_member is False:
+            # 归属主机自己已不在集群成员表（集群重建/迁移）→ 声明失效让位。
+            _clear_k8s_claim(cluster_display, home)
+            claim = None
+        if is_member is False:
+            k8s_emit = False
+            probes["k8s-attribution"] = (
+                "skipped（kubectl context 指向非成员集群，服务集不归属本主机——"
+                "endpoint 会是无意义的本机 IP）")
+        elif claim is not None and claim.get("host") != self_key:
+            can_steal = (is_cp and not claim.get("is_control_plane")
+                         and claim.get("source") == "runtime")
+            if can_steal:
+                # 本批次内 control-plane 接管临时归属（task29 语义；只对
+                # 本进程新建的声明生效，磁盘播种的声明永不抢）。
+                _K8S_CLUSTER_CLAIMS[cluster_display] = {
+                    "host": self_key,
+                    "is_control_plane": True,
+                    "svc_names": set(k8s_svc_names),
+                    "claimed_at": _now_iso(),
+                    "last_verified": _dt.date.today().isoformat(),
+                    "source": "runtime",
+                }
+                _persist_k8s_claim(cluster_display, home)
+                probes["k8s-attribution"] = "control-plane（接管本批次临时归属）"
+                k8s_emit = True
+            else:
+                k8s_svc_names = set(k8s_svc_names) | set(claim.get("svc_names") or set())
+                probes["k8s-attribution"] = (
+                    f"skipped（集群 k8s 服务集归属 {claim.get('host')}，"
+                    f"{'持久声明' if claim.get('source') == 'seeded' else '本批次登记'}）")
+                k8s_emit = False
+        elif claim is not None:
+            # 归属主机重扫：保持归属 + 刷新 last_verified（写穿）。
+            claim["last_verified"] = _dt.date.today().isoformat()
+            _persist_k8s_claim(cluster_display, home)
+            probes["k8s-attribution"] = "owner-refresh（归属保持）"
+            k8s_emit = True
+        else:
+            _K8S_CLUSTER_CLAIMS[cluster_display] = {
+                "host": self_key,
+                "is_control_plane": is_cp,
+                "svc_names": set(k8s_svc_names),
+                "claimed_at": _now_iso(),
                 "last_verified": _dt.date.today().isoformat(),
-                "needs_review": True,
-                "detail": detail_path,
+                "source": "runtime",
             }
-            services.append(svc)
-            deployments = []
-            if dep:
-                deployments.append({"name": dep["name"], "replicas": 0, "ready": 0})
-            details[name] = {
-                "name": name,
-                "detail": detail_path,
-                "version": _image_version(image),
-                "updated_at": _dt.date.today().isoformat(),
-                "checks": [],
-                "snapshot": {
-                    "captured_at": _now_iso(),
+            _persist_k8s_claim(cluster_display, home)
+            probes["k8s-attribution"] = (
+                "control-plane" if is_cp else "first-successful")
+            k8s_emit = True
+        # 端口可见性按主机无条件保留：NodePort/ExternalIP 在每个节点都监听。
+        for row in k8s_rows:
+            if row["kind"] == "k8s-service":
+                for p in row.get("ports") or []:
+                    seen_ports.add(p)
+        if k8s_emit:
+            # task30 PART B：数据面定位——一条集群级 pods 探针（比逐 service
+            # get pods -l 便宜：N 服务 = 1 条命令），join 出每个 Service 就绪
+            # 副本所在节点。best-effort：探针失败 → runtime_nodes 全 []，不阻塞。
+            pods_res = _probe(runner, "kubectl get pods -A -o json 2>/dev/null")
+            k8s_pods = _parse_kubectl_pods(pods_res.stdout) if pods_res.ok else []
+            probes["kubectl-pods"] = (
+                f"ok({len(k8s_pods)} pods)" if pods_res.ok else "skipped（pods 枚举不可用）")
+            for row in k8s_rows:
+                if row["kind"] != "k8s-service":
+                    continue
+                name = row["name"]
+                if name in [s["name"] for s in services]:
+                    # 与 compose 聚合实体同名 → compose 已退让项目名，正常不会命中；
+                    # 多 namespace 同名 svc 仍是首见优先（现有行为，不在本批范围）。
+                    continue
+                node_port = row.get("ports")[0] if row.get("ports") else None
+                detail_path = _entity_filename(cluster, host, name, env)
+                image = ""
+                dep = k8s_deploys.get(f"{row.get('namespace')}/{name}")
+                if dep:
+                    image = dep.get("image") or ""
+                service_type = _classify_service_type(name, image)
+                runtime_nodes = _runtime_nodes_for(
+                    row.get("selector") or {}, row.get("namespace", ""), k8s_pods)
+                svc = {
+                    "name": name,
+                    "type": service_type,
+                    "managed_by": "kubectl",
+                    "reachability": str(row.get("reachability") or "external"),
+                    "endpoint": f"{host}:{node_port}" if node_port else None,
+                    "extra_ports": row.get("ports")[1:] if len(row.get("ports") or []) > 1 else [],
+                    "log_paths": [],
+                    "depends_on": [],
+                    # task30 PART B：数据面位置（就绪副本所在节点）——Service 行
+                    # 留在归属主机的管理面语义不变，pod 实际运行节点是行属性。
+                    "runtime_nodes": runtime_nodes,
                     "source": "discovered",
-                    "common": {
-                        "version": _image_version(image),
-                        "config_dir": "",
-                        "log_dir": "",
-                        "data_dir": "",
-                        "mode": "single",
-                    },
-                    "by_type": {},
-                    "by_runtime": {
-                        "kubectl": {
-                            "namespace": row.get("namespace", ""),
-                            "deployments": deployments,
-                            "pvc": [],
+                    "last_verified": _dt.date.today().isoformat(),
+                    "needs_review": True,
+                    "detail": detail_path,
+                }
+                services.append(svc)
+                deployments = []
+                if dep:
+                    deployments.append({"name": dep["name"], "replicas": 0, "ready": 0})
+                details[name] = {
+                    "name": name,
+                    "detail": detail_path,
+                    "version": _image_version(image),
+                    "updated_at": _dt.date.today().isoformat(),
+                    "checks": [],
+                    "snapshot": {
+                        "captured_at": _now_iso(),
+                        "source": "discovered",
+                        "common": {
+                            "version": _image_version(image),
+                            "config_dir": "",
+                            "log_dir": "",
+                            "data_dir": "",
+                            "mode": "single",
+                        },
+                        "by_type": {},
+                        "by_runtime": {
+                            "kubectl": {
+                                "namespace": row.get("namespace", ""),
+                                "deployments": deployments,
+                                "pvc": [],
+                                # task30 PART B：档案层同带运行节点（L3 是事实层）。
+                                "runtime_nodes": runtime_nodes,
+                            },
                         },
                     },
-                },
-                "notes": "",
-            }
-            svc_ns[name] = row.get("namespace", "")
+                    "notes": "",
+                }
+                svc_ns[name] = row.get("namespace", "")
         # helm release 探测（kubectl 可用且 helm 存在时）：k8s service 条目不变，
         # release 细节写实体档案 by_runtime.helm.releases；失败 skipped 不阻塞。
-        helm_res = _probe(runner, "helm list -A -o json 2>/dev/null")
-        if helm_res.ok:
-            releases = _parse_helm_list(helm_res.stdout)
-            probes["helm"] = f"ok({len(releases)} releases)"
-            _attach_helm_releases(releases, svc_ns, details,
-                                  cluster=cluster, host=host, env=env)
-        else:
-            probes["helm"] = "skipped（helm 不可用）"
+        # task29 PART A：helm release 也是集群级组件 → 只由归属主机探测落档，
+        # 非归属主机跳过（与 k8s 服务行同一归属语义）。
+        if k8s_emit:
+            helm_res = _probe(runner, "helm list -A -o json 2>/dev/null")
+            if helm_res.ok:
+                releases = _parse_helm_list(helm_res.stdout)
+                probes["helm"] = f"ok({len(releases)} releases)"
+                _attach_helm_releases(releases, svc_ns, details,
+                                      cluster=cluster, host=host, env=env)
+            else:
+                probes["helm"] = "skipped（helm 不可用）"
 
     # 2.5) ss 监听端口探测（先于 systemd：供无端口系统服务过滤 + 未识别端口补条目）。
     ss_res = _probe(runner, "ss -tlnp 2>/dev/null")
@@ -1955,13 +2382,22 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
     merged_rows: List[Dict[str, Any]] = (
         list(existing_rows) if (host_exists and not force) else []
     )
+    # task29 PART A（防御性）：写入方按 (host 文件, name) 去重——合并路径的
+    # existing_names 只挡"新 vs 磁盘存量"，挡不住同一发现片段/老代码路径产出
+    # 的片段内重名（如跨主机复制来的服务集被手工并进一个片段）。监控按
+    # (host, name) 消费，重复键会让列表渲染异常——数据层清干净，不留兜底给
+    # 读取端。首个同名保留（与 k8s/compose/systemd 各自的"首见优先"一致）。
+    merged_names = {
+        str(r.get("name")) for r in merged_rows
+        if isinstance(r, dict) and r.get("name")
+    }
     appended = 0
     for svc in discovery.get("services") or []:
         if not isinstance(svc, dict):
             continue
         row = dict(svc)
         row.pop("_host", None)
-        if str(row.get("name")) in existing_names:
+        if str(row.get("name")) in merged_names:
             # 同名跳过：保留现有行（含手动 endpoint/type/managed_by），不覆盖。
             # 例外：reachability（内/外部可达标记）——现有行缺省而本次发现带值
             # 时回填；否则老拓扑里的 ClusterIP 服务永远等不到标记，监控误报
@@ -1972,8 +2408,17 @@ def write_discovery(home: Path, discovery: Dict[str, Any], force: bool = False,
                             and str(existing_row.get("name")) == str(row.get("name"))):
                         existing_row.setdefault("reachability", row["reachability"])
                         break
+            # task30 PART B：runtime_nodes 回填——字段比合并语义新，只在存量行
+            # 缺失时补（setdefault），绝不覆盖已有值（可能是人工维护的节点清单）。
+            if row.get("runtime_nodes") is not None:
+                for existing_row in merged_rows:
+                    if (isinstance(existing_row, dict)
+                            and str(existing_row.get("name")) == str(row.get("name"))):
+                        existing_row.setdefault("runtime_nodes", row["runtime_nodes"])
+                        break
             continue
         merged_rows.append(row)
+        merged_names.add(str(row.get("name")))
         appended += 1
     kept = len(existing_rows) if (host_exists and not force) else 0
 

@@ -468,3 +468,40 @@ describe("MonitoringPage", () => {
     expect(container.textContent).toContain("已保存");
   });
 });
+
+// ── task27 PART C: PromQL 输入行图标/文字不重叠 ──
+// 根因：.vigil-input（非 layered 规则）恒胜 @layer utilities，输入上的 pl-8
+// 被吞掉 → 左净空失效，绝对定位的放大镜图标与文字同框。修复 = 专用
+// .vigil-input-icon（unlayered padding-left: 30px）。这里以类契约为断言
+// （jsdom 不算 CSS）；像素级观感由维护者浏览器验收。
+describe("MonitoringPage PromQL 输入图标净空（task27 PART C）", () => {
+  it("PromQL 输入带 vigil-input-icon 净空类，不再依赖 pl-8", async () => {
+    vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
+    const { container } = await renderPage();
+    const promqlInput = container.querySelector("input") as HTMLInputElement;
+    expect(promqlInput.className).toContain("vigil-input");
+    expect(promqlInput.className).toContain("vigil-input-icon");
+    expect(promqlInput.className).not.toContain("pl-8");
+    // 放大镜图标是输入框同容器（relative）内的兄弟绝对定位元素
+    const wrapper = promqlInput.parentElement as HTMLElement;
+    const icon = wrapper.querySelector("svg");
+    expect(icon).toBeTruthy();
+    const iconClass = typeof icon!.className === "string"
+      ? icon!.className
+      : icon!.className.baseVal;
+    expect(iconClass).toContain("absolute");
+  });
+
+  it("同页其余输入（duration/step）无图标、不需要净空类", async () => {
+    vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
+    const { container } = await renderPage();
+    const inputs = [...container.querySelectorAll("input")];
+    expect(inputs.length).toBeGreaterThanOrEqual(3);
+    for (const input of inputs.slice(1)) {
+      expect(input.className).toContain("vigil-input");
+      expect(input.className).not.toContain("vigil-input-icon");
+    }
+  });
+});

@@ -11,15 +11,18 @@ import {
   Network,
   Search,
   Server,
+  SquarePen,
   Trash2,
+  X,
 } from "lucide-react";
 import { api } from "@/lib/api";
 import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "@/lib/api";
 import TopologyGraph from "@/components/TopologyGraph";
 import DetailDrawer from "@/components/DetailDrawer";
-import { EnvBadge, StatusPill } from "@/components/StatusBits";
-import { cn, lastSeenInfo, matchesSearch, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
-import type { GraphEntityRef } from "@/lib/topologyGraph";
+import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
+import { EnvBadge, StatusDot, StatusPill } from "@/components/StatusBits";
+import { cn, lastSeenInfo, matchesSearch, statusAccentClass, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
+import { entityRawId, type GraphEntityRef } from "@/lib/topologyGraph";
 
 const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; key: string }> = [
   { id: "all", key: "topology.filter.all" },
@@ -39,6 +42,23 @@ function DetailButton({ onClick }: { onClick: () => void }) {
       aria-label={t("topology.detailAria")}
     >
       {t("topology.detailBtn")}
+    </button>
+  );
+}
+
+/** task27 PART A: 实体事实源 YAML 编辑入口（小图标按钮，行内/卡片头部）。 */
+function EditYamlButton({ onClick }: { onClick: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid="topo-edit-yaml"
+      aria-label={t("yamlEditor.editAria")}
+      title={t("yamlEditor.editAria")}
+      className="vigil-btn h-6 px-1.5 text-xs"
+    >
+      <SquarePen className="size-3.5" />
     </button>
   );
 }
@@ -89,25 +109,33 @@ function Facts({ card }: { card: TopologyCard }) {
 
 function ServiceRow({
   svc,
+  hostName,
   q,
   filter,
   onDetail,
+  onEdit,
 }: {
   svc: TopologyService;
+  /** 所属 host 名（服务事实源 entityId 需要三段：service:<host>:<name>）。 */
+  hostName: string;
   q: string;
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
+  onEdit: (entityId: string, title: string) => void;
 }) {
   const { t } = useTranslation();
   const card = svc.card;
-  if (!matchesSearch(card, q)) return null;
+  // task29 PART B：搜索不命中 → 与图一致的 dim（不隐藏、布局稳定）；状态
+  // 过滤器维持既有隐藏语义。
   if (!statusMatchesFilter(card.status, filter)) return null;
+  const searchDimmed = Boolean(q) && !matchesSearch(card, q);
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-2 rounded px-2 py-1 text-sm",
+        "flex flex-wrap items-center gap-2 rounded px-2 py-1 text-sm transition-opacity ease-out duration-150",
         "odd:bg-[var(--vigil-muted-bg)]",
         card.on_key_path && "ring-1 ring-inset ring-amber-500/40",
+        searchDimmed && "opacity-30",
       )}
     >
       <span className="font-medium">{card.name}</span>
@@ -126,7 +154,8 @@ function ServiceRow({
         </span>
       )}
       <StatusPill status={card.status} />
-      <div className="ml-auto min-w-0">
+      <div className="ml-auto flex min-w-0 items-center gap-1.5">
+        <EditYamlButton onClick={() => onEdit(entityRawId({ kind: "service", name: card.name, hostName }), card.name)} />
         <DetailButton onClick={() => onDetail({ kind: "service", name: card.name, card, detail: svc.detail })} />
       </div>
     </div>
@@ -138,27 +167,39 @@ function HostCard({
   q,
   filter,
   onDetail,
+  onEdit,
 }: {
   host: TopologyHost;
   q: string;
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
+  onEdit: (entityId: string, title: string) => void;
 }) {
   const { t } = useTranslation();
   const card = host.card;
-  const anyServiceVisible = host.services.some(
-    (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
+  // task29 PART B：搜索对卡片视图 = 与图一致的 dim（不隐藏、布局稳定）；
+  // 状态过滤器维持既有隐藏语义。宿主卡在自身与所有（状态可见）服务都不
+  // 命中时才整卡变暗——opacity 会继承到子行，服务行命中时保持宿主卡可读，
+  // 是嵌套 DOM 下最接近图"逐节点 dim"的等价物。
+  const statusVisibleServices = host.services.filter(
+    (s) => statusMatchesFilter(s.card.status, filter),
   );
-  if (!matchesSearch(card, q)) return null;
-  if (!statusMatchesFilter(card.status, filter) && !anyServiceVisible) return null;
-  const visibleServices = host.services.filter(
-    (s) => matchesSearch(s.card, q) && statusMatchesFilter(s.card.status, filter),
-  );
+  const anyServiceVisible = statusVisibleServices.some((s) => matchesSearch(s.card, q));
+  const hostMatched = matchesSearch(card, q);
+  if (!statusMatchesFilter(card.status, filter) && statusVisibleServices.length === 0) {
+    return null;
+  }
+  const searchDimmed = Boolean(q) && !hostMatched && !anyServiceVisible;
 
   return (
     <div
       id={`topo-row-${card.name}`}
-      className={cn("vigil-card cursor-pointer p-3.5", card.on_key_path && "border-amber-500/50")}
+      className={cn(
+        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5 transition-opacity ease-out duration-150",
+        statusAccentClass(card.status),
+        card.on_key_path && "[border-right-color:var(--vigil-warn)]/50 [border-top-color:var(--vigil-warn)]/50 [border-bottom-color:var(--vigil-warn)]/50",
+        searchDimmed && "opacity-30",
+      )}
       onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -171,7 +212,8 @@ function HostCard({
             <Link2 className="size-3" /> {t("topology.keyPath")}
           </span>
         )}
-        <div className="ml-auto min-w-0">
+        <div className="ml-auto flex min-w-0 items-center gap-1.5">
+          <EditYamlButton onClick={() => onEdit(entityRawId({ kind: "host", name: card.name }), card.name)} />
           <DetailButton onClick={() => onDetail({ kind: "host", name: card.name, card, detail: host.detail })} />
         </div>
       </div>
@@ -179,18 +221,20 @@ function HostCard({
       <ActivityLine lastSeen={card.last_seen} />
       <div className="border-t border-dashed border-[var(--vigil-border)] pt-2">
         <div className="mb-1 text-[11px] text-[var(--vigil-muted)]">
-          {visibleServices.length > 0 ? t("topology.servicesWithCount", { n: visibleServices.length }) : t("topology.kind.service")}
+          {statusVisibleServices.length > 0 ? t("topology.servicesWithCount", { n: statusVisibleServices.length }) : t("topology.kind.service")}
         </div>
-        {visibleServices.length === 0 ? (
+        {statusVisibleServices.length === 0 ? (
           <div className="text-xs italic text-[var(--vigil-muted)]">{t("topology.noServices")}</div>
         ) : (
-          visibleServices.map((svc) => (
+          statusVisibleServices.map((svc) => (
             <ServiceRow
               key={svc.card.name}
               svc={svc}
+              hostName={card.name}
               q={q}
               filter={filter}
               onDetail={onDetail}
+              onEdit={onEdit}
             />
           ))
         )}
@@ -204,19 +248,26 @@ function CrossCard({
   q,
   filter,
   onDetail,
+  onEdit,
 }: {
   svc: TopologyService;
   q: string;
   filter: StatusFilterId;
   onDetail: (e: GraphEntityRef) => void;
+  onEdit: (entityId: string, title: string) => void;
 }) {
   const card = svc.card;
-  if (!matchesSearch(card, q)) return null;
   if (!statusMatchesFilter(card.status, filter)) return null;
+  const searchDimmed = Boolean(q) && !matchesSearch(card, q);
   return (
     <div
       id={`topo-row-${card.name}`}
-      className={cn("vigil-card cursor-pointer p-3.5", card.on_key_path && "border-amber-500/50")}
+      className={cn(
+        "vigil-card vigil-card-interactive cursor-pointer border-l-4 p-3.5 transition-opacity ease-out duration-150",
+        statusAccentClass(card.status),
+        card.on_key_path && "[border-right-color:var(--vigil-warn)]/50 [border-top-color:var(--vigil-warn)]/50 [border-bottom-color:var(--vigil-warn)]/50",
+        searchDimmed && "opacity-30",
+      )}
       onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })}
     >
       <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -225,7 +276,8 @@ function CrossCard({
         <EnvBadge env={card.env} />
         <StatusPill status={card.status} />
         {card.on_key_path && <Link2 className="size-3 text-amber-500" />}
-        <div className="ml-auto min-w-0">
+        <div className="ml-auto flex min-w-0 items-center gap-1.5">
+          <EditYamlButton onClick={() => onEdit(entityRawId({ kind: "cross_host", name: card.name }), card.name)} />
           <DetailButton onClick={() => onDetail({ kind: "cross_host", name: card.name, card, detail: svc.detail })} />
         </div>
       </div>
@@ -238,19 +290,26 @@ function CrossCard({
 function ListRow({
   card,
   kind,
+  entityId,
   onFocus,
+  onEdit,
 }: {
   card: TopologyCard;
   kind: string;
+  /** 事实源 entityId（host:<name> / service:<host>:<name> / cross_host:<name>）；空 = 不给编辑入口。 */
+  entityId?: string;
   onFocus: (name: string) => void;
+  onEdit?: (entityId: string, title: string) => void;
 }) {
+  const { t } = useTranslation();
   return (
     <div
       id={`topo-row-${card.name}`}
       onClick={() => onFocus(card.name)}
-      className="grid cursor-pointer grid-cols-[1fr_auto_auto_auto_1fr_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm last:border-b-0 hover:bg-[var(--vigil-muted-bg)]"
+      className="grid cursor-pointer grid-cols-[1fr_auto_auto_auto_1fr_auto_auto] items-center gap-2 border-b border-[var(--vigil-border)]/70 px-2 py-1.5 text-sm tabular-nums transition-colors ease-out duration-150 last:border-b-0 hover:bg-[var(--vigil-muted-bg)]"
     >
       <span className="flex items-center gap-1.5 truncate">
+        <StatusDot status={card.status} />
         {card.on_key_path && <Link2 className="size-3 shrink-0 text-amber-500" />}
         <span className="font-medium">{card.name}</span>
       </span>
@@ -269,6 +328,23 @@ function ListRow({
         </span>
       )}
       <StatusPill status={card.status} />
+      <span className="justify-self-end">
+        {entityId && onEdit ? (
+          <button
+            type="button"
+            data-testid="topo-edit-yaml"
+            onClick={(e) => {
+              e.stopPropagation();
+              onEdit(entityId, card.name);
+            }}
+            aria-label={t("yamlEditor.editAria")}
+            title={t("yamlEditor.editAria")}
+            className="rounded p-1 text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]"
+          >
+            <SquarePen className="size-3.5" />
+          </button>
+        ) : null}
+      </span>
     </div>
   );
 }
@@ -276,12 +352,22 @@ function ListRow({
 export default function TopologyPage() {
   const { t } = useTranslation();
   const [searchParams] = useSearchParams();
+  // task27 PART D: 顶栏全局搜索提交 → /topology?q=...。query 此前只在
+  // useState 初始化器里读一次 URL 参数——组件已挂载时（再次提交搜索 /
+  // 参数变化）新 q 永远进不了过滤器。订阅参数变化显式同步。
+  const urlQuery = searchParams.get("q") ?? "";
   const [view, setView] = useState<TopologyView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState(() => searchParams.get("q") ?? "");
+  // URL ?q= 变化（含顶栏搜索再提交 / 他页跳转）→ 覆盖页内搜索框并应用过滤。
+  useEffect(() => {
+    setQuery(urlQuery);
+  }, [urlQuery]);
   const [filter, setFilter] = useState<StatusFilterId>("all");
   const [viewMode, setViewMode] = useState<"card" | "list">("card");
   const [drawer, setDrawer] = useState<GraphEntityRef | null>(null);
+  // task27 PART A: raw YAML 编辑抽屉（host/service/cross 档案 + cluster→topology.yaml）。
+  const [editTarget, setEditTarget] = useState<YamlEditorTarget | null>(null);
   const [resetting, setResetting] = useState(false);
   // Batch 49: graph ↔ list sync — clicking a graph node scrolls the list to
   // that row; clicking a list row highlights the node in the graph
@@ -293,6 +379,15 @@ export default function TopologyPage() {
     const el = document.getElementById(`topo-row-${focused}`);
     el?.scrollIntoView({ behavior: "smooth", block: "center" });
   }, [focused]);
+
+  const loadTopology = () => {
+    api
+      .getTopology()
+      .then((resp) => {
+        if (resp.ok && resp.data) setView(resp.data);
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
     let alive = true;
@@ -310,6 +405,16 @@ export default function TopologyPage() {
       alive = false;
     };
   }, []);
+
+  // task27 PART A: 打开实体事实源编辑抽屉；保存成功后重新拉取拓扑视图。
+  const openYamlEditor = (entityId: string, title: string) => {
+    setEditTarget({
+      title,
+      subtitle: entityId.startsWith("cluster:") ? "topology.yaml" : entityId,
+      load: () => api.getTopologyEntityRawYaml(entityId),
+      save: (text) => api.putTopologyEntityRawYaml(entityId, text),
+    });
+  };
 
   const q = query.trim().toLowerCase();
 
@@ -352,6 +457,29 @@ export default function TopologyPage() {
     }
     return n;
   }, [view]);
+
+  // task27 B2: 搜索命中统计（语料 = 全部节点 name/type/env：clusters+hosts+services+cross）
+  // + 第一个命中名（Enter 聚焦：列表滚动 + 图高亮 ring，是最廉价的聚焦路径）。
+  const searchMatch = useMemo(() => {
+    if (!view || !q) return null;
+    let total = 0;
+    let matched = 0;
+    let first: string | null = null;
+    const count = (card: { name: string; type?: string; env?: string }) => {
+      total += 1;
+      if (matchesSearch(card, q)) {
+        matched += 1;
+        if (first === null) first = card.name;
+      }
+    };
+    for (const c of view.clusters) count({ name: c.name, env: c.env });
+    for (const h of view.hosts) {
+      count(h.card);
+      for (const svc of h.services) count(svc.card);
+    }
+    for (const c of view.cross_host) count(c.card);
+    return { total, matched, first };
+  }, [view, q]);
 
   /** Batch 85: clear ALL topology data (destructive; confirm dialog + auditing owned by the backend). */
   const handleReset = async () => {
@@ -435,15 +563,30 @@ export default function TopologyPage() {
             </button>
           </div>
 
-          {/* Search */}
+          {/* Search（task27 B2: Enter 聚焦首个命中 + 清除按钮 + 命中数提示） */}
           <div className="flex h-8 w-56 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
             <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
             <input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && searchMatch?.first) setFocused(searchMatch.first);
+                if (e.key === "Escape") setQuery("");
+              }}
               placeholder={t("topology.searchPlaceholder")}
+              data-testid="topology-search"
               className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
             />
+            {query ? (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                aria-label={t("common.searchClearAria")}
+                className="rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+              >
+                <X className="size-3.5" />
+              </button>
+            ) : null}
           </div>
 
           {/* Batch 85: clear-topology entry (destructive, confirm dialog) */}
@@ -475,6 +618,21 @@ export default function TopologyPage() {
             <span>{t("topology.servicesCount", { n: view.hosts.reduce((n, h) => n + h.services.length, 0) })}</span>
             <span>{t("topology.crossCount", { n: view.cross_host.length })}</span>
             <span>{t("topology.depCount", { n: depCount })}</span>
+            {searchMatch ? (
+              <span
+                data-testid="topo-search-hint"
+                className={cn(
+                  "rounded px-1.5 py-px text-[11px]",
+                  searchMatch.matched === 0
+                    ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-muted)]"
+                    : "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]",
+                )}
+              >
+                {searchMatch.matched === 0
+                  ? t("topology.searchEmpty", { query: query.trim() })
+                  : t("topology.searchMatched", { matched: searchMatch.matched, total: searchMatch.total })}
+              </span>
+            ) : null}
           </div>
 
           <div className="vigil-card mb-4 p-3">
@@ -490,6 +648,7 @@ export default function TopologyPage() {
               onSelect={setDrawer}
               onNodeFocus={setFocused}
               focusedName={focused}
+              searchQuery={query}
             />
           </div>
 
@@ -517,7 +676,13 @@ export default function TopologyPage() {
                     <div className="rounded border border-[var(--vigil-border)]/70">
                       {visibleHosts.map((host) => (
                         <div key={host.card.name}>
-                          <ListRow card={host.card} kind="host" onFocus={setFocused} />
+                          <ListRow
+                            card={host.card}
+                            kind="host"
+                            entityId={entityRawId({ kind: "host", name: host.card.name })}
+                            onFocus={setFocused}
+                            onEdit={openYamlEditor}
+                          />
                           {host.services
                             .filter(
                               (s) =>
@@ -525,7 +690,14 @@ export default function TopologyPage() {
                                 statusMatchesFilter(s.card.status, filter),
                             )
                             .map((s) => (
-                              <ListRow key={s.card.name} card={s.card} kind="service" onFocus={setFocused} />
+                              <ListRow
+                                key={s.card.name}
+                                card={s.card}
+                                kind="service"
+                                entityId={entityRawId({ kind: "service", name: s.card.name, hostName: host.card.name })}
+                                onFocus={setFocused}
+                                onEdit={openYamlEditor}
+                              />
                             ))}
                         </div>
                       ))}
@@ -536,12 +708,28 @@ export default function TopologyPage() {
                             statusMatchesFilter(c.card.status, filter),
                         )
                         .map((c) => (
-                          <ListRow key={c.card.name} card={c.card} kind="cross_host" onFocus={setFocused} />
+                          <ListRow
+                            key={c.card.name}
+                            card={c.card}
+                            kind="cross_host"
+                            entityId={entityRawId({ kind: "cross_host", name: c.card.name })}
+                            onFocus={setFocused}
+                            onEdit={openYamlEditor}
+                          />
                         ))}
                     </div>
                   </div>
                 );
               })}
+              {/* task29 PART B：列表视图搜索无命中 → 空结果态 */}
+              {searchMatch && searchMatch.matched === 0 ? (
+                <p
+                  className="px-2 py-4 text-center text-sm text-[var(--vigil-muted)]"
+                  data-testid="topo-list-search-empty"
+                >
+                  {t("topology.searchEmpty", { query: query.trim() })}
+                </p>
+              ) : null}
               {view.hosts.length === 0 && (
                 <p className="px-2 py-4 text-sm italic text-[var(--vigil-muted)]">
                   {t("topology.noHosts")}
@@ -564,6 +752,8 @@ export default function TopologyPage() {
                     <span className="text-xs font-normal text-[var(--vigil-muted)]">
                       {t("topology.hostCountSuffix", { n: group.hosts.length })}
                     </span>
+                    {/* task27 PART A: 集群事实源 = topology.yaml 整文件 */}
+                    <EditYamlButton onClick={() => openYamlEditor(entityRawId({ kind: "cluster", name: group.name }), group.name)} />
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {group.hosts.map((host) => (
@@ -573,11 +763,22 @@ export default function TopologyPage() {
                         q={q}
                         filter={filter}
                         onDetail={setDrawer}
+                        onEdit={openYamlEditor}
                       />
                     ))}
                   </div>
                 </section>
               ))}
+
+              {/* task29 PART B：卡片视图搜索无命中 → 空结果态（此前是空白区） */}
+              {searchMatch && searchMatch.matched === 0 ? (
+                <div
+                  className="vigil-card border-dashed p-10 text-center text-sm text-[var(--vigil-muted)]"
+                  data-testid="topo-card-search-empty"
+                >
+                  {t("topology.searchEmpty", { query: query.trim() })}
+                </div>
+              ) : null}
 
               {view.cross_host.length > 0 && (
                 <section className="mb-6">
@@ -587,7 +788,14 @@ export default function TopologyPage() {
                   </h2>
                   <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
                     {view.cross_host.map((svc) => (
-                      <CrossCard key={svc.card.name} svc={svc} q={q} filter={filter} onDetail={setDrawer} />
+                      <CrossCard
+                        key={svc.card.name}
+                        svc={svc}
+                        q={q}
+                        filter={filter}
+                        onDetail={setDrawer}
+                        onEdit={openYamlEditor}
+                      />
                     ))}
                   </div>
                 </section>
@@ -598,7 +806,24 @@ export default function TopologyPage() {
         </div>
       ) : null}
 
-      <DetailDrawer entity={drawer} onClose={() => setDrawer(null)} />
+      <DetailDrawer
+        entity={drawer}
+        onClose={() => setDrawer(null)}
+        onEdit={(entity) => {
+          // task29 PART C：图节点详情 → 同一 raw-YAML 编辑抽屉（entityId 走
+          // entityRawId 唯一解析器，与卡片/列表按钮同源）；关闭详情避免编辑
+          // 保存后抽屉里残留旧数据。
+          setDrawer(null);
+          openYamlEditor(entityRawId(entity), entity.name);
+        }}
+      />
+
+      {/* task27 PART A: raw YAML 编辑抽屉（保存成功 → 重新拉取拓扑视图） */}
+      <YamlEditorDrawer
+        target={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSaved={() => loadTopology()}
+      />
     </div>
   );
 }

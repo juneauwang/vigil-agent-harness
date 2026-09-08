@@ -106,6 +106,20 @@
 
 * { box-sizing: border-box; }
 
+/* ------------------------------------------------------------------ */
+/* task28 P0.1 动效基线：全局唯一节奏（~160ms ease-out），只动颜色/边框/  */
+/* transform/opacity，不动布局属性。                                    */
+/* ------------------------------------------------------------------ */
+:root {
+  --vigil-ease: 160ms ease-out;
+}
+
+/* task28 P2：输入聚焦环（配合边框变主色；颜色取主色淡投影） */
+.vigil-input:focus {
+  border-color: var(--vigil-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--vigil-primary) 22%, transparent);
+}
+
 html, body, #root { height: 100%; }
 
 body {
@@ -132,6 +146,20 @@ body {
   box-shadow: var(--vigil-shadow);
 }
 
+/* task28 P1.1：可交互卡片 hover 抬升（叠加在 .vigil-card 上，静态卡不加） */
+.vigil-card-interactive {
+  transition:
+    transform var(--vigil-ease),
+    box-shadow var(--vigil-ease),
+    border-color var(--vigil-ease);
+}
+.vigil-card-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow:
+    var(--vigil-shadow),
+    0 6px 18px rgba(0, 0, 0, 0.1);
+}
+
 .vigil-input {
   width: 100%;
   height: 32px;
@@ -146,6 +174,15 @@ body {
 }
 .vigil-input:focus { border-color: var(--vigil-primary); }
 
+/* task27 PART C：带左侧内嵌图标的输入框（图标 absolute left-2.5 → 占位
+   10–24px，30px 左净空 = 10px 图标起点 + 14px 图标宽 + 6px 间隙）。
+   必须用本类而不是 tailwind pl-* 工具类：.vigil-input 是非 layered 规则，
+   CSS 级联中非 layered 恒胜 @layer utilities——pl-8 会被 .vigil-input 的
+   `padding: 0 10px` 吞掉，左净空失效，图标与输入文字重叠（本 bug 根因）。 */
+.vigil-input-icon {
+  padding-left: 30px;
+}
+
 .vigil-badge {
   display: inline-flex;
   align-items: center;
@@ -156,6 +193,7 @@ body {
   font-size: 12px;
   color: var(--vigil-muted);
   background: transparent;
+  transition: background-color var(--vigil-ease), color var(--vigil-ease), border-color var(--vigil-ease);
 }
 
 .vigil-btn {
@@ -172,7 +210,17 @@ body {
   background: transparent;
   color: var(--vigil-text-secondary);
 }
-.vigil-btn:hover { background: var(--vigil-muted-bg); }
+.vigil-btn {
+  transition:
+    background-color var(--vigil-ease),
+    border-color var(--vigil-ease),
+    color var(--vigil-ease),
+    transform var(--vigil-ease),
+    box-shadow var(--vigil-ease);
+}
+.vigil-btn:hover { background: var(--vigil-muted-bg); transform: translateY(-1px); }
+.vigil-btn:active { transform: translateY(0.5px); filter: brightness(0.96); }
+.vigil-btn:disabled { transition: none; }
 .vigil-btn-primary {
   background: var(--vigil-primary);
   color: #fff;
@@ -190,7 +238,13 @@ body {
 }
 .vigil-link:hover { text-decoration: underline; }
 
-.vigil-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.vigil-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  /* task28 P1.1/P1.2：数字列用等宽数字，避免刷新时抖动 */
+  font-variant-numeric: tabular-nums;
+}
 .vigil-table th {
   text-align: left;
   font-weight: 500;
@@ -198,6 +252,11 @@ body {
   font-size: 11px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--vigil-border);
+  /* task28 P2：表格滚动时吸顶表头（非滚动容器内无副作用） */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--vigil-card);
 }
 .vigil-table td {
   padding: 6px 10px;
@@ -206,6 +265,7 @@ body {
 }
 .vigil-table tr:last-child td { border-bottom: none; }
 .vigil-table tbody tr { cursor: pointer; }
+.vigil-table tbody tr { transition: background-color var(--vigil-ease); }
 .vigil-table tbody tr:hover { background: var(--vigil-muted-bg); }
 
 .vigil-status-dot {
@@ -250,3 +310,37 @@ body {
 .scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
 .scroll-thin::-webkit-scrollbar-thumb { background: var(--vigil-border); border-radius: 3px; }
 .scroll-thin::-webkit-scrollbar-track { background: transparent; }
+/* task28 P2：Firefox 侧暗色细滚动条（webkit 已有） */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: var(--vigil-border) transparent;
+}
+
+/* task28 P1.1：加载骨架屏（shimmer 微光扫过，替代「获取中…」纯文字） */
+.vigil-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--vigil-muted-bg);
+  border-radius: 4px;
+}
+.vigil-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--vigil-text) 8%, transparent),
+    transparent
+  );
+  animation: vigil-shimmer 1.4s ease-out infinite;
+}
+@keyframes vigil-shimmer {
+  100% { transform: translateX(100%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .vigil-skeleton::after { animation: none; }
+  .vigil-btn:hover { transform: none; }
+  .vigil-card-interactive:hover { transform: none; }
+}

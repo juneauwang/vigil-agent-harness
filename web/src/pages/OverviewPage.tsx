@@ -12,13 +12,20 @@ import { EmptyState } from "@/components/EmptyState";
 import type { GraphEntityRef } from "@/lib/topologyGraph";
 import { cn } from "@/lib/ops";
 
-/** 4 metric cards (Nodes sky / Services emerald / Runbooks amber / Incidents rose). */
+/** task28 P1.1：加载骨架条（数据未就绪时替代空值/文字占位）。 */
+function SkeletonValue({ className }: { className?: string }) {
+  return <div className={cn("vigil-skeleton h-7 w-10", className)} aria-hidden="true" />;
+}
+
+/** 5 metric cards（task28 P1.1：统一卡面 + hover 抬升 + 图标方块 + tabular 数字 +
+ *  加载骨架；amber 仅作语义告警（风险卡），其余走蓝/绿/紫/ rose 类别色）。 */
 function MetricCard({
   tone,
   icon,
   label,
   value,
   sub,
+  loading,
   onClick,
 }: {
   tone: "sky" | "emerald" | "amber" | "rose" | "violet";
@@ -26,6 +33,7 @@ function MetricCard({
   label: string;
   value: React.ReactNode;
   sub?: React.ReactNode;
+  loading?: boolean;
   onClick?: () => void;
 }) {
   const tones: Record<string, string> = {
@@ -37,7 +45,10 @@ function MetricCard({
   };
   return (
     <div
-      className={cn("vigil-card flex items-center gap-3 p-4", onClick && "cursor-pointer hover:border-[var(--vigil-primary)]/60")}
+      className={cn(
+        "vigil-card vigil-card-interactive flex items-center gap-3 p-4",
+        onClick && "cursor-pointer hover:border-[var(--vigil-primary)]/60",
+      )}
       onClick={onClick}
       role={onClick ? "button" : undefined}
       tabIndex={onClick ? 0 : undefined}
@@ -48,7 +59,9 @@ function MetricCard({
       </div>
       <div className="min-w-0">
         <div className="text-sm text-[var(--vigil-muted)]">{label}</div>
-        <div className="text-xl font-semibold leading-tight">{value}</div>
+        <div className="text-xl font-semibold leading-tight tabular-nums">
+          {loading ? <SkeletonValue /> : value}
+        </div>
         {sub && <div className="truncate text-[11px] text-[var(--vigil-muted)] opacity-80">{sub}</div>}
       </div>
     </div>
@@ -70,7 +83,12 @@ function RunbookQueue({
     <div className="vigil-card relative w-full shrink-0 lg:w-[320px]">
       <div className="p-4">
         <div className="mb-3 flex items-center justify-between">
-          <h3 className="text-sm font-medium">Runbook Queue</h3>
+          <h3 className="flex items-center gap-2 text-sm font-medium">
+            <span className="flex size-6 items-center justify-center rounded-md bg-[var(--vigil-accent-bg)] text-[var(--vigil-accent-text)]">
+              <ListChecks className="size-3.5" />
+            </span>
+            Runbook Queue
+          </h3>
           <button
             type="button"
             onClick={onClose}
@@ -176,15 +194,16 @@ export default function OverviewPage() {
 
       {/* 5 metric cards row: Nodes / Services / Runbooks / Incidents (real count) / uncovered risk */}
       <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
-        <MetricCard tone="sky" icon={<Boxes className="size-4" />} label="Nodes" value={stats.nodes} sub={view ? `clusters ${view.clusters.length}` : undefined} />
-        <MetricCard tone="emerald" icon={<Server className="size-4" />} label="Services" value={stats.services} />
-        <MetricCard tone="amber" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub={t("overview.metricRunbooksSub")} />
-        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={incidentCount ?? 0} sub={incidentCount === null ? t("overview.incidentSubNull") : "watch inbox"} />
+        <MetricCard tone="sky" icon={<Boxes className="size-4" />} label="Nodes" value={stats.nodes} sub={view ? `clusters ${view.clusters.length}` : undefined} loading={view === null} />
+        <MetricCard tone="emerald" icon={<Server className="size-4" />} label="Services" value={stats.services} loading={view === null} />
+        <MetricCard tone="violet" icon={<ListChecks className="size-4" />} label="Runbooks" value={runbooks.length} sub={t("overview.metricRunbooksSub")} />
+        <MetricCard tone="rose" icon={<TriangleAlert className="size-4" />} label="Incidents" value={incidentCount ?? 0} sub={incidentCount === null ? t("overview.incidentSubNull") : "watch inbox"} loading={incidentCount === null} />
         <MetricCard
-          tone="violet"
+          tone="amber"
           icon={<TriangleAlert className="size-4" />}
           label={t("overview.riskTitle")}
           value={coverage ? coverage.high_risk.uncovered.length : 0}
+          loading={coverage === null}
           sub={coverage ? t("overview.riskSub", { total: coverage.high_risk.total, covered: coverage.high_risk.covered, pct: coverage.high_risk.coverage_pct }) : t("overview.riskSubEmpty")}
           onClick={() => navigate("/runbooks")}
         />
@@ -194,7 +213,12 @@ export default function OverviewPage() {
       <div className="flex min-h-0 flex-1 flex-col gap-4 xl:flex-row">
         <div className="vigil-card flex min-h-[240px] flex-1 flex-col p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-medium">Topology Graph</h3>
+            <h3 className="flex items-center gap-2 text-sm font-medium">
+              <span className="flex size-6 items-center justify-center rounded-md bg-[var(--vigil-accent-bg)] text-[var(--vigil-accent-text)]">
+                <Boxes className="size-3.5" />
+              </span>
+              Topology Graph
+            </h3>
             <button
               type="button"
               onClick={() => navigate("/topology")}
@@ -211,7 +235,7 @@ export default function OverviewPage() {
                   {t("topology.kind.cluster")}
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="size-2.5 rounded-sm border border-emerald-500/60 bg-emerald-500/10" />
+                  <span className="size-2.5 rounded-sm border border-[var(--vigil-ok)]/60 bg-[var(--vigil-ok)]/10" />
                   {t("topology.kind.host")}
                 </span>
                 <span className="flex items-center gap-1.5">
@@ -219,7 +243,7 @@ export default function OverviewPage() {
                   {t("topology.kind.service")}
                 </span>
                 <span className="flex items-center gap-1.5">
-                  <span className="size-2.5 rounded-sm border border-amber-500/60 bg-amber-500/10" />
+                  <span className="size-2.5 rounded-sm border border-[var(--vigil-warn)]/60 bg-[var(--vigil-warn)]/10" />
                   {t("overview.legendDeps")}
                 </span>
               </div>

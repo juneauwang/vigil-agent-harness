@@ -22,6 +22,7 @@ from tools.topo_discovery import (
     DiscoveryError,
     ProbeResult,
     discover_host,
+    reconcile_k8s_cluster_claims,
     write_discovery,
 )
 
@@ -1259,15 +1260,25 @@ def test_write_discovery_merges_existing_host_appends_new_keeps_manual(tmp_path)
 
 
 def test_write_discovery_new_host_append_unchanged(tmp_path):
-    """新 host 追加（现状行为不变）：互不干扰、topology hosts 段逐条追加。"""
+    """新 host 追加：互不干扰、topology hosts 段逐条追加。
+
+    task29 PART A 语义变更：同批次同集群（default）的第二台主机不再复制
+    k8s 服务集（归属 node-a）——node-b 的 3 条中 grafana 不再重复，appended
+    = 2（harbor/db 本地 docker 行照常）。
+    """
     home = tmp_path / "hermes_home"
     home.mkdir()
     r1 = write_discovery(home, _discovery("node-a"))
     r2 = write_discovery(home, _discovery("node-b"))
     assert r1["merged"] is False and r2["merged"] is False
-    assert r1["appended"] == 3 and r2["appended"] == 3
+    assert r1["appended"] == 3
+    assert r2["appended"] == 2  # grafana（kubectl 行）归属 node-a，node-b 不复制
     topo = yaml.safe_load((home / "topology.yaml").read_text(encoding="utf-8"))
     assert [h["name"] for h in topo["hosts"]] == ["node-a", "node-b"]
+    na = yaml.safe_load((home / "services" / "node-a.yaml").read_text(encoding="utf-8"))
+    nb = yaml.safe_load((home / "services" / "node-b.yaml").read_text(encoding="utf-8"))
+    assert "grafana" in {s["name"] for s in na["services"]}
+    assert "grafana" not in {s["name"] for s in nb["services"]}
 
 
 def test_write_discovery_dry_run_not_applied_by_cli(tmp_path, monkeypatch):
@@ -1425,3 +1436,493 @@ def test_write_discovery_backfills_reachability_onto_existing_rows(tmp_path):
     # 新行：直接带标记。
     assert rows["argocd-server"]["reachability"] == "external"
     assert rows["argocd-lb"]["reachability"] == "external"
+
+
+# ---------------------------------------------------------------------------
+# task29 PART A：k8s Service 集群级归属（防逐主机复制）+ 写入方去重
+# ---------------------------------------------------------------------------
+
+KUBE2 = (
+    '{"items":['
+    '{"kind":"Service","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"ports":[{"port":3000,"nodePort":30030}]}},'
+    '{"kind":"Service","metadata":{"name":"kube-dns","namespace":"kube-system"},'
+    '"spec":{"ports":[{"port":53,"nodePort":30053}]}},'
+    '{"kind":"Deployment","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"template":{"spec":{"containers":[{"image":"grafana/grafana:10"}]}}}}'
+    ']}'
+)
+# control-plane=.10 / worker=.20（角色标签 + InternalIP）
+NODES_WITH_CP = (
+    '{"items":['
+    '{"kind":"Node","metadata":{"name":"cp","labels":{"node-role.kubernetes.io/control-plane":""}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.10"}]}},'
+    '{"kind":"Node","metadata":{"name":"w1","labels":{}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.20"}]}}'
+    ']}'
+)
+# 无 control-plane 角色节点（两台都无标签）
+NODES_NO_CP = (
+    '{"items":['
+    '{"kind":"Node","metadata":{"name":"w1","labels":{}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.20"}]}},'
+    '{"kind":"Node","metadata":{"name":"w2","labels":{}},'
+    '"status":{"addresses":[{"type":"InternalIP","address":"203.0.113.30"}]}}'
+    ']}'
+)
+
+
+def _k8s_runner(host_ip, *, with_cp_label):
+    """kubectl 可达主机的 runner：服务枚举 + 节点表（自判定角色）。"""
+    return FakeRunner(**{
+        "kubectl get nodes": NODES_WITH_CP if with_cp_label else NODES_NO_CP,
+        "kubectl version": "",
+        "kubectl": KUBE2,
+        "docker ps": ("", 127),
+        "compose ls": ("", 127),
+    })
+
+
+def _k8s_names(disc):
+    return {s["name"] for s in disc["services"]
+            if s.get("managed_by") == "kubectl"}
+
+
+def test_k8s_worker_first_cp_second_reconciled(tmp_path):
+    """worker 先扫（临时归属）→ control-plane 后到接管 → 对账剥离 worker 行。"""
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=_k8s_runner("203.0.113.20", with_cp_label=True))
+    assert d_worker["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d_worker) == {"grafana", "kube-dns"}
+
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True))
+    # task30：接管路径的 probes 文案带了接管说明，语义仍是 CP 归属
+    assert "control-plane" in d_cp["probes"]["k8s-attribution"]
+    assert _k8s_names(d_cp) == {"grafana", "kube-dns"}
+
+    stripped = reconcile_k8s_cluster_claims([d_worker, d_cp])
+    assert stripped == [{
+        "host": "203.0.113.20", "cluster": "k3s-prod",
+        "owner": "203.0.113.10", "removed": 2,
+    }]
+    # worker 的 kubectl 行被剥离，非 k8s（docker/systemd）行不动
+    assert _k8s_names(d_worker) == set()
+    assert "grafana" not in d_worker["details"]
+    # 端口可见性保留：NodePort 不因归属跳过变成 unidentified 噪音
+    assert "unidentified-30030" not in {s["name"] for s in d_worker["pending_review"]}
+
+    # 落盘：同一集群服务集只落主人一份
+    home = tmp_path
+    write_discovery(home, d_cp)
+    write_discovery(home, d_worker)
+    cp_index = yaml.safe_load((home / "services" / "203.0.113.10.yaml").read_text())
+    w_index = yaml.safe_load((home / "services" / "203.0.113.20.yaml").read_text())
+    cp_names = {s["name"] for s in cp_index["services"]}
+    w_names = {s["name"] for s in w_index["services"]}
+    assert {"grafana", "kube-dns"} <= cp_names
+    assert not ({"grafana", "kube-dns"} & w_names)
+
+
+def test_k8s_cp_first_worker_gets_no_duplicate():
+    """control-plane 先扫 → 直接归属；worker 完全不产 k8s 行（无需对账）。"""
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True))
+    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=_k8s_runner("203.0.113.20", with_cp_label=True))
+    assert "skipped" in d_worker["probes"]["k8s-attribution"]
+    assert _k8s_names(d_worker) == set()
+    # compose 冲突退让仍拿得到全集群 k8s 服务名（名字集补齐）
+    assert not reconcile_k8s_cluster_claims([d_worker, d_cp])
+
+
+def test_k8s_no_control_plane_first_successful_owns(tmp_path):
+    """集群里没有 control-plane 节点 → 首个枚举成功的主机归属，第二台跳过。"""
+    d_w1 = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.20", with_cp_label=False))
+    assert d_w1["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d_w1) == {"grafana", "kube-dns"}
+
+    d_w2 = discover_host("203.0.113.30", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.30", with_cp_label=False))
+    assert "skipped" in d_w2["probes"]["k8s-attribution"]
+    assert _k8s_names(d_w2) == set()
+    assert not reconcile_k8s_cluster_claims([d_w1, d_w2])
+
+
+def test_k8s_non_k8s_services_on_worker_untouched(tmp_path):
+    """worker 的 docker/systemd 本地服务不受归属剥离影响。"""
+    worker_runner = _k8s_runner("203.0.113.20", with_cp_label=True)
+    worker_runner.probes["docker ps"] = DOCKER_PS
+    worker_runner.probes["compose ls"] = COMPOSE_LS
+    worker_runner.probes["ss -tlnp"] = SS_TLNP
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=worker_runner)
+    assert {"harbor", "db"} <= {s["name"] for s in d_worker["services"]}
+
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True))
+    reconcile_k8s_cluster_claims([d_worker, d_cp])
+    names = {s["name"] for s in d_worker["services"]}
+    assert {"harbor", "db"} <= names
+    assert _k8s_names(d_worker) == set()
+
+    home = tmp_path
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts: []\nclusters: []\n", encoding="utf-8")
+    write_discovery(home, d_cp)
+    write_discovery(home, d_worker)
+    w_index = yaml.safe_load((home / "services" / "203.0.113.20.yaml").read_text())
+    w_names = {s["name"] for s in w_index["services"]}
+    assert {"harbor", "db"} <= w_names
+    assert not ({"grafana", "kube-dns"} & w_names)
+
+
+def test_write_discovery_dedupes_duplicate_names_in_one_fragment(tmp_path):
+    """写入方按 (host 文件, name) 去重：同一片段内重名只落首见（防御性）。"""
+    base = {"name": "svc-a", "type": "app", "managed_by": "kubectl"}
+    dup = dict(base, endpoint="203.0.113.20:30030")  # 同名不同 endpoint（老路径复制的形态）
+    svc_b = {"name": "svc-b", "type": "app", "managed_by": "systemd"}
+    disc = {
+        "version": 4,
+        "host": {"name": "node1", "type": "host", "env": "test", "cluster": "default"},
+        "services": [base, dup, svc_b],
+        "details": {},
+    }
+    result = write_discovery(tmp_path, disc)
+    assert result["appended"] == 2
+    index = yaml.safe_load((tmp_path / "services" / "node1.yaml").read_text())
+    names = [s["name"] for s in index["services"]]
+    assert names == ["svc-a", "svc-b"]
+
+
+def test_write_discovery_merge_path_dedupes_against_existing_and_batch(tmp_path):
+    """合并路径：存量同名跳过（原语义）+ 片段内新重名也只落一条。"""
+    home = tmp_path
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts: []\nclusters: []\n", encoding="utf-8")
+    existing_index = {
+        "host": "node1",
+        "updated_at": "2026-09-07",
+        "services": [{"name": "svc-a", "type": "app", "managed_by": "manual"}],
+    }
+    (home / "services").mkdir()
+    (home / "services" / "node1.yaml").write_text(
+        yaml.safe_dump(existing_index), encoding="utf-8")
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts:\n  - {name: node1, type: host, env: test}\nclusters: []\n",
+        encoding="utf-8")
+
+    svc_a2 = {"name": "svc-a", "type": "app", "managed_by": "kubectl"}
+    svc_b = {"name": "svc-b", "type": "app", "managed_by": "systemd"}
+    svc_b2 = dict(svc_b)  # 片段内新重名
+    disc = {
+        "version": 4,
+        "host": {"name": "node1", "type": "host", "env": "test", "cluster": "default"},
+        "services": [svc_a2, svc_b, svc_b2],
+        "details": {},
+    }
+    result = write_discovery(home, disc)
+    assert result["appended"] == 1  # 只追加 svc-b；svc-a 存量保留、svc-b2 重名跳过
+    index = yaml.safe_load((home / "services" / "node1.yaml").read_text())
+    names = [s["name"] for s in index["services"]]
+    assert names == ["svc-a", "svc-b"]
+    assert index["services"][0]["managed_by"] == "manual"  # 存量不覆盖
+
+
+# ---------------------------------------------------------------------------
+# task30 PART A：归属持久化（跨进程）+ 成员 guard
+# ---------------------------------------------------------------------------
+
+def test_k8s_claim_persists_across_processes(tmp_path):
+    """(a) 两次独立 discover（reset 模拟新进程、同一 home）：持久声明被尊重——
+    非归属主机不再复制；归属主机重扫保持归属并刷新 last_verified。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+
+    # run 1：control-plane 扫描 → 归属 + 持久化
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                         home=home)
+    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+    state_file = home / "runtime" / "k8s_cluster_claims.json"
+    assert state_file.is_file()
+    import os as _os
+    assert (_os.stat(state_file).st_mode & 0o777) == 0o600
+    state = yaml.safe_load(state_file.read_text(encoding="utf-8"))
+    assert state["clusters"]["k3s-prod"]["host"] == "203.0.113.10"
+    assert state["clusters"]["k3s-prod"]["is_control_plane"] is True
+
+    # run 2（新进程语义）：reset 清内存；worker 扫描 → 磁盘播种声明挡住复制
+    from tools.topo_discovery import reset_k8s_cluster_claims
+    reset_k8s_cluster_claims()
+    d_worker = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                             runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                             home=home)
+    assert "skipped" in d_worker["probes"]["k8s-attribution"]
+    assert "持久声明" in d_worker["probes"]["k8s-attribution"]
+    assert _k8s_names(d_worker) == set()
+
+    # run 3（新进程语义）：归属主机自己重扫 → 保持归属 + 刷新
+    reset_k8s_cluster_claims()
+    d_cp2 = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                          runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                          home=home)
+    assert d_cp2["probes"]["k8s-attribution"] == "owner-refresh（归属保持）"
+    assert _k8s_names(d_cp2) == {"grafana", "kube-dns"}
+
+
+def test_k8s_non_member_host_never_attributed(tmp_path):
+    """(b) kubectl context 指向远程集群但本机不是成员（laptop 场景）→
+    服务集不归属、不落声明，probes 记录跳过原因。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    # 节点表 = 远程集群（.10/.20）；扫描主机 .99 不在其中
+    d = discover_host("203.0.113.99", "prod", cluster="beijing",
+                      runner=_k8s_runner("203.0.113.99", with_cp_label=True),
+                      home=home)
+    assert d["probes"]["k8s-role"].startswith("non-member")
+    assert "非成员" in d["probes"]["k8s-attribution"]
+    assert _k8s_names(d) == set()
+    # 不产生归属声明
+    state_file = home / "runtime" / "k8s_cluster_claims.json"
+    assert not state_file.exists()
+
+
+def test_k8s_member_worker_claims_when_no_claim(tmp_path):
+    """(c) 成员主机（worker）在无声明时正常归属（首个成功者语义）。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                      home=home)
+    assert d["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d) == {"grafana", "kube-dns"}
+    state = yaml.safe_load(
+        (home / "runtime" / "k8s_cluster_claims.json").read_text(encoding="utf-8"))
+    assert state["clusters"]["k3s-prod"]["host"] == "203.0.113.20"
+
+
+def test_k8s_owner_failure_moves_claim(tmp_path):
+    """(d) 归属主机后续扫描 kubectl 失效 → 声明让位，下一个成员接管。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    from tools.topo_discovery import reset_k8s_cluster_claims, _load_k8s_claims_disk
+
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                         home=home)
+    assert d_cp["probes"]["k8s-attribution"] == "control-plane"
+
+    reset_k8s_cluster_claims()
+    # 归属主机 kubectl 失效（比如被降权/节点下线）
+    failing_cp = FakeRunner(**{"kubectl": ("", 127), "kubectl version": ("", 127)})
+    discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                  runner=failing_cp, home=home)
+    assert "k3s-prod" not in _load_k8s_claims_disk(home), "归属主机失效后声明必须让位"
+
+    # 同批次（同一进程状态）内 worker 接管
+    d_w = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                        runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                        home=home)
+    assert d_w["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d_w) == {"grafana", "kube-dns"}
+    assert _load_k8s_claims_disk(home)["k3s-prod"]["host"] == "203.0.113.20"
+
+
+def test_k8s_owner_left_cluster_clears_claim(tmp_path):
+    """(d') 归属主机重扫但已不在成员表（集群重建/迁移）→ 声明失效让位。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    from tools.topo_discovery import reset_k8s_cluster_claims, _load_k8s_claims_disk
+
+    discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                  runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                  home=home)
+    reset_k8s_cluster_claims()
+    # 归属主机仍在扫，但节点表里已经没有它（被移出集群）
+    discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                  runner=_k8s_runner("203.0.113.10", with_cp_label=False),
+                  home=home)
+    assert "k3s-prod" not in _load_k8s_claims_disk(home)
+
+
+def test_k8s_seeded_claim_not_stolen_by_cp_across_processes(tmp_path):
+    """接管规则边界：磁盘播种的声明（归属 worker）不被后到 CP 抢——接管仅在
+    归属主机失效时发生（task30 选定的简单规则，报告里已声明）。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    from tools.topo_discovery import (  # noqa: F401
+        _load_k8s_claims_disk,
+        reset_k8s_cluster_claims,
+    )
+
+    discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                  runner=_k8s_runner("203.0.113.20", with_cp_label=True),
+                  home=home)  # worker 首个成功 → 归属（无 CP 在场）
+    reset_k8s_cluster_claims()
+    d_cp = discover_host("203.0.113.10", "prod", cluster="k3s-prod",
+                         runner=_k8s_runner("203.0.113.10", with_cp_label=True),
+                         home=home)
+    assert "skipped" in d_cp["probes"]["k8s-attribution"]
+    assert _k8s_names(d_cp) == set()
+    assert _load_k8s_claims_disk(home)["k3s-prod"]["host"] == "203.0.113.20"
+
+
+def test_k8s_membership_topology_fallback(tmp_path):
+    """nodes 探针不可用但拓扑 host 行声明了 cluster 归属 → 视为成员可归属。"""
+    home = tmp_path / "vigil_home"
+    home.mkdir()
+    (home / "topology.yaml").write_text(
+        "version: 4\n"
+        "hosts:\n"
+        "  - {name: 203.0.113.20, type: host, env: prod, cluster: k3s-prod}\n"
+        "clusters: []\n",
+        encoding="utf-8",
+    )
+    runner = _k8s_runner("203.0.113.20", with_cp_label=True)
+    runner.probes["kubectl get nodes"] = ("", 127)  # 探针失败 → 回退拓扑声明
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=runner, home=home)
+    assert d["probes"]["k8s-role"] == "member（拓扑 host 行 cluster 声明）"
+    assert d["probes"]["k8s-attribution"] == "first-successful"
+    assert _k8s_names(d) == {"grafana", "kube-dns"}
+
+
+# ---------------------------------------------------------------------------
+# task30 PART B：pod 运行节点采集（数据面位置 runtime_nodes）
+# ---------------------------------------------------------------------------
+
+KUBE_SEL = (
+    '{"items":['
+    '{"kind":"Service","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"ports":[{"port":3000,"nodePort":30030}],"selector":{"app":"grafana"}}},'
+    '{"kind":"Service","metadata":{"name":"kube-dns","namespace":"kube-system"},'
+    '"spec":{"ports":[{"port":53,"nodePort":30053}],"selector":{"k8s-app":"kube-dns"}}},'
+    '{"kind":"Service","metadata":{"name":"lonely","namespace":"monitoring"},'
+    '"spec":{"ports":[{"port":80,"nodePort":30080}],"selector":{"app":"lonely"}}},'
+    '{"kind":"Service","metadata":{"name":"ext-dns","namespace":"monitoring"},'
+    '"spec":{"type":"ExternalName"}},'
+    '{"kind":"Deployment","metadata":{"name":"grafana","namespace":"monitoring"},'
+    '"spec":{"template":{"spec":{"containers":[{"image":"grafana/grafana:10"}]}}}}'
+    ']}'
+)
+# grafana 副本跨 node1/node2；notready/pending 不算"当前运行"；lonely 无副本。
+PODS = (
+    '{"items":['
+    '{"kind":"Pod","metadata":{"name":"g1","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{"nodeName":"node2"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},'
+    '{"kind":"Pod","metadata":{"name":"g2","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{"nodeName":"node1"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}},'
+    '{"kind":"Pod","metadata":{"name":"nr","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{"nodeName":"node3"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"False"}]}},'
+    '{"kind":"Pod","metadata":{"name":"pend","namespace":"monitoring","labels":{"app":"grafana"}},'
+    '"spec":{},"status":{"phase":"Pending","conditions":[]}},'
+    '{"kind":"Pod","metadata":{"name":"d1","namespace":"kube-system","labels":{"k8s-app":"kube-dns"}},'
+    '"spec":{"nodeName":"node2"},"status":{"phase":"Running","conditions":[{"type":"Ready","status":"True"}]}}'
+    ']}'
+)
+
+
+def _pods_runner(**overrides):
+    probes = {
+        "kubectl get pods": PODS,
+        "kubectl get nodes": NODES_NO_CP,
+        "kubectl version": "",
+        "kubectl": KUBE_SEL,
+        "docker ps": ("", 127),
+        "compose ls": ("", 127),
+    }
+    probes.update(overrides)
+    return FakeRunner(**probes)
+
+
+def _row(disc, name):
+    return next(s for s in disc["services"] if s["name"] == name)
+
+
+def test_k8s_runtime_nodes_multi_node_ready_only():
+    """(a)+(b) selector join：多副本跨节点都进列表；只统计 Ready pod
+    （notready/pending 不算"当前运行"）。"""
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=_pods_runner())
+    row = _row(d, "grafana")
+    assert row["runtime_nodes"] == ["node1", "node2"]
+    assert _row(d, "kube-dns")["runtime_nodes"] == ["node2"]
+    # L3 档案镜像同带该字段
+    assert d["details"]["grafana"]["snapshot"]["by_runtime"]["kubectl"]["runtime_nodes"] == [
+        "node1", "node2"]
+    assert d["probes"]["kubectl-pods"].startswith("ok(")
+
+
+def test_k8s_runtime_nodes_zero_replica_and_no_selector():
+    """(c)+(d) 零就绪副本 → []（显式空标记）；无 selector（ExternalName/
+    headless）→ [] 不炸——字段对 k8s 行统一存在。"""
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=_pods_runner())
+    assert _row(d, "lonely")["runtime_nodes"] == []
+    assert _row(d, "ext-dns")["runtime_nodes"] == []
+
+
+def test_k8s_runtime_nodes_absent_on_non_k8s_rows():
+    """(e) 非 k8s 服务行（docker compose/systemd）不带该字段。"""
+    worker_runner = _pods_runner()
+    worker_runner.probes["docker ps"] = DOCKER_PS
+    worker_runner.probes["compose ls"] = COMPOSE_LS
+    d = discover_host("203.0.113.20", "prod", cluster="k3s-prod",
+                      runner=worker_runner)
+    harbor = _row(d, "harbor")
+    assert harbor["managed_by"] == "docker_compose"
+    assert "runtime_nodes" not in harbor
+
+
+def test_k8s_runtime_nodes_backfill_on_merge(tmp_path):
+    """(f) 合并回填：存量行缺 runtime_nodes → 补；已有值 → 不覆盖
+    （可能是人工维护的节点清单）；其余字段不被回填动作波及。"""
+    from tools.topo_discovery import write_discovery as _wd
+
+    home = tmp_path
+    (home / "topology.yaml").write_text(
+        "version: 4\nhosts: []\nclusters: []\n", encoding="utf-8")
+    svc = {"name": "grafana", "type": "monitor", "managed_by": "kubectl",
+           "endpoint": "203.0.113.10:30030"}
+    d1 = {"version": 4,
+          "host": {"name": "node1", "type": "host", "env": "prod", "cluster": "c1"},
+          "services": [svc], "details": {}}
+    _wd(home, d1)
+    index = yaml.safe_load((home / "services" / "node1.yaml").read_text(encoding="utf-8"))
+    assert "runtime_nodes" not in index["services"][0]  # 旧格式存量行
+
+    # 下次发现的同mer名行带 runtime_nodes → 回填；新行原样带
+    d2 = {"version": 4,
+          "host": {"name": "node1", "type": "host", "env": "prod", "cluster": "c1"},
+          "services": [
+              dict(svc, runtime_nodes=["node1", "node2"]),
+              {"name": "kube-dns", "type": "monitor", "managed_by": "kubectl",
+               "runtime_nodes": ["node2"]},
+          ],
+          "details": {}}
+    _wd(home, d2)
+    rows = {r["name"]: r for r in yaml.safe_load(
+        (home / "services" / "node1.yaml").read_text(encoding="utf-8"))["services"]}
+    assert rows["grafana"]["runtime_nodes"] == ["node1", "node2"]  # 回填
+    assert rows["grafana"]["endpoint"] == "203.0.113.10:30030"     # 其余字段不动
+
+    # 已有值不被覆盖（人工维护的节点清单保留）
+    d3 = {"version": 4,
+          "host": {"name": "node1", "type": "host", "env": "prod", "cluster": "c1"},
+          "services": [dict(svc, runtime_nodes=["node9"])],
+          "details": {}}
+    _wd(home, d3)
+    rows = {r["name"]: r for r in yaml.safe_load(
+        (home / "services" / "node1.yaml").read_text(encoding="utf-8"))["services"]}
+    assert rows["grafana"]["runtime_nodes"] == ["node1", "node2"]
+
+
+def test_card_fields_passthrough_runtime_nodes():
+    """API 卡片视图透传 runtime_nodes（非 k8s 行缺字段 → 空列表归一）。"""
+    from hermes_cli.subcommands.topo_export import _card_fields
+    assert _card_fields({"name": "x", "runtime_nodes": ["n1"]})["runtime_nodes"] == ["n1"]
+    assert _card_fields({"name": "x"})["runtime_nodes"] == []

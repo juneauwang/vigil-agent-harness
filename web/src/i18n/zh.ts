@@ -16,7 +16,8 @@ const zh = {
     language: "语言",
     langZh: "中",
     langEn: "EN",
-    searchPlaceholder: "搜索主机 / 服务 / 命令…",
+    searchPlaceholder: "搜索拓扑实体（主机 / 服务）…",
+    searchClearAria: "清除搜索",
     apiHealthTitle: "服务健康检查",
     approvalsBadgeTitle: "待审批（点击进入审批中心）",
     nav: {
@@ -224,6 +225,8 @@ const zh = {
     execRunning: "执行中…",
     execBtn: "执行",
     readonlyNote: "只读 · 内容已脱敏（路径/密钥/URL userinfo 过滤）",
+    searchPlaceholder: "搜索 runbook（名称 / 标题 / 摘要 / 触发词）…",
+    searchEmpty: "没有 runbook 匹配「{{query}}」",
     thName: "名称",
     thSteps: "步骤",
     thUpdated: "更新",
@@ -396,6 +399,8 @@ const zh = {
     cardViewAria: "卡片视图",
     listViewAria: "列表视图",
     searchPlaceholder: "搜索名称 / 类型 / 环境",
+    searchMatched: "命中 {{matched}} / {{total}} 个实体",
+    searchEmpty: "没有实体匹配「{{query}}」",
     clusterLabel: "集群",
     allClusters: "全部",
     nodeCluster: "🖥️ 集群 {{name}}",
@@ -565,6 +570,25 @@ const zh = {
     approvalBadScope: "scope 必须是 once/session/permanent",
     approvalScopeSession: "该审批不支持 session 作用域（prod 变更确认门只允许 once）",
     approvalScopePermanent: "该审批不支持 permanent 作用域",
+  },
+
+  // task27 PART A：raw YAML 编辑抽屉
+  yamlEditor: {
+    drawerAria: "编辑 {{name}} 的 YAML 源文件",
+    maskCloseAria: "点击遮罩关闭编辑器",
+    closeAria: "关闭编辑器",
+    editorAria: "YAML 编辑区",
+    editAria: "编辑 YAML 源文件",
+    loading: "加载原文…",
+    save: "保存",
+    cancel: "取消",
+    closeConfirm: "有未保存的修改，确认放弃并关闭？",
+    dirtyHint: "有未保存的修改",
+    validationFailed: "校验失败，未保存（错误按行号标注）",
+    lineRef: "第 {{line}} 行",
+    savedWithWarnings:
+      "已保存，但自动执行授权已失效——该 runbook 重新过资产审批前不会再无人值守执行",
+    loadFailedPrefix: "YAML 加载失败：",
   },
 };
 

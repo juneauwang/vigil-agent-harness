@@ -1,9 +1,10 @@
 import { useTranslation } from "react-i18next";
 import "@/i18n";
-import { X } from "lucide-react";
+import { FilePenLine, X } from "lucide-react";
 import { DetailTree } from "@/components/DetailTree";
 import { EnvBadge, StatusPill } from "@/components/StatusBits";
 import { kindLabel, type GraphEntityRef } from "@/lib/topologyGraph";
+import { cn } from "@/lib/ops";
 
 /**
  * Detail drawer (batch 35): slides in from the right, replacing in-card
@@ -16,9 +17,13 @@ import { kindLabel, type GraphEntityRef } from "@/lib/topologyGraph";
 export default function DetailDrawer({
   entity,
   onClose,
+  onEdit,
 }: {
   entity: GraphEntityRef | null;
   onClose: () => void;
+  /** task29 PART C：『编辑 YAML 源文件』入口（图节点详情与卡片/列表共用同一
+   *  编辑抽屉流程）；不传则不渲染按钮（如 Overview 页未接线时）。 */
+  onEdit?: (entity: GraphEntityRef) => void;
 }) {
   const { t } = useTranslation();
   if (!entity) return null;
@@ -33,11 +38,27 @@ export default function DetailDrawer({
           <span className="text-sm font-semibold text-[var(--vigil-text)]">{entity.card.name}</span>
           <EnvBadge env={entity.card.env} />
           <StatusPill status={entity.card.status} />
+          {onEdit ? (
+            <button
+              type="button"
+              onClick={() => onEdit(entity)}
+              data-testid="drawer-edit-yaml"
+              aria-label={t("yamlEditor.editAria")}
+              title={t("yamlEditor.editAria")}
+              className="vigil-btn ml-auto h-7 px-2 text-xs"
+            >
+              <FilePenLine className="size-3.5" />
+              {t("yamlEditor.editAria")}
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={onClose}
             aria-label={t("topology.closeAria")}
-            className="ml-auto flex size-7 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]"
+            className={cn(
+              "flex size-7 items-center justify-center rounded-md text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]",
+              onEdit ? "" : "ml-auto",
+            )}
           >
             <X className="size-4" />
           </button>

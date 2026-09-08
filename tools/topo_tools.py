@@ -1629,7 +1629,9 @@ def _discover_handler(args: Dict[str, Any], **kwargs) -> str:
     creds: Dict[str, Any] = {"user": args.get("user") or "root"}
     if args.get("key"):
         creds["key_path"] = args.get("key")
-    discovery = discover_host(str(host), str(env), creds, cluster=str(args.get("cluster") or ""))
+    discovery = discover_host(str(host), str(env), creds,
+                              cluster=str(args.get("cluster") or ""),
+                              home=_hermes_home())
     pending = len(discovery.get("services") or [])
     guide = (
         f"发现完成：{pending} 个实体（全部 needs_review=true）。下一步："

@@ -508,7 +508,8 @@ def test_topo_discover_handler_returns_guide_with_next_steps(topo_home_v3, monke
     from tools import topo_tools as tt_mod
     from tools.topo_tools import _discover_handler, _TOPO_DISCOVER_SCHEMA
 
-    def fake_discover(host, env, creds, *, cluster="", runner=None, skip_unidentified=False):
+    def fake_discover(host, env, creds, *, cluster="", runner=None,
+                      skip_unidentified=False, home=None):  # task30: home 归属持久化根
         return {
             "version": 3,
             "source": "discovered",

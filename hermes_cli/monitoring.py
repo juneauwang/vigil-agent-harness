@@ -247,8 +247,11 @@ def probe_services_health(home: Optional[Path] = None,
             results.append({**row, "status": "unknown", "latency_ms": None,
                             "ports": [], "error": "探测批次超时（30s）"})
     # 保序（与拓扑顺序一致），未完成行补在最后。
-    by_name = {r["name"]: r for r in results}
-    ordered = [by_name.get(r["name"], r) for r in rows]
+    # 键用 (host, name)——按 name 会撞跨 host 同名服务（kubelet/containerd 等
+    # 每节点一个；2026-09-08 实测：多节点集群 by_name 覆盖 → 行重复 → 前端
+    # React key 冲突 → 状态过滤错乱）。(host,name) 在数据层唯一，无覆盖。
+    by_key = {(r.get("host"), r["name"]): r for r in results}
+    ordered = [by_key.get((r.get("host"), r["name"]), r) for r in rows]
     summary = {"up": 0, "down": 0, "unknown": 0, "internal": 0}
     for r in ordered:
         key = r.get("status")

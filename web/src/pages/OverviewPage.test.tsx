@@ -168,3 +168,28 @@ describe("批次八十一 Overview 卡（Incidents 真实计数 + 未覆盖风�
     container.remove();
   });
 });
+
+// ── task28 P1.1: 加载骨架屏（数据未就绪时 shimmer 骨架替代空值渲染）──
+describe("OverviewPage 指标卡骨架（task28 P1.1）", () => {
+  it("数据未返回时指标值渲染骨架块，返回后消失", async () => {
+    vi.mocked(api.getTopology).mockReturnValue(new Promise(() => {}) as never);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      await act(async () => {
+        root.render(
+          <MemoryRouter>
+            <OverviewPage />
+          </MemoryRouter>,
+        );
+      });
+      await act(async () => {});
+      // Nodes/Services 卡的值在拓扑未返回时是骨架
+      expect(container.querySelectorAll(".vigil-skeleton").length).toBeGreaterThanOrEqual(2);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+});

@@ -76,6 +76,60 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return (text ? JSON.parse(text) : {}) as T;
 }
 
+// ── Raw YAML editor（task27 PART A：RAW round-trip，GET/PUT 都是原文文本）──
+
+/** 校验失败的结构化错误（422 响应体 errors[] 元素）。 */
+export interface YamlValidationIssue {
+  line: number;
+  column?: number;
+  message: string;
+}
+
+/** 保存成功但需注意的告警（如 schedule/alert_auto_run 豁免失效需重新审批）。 */
+export interface YamlSaveWarning {
+  code: string;
+  message: string;
+}
+
+export interface YamlSaveResponse {
+  ok: boolean;
+  warnings?: YamlSaveWarning[];
+}
+
+function authHeaders(extra?: HeadersInit): Headers {
+  const headers = new Headers(extra);
+  const token = typeof window !== "undefined" ? window.__VIGIL_SESSION_TOKEN__ : undefined;
+  if (token && !headers.has("X-Vigil-Session-Token")) {
+    headers.set("X-Vigil-Session-Token", token);
+  }
+  return headers;
+}
+
+/** GET 原始 YAML 文本（非 JSON；服务端 content-type text/yaml）。 */
+async function fetchRawYaml(url: string): Promise<string> {
+  const res = await fetch(`${BASE}${url}`, {
+    headers: authHeaders(),
+    credentials: "include",
+  });
+  const text = await res.text();
+  if (!res.ok) throw parseErrorBody(text, res.status);
+  return text;
+}
+
+/** PUT 原始 YAML 文本：200 {ok, warnings?}；422 {errors:[{line,...}]}（抛
+ * ApiError，details.errors 携带结构化校验错误）。 */
+async function putRawYaml(url: string, text: string): Promise<YamlSaveResponse> {
+  const res = await fetch(`${BASE}${url}`, {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "text/yaml; charset=utf-8" }),
+    body: text,
+    credentials: "include",
+  });
+  const body = await res.text();
+  if (!res.ok) throw parseErrorBody(body, res.status);
+  return (body ? JSON.parse(body) : { ok: true }) as YamlSaveResponse;
+}
+
 // ── Types (mirror the sanitized server payloads) ──────────────────────────
 
 export interface TopologyCard {
@@ -718,6 +772,15 @@ export const api = {
   getRunbooks: () => fetchJSON<RunbookListResponse>("/api/runbooks"),
   getRunbook: (name: string) =>
     fetchJSON<RunbookDetailResponse>(`/api/runbooks/${encodeURIComponent(name)}`),
+  // task27 PART A：raw YAML 编辑（RAW round-trip；校验门在服务端）
+  getRunbookRawYaml: (name: string) =>
+    fetchRawYaml(`/api/runbooks/${encodeURIComponent(name)}/raw`),
+  putRunbookRawYaml: (name: string, text: string) =>
+    putRawYaml(`/api/runbooks/${encodeURIComponent(name)}/raw`, text),
+  getTopologyEntityRawYaml: (entityId: string) =>
+    fetchRawYaml(`/api/topology/entities/${encodeURIComponent(entityId)}/raw`),
+  putTopologyEntityRawYaml: (entityId: string, text: string) =>
+    putRawYaml(`/api/topology/entities/${encodeURIComponent(entityId)}/raw`, text),
   // YAPL P4：v0.2 runbook 执行（dashboard 触发，审批门走 web 注册表）+ 历史
   getRunbookExecutions: (limit = 20) =>
     fetchJSON<RunbookExecutionsResponse>(

@@ -39,6 +39,8 @@ export interface GraphNodeData extends GraphEntityRef {
   keyPath: boolean;
   /** 批四十九：列表中选中/图中点选的高亮标记（列表 ↔ 图联动）。 */
   selected?: boolean;
+  /** task27 B2：搜索不命中 → 节点降透明度（filter/highlight，不改布局）。 */
+  dim?: boolean;
   // react-flow v12 Node<T> 要求 data 满足 Record<string, unknown>。
   [key: string]: unknown;
 }
@@ -228,14 +230,16 @@ export function kindLabel(kind: GraphNodeKind): string {
 
 /** 节点状态着色：关键链路琥珀优先；running 绿 / warn 琥珀 / error 红 / 其余灰。 */
 export function nodeToneClass(status?: string, keyPath = false): string {
-  if (keyPath) return "border-amber-500/60 bg-amber-500/10";
+  // task28 P0.3：图节点配色收敛到全局状态 token（CSS 变量），不再各写一套
+  // tailwind 字面色。keyPath 琥珀是语义标记（请求路径上的服务），归 warn 档。
+  if (keyPath) return "border-[var(--vigil-warn)]/60 bg-[var(--vigil-warn)]/10";
   switch (statusTone(status)) {
     case "ok":
-      return "border-emerald-500/60 bg-emerald-500/10";
+      return "border-[var(--vigil-ok)]/60 bg-[var(--vigil-ok)]/10";
     case "warn":
-      return "border-amber-500/60 bg-amber-500/10";
+      return "border-[var(--vigil-warn)]/60 bg-[var(--vigil-warn)]/10";
     case "error":
-      return "border-red-500/60 bg-red-500/10";
+      return "border-[var(--vigil-error)]/60 bg-[var(--vigil-error)]/10";
     default:
       return "border-[var(--vigil-border)] bg-[var(--vigil-card)]";
   }
@@ -249,6 +253,28 @@ function _clusterCard(name: string, cluster: { env?: string; status?: string; de
 export function entityFromNode(node: TopologyFlowNode): GraphEntityRef {
   const { kind, name, card, detail, hostName } = node.data;
   return { kind, name, card, detail, hostName };
+}
+
+/**
+ * task29 PART C：实体 → raw-YAML API 的 entityId（唯一解析器）。
+ * host → `host:<name>`；service → `service:<host>:<name>`（三段，hostName
+ * 缺失时由 card.cluster 兜底）；cross_host → `cross_host:<name>`；
+ * cluster → `cluster:<name>`（服务端解析为 topology.yaml 整文件）。卡片/
+ * 列表/图抽屉的编辑入口一律走这里，不再各自拼字符串。
+ */
+export function entityRawId(
+  entity: Pick<GraphEntityRef, "kind" | "name" | "hostName">,
+): string {
+  switch (entity.kind) {
+    case "host":
+      return `host:${entity.name}`;
+    case "service":
+      return `service:${entity.hostName ?? ""}:${entity.name}`;
+    case "cross_host":
+      return `cross_host:${entity.name}`;
+    case "cluster":
+      return `cluster:${entity.name}`;
+  }
 }
 
 export function buildGraphModel(view: TopologyView): TopologyGraphModel {

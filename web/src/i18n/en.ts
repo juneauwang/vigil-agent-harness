@@ -15,7 +15,8 @@ const en = {
     language: "Language",
     langZh: "中文",
     langEn: "EN",
-    searchPlaceholder: "Search hosts / services / commands…",
+    searchPlaceholder: "Search topology entities (hosts / services)…",
+    searchClearAria: "Clear search",
     apiHealthTitle: "API health check",
     approvalsBadgeTitle: "Pending approvals (click to open the approval center)",
     nav: {
@@ -223,6 +224,8 @@ const en = {
     execRunning: "Running…",
     execBtn: "Run",
     readonlyNote: "Read-only · content sanitized (paths/secrets/URL userinfo filtered)",
+    searchPlaceholder: "Search runbooks (name / title / summary / triggers)…",
+    searchEmpty: 'No runbooks match "{{query}}"',
     thName: "Name",
     thSteps: "Steps",
     thUpdated: "Updated",
@@ -398,6 +401,8 @@ const en = {
     cardViewAria: "Card view",
     listViewAria: "List view",
     searchPlaceholder: "Search name / type / env",
+    searchMatched: "{{matched}} / {{total}} entities matched",
+    searchEmpty: 'No entities match "{{query}}"',
     clusterLabel: "Cluster",
     allClusters: "All",
     nodeCluster: "🖥️ Cluster {{name}}",
@@ -573,6 +578,25 @@ const en = {
     approvalBadScope: "scope must be once/session/permanent",
     approvalScopeSession: "This approval does not support the session scope (the prod change confirmation gate only allows once)",
     approvalScopePermanent: "This approval does not support the permanent scope",
+  },
+
+  // task27 PART A: raw YAML editor drawer
+  yamlEditor: {
+    drawerAria: "Edit YAML source of {{name}}",
+    maskCloseAria: "Click the overlay to close the editor",
+    closeAria: "Close editor",
+    editorAria: "YAML editor area",
+    editAria: "Edit YAML source",
+    loading: "Loading source…",
+    save: "Save",
+    cancel: "Cancel",
+    closeConfirm: "Discard unsaved changes and close?",
+    dirtyHint: "Unsaved changes",
+    validationFailed: "Validation failed — nothing was saved (errors annotated by line)",
+    lineRef: "L{{line}}",
+    savedWithWarnings:
+      "Saved, but the auto-execution authorization is now invalidated — this runbook needs re-approval before it can run unattended again",
+    loadFailedPrefix: "Failed to load YAML: ",
   },
 };
 
