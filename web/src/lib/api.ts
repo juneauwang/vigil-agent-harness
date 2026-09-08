@@ -684,6 +684,18 @@ export interface MonitoringConfigResponse {
   error?: { code?: string; message?: string };
 }
 
+/** task31 PART A：单目标连通性探测结果。 */
+export interface MonitoringValidateTarget {
+  ok: boolean;
+  latency_ms?: number | null;
+  error?: string | null;
+}
+
+export interface MonitoringValidateResponse {
+  ok: boolean;
+  results: { endpoint?: MonitoringValidateTarget; alertmanager?: MonitoringValidateTarget };
+}
+
 export interface MonitoringHealthResponse {
   ok?: boolean;
   data?: {
@@ -915,6 +927,13 @@ export const api = {
   saveMonitoringConfig: (cfg: { endpoint?: string; alertmanager?: string }) =>
     fetchJSON<MonitoringConfigResponse>("/api/monitoring/config", {
       method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    }),
+  // task31 PART A：端点连通性校验（纯探测不写配置；给出什么验什么）
+  validateMonitoring: (cfg: { endpoint?: string; alertmanager?: string }) =>
+    fetchJSON<MonitoringValidateResponse>("/api/monitoring/validate", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(cfg),
     }),

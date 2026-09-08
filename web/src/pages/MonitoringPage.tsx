@@ -2,13 +2,15 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
-import { Activity, AlertTriangle, Loader2, Play, RefreshCw, Search, Server, Settings, X } from "lucide-react";
+import { Activity, AlertTriangle, Loader2, Play, PlugZap, RefreshCw, Search, Server, Settings, X } from "lucide-react";
 import { ApiError, api } from "@/lib/api";
 import type {
   AlertDisposition,
   MonitoringAlert,
   MonitoringHealthService,
   MonitoringSeries,
+  MonitoringValidateResponse,
+  MonitoringValidateTarget,
 } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
 import { cn, isAlertmanagerUnconfiguredError, isPrometheusUnavailableError } from "@/lib/ops";
@@ -248,12 +250,18 @@ export default function MonitoringPage() {
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<string | null>(null);
   const [settingsErr, setSettingsErr] = useState<string | null>(null);
+  // task31 PART A：连接测试（当前表单值发给 /validate，纯探测不保存）
+  const [validateBusy, setValidateBusy] = useState(false);
+  const [validateResult, setValidateResult] = useState<MonitoringValidateResponse["results"] | null>(null);
+  const [validateErr, setValidateErr] = useState<string | null>(null);
 
   const openSettings = useCallback(async () => {
     setSettingsOpen((v) => {
       if (v) return v; // already open — keep drafts as-is
       setSettingsErr(null);
       setSettingsMsg(null);
+      setValidateResult(null);
+      setValidateErr(null);
       void api
         .getMonitoringConfig()
         .then((resp) => {
@@ -291,6 +299,29 @@ export default function MonitoringPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [endpointDraft, alertmanagerDraft, t],
   );
+
+  // task31 PART A：连接测试——当前表单值（含未保存草稿）发给 /validate，
+  // 纯探测不保存；结果逐目标内联显示（✓ 延迟 / ✗ 错误），由用户决定是否保存。
+  const testConnection = useCallback(async () => {
+    const endpoint = endpointDraft.trim();
+    const alertmanager = alertmanagerDraft.trim();
+    if (validateBusy) return;
+    setValidateBusy(true);
+    setValidateErr(null);
+    setValidateResult(null);
+    try {
+      const resp = await api.validateMonitoring({
+        ...(endpoint ? { endpoint } : {}),
+        ...(alertmanager ? { alertmanager } : {}),
+      });
+      setValidateResult(resp.results ?? {});
+    } catch (err) {
+      setValidateErr(errText(err));
+    } finally {
+      setValidateBusy(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endpointDraft, alertmanagerDraft, validateBusy, t, errText]);
 
   const loadHealth = useCallback((refresh: boolean) => {
     api
@@ -491,6 +522,40 @@ export default function MonitoringPage() {
                 ) : settingsMsg ? (
                   <div className="text-[var(--vigil-ok)]">{settingsMsg}</div>
                 ) : null}
+                {/* task31 PART A：连接测试结果（逐目标 ✓/✗ + 延迟/错误） */}
+                {validateErr ? (
+                  <div className="text-[var(--vigil-error)]">{validateErr}</div>
+                ) : validateResult ? (
+                  <div className="space-y-1" data-testid="monitoring-validate-results">
+                    {(["endpoint", "alertmanager"] as const).map((key) => {
+                      const res: MonitoringValidateTarget | undefined = validateResult[key];
+                      if (!res) return null;
+                      return (
+                        <div key={key} className="flex items-center gap-1.5">
+                          {res.ok ? (
+                            <span className="text-[var(--vigil-ok)]">✓</span>
+                          ) : (
+                            <span className="text-[var(--vigil-error)]">✗</span>
+                          )}
+                          <span className="text-[var(--vigil-muted)]">
+                            {key === "endpoint"
+                              ? t("monitoring.settingsEndpoint")
+                              : t("monitoring.settingsAlertmanager")}
+                          </span>
+                          {res.ok ? (
+                            <span className="text-[var(--vigil-ok)]">
+                              {t("monitoring.settingsValidateOk", { latency: res.latency_ms ?? 0 })}
+                            </span>
+                          ) : (
+                            <span className="min-w-0 flex-1 truncate text-[var(--vigil-error)]" title={res.error ?? ""}>
+                              {res.error}
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
                 <div className="flex items-center gap-2">
                   <button
                     type="submit"
@@ -501,6 +566,21 @@ export default function MonitoringPage() {
                       <Loader2 className="size-3 animate-spin" />
                     ) : null}
                     {t("monitoring.settingsSave")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void testConnection()}
+                    disabled={validateBusy || (!endpointDraft.trim() && !alertmanagerDraft.trim())}
+                    data-testid="monitoring-test-connection"
+                    title={t("monitoring.settingsTestBtn")}
+                    className="vigil-btn inline-flex h-7 items-center gap-1 rounded border border-[var(--vigil-border)] px-2 text-[11px] disabled:opacity-50"
+                  >
+                    {validateBusy ? (
+                      <Loader2 className="size-3 animate-spin" />
+                    ) : (
+                      <PlugZap className="size-3" />
+                    )}
+                    {validateBusy ? t("monitoring.settingsTestTesting") : t("monitoring.settingsTestBtn")}
                   </button>
                   <button
                     type="button"

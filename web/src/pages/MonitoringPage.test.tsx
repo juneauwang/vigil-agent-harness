@@ -18,6 +18,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       runRunbook: vi.fn(),
       getMonitoringConfig: vi.fn(),
       saveMonitoringConfig: vi.fn(),
+      validateMonitoring: vi.fn(),
     },
   };
 });
@@ -503,5 +504,103 @@ describe("MonitoringPage PromQL 输入图标净空（task27 PART C）", () => {
       expect(input.className).toContain("vigil-input");
       expect(input.className).not.toContain("vigil-input-icon");
     }
+  });
+});
+
+// ── task31 PART A: 设置面板连接测试按钮 ──
+describe("MonitoringPage 连接测试（task31 PART A）", () => {
+  async function openSettings() {
+    vi.mocked(api.getMonitoringHealth).mockResolvedValue(HEALTH as never);
+    vi.mocked(api.getMonitoringAlertsTriage).mockResolvedValue(ALERTS as never);
+    vi.mocked(api.getMonitoringConfig).mockResolvedValue({
+      ok: true,
+      data: { endpoint: "http://127.0.0.1:9090", alertmanager: "http://127.0.0.1:9093" },
+    } as never);
+    const { container } = await renderPage();
+    const btn = [...container.querySelectorAll("button")].find(
+      (b) => b.textContent?.includes("设置"),
+    ) as HTMLButtonElement;
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    return container;
+  }
+
+  function clickTest(container: HTMLElement) {
+    const testBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="monitoring-test-connection"]',
+    )!;
+    expect(testBtn).toBeTruthy();
+    act(() => testBtn.click());
+  }
+
+  it("测试按钮把当前表单值发给 /validate 并渲染逐目标 ✓ + 延迟", async () => {
+    vi.mocked(api.validateMonitoring).mockResolvedValue({
+      ok: true,
+      results: {
+        endpoint: { ok: true, latency_ms: 12.3, error: null },
+        alertmanager: { ok: true, latency_ms: 8.1, error: null },
+      },
+    } as never);
+    const container = await openSettings();
+    clickTest(container);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(api.validateMonitoring).toHaveBeenCalledWith({
+      endpoint: "http://127.0.0.1:9090",
+      alertmanager: "http://127.0.0.1:9093",
+    });
+    const results = container.querySelector('[data-testid="monitoring-validate-results"]');
+    expect(results).toBeTruthy();
+    expect(results!.textContent).toContain("连通（12.3 ms）");
+    expect(results!.textContent).toContain("连通（8.1 ms）");
+    expect(results!.textContent).toContain("✓");
+  });
+
+  it("失败目标渲染 ✗ + 错误信息", async () => {
+    vi.mocked(api.validateMonitoring).mockResolvedValue({
+      ok: true,
+      results: {
+        endpoint: { ok: false, latency_ms: 5, error: "HTTP 401" },
+      },
+    } as never);
+    const container = await openSettings();
+    clickTest(container);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const results = container.querySelector('[data-testid="monitoring-validate-results"]');
+    expect(results!.textContent).toContain("✗");
+    expect(results!.textContent).toContain("HTTP 401");
+    expect(results!.textContent).not.toContain("✓");
+  });
+
+  it("探测进行中按钮禁用（loading 态）", async () => {
+    let resolveProbe: (v: unknown) => void = () => {};
+    vi.mocked(api.validateMonitoring).mockReturnValue(
+      new Promise((resolve) => { resolveProbe = resolve; }) as never,
+    );
+    const container = await openSettings();
+    clickTest(container);
+    await act(async () => {});
+    const testBtn = container.querySelector<HTMLButtonElement>(
+      '[data-testid="monitoring-test-connection"]',
+    )!;
+    expect(testBtn.disabled).toBe(true);
+    expect(testBtn.textContent).toContain("探测中…");
+    await act(async () => {
+      resolveProbe({ ok: true, results: {} });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    // 探测结束后恢复可用（草稿非空）
+    expect(container.querySelector<HTMLButtonElement>(
+      '[data-testid="monitoring-test-connection"]',
+    )!.disabled).toBe(false);
   });
 });

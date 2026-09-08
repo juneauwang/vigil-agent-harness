@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router";
 import ChatPage from "./ChatPage";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { ChatSessionSummary, ChatHistoryMessage } from "@/lib/api";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -182,14 +182,15 @@ async function sendMessage(text: string) {
 }
 
 describe("批四十一 §7 切走再切回 busy 指示恢复", () => {
-  it("切回后 busy 会话显示处理中并禁用输入", async () => {
+  it("切回后 busy 会话显示处理中指示；输入保持可用（task31 PART C type-to-interrupt），placeholder 提示将中断", async () => {
     await mountWith([SESSION_A, SESSION_B], "A");
-    // 初始 activeId = A（busy）→ 输入禁用 + 处理中指示
+    // 初始 activeId = A（busy）→ 输入可用 + 处理中指示 + 中断提示 placeholder
     const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
-    expect(input.disabled).toBe(true);
+    expect(input.disabled).toBe(false);
+    expect(input.placeholder).toBe("输入将中断当前任务");
     expect(container.textContent).toContain("agent 处理中");
 
-    // 切到 B（空闲）→ 输入可用
+    // 切到 B（空闲）→ 输入可用，placeholder 恢复常规
     const sel = sessionSelect();
     switchTo(sel, "B");
     await act(async () => {
@@ -197,6 +198,7 @@ describe("批四十一 §7 切走再切回 busy 指示恢复", () => {
     });
     const inputB = container.querySelector<HTMLInputElement>("input[placeholder]")!;
     expect(inputB.disabled).toBe(false);
+    expect(inputB.placeholder).not.toBe("输入将中断当前任务");
 
     // 切回 A（仍 busy）→ 指示恢复
     switchTo(sel, "A");
@@ -204,7 +206,9 @@ describe("批四十一 §7 切走再切回 busy 指示恢复", () => {
       await vi.advanceTimersByTimeAsync(0);
     });
     const inputA = container.querySelector<HTMLInputElement>("input[placeholder]")!;
-    expect(inputA.disabled).toBe(true);
+    // task31 PART C：busy 不再禁输入，但中断提示与 busy 指示恢复
+    expect(inputA.disabled).toBe(false);
+    expect(inputA.placeholder).toBe("输入将中断当前任务");
     expect(container.textContent).toContain("agent 处理中");
     expect(container.textContent).toContain("正在处理中");
   });
@@ -214,7 +218,9 @@ describe("批四十一 §23 停止后 busy 校验清理", () => {
   it("点停止 → 本地已停止 → 轮询确认 busy 翻转 → 输入恢复", async () => {
     await mountWith([SESSION_A], "A");
     const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
-    expect(input.disabled).toBe(true);
+    // task31 PART C：busy 下输入本就可用；恢复信号 = placeholder 离开中断提示
+    expect(input.disabled).toBe(false);
+    expect(input.placeholder).toBe("输入将中断当前任务");
 
     const stopBtn = container.querySelector<HTMLButtonElement>('button[aria-label="停止"]')!;
     expect(stopBtn).toBeTruthy();
@@ -238,9 +244,10 @@ describe("批四十一 §23 停止后 busy 校验清理", () => {
 
     expect(apiMock.interruptChatSession).toHaveBeenCalledWith("A");
     expect(apiMock.getChatHistory).toHaveBeenCalledWith("A");
-    // 输入恢复可用 + 无残留 busy 警告
+    // 输入恢复常规 placeholder + 无残留 busy 警告
     const input2 = container.querySelector<HTMLInputElement>("input[placeholder]")!;
     expect(input2.disabled).toBe(false);
+    expect(input2.placeholder).not.toBe("输入将中断当前任务");
     expect(container.textContent).not.toContain("仍显示忙碌");
   });
 
@@ -737,5 +744,142 @@ describe("ChatPage ?prompt= prefill (task19 F2)", () => {
     );
     expect(inputs.some((i) => i.value === "busy case prompt")).toBe(false);
     expect(search).toBe("/chat");
+  });
+});
+
+// ── task31 PART B：长回合停止可靠性（根因：渲染谓词 local‖registry vs 守卫只看 local）──
+describe("ChatPage 停止可靠性（task31 PART B）", () => {
+  it("长回合：poll 用 busy:false 重建本槽后（desync），停止按钮仍真正发出中断", async () => {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    expect(apiMock.interruptChatSession).not.toHaveBeenCalled();
+
+    // poll tick（1s）：busy 分支用 stateFromHistory(…, false) 重建本槽 →
+    // 本槽 busy 变 false，busyMap 保持 true（OPS-DELTA #107 的刻意设计）。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+
+    // desync 生效：本槽不再 disabled，但停止按钮仍在（effective busy）。
+    const stopBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "停止",
+    )!;
+    expect(stopBtn).toBeTruthy();
+
+    await act(async () => {
+      stopBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // 修复前：守卫只看本槽 busy → 点击被静默吞掉（interrupt 不发）。
+    expect(apiMock.interruptChatSession).toHaveBeenCalledTimes(1);
+    expect(apiMock.interruptChatSession).toHaveBeenCalledWith("A");
+    // 本地立即复位：出现"已停止"标记行，输入恢复可用。
+    expect(container.textContent).toContain("已停止");
+  });
+
+  it("interrupt 请求失败 → 重试一次；仍失败 → 错误上屏 + 本地强制复位（无需刷新）", async () => {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    apiMock.interruptChatSession.mockRejectedValue(
+      new ApiError("internal", "upstream exploded", 500),
+    );
+    const stopBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "停止",
+    )!;
+    await act(async () => {
+      stopBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // 第一次失败 → 800ms 后重试
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(apiMock.interruptChatSession).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    // 错误上屏（不静默）；本地照样复位（已停止标记 + 输入不再锁死）
+    expect(container.textContent).toContain("停止请求未送达");
+    expect(container.textContent).toContain("已停止");
+  });
+
+  it("interrupt 409 not_busy（会话已收敛）→ 视为成功：不重试、不报错，本地复位", async () => {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    apiMock.interruptChatSession.mockRejectedValue(
+      new ApiError("not_busy", "会话当前没有进行中的操作", 409),
+    );
+    const stopBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "停止",
+    )!;
+    await act(async () => {
+      stopBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(apiMock.interruptChatSession).toHaveBeenCalledTimes(1); // 409 不重试
+    expect(container.textContent).not.toContain("停止请求未送达");
+    expect(container.textContent).toContain("已停止");
+  });
+});
+
+// ── task31 PART C：type-to-interrupt（busy 提交 = 打断 + 同会话续发）──
+describe("ChatPage type-to-interrupt（task31 PART C）", () => {
+  async function mountBusy() {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    expect(input.disabled).toBe(false); // busy 不再禁输入
+    return input;
+  }
+
+  it("busy 提交 → 走共享取消路径打断 + 同会话立即发新消息，草稿清空", async () => {
+    const input = await mountBusy();
+    await sendMessage("新指令，打断一下");
+    // 共享取消路径：中断发到同一会话
+    expect(apiMock.interruptChatSession).toHaveBeenCalledWith("A");
+    // 新消息作为同一会话的下一 turn 立即发出
+    expect(apiMock.chatStream).toHaveBeenCalledWith(
+      "A",
+      "新指令，打断一下",
+      expect.any(Function),
+      expect.anything(),
+    );
+    // 草稿清空 + 用户消息进时间线
+    expect(input.value).toBe("");
+    expect(container.textContent).toContain("新指令，打断一下");
+    expect(container.textContent).toContain("已停止"); // 被打断回合带中断标记
+  });
+
+  it("打断收尾竞态：首个 chatStream 409 busy → 就地重试成功，消息不丢", async () => {
+    await mountBusy();
+    apiMock.chatStream
+      .mockRejectedValueOnce(new ApiError("busy", "会话正在处理", 409))
+      .mockResolvedValueOnce(undefined);
+    await sendMessage("竞态消息");
+    // 409 → drain 等 1s 就地重试（fake timers 推进）
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+    const calls = apiMock.chatStream.mock.calls.filter(
+      (c) => c[1] === "竞态消息",
+    );
+    expect(calls.length).toBe(2); // 首发失败 + 重试成功
+    expect(container.textContent).not.toContain("已放回输入框");
+  });
+
+  it("空闲会话提交不走中断路径（行为不变）", async () => {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    const sel = sessionSelect();
+    switchTo(sel, "B");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await sendMessage("正常提问");
+    expect(apiMock.interruptChatSession).not.toHaveBeenCalled();
+    expect(apiMock.chatStream).toHaveBeenCalledWith(
+      "B",
+      "正常提问",
+      expect.any(Function),
+      expect.anything(),
+    );
   });
 });

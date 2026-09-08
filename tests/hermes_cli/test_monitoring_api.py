@@ -595,3 +595,108 @@ steps:
     assert disp["matched"] is True
     assert disp["matched_by"] == "trigger"
     assert disp["matched_keyword"] == "playbook=harbor-restart"
+
+
+# ---------------------------------------------------------------------------
+# task31 PART A：POST /api/monitoring/validate（连接测试，纯探测不写配置）
+# ---------------------------------------------------------------------------
+
+def test_validate_requires_token(env_home, client):
+    client.headers.pop(web_server._SESSION_HEADER_NAME, None)
+    resp = client.post(
+        "/api/monitoring/validate",
+        json={"endpoint": "http://127.0.0.1:9090"},
+    )
+    assert resp.status_code == 401
+
+
+def test_validate_both_empty_400(env_home, client):
+    resp = client.post("/api/monitoring/validate", json={"endpoint": "", "alertmanager": ""})
+    assert resp.status_code == 400
+
+
+def test_validate_malformed_url_422(env_home, client):
+    """URL 形态门与 config PUT 同款文案，状态 422；不触发任何探测。"""
+    called = []
+    import tools.prom_tools as pt
+    monkeypatch_used = False
+    resp = client.post("/api/monitoring/validate", json={"endpoint": "ftp://nope"})
+    assert resp.status_code == 422
+    assert resp.json()["error"]["code"] == "invalid_url"
+    assert "http(s)://" in resp.json()["error"]["message"]
+    assert not called and not monkeypatch_used
+
+
+def test_validate_ok_results_mirror_probe(env_home, client, monkeypatch):
+    """合法 URL → 探测 helper（prom_tools._http_get）被调用、ok+延迟镜像回传；
+    探测目标是各上游的 /-/healthy。"""
+    import tools.prom_tools as pt
+
+    seen_urls = []
+
+    def fake_get(url, params, auth):
+        seen_urls.append(url)
+        return _fake_resp(200, text="ok")
+
+    monkeypatch.setattr(pt, "_http_get", fake_get)
+    resp = client.post(
+        "/api/monitoring/validate",
+        json={"endpoint": "http://127.0.0.1:9090/",
+              "alertmanager": "http://127.0.0.1:9093"},
+    )
+    assert resp.status_code == 200
+    results = resp.json()["results"]
+    assert results["endpoint"]["ok"] is True
+    assert isinstance(results["endpoint"]["latency_ms"], (int, float))
+    assert results["endpoint"]["error"] is None
+    assert results["alertmanager"]["ok"] is True
+    assert sorted(seen_urls) == [
+        "http://127.0.0.1:9090/-/healthy",
+        "http://127.0.0.1:9093/-/healthy",
+    ]
+
+
+def test_validate_unreachable_target_reports_error(env_home, client, monkeypatch):
+    """探测失败（连接拒绝/超时）→ ok:false + 错误信息，不 500。"""
+    import httpx
+    import tools.prom_tools as pt
+
+    def fail_get(url, params, auth):
+        raise httpx.ConnectError("connection refused")
+
+    monkeypatch.setattr(pt, "_http_get", fail_get)
+    resp = client.post(
+        "/api/monitoring/validate", json={"endpoint": "http://127.0.0.1:9090"})
+    assert resp.status_code == 200
+    result = resp.json()["results"]["endpoint"]
+    assert result["ok"] is False
+    assert result["error"]
+
+
+def test_validate_http_error_status_reports_error(env_home, client, monkeypatch):
+    """上游返回非 200（如 401 认证失败）→ ok:false + HTTP 状态码错误。"""
+    import tools.prom_tools as pt
+    monkeypatch.setattr(pt, "_http_get",
+                        lambda url, params, auth: _fake_resp(401, text="unauth"))
+    resp = client.post(
+        "/api/monitoring/validate", json={"endpoint": "http://127.0.0.1:9090"})
+    result = resp.json()["results"]["endpoint"]
+    assert result["ok"] is False
+    assert result["error"] == "HTTP 401"
+
+
+def test_validate_partial_body_only_validates_given(env_home, client, monkeypatch):
+    """(部分 body) 只给 endpoint → 只探测 endpoint，alertmanager 不出现在结果。"""
+    import tools.prom_tools as pt
+    seen = []
+
+    def fake_get(url, params, auth):
+        seen.append(url)
+        return _fake_resp(200, text="ok")
+
+    monkeypatch.setattr(pt, "_http_get", fake_get)
+    resp = client.post("/api/monitoring/validate",
+                       json={"endpoint": "http://127.0.0.1:9090"})
+    results = resp.json()["results"]
+    assert list(results.keys()) == ["endpoint"]
+    assert len(seen) == 1
