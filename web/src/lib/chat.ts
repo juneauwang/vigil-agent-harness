@@ -58,7 +58,9 @@ export interface ChatToolEvent {
   reasoning: string;
 }
 
-export type ChatApprovalStatus = "pending" | "approved" | "denied" | "error";
+// task32 PART A：timed_out 终态——后端审批会话到点终止后，前端把到点未决卡
+// 收敛为该状态（浮层按 status==="pending" 过滤，随即放行；卡片留在消息流）。
+export type ChatApprovalStatus = "pending" | "approved" | "denied" | "error" | "timed_out";
 
 export interface ChatApprovalCard {
   approvalId: string;
@@ -129,6 +131,34 @@ export function clarifyIsTimedOut(
   const deadline = Date.parse(card.timeoutAt);
   if (Number.isNaN(deadline)) return false;
   return now >= deadline;
+}
+
+/** task32 PART A：到点未决的审批卡收敛为 timed_out 终态——浮层/待决区（按
+ * status==="pending" 过滤）随即放行，卡片留在消息流里随历史滚动（不钉底）。
+ * 幂等：没有到点卡时返回原引用，调用方可安全周期性运行。 */
+export function markExpiredApprovals(state: ChatTurnState): ChatTurnState {
+  let changed = false;
+  const messages = state.messages.map((m) => {
+    const expired = new Set(
+      (m.approvals ?? [])
+        .filter((a) => approvalIsTimedOut(a))
+        .map((a) => a.approvalId),
+    );
+    if (expired.size === 0) return m;
+    changed = true;
+    return {
+      ...m,
+      approvals: (m.approvals ?? []).map((a) =>
+        expired.has(a.approvalId) ? { ...a, status: "timed_out" as const } : a,
+      ),
+      steps: (m.steps ?? []).map((st) =>
+        st.kind === "approval" && expired.has(String(st.ref)) && st.status === "pending"
+          ? { ...st, status: "timed_out" as const }
+          : st,
+      ),
+    };
+  });
+  return changed ? { ...state, messages } : state;
 }
 
 export function createChatState(): ChatTurnState {

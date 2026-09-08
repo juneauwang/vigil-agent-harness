@@ -7,6 +7,7 @@ import {
   clarifyIsTimedOut,
   createChatState,
   markApprovalResolved,
+  markExpiredApprovals,
   markApprovalResolvedInSessions,
   markClarifyResolved,
   markTurnInterrupted,
@@ -448,5 +449,41 @@ describe("批四十二 §BH 跨会话审批裁决回写", () => {
     const states = { A: stateA };
     const next = markApprovalResolvedInSessions(states, "nope", "approved");
     expect(next).toBe(states);
+  });
+});
+
+// ── task32 PART A：到点审批卡收敛（浮层放行 + 终态标记）──
+describe("markExpiredApprovals", () => {
+  const past = new Date(Date.now() - 60_000).toISOString();
+
+  it("到点未决卡收敛为 timed_out（卡 + step 同步），未到点/已决卡不动", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:approval_pending", {
+      approval_id: "apv_old", command: "rm -rf x", env: "test", timeout_at: past,
+    }));
+    s = applyChatEvent(s, ev("chat:approval_pending", {
+      approval_id: "apv_live", command: "kubectl get pods", env: "test",
+      timeout_at: new Date(Date.now() + 600_000).toISOString(),
+    }));
+
+    const swept = markExpiredApprovals(s);
+    const old = swept.messages.flatMap((m) => m.approvals).find((a) => a.approvalId === "apv_old");
+    const live = swept.messages.flatMap((m) => m.approvals).find((a) => a.approvalId === "apv_live");
+    expect(old!.status).toBe("timed_out");
+    expect(live!.status).toBe("pending");
+    const stepOld = swept.messages.flatMap((m) => m.steps).find(
+      (st) => st.kind === "approval" && String(st.ref) === "apv_old",
+    );
+    expect(stepOld!.status).toBe("timed_out");
+  });
+
+  it("幂等：无到点卡时返回原引用（调用方可安全周期运行）", () => {
+    let s = createChatState();
+    s = applyChatEvent(s, ev("chat:approval_pending", {
+      approval_id: "apv_1", command: "ls", env: "test",
+    }));
+    expect(markExpiredApprovals(s)).toBe(s);
+    const sweptOnce = markExpiredApprovals(s);
+    expect(markExpiredApprovals(sweptOnce)).toBe(sweptOnce);
   });
 });

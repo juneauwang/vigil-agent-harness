@@ -28,6 +28,7 @@ import { api, ApiError } from "@/lib/api";
 import type { ChatContextUsage, ChatModelOption, ChatSessionSummary, ChatUsageResponse, UsageAnalyticsResponse } from "@/lib/api";
 import {
   approvalIsTimedOut,
+  markExpiredApprovals,
   applyChatEvent,
   chatInputDisabled,
   clarifyIsTimedOut,
@@ -241,18 +242,18 @@ function ApprovalCard({
         "flex flex-col gap-1.5 rounded-md border px-3 py-2 text-xs",
         card.status === "approved"
           ? "border-emerald-500/50 bg-emerald-500/10"
-          : card.status === "denied"
+          : card.status === "denied" || card.status === "timed_out"
             ? "border-red-500/50 bg-red-500/10"
             : "border-amber-500/50 bg-amber-500/10",
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <ShieldAlert className={cn("size-4 shrink-0", card.status === "approved" ? "text-emerald-500" : card.status === "denied" ? "text-red-500" : "text-amber-500")} />
+        <ShieldAlert className={cn("size-4 shrink-0", card.status === "approved" ? "text-emerald-500" : card.status === "denied" || card.status === "timed_out" ? "text-red-500" : "text-amber-500")} />
         <span className="font-medium">{t("chat.needsApproval")}</span>
         {card.grade && <span className="rounded bg-amber-500/15 px-1.5 py-px text-[10px] text-amber-600 dark:text-amber-400">L{card.grade}</span>}
         {card.env && <span className="text-[var(--vigil-muted)]">{card.env}</span>}
         <span className="ml-auto shrink-0 text-[10px]">
-          {card.status === "pending" && timedOut ? (
+          {(card.status === "pending" && timedOut) || card.status === "timed_out" ? (
             <span className="text-red-500">{t("chat.approvalTimedOut")}</span>
           ) : card.status === "approved" ? (
             <span className="text-emerald-500">{t("chat.approved")}</span>
@@ -1344,6 +1345,15 @@ export default function ChatPage() {
     async (card: ChatApprovalCard, status: "approved" | "denied") => {
       const sid = activeId;
       if (!sid) return;
+      // task32 PART A：死审批点击的客户端拒绝——已到点的审批后端已终结，
+      // 不发 API（避免 404/409 静默失败），卡片直接收敛为 timed_out 终态。
+      if (approvalIsTimedOut(card)) {
+        setStates((prev) => ({
+          ...prev,
+          [sid]: markApprovalResolved(prev[sid] ?? createChatState(), card.approvalId, "timed_out"),
+        }));
+        return;
+      }
       setStates((prev) => ({
         ...prev,
         [sid]: markApprovalResolved(prev[sid] ?? createChatState(), card.approvalId, status === "approved" ? "approved" : "denied"),
@@ -1487,6 +1497,25 @@ export default function ChatPage() {
     clearPromptParam();
   }, [activeId, busyAction, activeBusy, activeState, searchParams, setSearchParams]);
 
+  // task32 PART A：周期收敛到点未决的审批卡为 timed_out 终态（幂等：无变化
+  // 返回原引用，不触发重渲染）——浮层随即放行，卡片留在消息流随历史滚动。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setStates((prev) => {
+        // 全会话槽扫一遍：到点审批在任何槽里都是陈旧物。无变化返回原引用。
+        let changed = false;
+        const next: Record<string, ChatTurnState> = {};
+        for (const [sid, st] of Object.entries(prev)) {
+          const swept = markExpiredApprovals(st);
+          if (swept !== st) changed = true;
+          next[sid] = swept;
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const lastMsg = activeState.messages[activeState.messages.length - 1];
   // Stop already clicked (last item is the local "stopped" row): hide the stop button so an inert button doesn't mislead.
   const stopIssued = Boolean(lastMsg?.interrupted);
@@ -1496,9 +1525,11 @@ export default function ChatPage() {
   // above the viewport while the agent's latest output grows at the bottom — the
   // card looked "pinned to an old position". Resolving updates both copies via the
   // shared state (steps list keeps its slot; the floating copy disappears).
+  // task32 PART A：到点未决的审批卡不再进浮层（timed_out 终态由下方 sweep
+  // 收敛；这里再排除一次 expired，覆盖两次 tick 之间的窗口）。
   const pendingApprovals = activeState.messages
     .flatMap((m) => m.approvals ?? [])
-    .filter((c) => c.status === "pending");
+    .filter((c) => c.status === "pending" && !approvalIsTimedOut(c));
   const pendingClarifies = activeState.messages
     .flatMap((m) => m.clarifies ?? [])
     .filter((c) => c.status === "pending");

@@ -883,3 +883,38 @@ describe("ChatPage type-to-interrupt（task31 PART C）", () => {
     );
   });
 });
+
+// ── task32 PART A：审批到点后卡片离开底部浮层（不钉死），终态留在消息流 ──
+describe("审批超时卡片收敛（task32 PART A）", () => {
+  it("到点未决卡：浮层消失 + 消息流内显示已超时终态（无批准按钮）", async () => {
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    const pastTimeout = new Date(Date.now() - 60_000).toISOString();
+    apiMock.chatStream.mockImplementation(async (_sid, _msg, onEvent) => {
+      onEvent({ type: "chat:tool", data: { tool_id: "call_1", name: "terminal", input_summary: "kubectl delete pod x" } });
+      onEvent({
+        type: "chat:approval_pending",
+        data: { approval_id: "apv_t", command: "kubectl delete pod x", env: "prod", timeout_at: pastTimeout },
+      });
+      // no chat:done — 后端审批到点终止，turn 尚未收尾的窗口内卡片应离开浮层
+    });
+    await sendMessage("删除 pod");
+
+    // sweep tick（1s）跑完：卡片收敛为 timed_out
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+
+    // 浮层放行（不再钉在底部）
+    expect(container.querySelector('[data-testid="pending-cards-float"]')).toBeNull();
+    // 消息流内的卡片保留历史事实：已超时终态 + 无批准/拒绝按钮（死审批不可点）
+    expect(container.textContent).toContain("审批超时，已终止");
+    const cards = [...container.querySelectorAll("div")].filter((d) =>
+      d.textContent?.includes("kubectl delete pod x"),
+    );
+    const cardRoot = cards[cards.length - 1]!;
+    expect([...cardRoot.querySelectorAll("button")].some((b) => b.textContent?.includes("批准"))).toBe(false);
+    expect([...cardRoot.querySelectorAll("button")].some((b) => b.textContent?.includes("拒绝"))).toBe(false);
+    // 没有向 API 发过死审批请求（客户端拒绝）
+    expect(apiMock.approveApproval).not.toHaveBeenCalled();
+  });
+});
