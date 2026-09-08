@@ -1217,33 +1217,65 @@ export default function ChatPage() {
     [activeId, draft, refreshSessions, states, activeBusy],
   );
 
+  // task31 PART B/C：共享取消路径——stop 按钮与"输入即中断"都走这里，绝不分叉。
+  // 可靠性守则：interrupt 请求失败重试一次（409 not_busy/agent_not_ready 视为
+  // 已收敛 = 会话本就没在跑）；仍失败也照样 abort SSE + 本地强制复位 +
+  // verifyBusyCleared 注册表轮询兜底——页面绝不要求手动刷新才能拿回控制权。
+  const interruptActiveTurn = useCallback(
+    async (sid: string) => {
+      const tryOnce = async (): Promise<string | null> => {
+        try {
+          await api.interruptChatSession(sid);
+          return null;
+        } catch (err) {
+          // 409 not_busy / agent_not_ready = 会话已不忙（重复中断/竞态收敛）——非失败。
+          if (err instanceof ApiError && (err.code === "not_busy" || err.code === "agent_not_ready")) {
+            return null;
+          }
+          return err instanceof ApiError
+            ? `[${err.code}] ${err.message}`
+            : err instanceof Error
+              ? err.message
+              : String(err);
+        }
+      };
+      let failure = await tryOnce();
+      if (failure !== null) {
+        // 重试一次（长回合下 SSE/代理抖动的偶发失败）。
+        await new Promise((r) => setTimeout(r, 800));
+        failure = await tryOnce();
+      }
+      if (failure !== null) {
+        setError(t("chat.stopNotDelivered", { msg: failure }));
+      }
+      abortRefs.current[sid]?.abort();
+      setStates((prev) => ({
+        ...prev,
+        [sid]: markTurnInterrupted(prev[sid] ?? createChatState()),
+      }));
+      void refreshSessions();
+      // Batch 41 §23: local busy cleared; an independent verification loop checks the registry flip.
+      void verifyBusyCleared(sid, setStates, setStopWarning, setBusyMap);
+    },
+    [refreshSessions, t],
+  );
+
   const stopTurn = useCallback(async () => {
     const sid = activeId;
     const st = (sid && states[sid]) || createChatState();
-    if (!sid || !chatInputDisabled(st) || stopping) return;
+    const registryBusy = Boolean(sid && busyMap[sid]);
+    // task31 PART B 根因修复：StopButton 的渲染条件是 effective busy（本槽
+    // busy OR 注册表快照 busy），但旧守卫只看本槽 busy——长回合里两者失谐
+    // （注册表忙、本槽状态被轮询/恢复路径重建为空闲）时，点击被静默吞掉，
+    // 表现为"停止没反应，刷新才管用"。守卫改成与渲染同一个谓词。
+    if (!sid || stopping) return;
+    if (!chatInputDisabled(st) && !registryBusy) return;
     setStopping(true);
     setError(null);
     setStopWarning(null);
-    try {
-      await api.interruptChatSession(sid);
-    } catch (err) {
-      // Interrupt request failed (network/409 etc.) — surface it without
-      // freezing: still abort the SSE + mark stopped locally; the background
-      // turn is reset via the registry polling fallback.
-      const msg = err instanceof ApiError ? `[${err.code}] ${err.message}` : err instanceof Error ? err.message : String(err);
-      setError(t("chat.stopNotDelivered", { msg }));
-    } finally {
-      setStopping(false);
-    }
-    abortRefs.current[sid]?.abort();
-    setStates((prev) => ({
-      ...prev,
-      [sid]: markTurnInterrupted(prev[sid] ?? createChatState()),
-    }));
-    void refreshSessions();
-    // Batch 41 §23: local busy cleared; an independent verification loop checks the registry flip.
-    void verifyBusyCleared(sid, setStates, setStopWarning, setBusyMap);
-  }, [activeId, refreshSessions, states, stopping, t]);
+    await interruptActiveTurn(sid);
+    setStopping(false);
+  }, [activeId, states, busyMap, stopping, interruptActiveTurn]);
 
   const resolveApproval = useCallback(
     async (card: ChatApprovalCard, status: "approved" | "denied") => {

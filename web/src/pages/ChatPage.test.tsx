@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { MemoryRouter, useLocation } from "react-router";
 import ChatPage from "./ChatPage";
-import { api } from "@/lib/api";
+import { api, ApiError } from "@/lib/api";
 import type { ChatSessionSummary, ChatHistoryMessage } from "@/lib/api";
 
 vi.mock("@/lib/api", async (importOriginal) => {
@@ -737,5 +737,80 @@ describe("ChatPage ?prompt= prefill (task19 F2)", () => {
     );
     expect(inputs.some((i) => i.value === "busy case prompt")).toBe(false);
     expect(search).toBe("/chat");
+  });
+});
+
+// ── task31 PART B：长回合停止可靠性（根因：渲染谓词 local‖registry vs 守卫只看 local）──
+describe("ChatPage 停止可靠性（task31 PART B）", () => {
+  it("长回合：poll 用 busy:false 重建本槽后（desync），停止按钮仍真正发出中断", async () => {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    expect(apiMock.interruptChatSession).not.toHaveBeenCalled();
+
+    // poll tick（1s）：busy 分支用 stateFromHistory(…, false) 重建本槽 →
+    // 本槽 busy 变 false，busyMap 保持 true（OPS-DELTA #107 的刻意设计）。
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+
+    // desync 生效：本槽不再 disabled，但停止按钮仍在（effective busy）。
+    const stopBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "停止",
+    )!;
+    expect(stopBtn).toBeTruthy();
+
+    await act(async () => {
+      stopBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // 修复前：守卫只看本槽 busy → 点击被静默吞掉（interrupt 不发）。
+    expect(apiMock.interruptChatSession).toHaveBeenCalledTimes(1);
+    expect(apiMock.interruptChatSession).toHaveBeenCalledWith("A");
+    // 本地立即复位：出现"已停止"标记行，输入恢复可用。
+    expect(container.textContent).toContain("已停止");
+  });
+
+  it("interrupt 请求失败 → 重试一次；仍失败 → 错误上屏 + 本地强制复位（无需刷新）", async () => {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    apiMock.interruptChatSession.mockRejectedValue(
+      new ApiError("internal", "upstream exploded", 500),
+    );
+    const stopBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "停止",
+    )!;
+    await act(async () => {
+      stopBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    // 第一次失败 → 800ms 后重试
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(apiMock.interruptChatSession).toHaveBeenCalledTimes(2);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(50);
+    });
+    // 错误上屏（不静默）；本地照样复位（已停止标记 + 输入不再锁死）
+    expect(container.textContent).toContain("停止请求未送达");
+    expect(container.textContent).toContain("已停止");
+  });
+
+  it("interrupt 409 not_busy（会话已收敛）→ 视为成功：不重试、不报错，本地复位", async () => {
+    await mountWith([SESSION_A, SESSION_B], "A");
+    apiMock.interruptChatSession.mockRejectedValue(
+      new ApiError("not_busy", "会话当前没有进行中的操作", 409),
+    );
+    const stopBtn = [...container.querySelectorAll("button")].find(
+      (b) => b.getAttribute("aria-label") === "停止",
+    )!;
+    await act(async () => {
+      stopBtn.click();
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(900);
+    });
+    expect(apiMock.interruptChatSession).toHaveBeenCalledTimes(1); // 409 不重试
+    expect(container.textContent).not.toContain("停止请求未送达");
+    expect(container.textContent).toContain("已停止");
   });
 });
