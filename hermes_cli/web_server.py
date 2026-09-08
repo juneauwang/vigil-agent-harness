@@ -4680,6 +4680,84 @@ async def put_monitoring_config(
     return {"ok": True, "data": updates}
 
 
+@app.post("/api/monitoring/validate")
+async def validate_monitoring_endpoints(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+):
+    """监控端点连通性校验（task31 PART A）——纯探测，不写配置。
+
+    body ``{endpoint?, alertmanager?}``：给出什么验什么（空串/缺省跳过）。
+    探测复用既有客户端路径：prom_tools._http_get + _resolve_basic_auth
+    （认证沿用当前配置的 basic auth，与读取路径一致），Prometheus /
+    Alertmanager 各自的 /-/healthy 上游健康端点，硬超时沿用 prom_tools 的
+    客户端超时（不另造 client）。URL 形态校验与 config PUT 同款文案
+    （422）。响应 ``{ok, results: {endpoint: {ok, latency_ms, error?},
+    alertmanager: {…}}}``。
+    """
+    _require_token(request)
+    import httpx as _httpx
+    from tools import prom_tools as pt
+
+    def _clean(val: object) -> str:
+        return str(val or "").strip().rstrip("/")
+
+    targets: Dict[str, str] = {}
+    if "endpoint" in payload:
+        targets["endpoint"] = _clean(payload.get("endpoint"))
+    if "alertmanager" in payload:
+        targets["alertmanager"] = _clean(payload.get("alertmanager"))
+    if not any(targets.values()):
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request", "endpoint / alertmanager 至少提供一项非空地址"
+            ),
+        )
+    for name, val in targets.items():
+        if val and not val.startswith(("http://", "https://")):
+            return JSONResponse(
+                status_code=422,
+                content=_api_error("invalid_url", f"{name} 需以 http(s):// 开头（或留空）"),
+            )
+
+    def _probe(name: str, base_url: str) -> Dict[str, Any]:
+        start = time.monotonic()
+        try:
+            cfg = pt._prom_config()
+            try:
+                auth = pt._resolve_basic_auth(cfg)
+            except ValueError:
+                auth = None  # 认证配置坏 → 按匿名探测，错误由结果体现
+            resp = pt._http_get(f"{base_url}/-/healthy", {}, auth)
+        except _httpx.TimeoutException:
+            return {"ok": False, "latency_ms": None, "error": "请求超时"}
+        except _httpx.HTTPError as exc:
+            return {
+                "ok": False,
+                "latency_ms": None,
+                "error": str(exc)[:200] or "连接失败",
+            }
+        latency = round((time.monotonic() - start) * 1000.0, 1)
+        if resp.status_code != 200:
+            return {
+                "ok": False,
+                "latency_ms": latency,
+                "error": f"HTTP {resp.status_code}",
+            }
+        return {"ok": True, "latency_ms": latency, "error": None}
+
+    def _run() -> Dict[str, Dict[str, Any]]:
+        return {
+            name: _probe(name, url)
+            for name, url in targets.items()
+            if url
+        }
+
+    results = await run_in_threadpool(_run)
+    return {"ok": True, "results": results}
+
+
 @app.get("/api/monitoring/alerts")
 async def get_monitoring_alerts(request: Request):
     """Alertmanager /api/v2/alerts 活跃告警实时快照（只读）。
