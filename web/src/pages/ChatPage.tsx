@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import i18n from "@/i18n";
@@ -65,6 +65,35 @@ import { cn } from "@/lib/ops";
  * verification (§23); full approval details (§6); busy indicator restored on
  * switching back (§7); per-session model dropdown (§8).
  */
+
+/** task33：输入框多行自适应（1–8 行，超出内部滚动）。零新依赖（ref + scrollHeight）。 */
+const COMPOSER_LINE_PX = 20;
+const COMPOSER_MAX_ROWS = 8;
+
+function useComposerTextarea(value: string) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const max = COMPOSER_MAX_ROWS * COMPOSER_LINE_PX;
+    el.style.height = "auto";
+    // jsdom 的 scrollHeight 恒为 0 → 兜底一行高度（测试只断言行为，不测像素）。
+    const next = Math.min(Math.max(el.scrollHeight, COMPOSER_LINE_PX), max);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+  }, [value]);
+  return ref;
+}
+
+/** Enter 提交 / Shift+Enter 换行；IME 组合输入中（isComposing）按 Enter 不提交。 */
+function composerKeyDown(submit: (e: ReactKeyboardEvent<HTMLTextAreaElement>) => void) {
+  return (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    if (e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    submit(e);
+  };
+}
 
 const STEP_STATUS_CLASS: Record<ChatStepStatus, string> = {
   running: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
@@ -376,6 +405,7 @@ function ClarifyCard({
 
   const expired = timedOut || card.status === "timed_out";
   const hasChoices = (card.choices?.length ?? 0) > 0;
+  const customRef = useComposerTextarea(custom);
   const toggle = (choice: string) => {
     setSelected((prev) => {
       const nextSet = new Set(prev);
@@ -474,19 +504,16 @@ function ClarifyCard({
           })}
         </div>
       )}
-      <input
+      <textarea
+        ref={customRef}
         value={custom}
         onChange={(e) => setCustom(e.target.value)}
         disabled={busy || expired}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            submit();
-          }
-        }}
+        onKeyDown={composerKeyDown(() => submit())}
+        rows={1}
         placeholder={hasChoices ? t("chat.clarifyOtherPlaceholder") : t("chat.clarifyInputPlaceholder")}
         data-testid={`clarify-input-${card.clarifyId}`}
-        className="h-8 min-w-0 rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 text-xs text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-50"
+        className="min-w-0 resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 py-1 text-xs leading-5 text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-50"
       />
       {card.status === "pending" && !expired && (
         <div className="flex items-center justify-end gap-2">
@@ -871,6 +898,8 @@ export default function ChatPage() {
   // slot was lost.
   const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState("");
+  // task33：多行输入框自适应（与 clarify 卡同款行为）
+  const draftRef = useComposerTextarea(draft);
   const [error, setError] = useState<string | null>(null);
   const [stopWarning, setStopWarning] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
@@ -1745,9 +1774,12 @@ export default function ChatPage() {
           </div>
         )}
         <div className="flex items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-3 py-2">
-          <input
+          <textarea
+            ref={draftRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={composerKeyDown((e) => e.currentTarget.form?.requestSubmit())}
+            rows={1}
             placeholder={
               disabled
                 ? busyAction
@@ -1759,7 +1791,7 @@ export default function ChatPage() {
             }
             disabled={disabled}
             spellCheck={false}
-            className="h-9 min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
+            className="min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
           />
           {(activeBusy || chatInputDisabled(activeState)) && (
             <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[var(--vigil-muted)] sm:inline-flex">
