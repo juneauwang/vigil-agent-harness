@@ -2454,6 +2454,11 @@ DEFAULT_CONFIG = {
             "endpoint": "",       # 如 http://127.0.0.1:9090；空 = prom_query 不可用
             "alertmanager": "",   # 如 http://127.0.0.1:9093；空 = alert_query 不可用
             "vault_path": "",     # 可选：本机保险箱 JSON 凭据条目（{"user": ..., "pass": ...}）
+            # task32 PART B：命名源注册表（多 Prometheus 实例等）。default 保留名
+            # = 上面 legacy 三字段；prom_query/alert_query 传 source=<name> 走对应
+            # 源（每源独立 endpoint/vault_path/alertmanager）。形状非法 → 工具
+            # 侧显式报错（不静默忽略）。
+            "sources": {},
         },
         # 在线 LLM 价格拉取（OPS-DELTA #79）：OpenRouter /models 列表公开、
         # 无需 key；配置 base_url 后 web 启动后台线程拉取一次，写

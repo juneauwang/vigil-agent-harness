@@ -388,6 +388,17 @@ CREATE TABLE IF NOT EXISTS async_delegations (
     delivery_claimed_at REAL
 );
 
+CREATE TABLE IF NOT EXISTS incident_marks (
+    alert_key  TEXT NOT NULL,
+    episode    TEXT NOT NULL,
+    action     TEXT NOT NULL,
+    created_at REAL NOT NULL,
+    actor      TEXT,
+    PRIMARY KEY (alert_key, episode, action)
+);
+
+CREATE INDEX IF NOT EXISTS idx_incident_marks_key ON incident_marks(alert_key, episode);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source);
 CREATE INDEX IF NOT EXISTS idx_sessions_source_id ON sessions(source, id);
 CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);

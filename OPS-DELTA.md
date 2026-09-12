@@ -5265,3 +5265,55 @@
   hermes_cli/subcommands/topo_export.py、hermes_cli/main.py、hermes_cli/web_server.py、
   web/src/lib/api.ts、web/src/pages/TopologyPage.tsx（+ .test.tsx）、tests/ 相关用例
   + OPS-DELTA.md 本条登记。初始化豁免未做（reset + deny 引导已覆盖）。
+
+### 102. Incidents 人工处置（ack/清除，状态落 sqlite）+ chat 输入框多行（task33，2 个 commit）
+
+- **背景**（2026-09-12 dogfood 反馈）：① Incidents 页（`web/src/pages/IncidentsPage.tsx`）
+  零交互——后端只有 `GET /api/incidents`，全项目唯一能把快照 `processed` 置 True 的通道是
+  agent 专用工具 `watch_digest(mark_processed=True)`，UI 点不到 ack/清除；② chat composer
+  是单行 `<input>`，用户希望多行。
+- **复现（焊死"禁止把 ack/clear 写进 inbox 快照"）**：主 session 用真代码
+  （真 `watch_collect.collect()` + 真 `get_incidents()`，临时 `VIGIL_HOME` + stub
+  `_fetch_alerts`）复现 4/4——A 把快照标 `processed=true` → 下一轮采集去重失效、再写一条
+  → 页面又冒出来、✓ 丢失；B 把快照移出 inbox → 下一轮同一告警原样回来；C 告警恢复
+  （列表空）采集层不写盘 → 旧快照永留，`/api/incidents` 永久 active。故处置状态外置。
+- **任务 1——后端（commit 1）**：
+  - `hermes_state_common.py`：`SCHEMA_SQL` 加 `CREATE TABLE IF NOT EXISTS incident_marks
+    (alert_key, episode, action, created_at REAL, actor, PRIMARY KEY(alert_key, episode,
+    action))` + `idx_incident_marks_key`。`executescript(SCHEMA_SQL)` 自动建表，**不动
+    SCHEMA_VERSION / 无迁移块**。
+  - 新增 `tools/watch_marks.py`：`list_marks()`/`set_mark()`/`delete_mark()`，走
+    `hermes_state.SessionDB`（读 `read_only=True`，写普通连接）；键定义唯一来源 =
+    `watch_collect._alert_key`（alertname|instance），episode = startsAt。读失败返回空
+    （绝不让 `/api/incidents` 因 marks 500）。**语义**：clear 命中 → 该 (key, episode)
+    任何快照都不显示；ack → 保留 + 标记；撤销 = DELETE；重复 = UPSERT 幂等；episode 变
+    （startsAt 变 = 复发）→ 标记自动失效。
+  - `hermes_cli/web_server.py`：抽出 `_collect_incidents()`（GET 与新 POST 共用）；GET
+    `/api/incidents` 每条叠加 `mark: null|"ack"|"clear"`，clear 命中条目从 incidents 与
+    total 都剔除；新增 `POST /api/incidents/mark`（`_require_token`，body
+    `{action: ack|clear|unmark, alertname, instance, startsAt}`，服务端算 key，返回同构
+    刷新列表）——未知 action/缺 alertname → 400，无 token → 401。
+  - **硬规则**：`tools/watch_collect.py` 零改动，不写/不删 inbox 快照，`processed` 仍只由
+    `watch_digest` 标记（agent 通道语义不变）。
+- **任务 2——前端（commit 2）**：`web/src/lib/api.ts` 加 `markIncident()` +
+  `IncidentItem.mark`；`IncidentsPage.tsx` 每行 确认(✓)/清除(×) 两按钮，清除需点两次
+  （第一下变"确认清除?"，3 秒不点回落，**不引入 modal**），ack 后行内显示"已确认"+
+  "取消确认"（走 unmark），clear 后用 POST 返回列表 setState（行消失）；`ChatPage.tsx`
+  主 composer 与审批卡"自定义答案"框由 `<input>` 改 `<textarea>`——自动增高 1–8 行
+  （ref + scrollHeight，无新依赖）、`Enter` 提交 / `Shift+Enter` 换行、**IME 组合输入
+  （isComposing）中 Enter 不提交**；busy / type-to-interrupt 语义逐字不变。i18n
+  incidents 段加 6 个 key（中英同步）。
+- **不做的取舍**：不引入任何 Alertmanager **写**操作（silence 需写权限 + expiry 语义 +
+  会全局抑制影响其他消费者，留 v2）；不做"全部清除"（用户未拍板，超范围）。
+- **验证**：新 `tests/hermes_cli/test_task33_incident_marks.py`（13 例）——a ack→GET
+  `mark="ack"`；b clear→列表/total 剔除；c episode 变→重现；d 幂等 1 行；e unmark 恢复；
+  f 回归（mark 后快照文件字节级不变、`processed` 仍 false、文件数不变）；g 新 home
+  `PRAGMA table_info(incident_marks)` 自动建；h 无 inbox/无 state.db→200 空列表；
+  i 无 token→401、未知 action→400；j A/B/C 复现场景断言化。相邻套件
+  test_batch50_incidents / test_monitoring_api / test_ops_i18n 全绿；前端 vitest 245 全绿
+  + `tsc -b` 构建通过。
+- **状态**：2 个 commit，含 hermes_state_common.py、tools/watch_marks.py、
+  hermes_cli/web_server.py、web/src/{lib/api.ts,pages/IncidentsPage.tsx,
+  pages/ChatPage.tsx,i18n/{zh,en}.ts}（+ 两个 .test.tsx）、tests/hermes_cli/
+  test_task33_incident_marks.py + OPS-DELTA.md 本条登记。不发版（攒 dogfood 一起发
+  v1.0.6；PyPI 现为 1.0.5）。

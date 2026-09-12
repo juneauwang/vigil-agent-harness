@@ -147,6 +147,99 @@ def _endpoint_url(cfg: Dict[str, Any]) -> str:
     return (cfg.get("endpoint") or "").strip().rstrip("/")
 
 
+# ---------------------------------------------------------------------------
+# API-source registry（task32 PART B）—— named external-API sources
+#
+# 扩展点（未来 API 家族，如 Grafana）：新增协议函数时调
+# resolve_api_source(family, source) → {endpoint, alertmanager, auth}，
+# 再用 api_http_get() 发请求——不要把 endpoint/auth 解析重新埋进协议函数。
+# - family：目前仅 "prometheus"（读 ops.prometheus 块）。
+# - source 名规则：^[a-z0-9][a-z0-9_-]*$；"default" 保留 = legacy 单源字段
+#   （endpoint/alertmanager/vault_path），存量部署零配置改动。
+# - 每源独立 vault_path（各自 Basic Auth）；缺省 = 无认证。
+# - 形状坏 → 显式报错（KeyError，含原因与可用名），绝不静默回退 default。
+# ---------------------------------------------------------------------------
+
+_PROM_FAMILY = "prometheus"
+_SOURCE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_RESERVED_SOURCE_NAMES = frozenset({"default"})
+
+
+def source_names(family: str = _PROM_FAMILY) -> List[str]:
+    """可用 source 名（default 恒在 = legacy 字段；其余按名排序）。"""
+    if family != _PROM_FAMILY:
+        return ["default"]
+    sources = _prom_config().get("sources")
+    names = ["default"]
+    if isinstance(sources, dict):
+        names.extend(sorted(k for k in sources if isinstance(k, str) and k != "default"))
+    return names
+
+
+def _validate_sources_block(sources: Any) -> None:
+    """ops.prometheus.sources 形状校验；非法 raise KeyError（含原因）——配置
+    错误必须响，不静默忽略。"""
+    if not isinstance(sources, dict):
+        raise KeyError(
+            "ops.prometheus.sources 必须是映射 "
+            "（{<name>: {endpoint, vault_path?, alertmanager?}}）"
+        )
+    for name, entry in sources.items():
+        if not isinstance(name, str) or not _SOURCE_NAME_RE.fullmatch(name):
+            raise KeyError(
+                f"source 名 {name!r} 非法（小写字母/数字开头，可含 _ -）"
+            )
+        if name in _RESERVED_SOURCE_NAMES:
+            raise KeyError(
+                f"source 名 {name!r} 是保留名（default = legacy 单源字段，不可占用）"
+            )
+        if not isinstance(entry, dict):
+            raise KeyError(f"source {name!r} 必须是映射（endpoint 必填）")
+        if not str(entry.get("endpoint") or "").strip():
+            raise KeyError(f"source {name!r} 缺少 endpoint")
+
+
+def resolve_api_source(family: str = _PROM_FAMILY, source: str = "default") -> Dict[str, Any]:
+    """named source → {endpoint, alertmanager, auth}（registry 唯一解析口）。
+
+    - "default"/空 = legacy 单源字段——与 registry 引入前逐字节一致。
+    - named = ops.prometheus.sources[<name>]（形状先整体校验；未知名/
+      形状坏 → KeyError 列出可用名——typo 必须响，不回退 default）。
+    - auth 解析失败（vault 条目坏）→ ValueError 传播，调用方转 tool_error。
+    """
+    if family != _PROM_FAMILY:
+        raise KeyError(f"未知 API family: {family!r}（当前支持: {_PROM_FAMILY}）")
+    name = (source or "default").strip() or "default"
+    cfg = _prom_config()
+    sources = cfg.get("sources")
+    if sources:
+        # 配置错误必须响：sources 块存在即校验（default 解析也一样——占用保留
+        # 名/形状坏在任何 source 参数下都是显式错误，不静默）。
+        _validate_sources_block(sources)
+    if name == "default":
+        return {
+            "endpoint": _endpoint_url(cfg),
+            "alertmanager": (cfg.get("alertmanager") or "").strip().rstrip("/"),
+            "auth": _resolve_basic_auth(cfg),
+        }
+    if name not in sources:
+        raise KeyError(
+            f"未知 source: {name!r}（可用: {', '.join(source_names(family))}）"
+        )
+    entry = sources[name]
+    return {
+        "endpoint": str(entry.get("endpoint")).strip().rstrip("/"),
+        "alertmanager": str(entry.get("alertmanager") or "").strip().rstrip("/"),
+        "auth": _resolve_basic_auth(entry),
+    }
+
+
+def api_http_get(url: str, params: Dict[str, Any], auth: Optional[str]) -> httpx.Response:
+    """registry 统一 HTTP GET（当前即 _http_get；未来 API 家族若需 per-source
+    超时/头扩展在此收口，不改协议函数）。"""
+    return _http_get(url, params, auth)
+
+
 def _fmt_metric(metric: Dict[str, Any]) -> str:
     """series 的紧凑标签形态：name{labels}。"""
     name = metric.get("__name__") or ""
@@ -202,12 +295,25 @@ def prom_query(
     query: str,
     step: Optional[str] = None,
     duration: Optional[str] = None,
+    source: str = "default",
 ) -> str:
-    """PromQL 查询（只读）。省略 step/duration → 即时查询；两者都给出 → range 查询。"""
-    cfg = _prom_config()
-    endpoint = _endpoint_url(cfg)
+    """PromQL 查询（只读）。省略 step/duration → 即时查询；两者都给出 → range 查询。
+
+    task32 PART B：source 可选命名源（ops.prometheus.sources 键）；缺省
+    "default" = legacy 单源字段，行为与 registry 引入前逐字节一致。未知名 →
+    报错列出可用名（typo 必须响）。
+    """
+    try:
+        src = resolve_api_source(_PROM_FAMILY, source)
+    except KeyError as exc:
+        return tool_error(str(exc))
+    except ValueError as exc:
+        return tool_error(str(exc))
+    endpoint = src["endpoint"]
     if not endpoint:
-        return tool_error("Prometheus 未配置（ops.prometheus.endpoint 为空），prom_query 不可用。")
+        if (source or "default").strip() in ("", "default"):
+            return tool_error("Prometheus 未配置（ops.prometheus.endpoint 为空），prom_query 不可用。")
+        return tool_error(f"source {source!r} 未配置 endpoint。")
 
     if not query or not query.strip():
         return tool_error("prom_query 需要 query 参数（PromQL 表达式）。")
@@ -215,11 +321,7 @@ def prom_query(
     if invalid:
         return tool_error(f"PromQL 预校验失败：{invalid}")
 
-    auth: Optional[str] = None
-    try:
-        auth = _resolve_basic_auth(cfg)
-    except ValueError as exc:
-        return tool_error(str(exc))
+    auth: Optional[str] = src["auth"]
 
     is_range = bool(step) or bool(duration)
     if is_range:
@@ -297,18 +399,24 @@ def _parse_duration(duration: str) -> timedelta:
     return timedelta(seconds=seconds)
 
 
-def alert_query() -> str:
-    """查 Alertmanager /api/v2/alerts，返回活跃告警摘要。"""
-    cfg = _prom_config()
-    alertmanager = (cfg.get("alertmanager") or "").strip().rstrip("/")
-    if not alertmanager:
-        return tool_error("Alertmanager 未配置（ops.prometheus.alertmanager 为空），alert_query 不可用。")
+def alert_query(source: str = "default") -> str:
+    """查 Alertmanager /api/v2/alerts，返回活跃告警摘要。
 
-    auth: Optional[str] = None
+    task32 PART B：source 可选命名源；缺省 "default" = legacy 单源字段。
+    """
     try:
-        auth = _resolve_basic_auth(cfg)
+        src = resolve_api_source(_PROM_FAMILY, source)
+    except KeyError as exc:
+        return tool_error(str(exc))
     except ValueError as exc:
         return tool_error(str(exc))
+    alertmanager = src["alertmanager"]
+    if not alertmanager:
+        if (source or "default").strip() in ("", "default"):
+            return tool_error("Alertmanager 未配置（ops.prometheus.alertmanager 为空），alert_query 不可用。")
+        return tool_error(f"source {source!r} 未配置 alertmanager。")
+
+    auth: Optional[str] = src["auth"]
 
     url = f"{alertmanager}/api/v2/alerts"
     try:
@@ -424,6 +532,13 @@ _DEFAULT_QUERY_SCHEMA = {
                 "type": "string",
                 "description": "range 查询步长（如 30s/1m/5m），与 duration 同时给出时走 /api/v1/query_range。",
             },
+            "source": {
+                "type": "string",
+                "description": (
+                    "可选：命名源（ops.prometheus.sources 键，多 Prometheus 实例时选目标，"
+                    "如 dcgm/telegraf）。缺省 default = 主配置。未知名会报错并列出可用名。"
+                ),
+            },
             "duration": {
                 "type": "string",
                 "description": "range 查询回溯窗口（如 1h/24h），与 step 同时给出时走 /api/v1/query_range。",
@@ -442,7 +557,14 @@ _DEFAULT_ALERT_SCHEMA = {
     ),
     "parameters": {
         "type": "object",
-        "properties": {},
+        "properties": {
+            "source": {
+                "type": "string",
+                "description": (
+                    "可选：命名源（ops.prometheus.sources 键）。缺省 default = 主配置。"
+                ),
+            },
+        },
     },
 }
 
@@ -469,11 +591,12 @@ def _query_handler(args: Dict[str, Any], **kwargs) -> str:
         query=args.get("query", ""),
         step=args.get("step"),
         duration=args.get("duration"),
+        source=args.get("source") or "default",
     )
 
 
 def _alert_handler(args: Dict[str, Any], **kwargs) -> str:
-    return alert_query()
+    return alert_query(source=args.get("source") or "default")
 
 
 def _triage_handler(args: Dict[str, Any], **kwargs) -> str:

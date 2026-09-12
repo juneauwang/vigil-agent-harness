@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type SetStateAction } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type Dispatch, type FormEvent, type KeyboardEvent as ReactKeyboardEvent, type SetStateAction } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import i18n from "@/i18n";
@@ -28,6 +28,7 @@ import { api, ApiError } from "@/lib/api";
 import type { ChatContextUsage, ChatModelOption, ChatSessionSummary, ChatUsageResponse, UsageAnalyticsResponse } from "@/lib/api";
 import {
   approvalIsTimedOut,
+  markExpiredApprovals,
   applyChatEvent,
   chatInputDisabled,
   clarifyIsTimedOut,
@@ -64,6 +65,35 @@ import { cn } from "@/lib/ops";
  * verification (§23); full approval details (§6); busy indicator restored on
  * switching back (§7); per-session model dropdown (§8).
  */
+
+/** task33：输入框多行自适应（1–8 行，超出内部滚动）。零新依赖（ref + scrollHeight）。 */
+const COMPOSER_LINE_PX = 20;
+const COMPOSER_MAX_ROWS = 8;
+
+function useComposerTextarea(value: string) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const max = COMPOSER_MAX_ROWS * COMPOSER_LINE_PX;
+    el.style.height = "auto";
+    // jsdom 的 scrollHeight 恒为 0 → 兜底一行高度（测试只断言行为，不测像素）。
+    const next = Math.min(Math.max(el.scrollHeight, COMPOSER_LINE_PX), max);
+    el.style.height = `${next}px`;
+    el.style.overflowY = el.scrollHeight > max ? "auto" : "hidden";
+  }, [value]);
+  return ref;
+}
+
+/** Enter 提交 / Shift+Enter 换行；IME 组合输入中（isComposing）按 Enter 不提交。 */
+function composerKeyDown(submit: (e: ReactKeyboardEvent<HTMLTextAreaElement>) => void) {
+  return (e: ReactKeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    if (e.nativeEvent.isComposing) return;
+    e.preventDefault();
+    submit(e);
+  };
+}
 
 const STEP_STATUS_CLASS: Record<ChatStepStatus, string> = {
   running: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
@@ -241,18 +271,18 @@ function ApprovalCard({
         "flex flex-col gap-1.5 rounded-md border px-3 py-2 text-xs",
         card.status === "approved"
           ? "border-emerald-500/50 bg-emerald-500/10"
-          : card.status === "denied"
+          : card.status === "denied" || card.status === "timed_out"
             ? "border-red-500/50 bg-red-500/10"
             : "border-amber-500/50 bg-amber-500/10",
       )}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <ShieldAlert className={cn("size-4 shrink-0", card.status === "approved" ? "text-emerald-500" : card.status === "denied" ? "text-red-500" : "text-amber-500")} />
+        <ShieldAlert className={cn("size-4 shrink-0", card.status === "approved" ? "text-emerald-500" : card.status === "denied" || card.status === "timed_out" ? "text-red-500" : "text-amber-500")} />
         <span className="font-medium">{t("chat.needsApproval")}</span>
         {card.grade && <span className="rounded bg-amber-500/15 px-1.5 py-px text-[10px] text-amber-600 dark:text-amber-400">L{card.grade}</span>}
         {card.env && <span className="text-[var(--vigil-muted)]">{card.env}</span>}
         <span className="ml-auto shrink-0 text-[10px]">
-          {card.status === "pending" && timedOut ? (
+          {(card.status === "pending" && timedOut) || card.status === "timed_out" ? (
             <span className="text-red-500">{t("chat.approvalTimedOut")}</span>
           ) : card.status === "approved" ? (
             <span className="text-emerald-500">{t("chat.approved")}</span>
@@ -375,6 +405,7 @@ function ClarifyCard({
 
   const expired = timedOut || card.status === "timed_out";
   const hasChoices = (card.choices?.length ?? 0) > 0;
+  const customRef = useComposerTextarea(custom);
   const toggle = (choice: string) => {
     setSelected((prev) => {
       const nextSet = new Set(prev);
@@ -473,19 +504,16 @@ function ClarifyCard({
           })}
         </div>
       )}
-      <input
+      <textarea
+        ref={customRef}
         value={custom}
         onChange={(e) => setCustom(e.target.value)}
         disabled={busy || expired}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            submit();
-          }
-        }}
+        onKeyDown={composerKeyDown(() => submit())}
+        rows={1}
         placeholder={hasChoices ? t("chat.clarifyOtherPlaceholder") : t("chat.clarifyInputPlaceholder")}
         data-testid={`clarify-input-${card.clarifyId}`}
-        className="h-8 min-w-0 rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 text-xs text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-50"
+        className="min-w-0 resize-none rounded border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2 py-1 text-xs leading-5 text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-50"
       />
       {card.status === "pending" && !expired && (
         <div className="flex items-center justify-end gap-2">
@@ -870,6 +898,8 @@ export default function ChatPage() {
   // slot was lost.
   const [busyMap, setBusyMap] = useState<Record<string, boolean>>({});
   const [draft, setDraft] = useState("");
+  // task33：多行输入框自适应（与 clarify 卡同款行为）
+  const draftRef = useComposerTextarea(draft);
   const [error, setError] = useState<string | null>(null);
   const [stopWarning, setStopWarning] = useState<string | null>(null);
   const [busyAction, setBusyAction] = useState(false);
@@ -1344,6 +1374,15 @@ export default function ChatPage() {
     async (card: ChatApprovalCard, status: "approved" | "denied") => {
       const sid = activeId;
       if (!sid) return;
+      // task32 PART A：死审批点击的客户端拒绝——已到点的审批后端已终结，
+      // 不发 API（避免 404/409 静默失败），卡片直接收敛为 timed_out 终态。
+      if (approvalIsTimedOut(card)) {
+        setStates((prev) => ({
+          ...prev,
+          [sid]: markApprovalResolved(prev[sid] ?? createChatState(), card.approvalId, "timed_out"),
+        }));
+        return;
+      }
       setStates((prev) => ({
         ...prev,
         [sid]: markApprovalResolved(prev[sid] ?? createChatState(), card.approvalId, status === "approved" ? "approved" : "denied"),
@@ -1487,6 +1526,25 @@ export default function ChatPage() {
     clearPromptParam();
   }, [activeId, busyAction, activeBusy, activeState, searchParams, setSearchParams]);
 
+  // task32 PART A：周期收敛到点未决的审批卡为 timed_out 终态（幂等：无变化
+  // 返回原引用，不触发重渲染）——浮层随即放行，卡片留在消息流随历史滚动。
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setStates((prev) => {
+        // 全会话槽扫一遍：到点审批在任何槽里都是陈旧物。无变化返回原引用。
+        let changed = false;
+        const next: Record<string, ChatTurnState> = {};
+        for (const [sid, st] of Object.entries(prev)) {
+          const swept = markExpiredApprovals(st);
+          if (swept !== st) changed = true;
+          next[sid] = swept;
+        }
+        return changed ? next : prev;
+      });
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
   const lastMsg = activeState.messages[activeState.messages.length - 1];
   // Stop already clicked (last item is the local "stopped" row): hide the stop button so an inert button doesn't mislead.
   const stopIssued = Boolean(lastMsg?.interrupted);
@@ -1496,9 +1554,11 @@ export default function ChatPage() {
   // above the viewport while the agent's latest output grows at the bottom — the
   // card looked "pinned to an old position". Resolving updates both copies via the
   // shared state (steps list keeps its slot; the floating copy disappears).
+  // task32 PART A：到点未决的审批卡不再进浮层（timed_out 终态由下方 sweep
+  // 收敛；这里再排除一次 expired，覆盖两次 tick 之间的窗口）。
   const pendingApprovals = activeState.messages
     .flatMap((m) => m.approvals ?? [])
-    .filter((c) => c.status === "pending");
+    .filter((c) => c.status === "pending" && !approvalIsTimedOut(c));
   const pendingClarifies = activeState.messages
     .flatMap((m) => m.clarifies ?? [])
     .filter((c) => c.status === "pending");
@@ -1714,9 +1774,12 @@ export default function ChatPage() {
           </div>
         )}
         <div className="flex items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-3 py-2">
-          <input
+          <textarea
+            ref={draftRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={composerKeyDown((e) => e.currentTarget.form?.requestSubmit())}
+            rows={1}
             placeholder={
               disabled
                 ? busyAction
@@ -1728,7 +1791,7 @@ export default function ChatPage() {
             }
             disabled={disabled}
             spellCheck={false}
-            className="h-9 min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
+            className="min-w-0 flex-1 resize-none bg-transparent py-2 text-sm leading-5 text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60 disabled:opacity-60"
           />
           {(activeBusy || chatInputDisabled(activeState)) && (
             <span className="hidden shrink-0 items-center gap-1.5 text-xs text-[var(--vigil-muted)] sm:inline-flex">

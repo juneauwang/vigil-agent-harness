@@ -164,10 +164,10 @@ async function openUsagePanel() {
   });
 }
 
-/** 填输入框 + 提交表单（React 受控 input 需走原生 setter）。 */
+/** 填输入框 + 提交表单（React 受控 textarea 需走原生 setter）。 */
 async function sendMessage(text: string) {
-  const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
-  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!;
+  const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
   await act(async () => {
     setter.call(input, text);
     input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -185,7 +185,7 @@ describe("批四十一 §7 切走再切回 busy 指示恢复", () => {
   it("切回后 busy 会话显示处理中指示；输入保持可用（task31 PART C type-to-interrupt），placeholder 提示将中断", async () => {
     await mountWith([SESSION_A, SESSION_B], "A");
     // 初始 activeId = A（busy）→ 输入可用 + 处理中指示 + 中断提示 placeholder
-    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     expect(input.disabled).toBe(false);
     expect(input.placeholder).toBe("输入将中断当前任务");
     expect(container.textContent).toContain("agent 处理中");
@@ -196,7 +196,7 @@ describe("批四十一 §7 切走再切回 busy 指示恢复", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    const inputB = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const inputB = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     expect(inputB.disabled).toBe(false);
     expect(inputB.placeholder).not.toBe("输入将中断当前任务");
 
@@ -205,7 +205,7 @@ describe("批四十一 §7 切走再切回 busy 指示恢复", () => {
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
     });
-    const inputA = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const inputA = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     // task31 PART C：busy 不再禁输入，但中断提示与 busy 指示恢复
     expect(inputA.disabled).toBe(false);
     expect(inputA.placeholder).toBe("输入将中断当前任务");
@@ -217,7 +217,7 @@ describe("批四十一 §7 切走再切回 busy 指示恢复", () => {
 describe("批四十一 §23 停止后 busy 校验清理", () => {
   it("点停止 → 本地已停止 → 轮询确认 busy 翻转 → 输入恢复", async () => {
     await mountWith([SESSION_A], "A");
-    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     // task31 PART C：busy 下输入本就可用；恢复信号 = placeholder 离开中断提示
     expect(input.disabled).toBe(false);
     expect(input.placeholder).toBe("输入将中断当前任务");
@@ -245,7 +245,7 @@ describe("批四十一 §23 停止后 busy 校验清理", () => {
     expect(apiMock.interruptChatSession).toHaveBeenCalledWith("A");
     expect(apiMock.getChatHistory).toHaveBeenCalledWith("A");
     // 输入恢复常规 placeholder + 无残留 busy 警告
-    const input2 = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const input2 = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     expect(input2.disabled).toBe(false);
     expect(input2.placeholder).not.toBe("输入将中断当前任务");
     expect(container.textContent).not.toContain("仍显示忙碌");
@@ -271,7 +271,7 @@ describe("批四十一 §23 停止后 busy 校验清理", () => {
       });
     }
     expect(container.textContent).toContain("仍显示忙碌");
-    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     expect(input.disabled).toBe(false);
   });
 });
@@ -691,7 +691,7 @@ describe("批六十四 chat 用量面板", () => {
   it("URL sid 存在且在列表内 → 刷新回到该会话", async () => {
     await mountWith([SESSION_A, SESSION_B], undefined, undefined, "/chat?sid=B");
     // 初始 activeId = B（不是列表首个 A）：B 空闲 → 输入可用。
-    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     expect(input.disabled).toBe(false);
     const sel = sessionSelect();
     expect(sel.value).toBe("B");
@@ -722,7 +722,7 @@ describe("ChatPage ?prompt= prefill (task19 F2)", () => {
         search = s;
       },
     );
-    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     expect(input.value).toBe(prompt);
     // 参数用完即清（replace，不污染历史），?sid= 语义不受影响
     expect(search).toBe("/chat");
@@ -740,7 +740,7 @@ describe("ChatPage ?prompt= prefill (task19 F2)", () => {
       },
     );
     const inputs = Array.from(
-      container.querySelectorAll<HTMLInputElement>("input[placeholder]"),
+      container.querySelectorAll<HTMLTextAreaElement>("form textarea[placeholder]"),
     );
     expect(inputs.some((i) => i.value === "busy case prompt")).toBe(false);
     expect(search).toBe("/chat");
@@ -826,7 +826,7 @@ describe("ChatPage 停止可靠性（task31 PART B）", () => {
 describe("ChatPage type-to-interrupt（task31 PART C）", () => {
   async function mountBusy() {
     await mountWith([SESSION_A, SESSION_B], "A");
-    const input = container.querySelector<HTMLInputElement>("input[placeholder]")!;
+    const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
     expect(input.disabled).toBe(false); // busy 不再禁输入
     return input;
   }
@@ -881,5 +881,155 @@ describe("ChatPage type-to-interrupt（task31 PART C）", () => {
       expect.any(Function),
       expect.anything(),
     );
+  });
+});
+
+// ── task32 PART A：审批到点后卡片离开底部浮层（不钉死），终态留在消息流 ──
+describe("审批超时卡片收敛（task32 PART A）", () => {
+  it("到点未决卡：浮层消失 + 消息流内显示已超时终态（无批准按钮）", async () => {
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    const pastTimeout = new Date(Date.now() - 60_000).toISOString();
+    apiMock.chatStream.mockImplementation(async (_sid, _msg, onEvent) => {
+      onEvent({ type: "chat:tool", data: { tool_id: "call_1", name: "terminal", input_summary: "kubectl delete pod x" } });
+      onEvent({
+        type: "chat:approval_pending",
+        data: { approval_id: "apv_t", command: "kubectl delete pod x", env: "prod", timeout_at: pastTimeout },
+      });
+      // no chat:done — 后端审批到点终止，turn 尚未收尾的窗口内卡片应离开浮层
+    });
+    await sendMessage("删除 pod");
+
+    // sweep tick（1s）跑完：卡片收敛为 timed_out
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1100);
+    });
+
+    // 浮层放行（不再钉在底部）
+    expect(container.querySelector('[data-testid="pending-cards-float"]')).toBeNull();
+    // 消息流内的卡片保留历史事实：已超时终态 + 无批准/拒绝按钮（死审批不可点）
+    expect(container.textContent).toContain("审批超时，已终止");
+    const cards = [...container.querySelectorAll("div")].filter((d) =>
+      d.textContent?.includes("kubectl delete pod x"),
+    );
+    const cardRoot = cards[cards.length - 1]!;
+    expect([...cardRoot.querySelectorAll("button")].some((b) => b.textContent?.includes("批准"))).toBe(false);
+    expect([...cardRoot.querySelectorAll("button")].some((b) => b.textContent?.includes("拒绝"))).toBe(false);
+    // 没有向 API 发过死审批请求（客户端拒绝）
+    expect(apiMock.approveApproval).not.toHaveBeenCalled();
+  });
+});
+
+// ── task33：主输入框多行化（Enter 提交 / Shift+Enter 换行 / IME 不提交 / 提交清空）──
+describe("ChatPage 多行输入框（task33）", () => {
+  function composer(): HTMLTextAreaElement {
+    return container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
+  }
+
+  /** React 受控 textarea 需走原生 setter 才能触发 onChange。 */
+  async function setValue(el: HTMLTextAreaElement, text: string) {
+    const setter = Object.getOwnPropertyDescriptor(
+      window.HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!;
+    await act(async () => {
+      setter.call(el, text);
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+  }
+
+  function pressEnter(init: KeyboardEventInit = {}) {
+    return new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+  }
+
+  it("主输入框是 textarea（多行，默认 1 行）", async () => {
+    await mountWith([SESSION_B], "B");
+    const ta = composer();
+    expect(ta.tagName).toBe("TEXTAREA");
+    expect(ta.rows).toBe(1);
+  });
+
+  it("Shift+Enter 不提交（换行）", async () => {
+    await mountWith([SESSION_B], "B");
+    const ta = composer();
+    await setValue(ta, "第一行");
+    await act(async () => {
+      ta.dispatchEvent(pressEnter({ shiftKey: true }));
+    });
+    expect(apiMock.chatStream).not.toHaveBeenCalled();
+  });
+
+  it("IME 组合输入中按 Enter 不提交（中文输入法误发硬坑）", async () => {
+    await mountWith([SESSION_B], "B");
+    const ta = composer();
+    await setValue(ta, "中文候选");
+    await act(async () => {
+      ta.dispatchEvent(pressEnter({ isComposing: true }));
+    });
+    expect(apiMock.chatStream).not.toHaveBeenCalled();
+  });
+
+  it("普通 Enter 提交，且提交后 value 清空", async () => {
+    await mountWith([SESSION_B], "B");
+    const ta = composer();
+    await setValue(ta, "帮我看看拓扑");
+    await act(async () => {
+      ta.dispatchEvent(pressEnter());
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(apiMock.chatStream).toHaveBeenCalledWith(
+      "B",
+      "帮我看看拓扑",
+      expect.any(Function),
+      expect.anything(),
+    );
+    expect(composer().value).toBe("");
+  });
+
+  it("澄清卡自定义答案框同款多行（Enter 提交 / Shift+Enter 不提交）", async () => {
+    let resolveStream: (() => void) | null = null;
+    apiMock.answerChatClarify.mockResolvedValue({ status: "resolved", clarify_id: "clfy_ml" });
+    await mountWith([{ ...SESSION_A, busy: false }]);
+    apiMock.chatStream.mockImplementation(
+      async (_sid: string, _msg: string, onEvent: (e: { type: string; data: unknown }) => void) => {
+        onEvent({
+          type: "chat:clarify_pending",
+          data: {
+            clarify_id: "clfy_ml",
+            question: "补充说明？",
+            choices: null,
+            multi_select: false,
+            timeout_at: "2099-01-01T00:00:00Z",
+          },
+        });
+        await new Promise<void>((r) => {
+          resolveStream = r;
+        });
+      },
+    );
+    await sendMessage("继续");
+    const ta = container.querySelector<HTMLTextAreaElement>(
+      '[data-testid="clarify-input-clfy_ml"]',
+    )!;
+    expect(ta.tagName).toBe("TEXTAREA");
+    await setValue(ta, "我的答复");
+    await act(async () => {
+      ta.dispatchEvent(pressEnter({ shiftKey: true }));
+    });
+    expect(apiMock.answerChatClarify).not.toHaveBeenCalled();
+    await act(async () => {
+      ta.dispatchEvent(pressEnter());
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(apiMock.answerChatClarify).toHaveBeenCalledWith("A", "我的答复");
+    await act(async () => {
+      resolveStream!();
+    });
   });
 });

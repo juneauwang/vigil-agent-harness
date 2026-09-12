@@ -476,6 +476,18 @@ export interface IncidentItem {
   collected_at?: string;
   processed?: boolean;
   source?: string;
+  /** task33：人工处置标记（ack=已确认；clear 命中条目被后端剔除，故列表里
+   * 通常只见 "ack" 或 null）。 */
+  mark?: "ack" | "clear" | null;
+}
+
+/** task33：POST /api/incidents/mark 的 body（键由后端从 alertname|instance
+ * + startsAt 计算，前端禁止自己拼 alert_key）。 */
+export interface IncidentMarkRequest {
+  action: "ack" | "clear" | "unmark";
+  alertname: string;
+  instance?: string;
+  startsAt?: string;
 }
 
 export interface IncidentsResponse {
@@ -916,6 +928,12 @@ export const api = {
     fetchJSON<IncidentsResponse>(
       `/api/incidents?${new URLSearchParams(cleanParams({ limit: params?.limit, offset: params?.offset }))}`,
     ),
+  // task33：人工处置告警（ack / clear / unmark）→ 返回刷新后的同构列表
+  markIncident: (body: IncidentMarkRequest) =>
+    fetchJSON<IncidentsResponse>("/api/incidents/mark", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   // UI 监控 API（OPS-DELTA #78）：健康 / PromQL 查询 / 活跃告警
   getMonitoringHealth: (refresh = false) =>
     fetchJSON<MonitoringHealthResponse>(

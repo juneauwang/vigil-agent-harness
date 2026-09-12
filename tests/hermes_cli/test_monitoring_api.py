@@ -700,3 +700,34 @@ def test_validate_partial_body_only_validates_given(env_home, client, monkeypatc
     results = resp.json()["results"]
     assert list(results.keys()) == ["endpoint"]
     assert len(seen) == 1
+
+
+# ---------------------------------------------------------------------------
+# task32 PART B：UI 配置 PUT 不得丢命名源注册表（ops.prometheus.sources）
+# ---------------------------------------------------------------------------
+
+def test_monitoring_config_put_preserves_sources(env_home, client):
+    """面板 PUT 只写 endpoint/alertmanager——load→update→save 路径必须保留
+    已有的嵌套 sources 映射（命名源注册表，task32 PART B）。"""
+    _write_cfg(env_home)
+    import yaml
+    cfg_path = env_home / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    cfg["ops"]["prometheus"]["sources"] = {
+        "dcgm": {"endpoint": "http://127.0.0.1:9101"},
+        "telegraf": {"endpoint": "http://127.0.0.1:9102",
+                     "alertmanager": "http://127.0.0.1:9094"},
+    }
+    cfg_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
+    hc._LOAD_CONFIG_CACHE.clear()
+
+    resp = client.put("/api/monitoring/config",
+                      json={"endpoint": "http://127.0.0.1:9099"})
+    assert resp.status_code == 200
+
+    hc._LOAD_CONFIG_CACHE.clear()
+    after = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
+    prom = after["ops"]["prometheus"]
+    assert prom["endpoint"] == "http://127.0.0.1:9099"  # 面板改的字段生效
+    assert prom["sources"]["dcgm"]["endpoint"] == "http://127.0.0.1:9101"
+    assert prom["sources"]["telegraf"]["alertmanager"] == "http://127.0.0.1:9094"
