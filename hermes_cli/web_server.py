@@ -5614,19 +5614,31 @@ async def ui_sessions_list(
 # ------------------------- 四、Incidents（watch inbox 消费层） --------------------------
 
 
-@app.get("/api/incidents")
-async def get_incidents(limit: int = 50, offset: int = 0):
-    """读 watch inbox 返回告警列表（OPS-DELTA #9 采集层 → dashboard 消费层）。
+def _collect_incidents(limit: int, offset: int) -> Dict[str, Any]:
+    """构建 incidents 响应（GET /api/incidents 与 POST mark 共用，task33）。
 
-    inbox 目录不存在/为空 → 空列表 200（不 500）。条目按 alertname|instance
-    去重保留最新一次采集，新的 collected_at 在前；processed 只读展示
-    （标记处理是 watch_digest agent 通道的事，本端点不做）。
+    inbox 目录不存在/为空 → 空列表（调用方永不 500）。条目按
+    alertname|instance 去重保留最新一次采集，新的 collected_at 在前；
+    processed 只读展示（标记处理是 watch_digest agent 通道的事）。
+
+    task33 人工处置叠加：读 state.db 的 ``incident_marks``（键定义唯一来源 =
+    ``tools.watch_collect._alert_key``，episode = startsAt）。``clear`` 命中的
+    条目从 incidents 与 total 里都剔除；``ack`` 命中 → 保留并带 ``mark`` 字段。
+    状态外置而非写回 inbox 快照，见 ``tools/watch_marks`` 的模块 docstring。
     """
     limit = max(0, min(int(limit), 200))
     offset = max(0, int(offset))
     incidents: List[Dict[str, Any]] = []
     try:
         from tools.watch_collect import _alert_key, _iter_inbox
+
+        try:
+            from tools.watch_marks import episode_for, list_marks
+
+            marks = list_marks()
+        except Exception:
+            # marks 读失败绝不让告警页 500（与既有兜底风格一致）
+            marks = {}
 
         seen: set = set()
         for path in reversed(_iter_inbox()):
@@ -5645,6 +5657,10 @@ async def get_incidents(limit: int = 50, offset: int = 0):
                 if key in seen:
                     continue
                 seen.add(key)
+                mark = marks.get((key, episode_for(alert.get("startsAt"))))
+                if mark == "clear":
+                    # 用户显式清除 → 该 episode 的任何快照都不显示
+                    continue
                 incidents.append({
                     "alertname": alert.get("alertname"),
                     "severity": alert.get("severity"),
@@ -5654,6 +5670,7 @@ async def get_incidents(limit: int = 50, offset: int = 0):
                     "collected_at": collected_at,
                     "processed": processed,
                     "source": "alertmanager",
+                    "mark": mark if mark in ("ack", "clear") else None,
                 })
     except Exception:
         # 读不到 inbox（权限/坏目录等）按空处理，dashboard 永不因告警页 500
@@ -5668,6 +5685,58 @@ async def get_incidents(limit: int = 50, offset: int = 0):
         "offset": offset,
         "has_more": offset + len(page) < total,
     }
+
+
+@app.get("/api/incidents")
+async def get_incidents(limit: int = 50, offset: int = 0):
+    """读 watch inbox 返回告警列表（OPS-DELTA #9 采集层 → dashboard 消费层）。
+
+    inbox 目录不存在/为空 → 空列表 200（不 500）。task33：叠加人工处置标记
+    （``mark`` 字段，clear 命中剔除），见 ``_collect_incidents``。
+    """
+    return await run_in_threadpool(_collect_incidents, limit, offset)
+
+
+@app.post("/api/incidents/mark")
+async def post_incident_mark(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+    limit: int = 50,
+    offset: int = 0,
+):
+    """人工处置告警（task33）：``ack`` / ``clear`` / ``unmark``（需 token）。
+
+    body：``{action, alertname, instance, startsAt}``。``alert_key``/``episode``
+    由服务端计算（``watch_collect._alert_key`` + startsAt），**前端禁止拼 key**
+    ——键定义只有一处。返回与 GET 同构的刷新列表，UI 一次请求拿到结果。
+    校验：未知 action / 缺 alertname → 400；无 token → 401。
+    """
+    _require_token(request)
+    body = payload or {}
+    action = str(body.get("action") or "").strip()
+    alertname = body.get("alertname")
+    if action not in ("ack", "clear", "unmark") or not alertname:
+        return JSONResponse(
+            status_code=400,
+            content=_api_error(
+                "invalid_request",
+                "需要 action（ack|clear|unmark）与 alertname。",
+            ),
+        )
+    from tools.watch_marks import alert_key_for, delete_mark, episode_for, set_mark
+
+    alert_key = alert_key_for(alertname, body.get("instance"))
+    episode = episode_for(body.get("startsAt"))
+    if action == "unmark":
+        ok = await run_in_threadpool(delete_mark, alert_key, episode)
+    else:
+        ok = await run_in_threadpool(set_mark, alert_key, episode, action, "dashboard")
+    if not ok:
+        return JSONResponse(
+            status_code=500,
+            content=_api_error("mark_failed", "写入处置标记失败。"),
+        )
+    return await run_in_threadpool(_collect_incidents, limit, offset)
 
 
 _WINDOWS_11_MIN_BUILD = 22000
