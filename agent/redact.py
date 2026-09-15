@@ -720,8 +720,17 @@ _URL_WITH_QUERY_RE = re.compile(
 # URLs containing userinfo — `scheme://user:password@host` for ANY scheme
 # (not just DB protocols already covered by _DB_CONNSTR_RE above).
 # Catches things like `https://user:token@api.example.com/v1/foo`.
+# task34 PART C：scheme 从 HTTP/WS/FTP 白名单泛化为任意合法 scheme
+# （``minio://`` / ``nats://`` / ``mcp://`` 等对象存储/消息队列 DSN 的
+# userinfo 同样是凭据位）。约束：
+#   - DB 协议（postgres/mysql/mongodb/redis/amqp）仍归 _DB_CONNSTR_RE 专管，
+#     这里负向前瞻跳过，不重复处理；
+#   - 幂等：已打码形态（user:***@）再跑一遍输出不变（*** → ***）；
+#   - scheme 前不能紧邻 scheme 合法字符（防把更长标识符的尾部当 scheme）。
 _URL_USERINFO_RE = re.compile(
-    r"(https?|wss?|ftp)://([^/\s:@]+):([^/\s@]+)@",
+    r"(?<![A-Za-z0-9+.-])"
+    r"(?!(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://)"
+    r"([a-z][a-z0-9+.-]*)://([^/\s:@]+):([^/\s@]+)@",
 )
 
 # Strict provider-egress URL redaction accepts more URL-reference forms than
@@ -1043,10 +1052,12 @@ def _redact_url_query_params(text: str) -> str:
 
 
 def _redact_url_userinfo(text: str) -> str:
-    """Strip `user:password@` from HTTP/WS/FTP URLs.
+    """Strip `user:password@` from URLs of any scheme (task34 PART C).
 
     DB protocols (postgres, mysql, mongodb, redis, amqp) are handled
-    separately by `_DB_CONNSTR_RE`.
+    separately by `_DB_CONNSTR_RE` and are deliberately skipped here so they
+    are never processed twice. Already-masked userinfo (``user:***@``) is
+    idempotent; URLs without userinfo pass through byte-identical.
     """
     return _URL_USERINFO_RE.sub(
         lambda m: f"{m.group(1)}://{m.group(2)}:***@",

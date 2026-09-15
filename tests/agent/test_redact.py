@@ -1157,6 +1157,78 @@ class TestRenderConfigCommandDetection:
             assert line in loose and line in strict, benign
 
 
+class TestUrlUserinfoSchemeGeneralization:
+    """task34 PART C — _redact_url_userinfo 的 scheme 泛化。
+
+    原来只认 HTTP/WS/FTP；``minio://`` / ``nats://`` 等对象存储/消息队列
+    DSN 的 userinfo 同样是凭据位。约束：DB 协议仍归 _DB_CONNSTR_RE（不重复
+    处理）；已打码形态幂等；无 userinfo 的普通 URL 逐字节不变。
+    """
+
+    def test_minio_userinfo_masked(self):
+        from agent.redact import _redact_url_userinfo
+
+        out = _redact_url_userinfo("minio://admin:Sup3rSecret@127.0.0.1:9000/bucket")
+        assert "Sup3rSecret" not in out
+        assert out == "minio://admin:***@127.0.0.1:9000/bucket"
+
+    def test_nats_userinfo_masked(self):
+        from agent.redact import _redact_url_userinfo
+
+        out = _redact_url_userinfo("nats://svc:tokValue123@events.internal:4222")
+        assert "tokValue123" not in out
+        assert out == "nats://svc:***@events.internal:4222"
+
+    def test_http_ws_ftp_still_masked(self):
+        from agent.redact import _redact_url_userinfo
+
+        assert _redact_url_userinfo(
+            "https://user:pwValue12345@api.example.com/v1"
+        ) == "https://user:***@api.example.com/v1"
+        assert _redact_url_userinfo(
+            "wss://user:pwValue12345@ws.example.com"
+        ) == "wss://user:***@ws.example.com"
+
+    def test_db_schemes_not_double_processed(self):
+        """DB 协议归 _DB_CONNSTR_RE 专管——userinfo 泛化 pass 不重复处理。"""
+        from agent.redact import _redact_url_userinfo, redact_cdp_url
+
+        raw = "amqp://user:amqpsecret33@host:5672/vhost"
+        assert _redact_url_userinfo(raw) == raw  # 直接调用不动（DB 通道负责）
+        out = redact_cdp_url(raw)                # 全链路由 _DB_CONNSTR_RE 打码
+        assert "amqpsecret33" not in out
+
+    def test_already_masked_is_idempotent(self):
+        from agent.redact import _redact_url_userinfo
+
+        masked = "minio://user:***@host:9000/bucket"
+        assert _redact_url_userinfo(masked) == masked
+
+    def test_url_without_userinfo_byte_identical(self):
+        from agent.redact import _redact_url_userinfo
+
+        for url in (
+            "https://example.com/search?q=secret+query&lang=zh#frag",
+            "https://example.com/path/to/page?access_token=xyz",
+            "minio://127.0.0.1:9000/bucket",
+        ):
+            assert _redact_url_userinfo(url) == url
+
+    def test_scheme_tail_not_matched(self):
+        """数字开头的标识符尾部不当 scheme（lookbehind 挡住中途起匹配）。"""
+        from agent.redact import _redact_url_userinfo
+
+        text = "9minio://user:pwValue12345@host"
+        assert _redact_url_userinfo(text) == text
+
+    def test_cdp_url_integration_minio(self):
+        from agent.redact import redact_cdp_url
+
+        out = redact_cdp_url("minio://admin:Sup3rSecret@127.0.0.1:9000/bucket")
+        assert "Sup3rSecret" not in out
+        assert "minio://admin:***@127.0.0.1:9000/bucket" == out
+
+
 class TestKeywordWordBoundary:
     """Ported from nearai/ironclaw#6129 — a secret keyword embedded inside a
     larger prose word (``Secretary`` ⊃ ``secret``, ``tokenizer`` ⊃ ``token``,
