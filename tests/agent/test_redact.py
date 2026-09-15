@@ -1046,6 +1046,117 @@ class TestAffixedJsonKeyNames:
         assert "db_password" in out
 
 
+class TestRenderConfigCommandDetection:
+    """task34 PART B — 渲染/展开型命令进严格（env-dump）通道。
+
+    ``docker compose config`` / ``docker inspect`` / ``helm get values`` /
+    ``kubectl get|describe secret`` 的 stdout 是把 secrets 渲染进配置的展开
+    结果，必须走 code_file=False 通道（宽松 pass），否则组合键名凭据在严格
+    门控下整段漏（真实事故口）。只认每段首命令；``docker compose ps`` /
+    ``kubectl get pods`` 等判定保持不变。
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "docker compose config",
+            "docker compose config --format json",
+            "docker inspect mycontainer",
+            "helm get values myrelease",
+            "helm get values myrelease --all",
+            "kubectl get secret db-credentials",
+            "kubectl get secret db-credentials -o json",
+            "kubectl describe secret db-credentials",
+            "cat /tmp/x | docker compose config",   # 管道段的首命令
+            "printenv && docker inspect web",        # 多段，任一段命中即可
+        ],
+    )
+    def test_render_commands_detected(self, command):
+        from agent.redact import is_env_dump_command
+
+        assert is_env_dump_command(command) is True, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo docker compose config",   # echo 的参数，不是渲染命令
+            "docker compose ps",
+            "docker compose logs",
+            "docker compose up -d",
+            "docker ps",
+            "kubectl get pods",
+            "kubectl get secrets",          # 复数形式不在名单（保守）
+            "kubectl describe pods",
+            "helm list",
+            "",
+            None,
+        ],
+    )
+    def test_non_render_commands_unchanged(self, command):
+        from agent.redact import is_env_dump_command
+
+        assert is_env_dump_command(command) is False, command
+
+    def test_render_output_secret_masked_loose_path(self):
+        """渲染输出里的组合键名凭据走宽松通道后被打码。"""
+        from agent.redact import redact_terminal_output
+
+        v = "Aa1" + "-x9" * 6 + "Zz"
+        out = redact_terminal_output(
+            '{"MINIO_ROOT_' + 'PASSWORD": "' + v + '"}',
+            "docker compose config --format json",
+        )
+        assert v not in out
+
+    def test_env_dump_false_positive_comparison(self):
+        """误报对照（task34 验收项）：现实 env dump 样本分别走宽松
+        （code_file=False）与现状（code_file=True）通道，额外误伤的键必须
+        为 0——两张打码键名单的差异恰好等于带关键词的 4 条。"""
+        from agent.redact import redact_sensitive_text
+
+        v1 = "Aa1" + "-x9" * 6 + "Zz"
+        sample = "\n".join([
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG=C.UTF-8",
+            "PYTHON_VERSION=3.12.3",
+            "GPG_KEY=7169605F62C751356D059A34D8B939942C123456",
+            "PYTHON_SHA256=" + "a" * 4 + "b" * 8 + "c" * 4 + "d" * 44,
+            "HOSTNAME=7f3a2b1c9d0e",
+            "HOME=/root",
+            "TZ=UTC",
+            "MINIO_ROOT_PASSWORD=" + v1,
+            "POSTGRES_PASSWORD=" + v1 + "aa",
+            "NACOS_TOKEN=" + v1 + "bb",
+            "REDIS_AUTH=" + v1 + "cc",
+        ])
+
+        loose = redact_sensitive_text(sample, code_file=False, credential_values=True)
+        strict = redact_sensitive_text(sample, code_file=True, credential_values=True)
+
+        def masked_keys(out):
+            keys = set()
+            for line in out.splitlines():
+                if "=" in line:
+                    k, _, val = line.partition("=")
+                    if val != sample.split("\n")[[l.split("=")[0] for l in sample.splitlines()].index(k)].partition("=")[2]:
+                        keys.add(k)
+            return keys
+
+        loose_masked = masked_keys(loose)
+        strict_masked = masked_keys(strict)
+        # 宽松通道必须恰好打码 4 条带关键词的键，其余 8 条公共键逐字保留
+        assert loose_masked == {
+            "MINIO_ROOT_PASSWORD", "POSTGRES_PASSWORD", "NACOS_TOKEN", "REDIS_AUTH",
+        }
+        # 严格通道不比宽松通道多打码（额外误伤 = 0）
+        extra = strict_masked - loose_masked
+        assert extra == set(), f"strict path over-masks: {extra}"
+        for benign in ("PATH", "LANG", "PYTHON_VERSION", "GPG_KEY",
+                       "PYTHON_SHA256", "HOSTNAME", "HOME", "TZ"):
+            line = next(l for l in sample.splitlines() if l.startswith(benign + "="))
+            assert line in loose and line in strict, benign
+
+
 class TestKeywordWordBoundary:
     """Ported from nearai/ironclaw#6129 — a secret keyword embedded inside a
     larger prose word (``Secretary`` ⊃ ``secret``, ``tokenizer`` ⊃ ``token``,

@@ -1561,19 +1561,41 @@ def redact_sensitive_text(
 # fixtures, ``postgresql://{user}`` f-string templates). See issue #43025.
 _ENV_DUMP_COMMANDS = frozenset({"env", "printenv", "set", "export", "declare"})
 
+# 渲染/展开型命令（task34 PART B）：stdout 不是源码，而是把 secrets 渲染进
+# 配置的「展开结果」——``docker compose config``（compose 文件 + env 渲染成
+# JSON/YAML，真实事故口）、``docker inspect``（含 env 段）、``helm get
+# values``（release 渲染值）、``kubectl (get|describe) secret``（secret 明文
+# /base64 值）。这些命令的输出必须走宽松的 code_file=False 通道，否则键名
+# 带前后缀的凭据（MinIO root 凭据类）在严格门控下整段漏。
+#
+# 匹配语义：命令前缀元组，只认每个段的**首命令**（tokens[0:] 前缀）——
+# ``echo docker compose config`` 是 echo，不是渲染命令。段切分沿用既有
+# ``|`` ``;`` ``&`` 规则；前缀未匹配完（段比前缀短）自然不命中；解析失败/
+# 未知 → False（保守，语义与 _ENV_DUMP_COMMANDS 一致）。
+_RENDER_CONFIG_COMMAND_PREFIXES = (
+    ("docker", "compose", "config"),
+    ("docker", "inspect"),
+    ("helm", "get", "values"),
+    ("kubectl", "get", "secret"),
+    ("kubectl", "describe", "secret"),
+)
+
 
 def is_env_dump_command(command: str | None) -> bool:
     """Return True if ``command`` dumps environment variables to stdout.
 
     Detects ``env`` / ``printenv`` / ``set`` / ``export`` / ``declare`` as the
     first token of any segment in a pipeline or sequence (``;`` / ``&&`` /
-    ``||`` / ``|``). Conservative: a parse failure or anything unrecognized
-    returns False (callers then fall back to the safer code_file=True path,
-    which still masks prefix-shaped keys).
+    ``||`` / ``|``), plus the render/expand commands whose stdout embeds
+    rendered credentials (``docker compose config``, ``docker inspect``,
+    ``helm get values``, ``kubectl get|describe secret``) by command-prefix
+    match (task34 PART B). Conservative: a parse failure or anything
+    unrecognized returns False (callers then fall back to the safer
+    code_file=True path, which still masks prefix-shaped keys).
     """
     if not command or not isinstance(command, str):
         return False
-    # Split on shell separators, then inspect the first token of each segment.
+    # Split on shell separators, then inspect the first tokens of each segment.
     segments = re.split(r"[|;&]+", command)
     for seg in segments:
         seg = seg.strip()
@@ -1583,8 +1605,14 @@ def is_env_dump_command(command: str | None) -> bool:
             tokens = shlex.split(seg)
         except ValueError:
             tokens = seg.split()
-        if tokens and tokens[0] in _ENV_DUMP_COMMANDS:
+        if not tokens:
+            continue
+        if tokens[0] in _ENV_DUMP_COMMANDS:
             return True
+        # 渲染型命令：首命令 + 后续词组成的前缀元组（段短于前缀 → 切片不等 → False）。
+        for prefix in _RENDER_CONFIG_COMMAND_PREFIXES:
+            if tuple(tokens[: len(prefix)]) == prefix:
+                return True
     return False
 
 
