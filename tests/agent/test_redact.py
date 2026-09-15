@@ -923,6 +923,129 @@ class TestRedactCdpUrl:
         assert redact_cdp_url(None) == ""
 
 
+class TestAffixedJsonKeyNames:
+    """task34 PART A — JSON / 单引号 repr 键名包含匹配。
+
+    事故形态：``docker compose config --format json | python3 -c`` 渲染口，
+    键名带前后缀（MINIO_ROOT_PASSWORD / monitor_auth_token 一类）从 JSON 口
+    全部漏；print(dict) 的单引号 repr 形态全漏。修复后：
+      - 双引号 JSON / 单引号 repr 都按「前后缀键名 + _key_has_secret_keyword
+        词边界过滤」打码（语义名单只有 helper 一份）；
+      - ``*_ACCESS_KEY_ID`` / ``*_KEY_ID`` 族纳入关键词表（key id 是账号
+        标识，渲染配置里与 secret 相邻出现；词边界规则保护 prose）；
+      - 负样本（tokenizer / secretary / author / keys / note / timestamp /
+        max_tokens）逐字节不变。
+    """
+
+    # 合成值：低熵 + 含分隔符，值形态兜底 pass 不会命中——矩阵打到的是键名通道
+    _V = "Aa1" + "-x9" * 6 + "Zz"
+
+    KEYS_AFFIXED = [
+        "root_password",
+        "db_password",
+        "POSTGRES_PASSWORD",
+        "MINIO_ROOT_PASSWORD",
+        "MINIO_ACCESS_KEY_ID",
+        "monitor_auth_token",
+    ]
+
+    @pytest.mark.parametrize("form", ["json", "repr"])
+    @pytest.mark.parametrize("key", KEYS_AFFIXED)
+    def test_affixed_keys_masked(self, key, form):
+        from agent.redact import redact_terminal_output
+
+        if form == "json":
+            text = f'{{"{key}": "{self._V}"}}'
+        else:
+            text = f"{{'{key}': '{self._V}'}}"
+        out = redact_terminal_output(text, "docker compose config --format json")
+        assert self._V not in out, f"{key}/{form} leaked: {out!r}"
+        assert key in out  # 键名保留（值打码，不是整段吞）
+
+    @pytest.mark.parametrize("form", ["json", "repr"])
+    def test_bare_exact_keys_still_masked(self, form):
+        from agent.redact import redact_terminal_output
+
+        for key in ("password", "api_key"):
+            if form == "json":
+                text = f'{{"{key}": "{self._V}"}}'
+            else:
+                text = f"{{'{key}': '{self._V}'}}"
+            out = redact_terminal_output(text, "cat config.json")
+            assert self._V not in out, f"{key}/{form} leaked"
+
+    def test_repr_exact_name_without_core_word_masked(self):
+        """passphrase / id_rsa 不含核心词——repr 通道靠全等名单兜住（与 JSON 对齐）。
+
+        注：bearer 故意不在本列——bearer-only 文本过不了严格面 _CFG_SECRET_WORD_RE
+        预筛门（JSON 双引号通道同样如此，属既有行为，非本任务回归）。
+        """
+        from agent.redact import redact_terminal_output
+
+        for key in ("passphrase", "id_rsa"):
+            text = f"{{'{key}': '{self._V}'}}"
+            out = redact_terminal_output(text, "cat bao.json")
+            assert self._V not in out, f"{key} repr leaked: {out!r}"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            '{"tokenizer": "cl100k_base"}',
+            '{"secretary": "J.Smith"}',
+            '{"author": "J.R.R. Tolkien"}',
+            '{"keys": ["a", "b"]}',
+            '{"note": "meet at noon"}',
+            '{"timestamp": "2026-09-15T00:00:00Z"}',
+            '{"max_tokens": "4096"}',
+            "{'tokenizer': 'cl100k_base'}",
+            "{'secretary': 'J.Smith'}",
+            "{'author': 'J.R.R. Tolkien'}",
+        ],
+    )
+    def test_prose_keys_unchanged(self, text):
+        from agent.redact import redact_terminal_output
+
+        assert redact_terminal_output(text, "cat config.json") == text
+
+    def test_access_key_id_env_and_yaml_forms(self):
+        """key_id 族纳入关键词表后，env / yaml 形态同通道生效。"""
+        from agent.redact import redact_sensitive_text
+
+        env = redact_sensitive_text("MINIO_ACCESS_KEY_ID=" + self._V)
+        assert self._V not in env
+
+        yaml_text = redact_sensitive_text("minio_access_key_id: " + self._V)
+        assert self._V not in yaml_text
+        assert "minio_access_key_id:" in yaml_text
+
+    def test_access_key_id_prose_not_masked(self):
+        """key_id 词边界过滤：嵌在更大的词里不是键。"""
+        from agent.redact import redact_sensitive_text
+
+        text = "monkey_identifier=abc\nturkey_id: xyz\n"
+        assert redact_sensitive_text(text) == text
+
+    def test_already_masked_head_tail_not_collapsed(self):
+        """前缀 pass 打出的 head/tail 标记不被新通道二次打码成裸 ***。"""
+        from agent.redact import redact_terminal_output
+
+        out = redact_terminal_output(
+            '{"password": "sk-proj-abc123def456ghi789jkl012mno345"}',
+            "cat config.json",
+        )
+        assert "abc123def456" not in out
+        assert "sk-pro..." in out  # head/tail 标记保留（非 "***"）
+
+    def test_repr_skeleton_preserved(self):
+        from agent.redact import redact_sensitive_text
+
+        text = "{'db_password': '" + self._V + "', 'port': 5432}"
+        out = redact_sensitive_text(text)
+        assert self._V not in out
+        assert "'port': 5432" in out
+        assert "db_password" in out
+
+
 class TestKeywordWordBoundary:
     """Ported from nearai/ironclaw#6129 — a secret keyword embedded inside a
     larger prose word (``Secretary`` ⊃ ``secret``, ``tokenizer`` ⊃ ``token``,

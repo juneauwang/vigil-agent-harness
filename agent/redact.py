@@ -317,8 +317,12 @@ _PREFIX_PATTERNS = [
 # an all-caps key is almost never prose/code. ``PASS`` covers the sshpass /
 # sudo family (SSHPASS, SUDO_PASS, *_PASS) that the longer PASSWD/PASSWORD
 # alternatives miss — an all-caps KEY ending in PASS is a password, not prose
-# (OPS-DELTA #5).
-_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|CREDENTIAL|AUTH)"
+# (OPS-DELTA #5). ``KEY_?ID`` covers the access-key-id family
+# (``MINIO_ACCESS_KEY_ID`` / ``AWS_ACCESS_KEY_ID`` / ``*KEY_ID``): a key id is
+# an account identifier routinely rendered next to its secret in compose/
+# inventory dumps, and an all-caps KEY ending in KEY_ID is a credential slot,
+# not prose.
+_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|CREDENTIAL|AUTH|KEY_?ID)"
 _ENV_ASSIGN_RE = re.compile(
     rf"([A-Z0-9_]{{0,50}}{_SECRET_ENV_NAMES}[A-Z0-9_]{{0,50}})\s*=\s*(['\"]?)(\S+)\2",
 )
@@ -348,8 +352,11 @@ _ENV_ASSIGN_RE = re.compile(
 # anchored/YAML matchers still run their own ``_key_has_secret_keyword``
 # validation, so bare-``pass``/``ssh_key`` config forms stay unchanged; only
 # the JSON/ENV passes (which do not keyword-validate) gain coverage
-# (OPS-DELTA #5).
-_SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|pass|ssh_key|private_key|passphrase|id_rsa|credential|auth)"
+# (OPS-DELTA #5). ``key[ _.\-]?id`` (access-key-id family) is here so the
+# STRICT pre-gate admits key-id-only texts into the JSON passes — without it
+# ``{"MINIO_ACCESS_KEY_ID": …}`` fails the gate and leaks whole (task34);
+# the JSON affixed pass still keyword-validates every hit.
+_SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|pass|ssh_key|private_key|passphrase|id_rsa|credential|auth|key[ _.\-]?id)"
 _CFG_VALUE = r"(['\"]?)([^\s&]+?)\2(?=[\s&]|$)"
 # Linear pre-gate for the _CFG_*_RE subs below: a text with no secret keyword
 # can never match either pattern, so the (potentially backtrack-heavy) subs
@@ -407,7 +414,9 @@ _CFG_ANCHORED_SPACED_RE = re.compile(
 # from the key set so ``Authorization:`` / ``author:`` don't match (the former
 # is masked by _AUTH_HEADER_RE); ``auth_token``/``auth-token`` still match via
 # the ``token`` keyword. Quoted values defer to _JSON_FIELD_RE via the lookahead.
-_YAML_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|credential)"
+# ``key[ _.\-]?id`` (task34): access-key-id family — helper-validated like
+# every other YAML hit, so prose (``monkey_id:``) stays untouched.
+_YAML_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|credential|key[ _.\-]?id)"
 # NOTE(perf): possessive quantifiers wherever the successor is disjoint; the
 # leading ``[A-Za-z0-9_.\-]*`` stays backtrackable (see _CFG_DOTTED_RE note).
 _YAML_ASSIGN_RE = re.compile(
@@ -452,9 +461,18 @@ _YAML_QUOTED_ASSIGN_RE = re.compile(
 # (``secretary``, ``tokenizer``, ``authored``, ``credentialing``) no longer
 # match. ALL-CAPS keys keep the legacy embedded matching (``MYTOKEN=…``) — an
 # all-caps key is almost never prose, the same rationale as _ENV_ASSIGN_RE.
+#
+# ``key[ _.\-]?id`` (task34): the access-key-id family — ``*_ACCESS_KEY_ID``,
+# ``*_KEY_ID``. A key id is an account identifier (semi-sensitive) that
+# rendered configs (docker compose config / cloud inventory) place right next
+# to its secret; masking it trades little: the word-boundary rules keep prose
+# safe (``monkey_identifier`` / ``turkey_id`` don't match — the keyword must
+# sit at a separator or camelCase boundary), and the AKIA value-prefix pass
+# only ever covered the AWS-shaped minority of these values.
 _KEY_KEYWORD_RE = re.compile(
     r"(?:api|auth|access|refresh|session|secret)[ _.\-]?(?:key|token)"
-    r"|token|secret|passwd|password|credential|auth",
+    r"|token|secret|passwd|password|credential|auth"
+    r"|key[ _.\-]?id",
     re.IGNORECASE,
 )
 
@@ -561,6 +579,32 @@ def _already_masked_value(value: str) -> bool:
 _JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|passwd|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material|ssh_key|private_key|passphrase|client_secret|id_rsa|credential|credentials|authorization|auth)"
 _JSON_FIELD_RE = re.compile(
     rf'("{_JSON_KEY_NAMES}")\s*:\s*"([^"]+)"',
+    re.IGNORECASE,
+)
+# Full-match tester for the exact-name list above (shared with the single-quote
+# repr pass so the exact family can never drift between the two channels).
+_JSON_KEY_NAME_RE = re.compile(rf"^(?:{_JSON_KEY_NAMES})$", re.IGNORECASE)
+
+# task34 PART A — 组合键名（前后缀形态）通道。_JSON_FIELD_RE 的键名是全等匹配，
+# 渲染型输出里真实键名几乎都带前后缀（``MINIO_ROOT_PASSWORD`` / ``db_password``
+# / ``monitor_auth_token``），从 JSON 口全部漏。这里键名放宽为
+# ``[A-Za-z0-9_.\-]*<核心词>[A-Za-z0-9_.\-]*``，命中后交给既有的
+# ``_key_has_secret_keyword()`` 做词边界/prose 过滤（tokenizer / secretary /
+# author 等嵌词照旧放行）——秘密词的语义判定只有 _KEY_KEYWORD_RE 一份名单，
+# 这里只是预筛超集（含裸 ``key``：access_key_id 族的判定在 helper 里），
+# 预筛多匹配无副作用。
+_JSON_KEY_CORE = r"token|secret|passwd|password|credential|auth|key"
+_JSON_FIELD_AFFIXED_RE = re.compile(
+    rf'("[A-Za-z0-9_.\-]*(?:{_JSON_KEY_CORE})[A-Za-z0-9_.\-]*")\s*:\s*"([^"]+)"',
+    re.IGNORECASE,
+)
+
+# 单引号 repr 形态（``print(dict)`` 的现实输出，``--format json | python3 -c``
+# 的常见落地形态）：``{'api_key': 'value'}``。键名判定与 JSON pass 同源：
+# 全等名单（_JSON_KEY_NAMES，覆盖 passphrase/id_rsa/bearer 这类不含核心词的
+# 名字）或 _key_has_secret_keyword。
+_REPR_FIELD_RE = re.compile(
+    rf"('(?:{_JSON_KEY_NAMES})'|'[A-Za-z0-9_.\-]*(?:{_JSON_KEY_CORE})[A-Za-z0-9_.\-]*')\s*:\s*'([^']+)'",
     re.IGNORECASE,
 )
 
@@ -1223,6 +1267,35 @@ def redact_sensitive_text(
     # non-secret constants (MAX_TOKENS=4096, prompt_tokens: 123 — issue
     # #43025) and preserves values the prefix pass already masked.
     _strict = code_file and credential_values
+
+    def _affixed_field_redactor(quote: str):
+        """Shared callback for the affixed-key passes (double-quote JSON +
+        single-quote repr) so their guards can't drift apart.
+
+        Accepts a key when it is in the exact credential-name list OR passes
+        ``_key_has_secret_keyword`` (the single semantic keyword judge).
+        Already-masked values are skipped on every surface — an earlier pass's
+        head/tail marker or reversible placeholder must never be re-masked
+        into a bare ``***``.
+        """
+        def _redact(m):
+            key, value = m.group(1), m.group(2)
+            # Programmatic env lookups reference variable *names*, not
+            # secret values (issue #2852) — same exception as the other
+            # config/JSON passes.
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            bare_key = key.strip(quote)
+            if not (_JSON_KEY_NAME_RE.fullmatch(bare_key)
+                    or _key_has_secret_keyword(bare_key)):
+                return m.group(0)
+            if _strict and _is_non_secret_constant_key(bare_key):
+                return m.group(0)
+            if _already_masked_value(value):
+                return m.group(0)
+            return f"{key}: {quote}{_mask_token(value)}{quote}"
+        return _redact
+
     if "=" in text and (not code_file or (_strict and _CFG_SECRET_WORD_RE.search(text))):
         def _redact_env(m):
             name, quote, value = m.group(1), m.group(2), m.group(3)
@@ -1286,6 +1359,15 @@ def redact_sensitive_text(
                 return m.group(0)
             return f'{key}: "{_mask_token(value)}"'
         text = _JSON_FIELD_RE.sub(_redact_json, text)
+        # task34 PART A：组合键名通道——精确名单 pass 漏掉的前后缀键名
+        # （"MINIO_ROOT_PASSWORD" / "db_password" / "monitor_auth_token"），
+        # 词边界/prose 过滤在 _key_has_secret_keyword；已打码值跳过防二次打码。
+        text = _JSON_FIELD_AFFIXED_RE.sub(_affixed_field_redactor('"'), text)
+
+    # 单引号 repr 形态（print(dict) 输出）：{'api_key': '***'}。位于 JSON pass
+    # 之后、YAML pass 之前；键名判定与 JSON pass 共用同一份名单 + 同一个 helper。
+    if ":" in text and "'" in text and (not code_file or (_strict and _CFG_SECRET_WORD_RE.search(text))):
+        text = _REPR_FIELD_RE.sub(_affixed_field_redactor("'"), text)
 
     # OPS-DELTA #35：值形态检测兜底（精确键名 pass 之后，只处理它漏掉的）。
     # 严格模式（工具输出等）不要求键名含秘密词——这正是值形态检测存在的
