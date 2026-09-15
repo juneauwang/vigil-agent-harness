@@ -527,17 +527,20 @@ def _key_has_secret_keyword(key: str) -> bool:
 
 # Keys that LOOK secret (pass the keyword gate) but are well-known
 # non-secret programming/LLM constants — ``MAX_TOKENS=4096``,
-# ``prompt_tokens: 123``, ``max_tokens_for_response``. Only consulted on the
-# strict code_file surfaces (OPS-DELTA #5) so terminal/file output keeps the
+# ``prompt_tokens: 123``, ``max_tokens_for_response``. Consulted on every
+# credential-aware surface (credential_values=True: terminal/tool output, file
 # #43025 carve-out (source constants survive byte-identical); the loose
-# legacy passes on log/prose surfaces keep masking them exactly as before.
+# legacy calls (credential_values=False) keep masking them exactly as before.
+# task34b：原先这里挂的是 ``_strict``（= code_file and credential_values），
+# 而渲染型 dump 命令走 code_file=False（task34 PART B）→ 豁免在**恰好那条新
+# 通道上**失效，``max_tokens: 8192`` 被打成 ``***``（读配置的用途被砸）。
 # Prefix matching (after stripping separators) covers the affixed variants
 # that real usage stats emit: ``prompt_tokens_details``,
 # ``max_completion_tokens``, ``total_tokens`` …
 _NON_SECRET_TOKEN_KEY_PREFIXES = (
     "maxtokens", "mintokens", "numtokens", "tokencount", "tokenlimit",
     "tokenbudget", "tokenwindow", "inputtokens", "outputtokens",
-    "prompttokens", "completiontokens", "totaltokens", "tokensper",
+    "prompttokens", "completiontokens", "totaltokens", "tokensper", "tokensused",
 )
 
 
@@ -1300,7 +1303,7 @@ def redact_sensitive_text(
             if not (_JSON_KEY_NAME_RE.fullmatch(bare_key)
                     or _key_has_secret_keyword(bare_key)):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(bare_key):
+            if credential_values and _is_non_secret_constant_key(bare_key):
                 return m.group(0)
             if _already_masked_value(value):
                 return m.group(0)
@@ -1330,7 +1333,7 @@ def redact_sensitive_text(
             # embedded matching inside the helper.
             if not _key_has_secret_keyword(name):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(name):
+            if credential_values and _is_non_secret_constant_key(name):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1364,7 +1367,7 @@ def redact_sensitive_text(
             # not a leaked secret value.
             if _ENV_LOOKUP_VALUE_RE.match(value):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key.strip('"')):
+            if credential_values and _is_non_secret_constant_key(key.strip('"')):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1393,7 +1396,7 @@ def redact_sensitive_text(
             key, value = m.group(1), m.group(2)
             if _ENV_LOOKUP_VALUE_RE.match(value):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key.strip('"')):
+            if credential_values and _is_non_secret_constant_key(key.strip('"')):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1418,7 +1421,7 @@ def redact_sensitive_text(
             # document text, not credentials (nearai/ironclaw#6129).
             if not _key_has_secret_keyword(key):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key):
+            if credential_values and _is_non_secret_constant_key(key):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1435,7 +1438,7 @@ def redact_sensitive_text(
                 return m.group(0)
             if not _key_has_secret_keyword(key):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key):
+            if credential_values and _is_non_secret_constant_key(key):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)

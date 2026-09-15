@@ -1278,3 +1278,87 @@ class TestKeywordWordBoundary:
         assert "hunter2hunter2hunter2hh" not in result
 
 
+class TestNonSecretConstantCarveOutOnDumpSurface:
+    """task34b — 渲染型 dump 面上「非秘密常量豁免」曾经失效的回归。
+
+    现场（主 session 复跑发现）：task34 PART B 把 ``docker compose config`` 一类
+    渲染型命令送进严格通道（``code_file=False``），而豁免判据挂的是
+    ``_strict = code_file and credential_values`` —— 恰好在那条新通道上为 False，
+    于是 ``max_tokens: 8192`` / ``token_limit`` / ``tokens_used`` 被打成 ``***``：
+    读配置（本次的用途）被砸。
+
+    修复：豁免改挂 ``credential_values``（所有工具输出面都 True）；legacy 调用
+    （``credential_values=False``）行为不变。真凭据判据一个字没动。
+    """
+
+    _V = "Aa1" + "-x9" * 6 + "Zz"
+
+    FAMILY = [
+        "max_tokens",
+        "max_output_tokens",
+        "max_input_tokens",
+        "token_count",
+        "token_limit",
+        "token_budget",
+        "tokens_used",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "MAX_TOKENS",
+    ]
+
+    DUMP_CMDS = [
+        "docker compose config",
+        "docker compose config --format json",
+        "docker inspect node233",
+        "env",
+        "printenv",
+    ]
+
+    @pytest.mark.parametrize("cmd", DUMP_CMDS)
+    @pytest.mark.parametrize("key", FAMILY)
+    def test_constant_keys_survive_on_dump_surface(self, key, cmd):
+        from agent.redact import redact_terminal_output
+
+        for text in (
+            f"{key}: 8192",
+            '{"%s": "8192"}' % key,
+            f"{key}=8192",
+            str({key: 8192}),
+            f"model.{key}: 8192",
+        ):
+            assert redact_terminal_output(text, cmd) == text, f"{key} 在 {cmd} 面被误伤"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "access_tokens",
+            "refresh_tokens",
+            "client_secret",
+            "POSTGRES_PASSWORD",
+            "MINIO_ROOT_PASSWORD",
+            "MINIO_ACCESS_KEY_ID",
+        ],
+    )
+    def test_credential_family_still_masked_on_dump_surface(self, key):
+        """正向对照：同一 dump 面上，真凭据一个都不能因为这次放宽而漏。"""
+        from agent.redact import redact_terminal_output
+
+        for text in (
+            '{"%s": "%s"}' % (key, self._V),
+            f"{key}: {self._V}",
+            str({key: self._V}),
+            f"{key}={self._V}",
+        ):
+            assert self._V not in redact_terminal_output(text, "docker compose config"), (
+                f"{key} 在 dump 面漏了"
+            )
+
+    def test_legacy_call_behavior_unchanged(self):
+        """边界：豁免只挂在 credential-aware 面上；legacy 默认调用保持原行为。"""
+        from agent.redact import redact_sensitive_text
+
+        assert redact_sensitive_text("max_tokens: 8192") == "max_tokens: ***"
+
+
+
