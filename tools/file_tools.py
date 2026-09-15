@@ -2054,6 +2054,109 @@ def restore_redacted_write(path: str) -> str:
     )
 
 
+# =========================================================================
+# task34 PART D — 写侧落盘后回读校验 + 恢复指引（只做可见性，不动打码判据）
+#
+# 背景：写侧脱敏会真改文件内容。主 session 实测两类事故：① 25 处源码引用被
+# 替换成 «redacted:N»（产品名、ensure_ascii=False、16 位十六进制哈希都被吞），
+# 打码版被当正常产出交付；② heredoc 后半段被吞。打码发生时只给一行"已备份"
+# 警告，恢复机制不可发现 → 等于没有恢复。
+#
+# 这里加两层可见性：
+#   1. 写入成功后回读落盘内容做疑似误报判定（占位符落在代码围栏/表格内 +
+#      字节长度对账——"替换成占位符"和"直接吞掉一段"都改变长度，只 grep
+#      占位符会漏掉后者），命中 → logger.warning + 工具结果 _warning，不静默交付；
+#   2. 打码发生时在文件末尾追加恢复指引行（备份文件名 + 恢复命令）。
+# 打码"判据"本身（哪些值打码）是 agent/redact.py 的事，这里一律不碰。
+# =========================================================================
+
+_REDACT_PLACEHOLDER_RE = re.compile(r"«redacted:\d+»")
+
+
+def _redact_recovery_hint(target: str) -> str:
+    """打码写入时追加到文件末尾的恢复指引（备份文件名 + 恢复命令）。"""
+    backup = _redact_backup_path(target)
+    resolved = Path(target).resolve()
+    restore_cmd = (
+        "python3 -c \"from tools.file_tools import restore_redacted_write; "
+        f"print(restore_redacted_write(r'{resolved}'))\""
+    )
+    return (
+        "\n\n<!-- vigil-redact: 本文件写入时疑似凭据内容被自动打码"
+        "（«redacted:N» 占位）。原文完整备份于同目录 "
+        f"{backup.name}（0600）；恢复：用该备份 JSON 的 original 字段逐字覆盖"
+        f"本文件，或运行：{restore_cmd} -->\n"
+    )
+
+
+def _redact_false_positive_suspicion(
+    original: str, persisted_body: str, placeholders: dict
+) -> list:
+    """疑似误报判定（打码发生的前提下调用）。返回告警理由列表，空 = 无疑点。
+
+    两个信号：
+    (a) «redacted:N» 占位符落在代码围栏/表格行内——文档引用代码与表格是
+        误报重灾区（源码引用、产品名、哈希被吞）；
+    (b) 长度对账不平：落盘长度 ≠ 按占位映射推算的长度——说明存在映射之外
+        的打码替换或吞段（*** 类整段掩码、贪婪匹配吞掉相邻文本）。
+    """
+    reasons: list = []
+    in_fence = False
+    for line in persisted_body.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            continue
+        in_table = stripped.startswith("|") and stripped.endswith("|")
+        if (in_fence or in_table) and _REDACT_PLACEHOLDER_RE.search(line):
+            reasons.append("占位符出现在代码围栏/表格内（疑似误报）")
+            break
+    expected_len = len(original) - sum(len(v) for v in placeholders.values()) + sum(
+        len(f"«redacted:{n}»") for n in placeholders
+    )
+    if len(persisted_body) != expected_len:
+        reasons.append(
+            f"落盘长度无法由占位映射解释（{len(persisted_body)} != {expected_len}，"
+            "存在映射之外的打码替换或吞段）"
+        )
+    return reasons
+
+
+def _readback_redact_suspicion(
+    target: str, original: str, intended: str, hint: str | None, placeholders: dict
+) -> str | None:
+    """回读落盘内容做疑似误报校验。返回告警文案（合并进 _warning），None = 干净。
+
+    判定跑在**磁盘上**的内容（不是写入前的内存串）：部分写/编码异常/被并发
+    改写都会在这里暴露。恢复指引行本身含 «redacted:N» 字样，判定前先剥掉。
+    """
+    try:
+        raw = Path(target).read_bytes()
+    except OSError as exc:
+        return f"write_file 打码后回读失败（{exc}）；落盘内容未经校验，请人工核对"
+    try:
+        readback = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return "write_file 打码后回读校验失败（落盘内容非 UTF-8），请人工核对"
+    reasons: list = []
+    body = readback
+    if hint:
+        if readback.endswith(hint):
+            body = readback[: -len(hint)]
+        else:
+            reasons.append("恢复指引行缺失或被改动")
+    if readback != intended:
+        reasons.append("落盘内容与写入内容不一致")
+    reasons.extend(_redact_false_positive_suspicion(original, body, placeholders))
+    if not reasons:
+        return None
+    return (
+        "write_file 打码疑似误报告警（核对后再交付）："
+        + "；".join(reasons)
+        + "；原文见同目录 .redact-backup.json 的 original 字段"
+    )
+
+
 def write_file_tool(path: str, content: str, task_id: str = "default",
                     cross_profile: bool = False,
                     session_id: str | None = None) -> str:
@@ -2098,10 +2201,13 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
 
         if _resolved is None:
             backup_path = None
+            hint = _redact_recovery_hint(path) if credential_sensitive else None
             if credential_sensitive:
                 # §AS B2：写打码内容前先把原文备份到 sidecar（0600），
                 # 文档可逆恢复；备份失败不阻断写（警告里不宣称恢复点）。
+                # task34 PART D：恢复指引随打码内容一起落盘（文件末尾一行）。
                 backup_path = _backup_original_write(path, content, redact_placeholders)
+                write_content = write_content + hint
             stale_warning = _check_file_staleness(path, task_id)
             file_ops = _get_file_ops(task_id)
             result = file_ops.write_file(path, write_content)
@@ -2110,6 +2216,15 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
                 result_dict["_warning"] = stale_warning
             if credential_sensitive and not result_dict.get("error"):
                 _lockdown_credential_file(path, result_dict, backup_path=backup_path)
+                suspicion = _readback_redact_suspicion(
+                    path, content, write_content, hint, redact_placeholders
+                )
+                if suspicion:
+                    logger.warning("write_file: %s: %s", path, suspicion)
+                    existing = result_dict.get("_warning")
+                    result_dict["_warning"] = (
+                        f"{existing}；{suspicion}" if existing else suspicion
+                    )
             if not result_dict.get("error"):
                 _mark_verification_stale(task_id, [path], session_id=session_id)
             _update_read_timestamp(path, task_id)
@@ -2120,8 +2235,10 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
         # remain fully parallel.
         with file_state.lock_path(_resolved):
             backup_path = None
+            hint = _redact_recovery_hint(_resolved) if credential_sensitive else None
             if credential_sensitive:
                 backup_path = _backup_original_write(_resolved, content, redact_placeholders)
+                write_content = write_content + hint
             # Cross-agent staleness wins over per-task warning when both
             # fire — its message names the sibling subagent.
             cross_warning = file_state.check_stale(task_id, _resolved)
@@ -2137,6 +2254,15 @@ def write_file_tool(path: str, content: str, task_id: str = "default",
                 result_dict["_warning"] = effective_warning
             if credential_sensitive and not result_dict.get("error"):
                 _lockdown_credential_file(_resolved, result_dict, backup_path=backup_path)
+                suspicion = _readback_redact_suspicion(
+                    _resolved, content, write_content, hint, redact_placeholders
+                )
+                if suspicion:
+                    logger.warning("write_file: %s: %s", _resolved, suspicion)
+                    existing = result_dict.get("_warning")
+                    result_dict["_warning"] = (
+                        f"{existing}；{suspicion}" if existing else suspicion
+                    )
             # Always report the ABSOLUTE path actually written, so a wrong-cwd
             # mismatch is visible in the response instead of silently routing
             # the edit to the wrong checkout.
