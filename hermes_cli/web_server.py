@@ -4826,6 +4826,39 @@ async def get_monitoring_alerts_triage(request: Request):
     return {"ok": True, "data": data}
 
 
+@app.get("/api/monitoring/alerts/autodispatch-audit")
+async def get_monitoring_alerts_autodispatch_audit(request: Request,
+                                                   limit: int = 50):
+    """告警自动派发审计回看（只读，task35 PART B）。
+
+    数据源 = ``runtime/alert_autodispatch.jsonl``
+    （``alert_autodispatch.record_dispatch_audit`` best-effort 落盘）。每条含
+    alertname/severity/instance/startsAt/runbook/matched_keyword/result/
+    needs_human/error/duration_s + steps（步骤回看投影：id/action/status/
+    error/target/commands，已脱敏 + 截断，task35 PART A）。
+
+    **纯读**：不写文件、不改状态、不触发派发。文件不存在（从未派发过 = 正常
+    态）→ 200 + 空列表，不 404/500。``limit`` 默认 50、钳制 [1,200]（与
+    ``recent_dispatch_audit`` 内部一致）。不进 PUBLIC_API_PATHS，走
+    ``_require_token``（与 /api/monitoring/alerts 同款门控）。
+    """
+    _require_token(request)
+    from hermes_cli.alert_autodispatch import recent_dispatch_audit
+
+    def _load() -> list:
+        return recent_dispatch_audit(Path(get_hermes_home()), limit=limit)
+
+    try:
+        rows = await run_in_threadpool(_load)
+    except Exception as exc:
+        _log.exception("monitoring alerts autodispatch audit failed")
+        return JSONResponse(
+            status_code=500,
+            content=_api_error("autodispatch_audit_failed", str(exc)),
+        )
+    return {"ok": True, "data": {"count": len(rows), "entries": rows}}
+
+
 # ---------------------------------------------------------------------------
 # UI 壳第二批：执行/审批/审计 API（OPS-DELTA #47，契约见 vigil-exec-api-draft.md）
 # ---------------------------------------------------------------------------

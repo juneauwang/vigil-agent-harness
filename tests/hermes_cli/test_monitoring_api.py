@@ -731,3 +731,94 @@ def test_monitoring_config_put_preserves_sources(env_home, client):
     assert prom["endpoint"] == "http://127.0.0.1:9099"  # 面板改的字段生效
     assert prom["sources"]["dcgm"]["endpoint"] == "http://127.0.0.1:9101"
     assert prom["sources"]["telegraf"]["alertmanager"] == "http://127.0.0.1:9094"
+
+
+# ---------------------------------------------------------------------------
+# /api/monitoring/alerts/autodispatch-audit（task35 PART B：自动派发审计只读回看）
+# ---------------------------------------------------------------------------
+
+def _write_audit(home, entries) -> None:
+    (home / "runtime").mkdir(parents=True, exist_ok=True)
+    path = home / "runtime" / "alert_autodispatch.jsonl"
+    path.write_text(
+        "".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries),
+        encoding="utf-8",
+    )
+
+
+def _audit_entry(n: int, **over):
+    base = {
+        "ts": f"2026-09-24T0{n}:00:00+0800",
+        "type": "alert_autodispatch",
+        "alertname": f"Alert{n}",
+        "severity": "critical",
+        "instance": f"node{n}:9100",
+        "startsAt": f"2026-09-24T0{n}:00:00Z",
+        "runbook": f"rb-{n}",
+        "matched_keyword": "k",
+        "result": "ok",
+        "needs_human": False,
+        "error": "",
+        "duration_s": 1.5,
+        "steps": [{"id": f"s{n}", "action": "query", "status": "ok", "ok": True,
+                   "error": "",
+                   "commands": [{"desc": "q", "exit_code": 0,
+                                 "stdout": f"out{n}", "stderr": ""}]}],
+    }
+    base.update(over)
+    return base
+
+
+def test_autodispatch_audit_requires_token(env_home, client):
+    client.headers.pop(web_server._SESSION_HEADER_NAME, None)
+    resp = client.get("/api/monitoring/alerts/autodispatch-audit")
+    assert resp.status_code == 401
+
+
+def test_autodispatch_audit_missing_file_empty_200(env_home, client):
+    """从未派发过（审计文件不存在）→ 200 + 空列表，不是 404/500。"""
+    assert not (env_home / "runtime" / "alert_autodispatch.jsonl").exists()
+    resp = client.get("/api/monitoring/alerts/autodispatch-audit")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["count"] == 0
+    assert data["entries"] == []
+
+
+def test_autodispatch_audit_returns_newest_first(env_home, client):
+    _write_audit(env_home, [_audit_entry(1), _audit_entry(2),
+                            _audit_entry(3, needs_human=True,
+                                         result="blocked")])
+    resp = client.get("/api/monitoring/alerts/autodispatch-audit")
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data["count"] == 3
+    entries = data["entries"]
+    assert [e["alertname"] for e in entries] == ["Alert3", "Alert2", "Alert1"]
+    assert entries[0]["needs_human"] is True
+    # steps 一并透出（可回看）
+    assert entries[0]["steps"][0]["id"] == "s3"
+
+
+def test_autodispatch_audit_limit_applied_and_clamped(env_home, client):
+    _write_audit(env_home, [_audit_entry(i) for i in range(1, 6)])
+    resp = client.get("/api/monitoring/alerts/autodispatch-audit?limit=2")
+    assert resp.status_code == 200
+    entries = resp.json()["data"]["entries"]
+    assert [e["alertname"] for e in entries] == ["Alert5", "Alert4"]
+    # 上限钳制到 200（与 recent_dispatch_audit 一致）：这里验证 >200 不报错
+    resp = client.get("/api/monitoring/alerts/autodispatch-audit?limit=9999")
+    assert resp.status_code == 200
+    assert resp.json()["data"]["count"] == 5
+
+
+def test_autodispatch_audit_is_pure_read(env_home, client):
+    """纯读：读端点不得创建/改写文件，也不得触发派发。"""
+    _write_audit(env_home, [_audit_entry(1)])
+    path = env_home / "runtime" / "alert_autodispatch.jsonl"
+    before = path.read_text(encoding="utf-8")
+    state = env_home / "runtime" / "alert_autodispatch_state.json"
+    for _ in range(3):
+        assert client.get("/api/monitoring/alerts/autodispatch-audit").status_code == 200
+    assert path.read_text(encoding="utf-8") == before
+    assert not state.exists()
