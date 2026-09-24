@@ -32,6 +32,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("VIGIL_DASHBOARD_SESSION_TOKEN", "soul-test-token")
     from hermes_cli import web_server
 
+    # See test_dashboard_param_clamps.py: ``_SESSION_TOKEN`` is resolved at
+    # IMPORT time, so relying on the env var alone makes this fixture depend on
+    # which file imported web_server first. Pin the constant.
+    monkeypatch.setattr(web_server, "_SESSION_TOKEN", "soul-test-token", raising=False)
+
     with TestClient(web_server.app, raise_server_exceptions=False) as c:
         c.headers["Authorization"] = "Bearer soul-test-token"
         yield c

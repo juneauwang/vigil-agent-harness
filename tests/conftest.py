@@ -660,21 +660,192 @@ def _kanban_write_guard(_hermetic_environment, monkeypatch):
     monkeypatch.setattr(_kdb, "connect", _guarded_connect)
 
 
-# ── Module-level state reset — replaced by per-file process isolation ──────
+# ── Module-level state reset, per test FILE ────────────────────────────────
 #
 # Each test FILE runs in a freshly-spawned ``python -m pytest <file>``
 # subprocess via ``scripts/run_tests_parallel.py``, so module-level dicts /
 # sets / ContextVars from tests in one file cannot leak into tests in
-# another file. No manual per-module clearing needed.
+# another file — *under the canonical runner*. A direct multi-file
+# invocation (``pytest tests/hermes_cli``, ``pytest tests/``) shares one
+# interpreter and used to fail ~120 tests that pass individually.
 #
-# Within a single file, ordering is the author's responsibility. If your
-# tests in the same file share mutable state, either reset it explicitly
-# in a fixture or split them across files.
+# The historic ``_reset_module_state`` autouse fixture (manual per-module
+# clearing) was dropped when the runner moved to per-file subprocesses, on
+# the assumption that no other invocation mode mattered. This fixture
+# restores that capability *generically* rather than by re-adding one
+# hand-written clear per module: it snapshots process-level state at the top
+# of every test module and rolls it back when the module ends, which makes
+# any file combination behave like the per-file runner.
+#
+# Module scope (not function scope) is deliberate: it reproduces exactly the
+# per-file-process semantics, so tests that intentionally share state
+# *within* one file keep working — a function-scoped reset would over-isolate
+# and break them, i.e. make ``pytest tests/foo.py`` fail where it passes
+# today.
+#
+# What it rolls back (each face was measured, not guessed — see the task-37
+# diagnosis):
+#   * module-level dict / list / set objects under the app packages, restored
+#     in place. These hold the config / model-catalog / auth / skill caches
+#     (``hermes_cli.config._LOAD_CONFIG_CACHE``, ``agent.models_dev``,
+#     ``hermes_cli.models._PROVIDER_MODELS``, …) which are keyed on the
+#     per-test ``VIGIL_HOME`` and otherwise poison the next file.
+#   * module-level scalars and ``Path`` constants (``agent.redact.
+#     _CREDENTIAL_VALUES_LOADED``, import-time ``get_hermes_home()``
+#     snapshots).
+#   * ``sys.modules`` module IDENTITY: three kanban files do
+#     ``del sys.modules[mod]`` for every ``hermes_cli*`` module to force a
+#     re-import against a throwaway home. Without restoring the original
+#     module objects, later files end up with two divergent copies of the
+#     same module (old references vs. the re-imported object), which broke
+#     ``test_model_validation`` and friends.
+#   * ``hermes_cli.web_server.app.state`` — a process-wide FastAPI singleton
+#     (``auth_required`` flipped on by dashboard-auth tests leaked into later
+#     files, turning their expected 422 into 401).
+#
+# Within a single file, ordering remains the author's responsibility. If your
+# tests in the same file share mutable state, either reset it explicitly in a
+# fixture or split them across files.
 #
 # The skill ``test-suite-cascade-diagnosis`` documents the cascade patterns
 # this replaces; the running example was ``test_command_guards`` failing
 # 12/15 CI runs because ``tools.approval._session_approved`` carried
 # approvals from one test's session into another's.
+
+# Packages whose module-level state the per-file reset covers. Prefix match:
+# ``hermes_cli`` also matches ``hermes_cli.config`` etc.
+_PROCESS_STATE_PACKAGES = (
+    "hermes_cli", "tools", "agent", "gateway", "tui_gateway", "cron", "kanban",
+    "hermes_state", "hermes_constants", "run_agent", "cli", "model_tools",
+    "toolsets", "trajectory_compressor", "mcp_serve", "acp_adapter",
+)
+
+# ``app.state`` is a process-wide FastAPI singleton, not a module — probe it
+# under a synthetic owner name so it flows through the same snapshot code.
+# (attributues live in ``app.state._state``, a plain dict, so the ordinary
+# container restore handles them.)
+_APP_STATE_OWNER = "hermes_cli.web_server:app.state"
+
+
+def _process_state_owner(name: str) -> bool:
+    for pkg in _PROCESS_STATE_PACKAGES:
+        if name == pkg or name.startswith(f"{pkg}."):
+            return True
+    return False
+
+
+def _app_state_object():
+    ws = sys.modules.get("hermes_cli.web_server")
+    return getattr(getattr(ws, "app", None), "state", None)
+
+
+def _snapshot_process_state() -> dict:
+    """Copy the process-level state faces this fixture is able to roll back."""
+    containers: dict = {}
+    scalars: dict = {}
+
+    def _collect(owner: str, attrs: dict) -> None:
+        for attr, val in attrs.items():
+            if attr.startswith("__"):
+                continue
+            typ = type(val)
+            try:
+                if typ is dict:
+                    containers[(owner, attr)] = ("dict", dict(val))
+                elif typ is list:
+                    containers[(owner, attr)] = ("list", list(val))
+                elif typ is set:
+                    containers[(owner, attr)] = ("set", set(val))
+                elif typ in (bool, int, float, str) or val is None or typ is Path:
+                    scalars[(owner, attr)] = val
+            except Exception:
+                continue
+
+    for name, mod in list(sys.modules.items()):
+        if mod is None or not _process_state_owner(name):
+            continue
+        try:
+            _collect(name, vars(mod))
+        except Exception:
+            continue
+    app_state = _app_state_object()
+    if app_state is not None:
+        try:
+            _collect(_APP_STATE_OWNER, vars(app_state))
+        except Exception:
+            app_state = None
+    return {
+        # Module IDENTITY, not just contents: three kanban files delete every
+        # ``hermes_cli*`` entry from sys.modules to force a re-import.
+        "modules": dict(sys.modules),
+        "containers": containers,
+        "scalars": scalars,
+        "app_state": app_state,
+    }
+
+
+def _restore_process_state(snapshot: dict) -> None:
+    """Roll the process back to ``snapshot``. Never raises."""
+    # 1. Module identity first: a deleted/replaced module must come back as the
+    #    ORIGINAL object, so modules holding a reference to it stay in sync.
+    for name, mod in snapshot["modules"].items():
+        if sys.modules.get(name) is not mod:
+            sys.modules[name] = mod
+
+    def _owner(name: str):
+        if name == _APP_STATE_OWNER:
+            return snapshot["app_state"]
+        return sys.modules.get(name)
+
+    # 2. Mutable containers, restored in place (identity preserved: other
+    #    modules may hold a reference to the very same dict/set).
+    for (name, attr), (kind, saved) in snapshot["containers"].items():
+        owner = _owner(name)
+        if owner is None:
+            continue
+        try:
+            current = getattr(owner, attr, None)
+            if kind == "dict" and type(current) is dict and current != saved:
+                current.clear()
+                current.update(saved)
+            elif kind == "list" and type(current) is list and current != saved:
+                current[:] = saved
+            elif kind == "set" and type(current) is set and current != saved:
+                current.clear()
+                current.update(saved)
+        except Exception:
+            continue
+    # 3. Scalars / Path constants (import-time snapshots included).
+    for (name, attr), saved in snapshot["scalars"].items():
+        owner = _owner(name)
+        if owner is None:
+            continue
+        try:
+            if getattr(owner, attr, None) != saved:
+                setattr(owner, attr, saved)
+        except Exception:
+            continue
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _reset_process_state_between_files():
+    """Roll process-level state back at every test-FILE boundary.
+
+    Module scope is load-bearing: it reproduces "one file = one fresh
+    interpreter" without over-isolating tests that legitimately share state
+    inside a single file.
+    """
+    try:
+        before = _snapshot_process_state()
+    except Exception:
+        before = None
+    yield
+    if before is None:
+        return
+    try:
+        _restore_process_state(before)
+    except Exception:
+        pass
 
 
 # ── tui_gateway.server shared-module state isolation ───────────────────────
