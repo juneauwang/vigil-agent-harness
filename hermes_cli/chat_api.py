@@ -208,6 +208,20 @@ def _chat_image_root() -> Path:
     return Path(get_hermes_home()).resolve().joinpath(*_CHAT_IMAGE_SUBDIR)
 
 
+def _fmt_bytes(num: int) -> str:
+    """人类可读的字节数。
+
+    默认上限 10 MiB 走整数除法够用，但用户在 config.yaml 里调成 KiB 级（例如
+    压测 / 小图专用部署）时整数除法会显示成"0 MiB" —— 报错信息里的数字必须
+    是真的，否则用户按它调配置只会更困惑。
+    """
+    if num >= 1024 * 1024:
+        return f"{num / 1024 / 1024:.0f} MiB"
+    if num >= 1024:
+        return f"{num / 1024:.0f} KiB"
+    return f"{num} B"
+
+
 def _chat_image_max_bytes() -> int:
     """尺寸上限（config.yaml ``dashboard.chat_image.max_bytes``，字节）。
 
@@ -1537,7 +1551,7 @@ async def chat_image_upload(file: UploadFile = File(...)):
                 if total > max_bytes:
                     return _chat_image_error(
                         "image_too_large",
-                        f"图片超过大小上限（{max_bytes // 1024 // 1024} MiB）——"
+                        f"图片超过大小上限（{_fmt_bytes(max_bytes)}）——"
                         f"可在 config.yaml dashboard.chat_image.max_bytes 调整。",
                         413,
                     )

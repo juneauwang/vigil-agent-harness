@@ -145,6 +145,8 @@ def test_oversize_rejected_with_readable_reason(client, env_home):
     body = resp.json()
     assert body["error"]["code"] == "image_too_large"
     assert "上限" in body["error"]["message"]
+    # 报错里的数字必须是真的（曾把 1 KiB 显示成 "0 MiB"）。
+    assert "1 KiB" in body["error"]["message"], body["error"]["message"]
     assert not list(_image_dir(env_home).glob("*.png")), "超限不得留下任何文件"
 
 
