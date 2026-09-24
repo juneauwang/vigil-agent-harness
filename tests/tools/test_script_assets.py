@@ -38,8 +38,10 @@ def shome(tmp_path, monkeypatch):
 
 
 def _approve_cb(**kw):
-    from tools.approval import set_hermes_interactive_context, reset_current_session_key
-    reset_current_session_key()
+    # ``reset_current_session_key()`` took no argument and reset a different
+    # ContextVar (TypeError on the missing token); dropped. The interactive
+    # contextvar is rolled back at the file boundary by conftest either way.
+    from tools.approval import set_hermes_interactive_context
     set_hermes_interactive_context("1")
     from tools import terminal_tool
     terminal_tool.set_approval_callback(lambda *a, **k: "once")
