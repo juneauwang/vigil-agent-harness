@@ -1330,6 +1330,12 @@ DEFAULT_CONFIG = {
         # Process-isolation rollout controls. Runtime reads these through the
         # raw config loader, so tui_gateway.server also owns explicit defaults.
         "turn_isolation": False,
+        # 聊天图片上传（web chat composer → 本地文件 → agent.image_routing）。
+        # 单张图大小上限（字节）；类型白名单不由配置控制（以真实 magic bytes
+        # 嗅探为准）。超限 → 上传端点明确报错（413），不静默截断。
+        "chat_image": {
+            "max_bytes": 10 * 1024 * 1024,  # 10 MiB
+        },
         "compute_host_heartbeat_secs": 15,
         "compute_host_respawn_max": 3,
         # Hide the token/cost analytics surfaces (Analytics page, token bars and
