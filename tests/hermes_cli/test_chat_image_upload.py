@@ -279,3 +279,51 @@ def test_native_mode_attaches_image_url_content_part(client, env_home, monkeypat
     assert url.startswith("data:image/png;base64,")
     text_part = next(p for p in message if p.get("type") == "text")
     assert path in text_part["text"]  # 路径提示仍在文本 part 里
+
+
+# ---------------------------------------------------------------------------
+# 会话标题不泄漏落盘路径（task36 补丁：真机实测发现标题变成
+# "图里是什么颜色？ /tmp/…/uploads/chat_images/ab12.png"）
+# ---------------------------------------------------------------------------
+
+
+def _real_image(env_home: Path, name: str = "probe.png") -> str:
+    """在临时 VIGIL_HOME 下落一张真图——extract_image_refs 认的是"磁盘上真实
+    存在"的路径，所以标题剥离也只能用真文件验证。"""
+    target = env_home / "uploads" / "chat_images" / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(_png())
+    return str(target)
+
+
+def test_title_text_strips_upload_path(env_home):
+    """带图消息的标题只留用户打的字。"""
+    path = _real_image(env_home)
+    assert chat_api._title_text(f"图里是什么颜色？\n{path}", 60) == "图里是什么颜色？"
+
+
+def test_title_text_plain_message_unchanged(env_home):
+    """无图片引用时与 _preview 逐字节一致（纯文本路径不变）。"""
+    assert chat_api._title_text("看下拓扑", 60) == chat_api._preview("看下拓扑", 60)
+    assert chat_api._title_text("看下拓扑", 60) == "看下拓扑"
+
+
+def test_title_text_image_only_falls_back_to_raw(env_home):
+    """纯图消息（剥完为空）退回原文，不产出空标题。"""
+    path = _real_image(env_home, "only.png")
+    assert chat_api._title_text(path, 60) == chat_api._preview(path, 60)
+    assert chat_api._title_text(path, 60) != ""
+
+
+def test_session_listing_title_has_no_upload_path(client, monkeypatch):
+    """端到端：发一条带图消息 → 会话列表标题里没有落盘路径。"""
+    _install_stub(monkeypatch)
+    sid = _new_session(client)
+    path = _upload(client, _png(), "shot.png").json()["data"]["path"]
+    _send(client, sid, f"图里是什么颜色？\n{path}")
+
+    listing = client.get("/api/chat/sessions").json()
+    titles = [s.get("last_message_preview") or "" for s in listing.get("sessions", [])]
+    title = next(t for t in titles if t)
+    assert path not in title, title
+    assert "图里是什么颜色？" in title

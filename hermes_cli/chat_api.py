@@ -91,6 +91,28 @@ def _preview(value: Any, max_len: int = _PREVIEW_MAX) -> str:
     return out
 
 
+def _title_text(message: Any, max_len: int = 60) -> str:
+    """会话标题用的用户消息预览。
+
+    task36：带图消息的正文里带着落盘路径（``image_routing.extract_image_refs``
+    认的引用形态）。那是给模型看的定位串，不该出现在会话标题里 —— 「图里是什么
+    颜色？ /tmp/…/uploads/chat_images/ab12.png」这种标题对用户没意义。剥掉引用
+    后若还剩正文就用剥后的；纯图消息（剥完为空）退回原文，至少保留可辨识信息。
+    """
+    try:
+        from agent.image_routing import extract_image_refs
+
+        paths, urls = extract_image_refs(message if isinstance(message, str) else "")
+    except Exception:
+        paths, urls = (), ()
+    if not paths and not urls:
+        return _preview(message, max_len)
+    stripped = message
+    for ref in list(paths) + list(urls):
+        stripped = stripped.replace(str(ref), "")
+    return _preview(stripped, max_len) or _preview(message, max_len)
+
+
 def _default_ops_env() -> str:
     try:
         from hermes_cli.config import load_config_readonly
@@ -1017,7 +1039,7 @@ def _run_chat_turn(
 
         history = _load_conversation_history(session)
         if not session.title:
-            session.title = _preview(message, 60)
+            session.title = _title_text(message, 60)
             session.last_activity_at = time.time()
         # batch81 2d：context 用量 >=80% 时在 turn 起点推警告（不阻断对话）。
         _try_push_context_warning(session, message, _push)
