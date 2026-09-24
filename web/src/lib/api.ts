@@ -500,6 +500,20 @@ export interface IncidentsResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+/** task36：聊天图片上传响应（POST /api/chat/images，multipart）。
+ * ``data.path`` 是可直接放进消息文本的本地绝对路径——它同时就是
+ * ``agent.image_routing.extract_image_refs()`` 认的引用形态。 */
+export interface ChatImageUploadResponse {
+  ok?: boolean;
+  data?: {
+    path: string;
+    mime?: string;
+    size?: number;
+    original_name?: string;
+  };
+  error?: { code?: string; message?: string; details?: Record<string, unknown> };
+}
+
 // ── 批三十一契约：对话 Session（/api/chat/*）─────────────────────────────
 
 /** 批八十一：会话 context 使用率（used/limit/pct/model；用量或上限拿不到 →
@@ -1024,6 +1038,16 @@ export const api = {
 
   // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
   // approval_pending/done/error）
+  /** task36：上传一张聊天图片 → 返回可引用的本地路径（multipart，非 base64 塞 JSON）。
+   * 失败（超尺寸 413 / 类型不在白名单 415）→ ApiError（code/message 直接用）。 */
+  uploadChatImage: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetchJSON<ChatImageUploadResponse>("/api/chat/images", {
+      method: "POST",
+      body: form,
+    });
+  },
   createChatSession: (model?: string, provider?: string) =>
     fetchJSON<{ chat_session_id: string; created_at?: string; model?: string }>("/api/chat/sessions", {
       method: "POST",

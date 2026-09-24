@@ -163,6 +163,18 @@ const en = {
     busyUnclear: "Could not confirm the busy state was cleared; refresh the session list and retry.",
     headerTagline: "· Chat with Vigil, watch the agent work",
     sessionSwitchTitle: "Switch active session",
+    // task36: image upload (pick → on-disk file → path referenced in the message; the
+    // backend's image_routing decides native/text)
+    attachImage: "Attach image",
+    attachImageAria: "Attach an image (paste or drag & drop works too)",
+    attachRemove: "Remove image",
+    attachRemoveAria: "Remove this image",
+    attachUploading: "Uploading…",
+    attachReady: "Ready",
+    attachFailed: "Upload failed",
+    attachRetry: "Retry",
+    attachPending: "Uploading images — send is paused",
+    attachImageAlt: "Attached image",
   },
 
   runbooks: {

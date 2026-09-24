@@ -20,6 +20,7 @@ import {
   X,
   Brain,
   HelpCircle,
+  ImagePlus,
   ListOrdered,
   Coins,
 } from "lucide-react";
@@ -631,6 +632,53 @@ function StepList({
   );
 }
 
+// ── task36: 聊天图片上传（composer 附件状态）────────────────────────────────
+//
+// 链路：选图/粘贴/拖拽 → 上传到 /api/chat/images 落盘 → 把返回的绝对路径
+// 追加到出站消息文本 → 后端 image_routing 决定 native/text。这里只管 UI 与
+// 上传状态：uploading / ready / error（error 可重试或移除，绝不卡中间态）。
+
+interface ChatAttachment {
+  id: string;
+  name: string;
+  /** 本地预览（object URL，仅渲染用；移除/发送后 revoke）。 */
+  previewUrl: string;
+  status: "uploading" | "ready" | "error";
+  /** 上传成功后后端返回的绝对路径（消息引用用）。 */
+  path?: string;
+  error?: string;
+  file: File;
+}
+
+const _IMG_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|tiff?|heic|avif)$/i;
+
+function isImageFile(f: File): boolean {
+  return (f.type || "").startsWith("image/") || _IMG_EXT_RE.test(f.name);
+}
+
+/** task36：用户轮里的图片缩略图。
+ *
+ * 预览是本地 ``blob:`` object URL。发送时 composer 把所有权移交给消息（不再
+ * 释放），所以**消息是唯一所有者**——在它卸载（会话切换 / 历史重取 / 关页）
+ * 时统一 ``revokeObjectURL``，blob 生命周期与它渲染的轮次严格同寿，既不提前
+ * 失效（曾经的 bug：发送即 revoke → 气泡里裂图），也不永久泄漏。 */
+function UserMessageImages({ images }: { images: string[] }) {
+  const { t } = useTranslation();
+  useEffect(() => () => images.forEach((src) => URL.revokeObjectURL(src)), [images]);
+  return (
+    <div className="mb-1.5 flex flex-wrap gap-1.5" data-testid="user-message-images">
+      {images.map((src, i) => (
+        <img
+          key={`${src}-${i}`}
+          src={src}
+          alt={t("chat.attachImageAlt")}
+          className="max-h-40 max-w-[240px] rounded border border-[var(--vigil-border)] object-contain"
+        />
+      ))}
+    </div>
+  );
+}
+
 function MessageBubble({ msg, onToggleTool, onResolveApproval, onResolveClarify }: {
   msg: ChatMessage;
   onToggleTool: (toolId: number) => void;
@@ -645,7 +693,10 @@ function MessageBubble({ msg, onToggleTool, onResolveApproval, onResolveClarify 
           <div className="mb-1 flex items-center gap-1.5 text-[10px] text-[var(--vigil-muted)]">
             <User className="size-3" /> {t("chat.you")}
           </div>
-          <div className="whitespace-pre-wrap break-words text-sm">{msg.content}</div>
+          {msg.images && msg.images.length > 0 && <UserMessageImages images={msg.images} />}
+          {msg.content && (
+            <div className="whitespace-pre-wrap break-words text-sm">{msg.content}</div>
+          )}
         </div>
       </div>
     );
@@ -916,10 +967,16 @@ export default function ChatPage() {
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
   const abortRefs = useRef<Record<string, AbortController>>({});
   // task31 PART C：busy 提交的排队发送（打断收尾后回放；每会话一条队列）。
-  const pendingSendsRef = useRef<Record<string, string[]>>({});
+  // task31 PART C 的排队消息；task36 起每条还带上本地预览 URL（{text, previews}），
+  // 这样"打断中排队"的新消息回放时气泡里同样有图，预览不会只在空闲路径可见。
+  const pendingSendsRef = useRef<Record<string, { text: string; previews: string[] }[]>>({});
   const pendingDrainRef = useRef<Record<string, boolean>>({});
   const loadedRef = useRef<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement>(null);
+  // task36：composer 图片附件（见 ChatAttachment）。
+  const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const attachSeqRef = useRef(0);
 
   const activeState = (activeId && states[activeId]) || createChatState();
   // Effective busy: local slot busy or registry snapshot busy (§7: indicator doesn't depend on the message stream).
@@ -1299,11 +1356,12 @@ export default function ChatPage() {
       try {
         for (;;) {
           const queue = pendingSendsRef.current[sid] ?? [];
-          const text = queue[0];
-          if (text === undefined) break;
+          const item = queue[0];
+          if (item === undefined) break;
+          const text = item.text;
           setStates((prev) => ({
             ...prev,
-            [sid]: pushUserMessage(prev[sid] ?? createChatState(), text),
+            [sid]: pushUserMessage(prev[sid] ?? createChatState(), text, item.previews),
           }));
           let code = await startTurn(sid, text);
           let tries = 0;
@@ -1314,6 +1372,8 @@ export default function ChatPage() {
           }
           pendingSendsRef.current[sid] = queue.slice(1);
           if (code !== null) {
+            // 最终失败：文本退回输入框，这些预览 URL 没有消息接管 —— 就地释放。
+            item.previews.forEach((u) => URL.revokeObjectURL(u));
             setDraft((prev) => (prev ? `${text}\n${prev}` : text));
             setError(i18n.t("chat.pendingSendFailed"));
             break;
@@ -1326,31 +1386,112 @@ export default function ChatPage() {
     [startTurn],
   );
 
+  const uploadAttachment = useCallback(async (att: ChatAttachment) => {
+    setAttachments((prev) =>
+      prev.map((a) => (a.id === att.id ? { ...a, status: "uploading", error: undefined } : a)),
+    );
+    try {
+      const resp = await api.uploadChatImage(att.file);
+      const path = resp.data?.path;
+      if (!path) throw new Error("upload returned no path");
+      setAttachments((prev) =>
+        prev.map((a) => (a.id === att.id ? { ...a, status: "ready", path, error: undefined } : a)),
+      );
+    } catch (err) {
+      const msg =
+        err instanceof ApiError ? err.message : err instanceof Error ? err.message : String(err);
+      setAttachments((prev) =>
+        prev.map((a) => (a.id === att.id ? { ...a, status: "error", error: msg } : a)),
+      );
+    }
+  }, []);
+
+  const removeAttachment = useCallback((id: string) => {
+    setAttachments((prev) => {
+      const hit = prev.find((a) => a.id === id);
+      if (hit) URL.revokeObjectURL(hit.previewUrl);
+      return prev.filter((a) => a.id !== id);
+    });
+  }, []);
+
+  /** 清空附件（发送时调用）。**不** revoke 预览 URL —— 它们已随消息转交，
+   * 由 UserMessageImages 在消息卸载时释放；这里 revoke 会让刚发出的气泡裂图。 */
+  const clearAttachments = useCallback(() => {
+    setAttachments([]);
+  }, []);
+
+  const addFiles = useCallback(
+    (files: FileList | File[] | null | undefined) => {
+      const list = Array.from(files ?? []).filter(isImageFile);
+      if (list.length === 0) return;
+      const created: ChatAttachment[] = list.map((f) => {
+        attachSeqRef.current += 1;
+        return {
+          id: `att-${attachSeqRef.current}`,
+          name: f.name || "image",
+          previewUrl: URL.createObjectURL(f),
+          status: "uploading",
+          file: f,
+        };
+      });
+      setAttachments((prev) => [...prev, ...created]);
+      created.forEach((att) => void uploadAttachment(att));
+    },
+    [uploadAttachment],
+  );
+
+  const readyAttachments = attachments.filter((a) => a.status === "ready" && a.path);
+  const uploadingAttachments = attachments.some((a) => a.status === "uploading");
+
   const send = useCallback(
     async (e: FormEvent) => {
       e.preventDefault();
       const text = draft.trim();
       const sid = activeId;
-      if (!text || !sid || busyAction) return;
+      const ready = attachments.filter((a) => a.status === "ready" && a.path);
+      if ((!text && ready.length === 0) || !sid || busyAction) return;
+      if (attachments.some((a) => a.status === "uploading")) {
+        // 不让半上传的图片静默漏发：明确提示，等上传收敛（成功/失败）再发。
+        setError(t("chat.attachPending"));
+        return;
+      }
+      // task36：图片引用（落盘绝对路径）随文本一起提交，后端
+      // image_routing.extract_image_refs() 从文本抽出引用再决定 native/text。
+      // 无附件时 outgoing === text —— 纯文本路径逐字节不变。
+      const refs = ready.map((a) => a.path as string);
+      const outgoing = refs.length
+        ? text
+          ? `${text}\n${refs.join("\n")}`
+          : refs.join("\n")
+        : text;
+      const previews = ready.map((a) => a.previewUrl);
       const busy = chatInputDisabled((states[sid] ?? createChatState())) || activeBusy;
       if (!busy) {
-        // 空闲路径：与既有行为逐字节一致。
+        // 空闲路径：与既有行为一致（纯文本时逐字节相同）。
         setDraft("");
         setError(null);
         setStopWarning(null);
-        setStates((prev) => ({ ...prev, [sid]: pushUserMessage(prev[sid] ?? createChatState(), text) }));
-        await startTurn(sid, text);
+        setAttachments([]); // 预览 URL 随消息转交（见 clearAttachments 注释）
+        setStates((prev) => ({
+          ...prev,
+          [sid]: pushUserMessage(prev[sid] ?? createChatState(), text, previews),
+        }));
+        await startTurn(sid, outgoing);
         return;
       }
       // task31 PART C：busy 提交 = 打断当前 turn（与 stop 按钮同一条共享取消
       // 路径 interruptActiveTurn），新消息在同一会话排队紧接着发（CLI 语义；
       // 中断标记由 markTurnInterrupted 落在被打断回合上）。
       setDraft("");
-      pendingSendsRef.current[sid] = [...(pendingSendsRef.current[sid] ?? []), text];
+      clearAttachments();
+      pendingSendsRef.current[sid] = [
+        ...(pendingSendsRef.current[sid] ?? []),
+        { text: outgoing, previews },
+      ];
       await interruptActiveTurn(sid);
       await drainPendingSends(sid);
     },
-    [draft, activeId, states, busyAction, activeBusy, startTurn, interruptActiveTurn, drainPendingSends],
+    [draft, activeId, states, busyAction, activeBusy, startTurn, interruptActiveTurn, drainPendingSends, attachments, clearAttachments, t],
   );
 
   const stopTurn = useCallback(async () => {
@@ -1745,7 +1886,18 @@ export default function ChatPage() {
       </div>
 
       {/* Input row */}
-      <form onSubmit={(e) => void send(e)} className="mt-2 shrink-0">
+      <form
+        onSubmit={(e) => void send(e)}
+        onDragOver={(e) => {
+          if (e.dataTransfer?.types?.includes("Files")) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          if (!e.dataTransfer?.files?.length) return;
+          e.preventDefault();
+          addFiles(e.dataTransfer.files);
+        }}
+        className="mt-2 shrink-0"
+      >
         {modelOptions.length > 0 && activeId && (
           <div className="mb-1.5 flex items-center gap-2">
             <span className="text-[10px] text-[var(--vigil-muted)]">{t("chat.model")}</span>
@@ -1773,11 +1925,99 @@ export default function ChatPage() {
             </span>
           </div>
         )}
+        {attachments.length > 0 && (
+          <div className="mb-1.5 flex flex-wrap items-center gap-2" data-testid="chat-attachments">
+            {attachments.map((att) => (
+              <div
+                key={att.id}
+                className={cn(
+                  "flex items-center gap-2 rounded border px-2 py-1",
+                  att.status === "error"
+                    ? "border-[var(--vigil-error)]/60 bg-[var(--vigil-error)]/10"
+                    : "border-[var(--vigil-border)] bg-[var(--vigil-card)]",
+                )}
+              >
+                <img
+                  src={att.previewUrl}
+                  alt={att.name}
+                  className="size-10 shrink-0 rounded object-cover"
+                />
+                <div className="min-w-0">
+                  <div className="max-w-[160px] truncate text-[11px] text-[var(--vigil-text)]">
+                    {att.name}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[10px]">
+                    {att.status === "uploading" && (
+                      <span className="inline-flex items-center gap-1 text-[var(--vigil-muted)]">
+                        <Loader2 className="size-3 animate-spin" /> {t("chat.attachUploading")}
+                      </span>
+                    )}
+                    {att.status === "ready" && (
+                      <span className="text-[var(--vigil-ok)]">{t("chat.attachReady")}</span>
+                    )}
+                    {att.status === "error" && (
+                      <>
+                        <span className="text-[var(--vigil-error)]" title={att.error}>
+                          {t("chat.attachFailed")}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void uploadAttachment(att)}
+                          className="rounded border border-[var(--vigil-border)] px-1.5 py-px text-[10px] text-[var(--vigil-text)] hover:bg-[var(--vigil-muted-bg)]"
+                        >
+                          {t("chat.attachRetry")}
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  aria-label={t("chat.attachRemoveAria")}
+                  title={t("chat.attachRemove")}
+                  onClick={() => removeAttachment(att.id)}
+                  className="shrink-0 text-[var(--vigil-muted)] hover:text-[var(--vigil-error)]"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="flex items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-3 py-2">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            data-testid="chat-image-input"
+            onChange={(e) => {
+              addFiles(e.target.files);
+              e.target.value = ""; // 同一张图可再次选择
+            }}
+          />
+          <button
+            type="button"
+            aria-label={t("chat.attachImageAria")}
+            title={t("chat.attachImageAria")}
+            disabled={disabled}
+            onClick={() => fileInputRef.current?.click()}
+            className="shrink-0 rounded p-1 text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)] disabled:opacity-40"
+          >
+            <ImagePlus className="size-4" />
+          </button>
           <textarea
             ref={draftRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={(e) => {
+              const files = e.clipboardData?.files;
+              if (files && files.length > 0 && isImageFile(files[0])) {
+                e.preventDefault();
+                addFiles(files);
+              }
+            }}
             onKeyDown={composerKeyDown((e) => e.currentTarget.form?.requestSubmit())}
             rows={1}
             placeholder={
@@ -1803,7 +2043,8 @@ export default function ChatPage() {
           )}
           <button
             type="submit"
-            disabled={disabled || !draft.trim()}
+            disabled={disabled || uploadingAttachments || (!draft.trim() && readyAttachments.length === 0)}
+            title={uploadingAttachments ? t("chat.attachPending") : undefined}
             aria-label={t("chat.send")}
             className="vigil-btn vigil-btn-primary h-8 shrink-0 px-3 text-sm"
           >

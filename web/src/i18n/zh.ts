@@ -164,6 +164,17 @@ const zh = {
     busyUnclear: "未能确认忙碌状态已清除，可在会话列表刷新重试。",
     headerTagline: "· 和 Vigil 对话，看 agent 干活",
     sessionSwitchTitle: "活会话切换",
+    // task36：图片上传（选图 → 落盘 → 路径随消息引用，由后端 image_routing 决定 native/text）
+    attachImage: "添加图片",
+    attachImageAria: "添加图片（可粘贴 / 拖拽）",
+    attachRemove: "移除图片",
+    attachRemoveAria: "移除这张图片",
+    attachUploading: "上传中…",
+    attachReady: "已就绪",
+    attachFailed: "上传失败",
+    attachRetry: "重试",
+    attachPending: "图片上传中，发送已暂停",
+    attachImageAlt: "已附加的图片",
   },
 
   runbooks: {

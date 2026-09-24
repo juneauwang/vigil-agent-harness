@@ -100,6 +100,10 @@ export interface ChatMessage {
   error?: string;
   /** Batch 36: local status row after the user clicks "stop" (not persisted; gone on session switch / history refetch). */
   interrupted?: boolean;
+  /** task36: images attached to this user turn (local preview URLs for
+   * rendering only — the model gets the on-disk path via the message text,
+   * and previews are revoked after send). Absent for plain text turns. */
+  images?: string[];
 }
 
 export interface ChatTurnState {
@@ -451,27 +455,34 @@ export function applyChatEvent(state: ChatTurnState, ev: ChatEvent): ChatTurnSta
   return next;
 }
 
-/** Enqueue a user message (bubble renders immediately on send). */
-export function pushUserMessage(state: ChatTurnState, text: string): ChatTurnState {
+/** Enqueue a user message (bubble renders immediately on send).
+ *
+ * task36: optional ``images`` = local preview URLs shown under the caption.
+ * The key is only added when non-empty so the plain-text message shape stays
+ * byte-identical (existing snapshots/deep-equals unaffected). */
+export function pushUserMessage(
+  state: ChatTurnState,
+  text: string,
+  images?: string[],
+): ChatTurnState {
+  const bubble: ChatMessage = {
+    id: state.nextId,
+    role: "user",
+    content: text,
+    reasoning: "",
+    tools: [],
+    approvals: [],
+    clarifies: [],
+    steps: [],
+  };
+  if (images && images.length > 0) bubble.images = [...images];
   return {
     ...state,
     busy: true,
     activeMessageId: null,
     contextWarning: null,
     nextId: state.nextId + 1,
-    messages: [
-      ...state.messages,
-      {
-        id: state.nextId,
-        role: "user",
-        content: text,
-        reasoning: "",
-        tools: [],
-        approvals: [],
-        clarifies: [],
-        steps: [],
-      },
-    ],
+    messages: [...state.messages, bubble],
   };
 }
 
