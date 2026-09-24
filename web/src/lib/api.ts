@@ -782,6 +782,54 @@ export interface MonitoringAlertsTriageResponse {
   };
 }
 
+/** task35 PART C：自动派发审计（GET /api/monitoring/alerts/autodispatch-audit）。
+ *
+ * 一条 = 一次告警自动派发（no_agent cron 触发，无会话）。steps 是后端做的
+ * 回看投影：只留 id/action/status/ok/error/target/commands，stdout/stderr
+ * 已脱敏 + 逐字段截断（详情回完整执行账本）。总长封顶时尾部步骤被丢弃，
+ * 末条是 { id: "__truncated__", omitted_steps: N } 哨兵。 */
+export interface AutodispatchAuditCommand {
+  desc?: string;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface AutodispatchAuditStep {
+  id?: string;
+  action?: string;
+  status?: string;
+  ok?: boolean;
+  error?: string;
+  target?: string;
+  commands?: AutodispatchAuditCommand[];
+  /** 仅哨兵步骤有：被总长截断丢弃的尾部步骤数。 */
+  omitted_steps?: number;
+}
+
+export interface AutodispatchAuditEntry {
+  ts?: string;
+  type?: string;
+  alertname?: string;
+  severity?: string;
+  instance?: string;
+  startsAt?: string;
+  runbook?: string;
+  matched_keyword?: string | null;
+  result?: string;
+  /** true = 引擎拒绝执行 / 失败，已降级回建议闭环（最需要人看的一条）。 */
+  needs_human?: boolean;
+  error?: string;
+  duration_s?: number;
+  steps?: AutodispatchAuditStep[];
+}
+
+export interface AutodispatchAuditResponse {
+  ok?: boolean;
+  data?: { count: number; entries: AutodispatchAuditEntry[] };
+  error?: { code?: string; message?: string; details?: Record<string, unknown> };
+}
+
 // ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -966,6 +1014,13 @@ export const api = {
   /** batch87：活跃告警 + 逐条 runbook 处置建议（只读；执行走既有确认流）。 */
   getMonitoringAlertsTriage: () =>
     fetchJSON<MonitoringAlertsTriageResponse>("/api/monitoring/alerts/triage"),
+  /** task35 PART B/C：告警自动派发审计回看（只读；从未派发过 → 空列表 200）。 */
+  getAutodispatchAudit: (params?: { limit?: number }) =>
+    fetchJSON<AutodispatchAuditResponse>(
+      `/api/monitoring/alerts/autodispatch-audit?${new URLSearchParams(
+        cleanParams({ limit: params?.limit }),
+      )}`,
+    ),
 
   // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
   // approval_pending/done/error）
