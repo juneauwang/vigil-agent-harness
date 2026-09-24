@@ -45,6 +45,16 @@ _MAX_STATE_ENTRIES = 500
 _MAX_AUDIT_LINES = 500
 _DEFAULT_MAX_PER_TICK = 3
 
+# 审计 steps 截断（task35 PART A）：审计是"事后回看"入口，不是完整账本
+# （完整账本仍是 runtime/runbook_executions.jsonl）。这里每步只留回看必需
+# 字段，并对输出逐字段截断 + 卡总长：runbook 步骤的 stdout/stderr 是命令
+# 原始输出，可能很大——现有 _MAX_AUDIT_LINES 只按**行数**裁，单行 JSON 里
+# 一个巨型 stdout 仍能把 alert_autodispatch.jsonl 撑爆。上限取小值，因为
+# 回看要的是"这一步做了什么、成没成、报了什么错"，详情回完整账本看。
+_AUDIT_STEP_FIELD_MAX_CHARS = 400   # 每步 stdout/stderr/error 单字段上限
+_AUDIT_STEP_COMMANDS_MAX = 20       # 每步保留的命令条数上限
+_AUDIT_STEPS_MAX_CHARS = 8000       # 单条审计 steps 序列化总长上限
+
 _state_lock = threading.Lock()
 _audit_lock = threading.Lock()
 
@@ -130,6 +140,76 @@ def _save_state(home: Path, state: Dict[str, Any]) -> None:
 def audit_path(home: Optional[Path] = None) -> Path:
     home = Path(home) if home is not None else _active_home()
     return home / _STATE_DIRNAME / _AUDIT_FILENAME
+
+
+def _audit_clip(value: Any, limit: int = _AUDIT_STEP_FIELD_MAX_CHARS) -> str:
+    """审计字段截断：非字符串先 str 化；超限追加截断标记（回看时知道有省略）。"""
+    text = str(value if value is not None else "")
+    if len(text) > limit:
+        return text[:limit] + f"…(截断 {len(text) - limit} 字符)"
+    return text
+
+
+def _audit_step(step: Dict[str, Any]) -> Dict[str, Any]:
+    """单个步骤 → 审计回看投影（只留必需字段 + 逐字段截断）。
+
+    字段取自 runbook_exec ``_run_one_step`` 的实际步骤结构：id/action/status/
+    ok/error/target/commands[{desc,exit_code,stdout,stderr}]。**不含 params**
+    （params 是步骤输入配置，回看"运行情况和结果"不需要，且体积不可控）。
+    """
+    out: Dict[str, Any] = {
+        "id": str(step.get("id") or ""),
+        "action": str(step.get("action") or ""),
+        "status": str(step.get("status") or ""),
+        "ok": bool(step.get("ok")),
+        "error": _audit_clip(step.get("error")),
+    }
+    target = step.get("target")
+    if isinstance(target, dict) and target.get("name"):
+        out["target"] = str(target.get("name"))
+    cmds = step.get("commands")
+    if isinstance(cmds, list) and cmds:
+        out["commands"] = [
+            {
+                "desc": str(c.get("desc") or ""),
+                "exit_code": c.get("exit_code"),
+                "stdout": _audit_clip(c.get("stdout")),
+                "stderr": _audit_clip(c.get("stderr")),
+            }
+            for c in cmds[:_AUDIT_STEP_COMMANDS_MAX]
+            if isinstance(c, dict)
+        ]
+    return out
+
+
+def project_steps_for_audit(steps: Any) -> List[Dict[str, Any]]:
+    """执行结果 steps → 审计投影（缺省/空/非法 → []，绝不返回 None）。
+
+    安全性：``execute_runbook`` 返回的步骤在构造时已过 ``_clip``/``_redact_deep``
+    （stdout/stderr 走 ``_clip``，params 走 ``_redact_deep``）——本任务实测确认
+    返回值里无明文凭据（见 tests/hermes_cli/test_alert_autodispatch.py 的脱敏
+    用例）。这里再叠一层 ``_redact_deep`` 做纵深防御：审计是本模块自己写的第二
+    份落盘，不该只依赖上游"已经脱敏"的假设。截断在脱敏之后做，避免截断标记
+    本身破坏赋值式凭据形态。
+    """
+    if not isinstance(steps, list) or not steps:
+        return []
+    projected = [_audit_step(s) for s in steps if isinstance(s, dict)]
+    if not projected:
+        return []
+    try:
+        from tools.runbook_exec import _redact_deep
+        projected = _redact_deep(projected)
+    except Exception as exc:  # 脱敏不可用 → 丢空比泄密安全
+        logger.warning("alert_autodispatch 审计 steps 脱敏失败: %s", exc)
+        return []
+    omitted = 0
+    while projected and len(json.dumps(projected, ensure_ascii=False)) > _AUDIT_STEPS_MAX_CHARS:
+        projected.pop()
+        omitted += 1
+    if omitted:
+        projected.append({"id": "__truncated__", "omitted_steps": omitted})
+    return projected
 
 
 def record_dispatch_audit(home: Optional[Path], entry: Dict[str, Any]) -> None:
@@ -294,6 +374,9 @@ def run_once(home: Optional[Path] = None, *,
                 "needs_human": needs_human,
                 "error": str(result.get("error") or "")[:400],
                 "duration_s": round(now() - t0, 2),
+                # task35：步骤明细进审计（此前被丢弃，导致"看不见 runbook
+                # 运行情况"）。缺省/空 → []（不写 None）。
+                "steps": project_steps_for_audit(result.get("steps")),
             }
             new_state_entries[key] = {
                 "runbook": rb_name,

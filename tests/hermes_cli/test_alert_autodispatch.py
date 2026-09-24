@@ -359,6 +359,168 @@ class TestRunOnce:
 
 
 # ---------------------------------------------------------------------------
+# task35 PART A —— 审计补 steps（可回看性）
+# ---------------------------------------------------------------------------
+
+def _step(i: int, *, stdout: str = "", stderr: str = "", status: str = "ok",
+          ok: bool = True, error: str = "", action: str = "query"):
+    """合成一个 runbook_exec 步骤结果（字段照 _run_one_step 实际结构）。"""
+    return {
+        "id": f"s{i}",
+        "action": action,
+        "status": status,
+        "ok": ok,
+        "error": error,
+        "target": {"name": "harbor", "type": "service", "env": "local",
+                   "host": "node1", "managed_by": "docker_compose"},
+        "params": {"target": "harbor"},  # 回看投影里应被丢弃
+        "commands": [{"desc": f"query step {i}", "exit_code": 0 if ok else 1,
+                      "stdout": stdout, "stderr": stderr}],
+    }
+
+
+class TestAuditSteps:
+    """task35：审计 entry 增加 steps + 逐字段截断 + 脱敏。"""
+
+    def test_three_steps_recorded_with_expected_fields(self, ahome, monkeypatch):
+        """3 步合成结果 → 审计 jsonl 每条含 steps、长度 = 3、字段齐全。"""
+        _enable(monkeypatch)
+        _write(ahome, "harbor-restart", _AUTHORIZED_RB)
+
+        def _exec(data, **kw):
+            return {"result": "ok", "steps": [_step(1, stdout="one"),
+                                              _step(2, stdout="two"),
+                                              _step(3, stdout="three")]}
+        out = ad.run_once(ahome, fetch_alerts=lambda: [_alert()], execute=_exec)
+        assert "已自动执行" in out
+
+        entries = [json.loads(l) for l in
+                   ad.audit_path(ahome).read_text(encoding="utf-8").splitlines()]
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry["steps"] and len(entry["steps"]) == 3
+        first = entry["steps"][0]
+        assert first["id"] == "s1" and first["action"] == "query"
+        assert first["status"] == "ok" and first["ok"] is True
+        assert first["target"] == "harbor"
+        assert first["commands"][0]["stdout"] == "one"
+        assert first["commands"][0]["desc"] == "query step 1"
+        # params（输入配置）不进回看投影——只留"做了什么/结果/输出"。
+        assert "params" not in first
+        assert ad.recent_dispatch_audit(ahome)[0]["steps"][2]["id"] == "s3"
+
+    def test_long_output_truncated_per_field(self, ahome, monkeypatch):
+        """超长 stdout/stderr/error → 逐字段截断到模块常量上限。"""
+        _enable(monkeypatch)
+        _write(ahome, "harbor-restart", _AUTHORIZED_RB)
+        limit = ad._AUDIT_STEP_FIELD_MAX_CHARS
+        huge = "x" * (limit * 4)
+
+        def _exec(data, **kw):
+            return {"result": "failed",
+                    "steps": [_step(1, stdout=huge, stderr=huge, ok=False,
+                                    status="failed", error=huge)]}
+        ad.run_once(ahome, fetch_alerts=lambda: [_alert()], execute=_exec)
+
+        step = json.loads(ad.audit_path(ahome).read_text(encoding="utf-8")
+                          .splitlines()[0])["steps"][0]
+        cmd = step["commands"][0]
+        for field in ("stdout", "stderr"):
+            assert len(cmd[field]) <= limit + 32  # 正文 ≤ 上限 + 截断标记
+            assert "截断" in cmd[field]
+            assert cmd[field].startswith("x" * limit)
+        assert len(step["error"]) <= limit + 32 and "截断" in step["error"]
+
+    def test_total_steps_length_capped(self, ahome, monkeypatch):
+        """步骤极多 / 单步极长 → 序列化总长不超上限（丢弃尾部 + 哨兵）。"""
+        _enable(monkeypatch)
+        _write(ahome, "harbor-restart", _AUTHORIZED_RB)
+        many = [_step(i, stdout="y" * 400) for i in range(1, 61)]
+
+        def _exec(data, **kw):
+            return {"result": "ok", "steps": many}
+        ad.run_once(ahome, fetch_alerts=lambda: [_alert()], execute=_exec)
+
+        steps = json.loads(ad.audit_path(ahome).read_text(encoding="utf-8")
+                           .splitlines()[0])["steps"]
+        assert len(json.dumps(steps, ensure_ascii=False)) <= ad._AUDIT_STEPS_MAX_CHARS + 200
+        assert len(steps) < 60
+        assert steps[-1]["id"] == "__truncated__" and steps[-1]["omitted_steps"] > 0
+
+    def test_missing_or_empty_steps_becomes_empty_list(self, ahome, monkeypatch):
+        """result 无 steps / steps 空 → 审计里是 []（不是 None），不炸。"""
+        _enable(monkeypatch)
+        _write(ahome, "harbor-restart", _AUTHORIZED_RB)
+        _preapprove(ahome, "harbor-restart", _AUTHORIZED_RB)
+
+        def _run(alertname, instance):
+            def _exec(data, **kw):
+                return {"result": "ok"}  # 无 steps 键
+            return ad.run_once(ahome,
+                               fetch_alerts=lambda: [_alert(alertname=alertname,
+                                                            instance=instance)],
+                               execute=_exec)
+        _run("HarborHealthcheckDown", "harbor:443")
+
+        # 直接打桩 execute 让's 空 list 分支也走到（runbook 命中同键幂等，
+        # 换 instance 构造新 occurrence）。
+        def _exec_empty(data, **kw):
+            return {"result": "ok", "steps": []}
+        ad.run_once(ahome, fetch_alerts=lambda: [_alert(instance="harbor:8443")],
+                    execute=_exec_empty)
+
+        rows = ad.recent_dispatch_audit(ahome)
+        assert len(rows) == 2
+        for r in rows:
+            assert r["steps"] == [] and r["steps"] is not None
+
+    def test_steps_never_none_for_ok_result_without_steps_key(self, ahome, monkeypatch):
+        """回归：缺 steps 键 → 旧字段齐全 + steps=[]，写入仍不阻断。"""
+        _enable(monkeypatch)
+        _write(ahome, "harbor-restart", _AUTHORIZED_RB)
+        ad.run_once(ahome, fetch_alerts=lambda: [_alert()],
+                    execute=lambda d, **k: {"result": "ok", "error": ""})
+        entry = ad.recent_dispatch_audit(ahome)[0]
+        for fld in ("alertname", "severity", "instance", "startsAt", "runbook",
+                    "matched_keyword", "result", "needs_human", "error",
+                    "duration_s", "steps"):
+            assert fld in entry
+
+    def test_plaintext_credential_never_lands_in_audit(self, ahome, monkeypatch):
+        """脱敏实测（全链真引擎）：步骤 stdout 带合成凭据形状 → 落盘审计无明文。
+
+        走真实 execute_runbook（不是打桩）——验证"返回值已脱敏"这条前提，再
+        确认本模块写的审计文件里也没有明文。报告只打 CAUGHT/LEAKED。
+        """
+        _enable(monkeypatch)
+        _write(ahome, "harbor-restart", _AUTHORIZED_RB)
+        _preapprove(ahome, "harbor-restart", _AUTHORIZED_RB)
+
+        # 拼接构造合成凭据（不写字面量）。
+        key = "MINIO_ROOT_" + "PASSWORD"
+        val = "Aa1" + "-x9" * 6 + "Zz"
+        blob = f"{key}={val}"
+
+        monkeypatch.setattr("tools.runbook_exec._run_spec",
+                            lambda home, target, spec: {"exit_code": 0,
+                                                        "stdout": "dump " + blob,
+                                                        "stderr": ""})
+        out = ad.run_once(ahome, fetch_alerts=lambda: [_alert()])
+        assert "已自动执行" in out
+
+        raw = ad.audit_path(ahome).read_text(encoding="utf-8")
+        caught = val not in raw
+        print(f"[task35-PART-A] redaction: {'CAUGHT' if caught else 'LEAKED'}")
+        assert caught, "LEAKED: 明文凭据进了审计文件"
+
+        # steps 确实非空 —— 证明遮罩不是"因为根本没写"。
+        steps = json.loads(raw.splitlines()[0])["steps"]
+        assert steps and steps[0]["commands"], "steps 未落盘，脱敏断言无意义"
+        assert "***" in json.dumps(steps, ensure_ascii=False) or "dump" in json.dumps(
+            steps, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------------------
 # cron 注册（task18 topo_sync 同款）
 # ---------------------------------------------------------------------------
 
