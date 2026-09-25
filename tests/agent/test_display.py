@@ -197,11 +197,11 @@ class TestEditDiffPreview:
         from agent import redact
         redact._reset_registered_credential_values_for_tests()
         try:
-            redact.register_credential_value("wwplove815")
+            redact.register_credential_value("example-pw-4711")
             target = tmp_path / "note.txt"
             target.write_text("old\n", encoding="utf-8")
             snapshot = capture_local_edit_snapshot("write_file", {"path": str(target)})
-            target.write_text("old\necho 'wwplove815' > /tmp/x\n", encoding="utf-8")
+            target.write_text("old\necho 'example-pw-4711' > /tmp/x\n", encoding="utf-8")
             diff = extract_edit_diff(
                 "write_file",
                 '{"bytes_written": 30}',
@@ -209,7 +209,7 @@ class TestEditDiffPreview:
                 snapshot=snapshot,
             )
             assert diff is not None
-            assert "wwplove815" not in diff
+            assert "example-pw-4711" not in diff
             assert "«redacted-value»" in diff
         finally:
             redact._reset_registered_credential_values_for_tests()
@@ -222,11 +222,11 @@ class TestEditDiffPreview:
         from agent import redact
         redact._reset_registered_credential_values_for_tests()
         try:
-            redact.register_credential_value("wwplove815")
+            redact.register_credential_value("example-pw-4711")
             from agent.display import _emit_inline_diff
             lines = []
-            assert _emit_inline_diff("+wwplove815", lines.append) is True
-            assert "wwplove815" not in lines[1]
+            assert _emit_inline_diff("+example-pw-4711", lines.append) is True
+            assert "example-pw-4711" not in lines[1]
             assert "«redacted-value»" in lines[1]
         finally:
             redact._reset_registered_credential_values_for_tests()

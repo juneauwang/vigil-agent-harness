@@ -50,14 +50,14 @@ class TestTrueAskpassStillBlocked:
         "path,content",
         [
             (os.path.expanduser("~/.vigil/tmp-askpass-sudo"),
-             "#!/bin/sh\necho 'wwplove815'\n"),
-            (os.path.expanduser("~/.vigil/ask.sh"), "echo \"wwplove815\"\n"),
+             "#!/bin/sh\necho 'example-pw-4711'\n"),
+            (os.path.expanduser("~/.vigil/ask.sh"), "echo \"example-pw-4711\"\n"),
             (os.path.expanduser("~/credential/sudo_credential"),
-             "echo 'wwplove815'"),
+             "echo 'example-pw-4711'"),
             (os.path.expanduser("~/credential/askpass"),
-             "#!/bin/sh\nprintf '%s' 'wwplove815'\n"),
+             "#!/bin/sh\nprintf '%s' 'example-pw-4711'\n"),
             (os.path.expanduser("~/.vigil/secrets/sudo-pw"),
-             "echo 'wwplove815'\n"),
+             "echo 'example-pw-4711'\n"),
         ],
     )
     def test_bare_credential_echo_still_blocked(self, path, content):
@@ -74,5 +74,5 @@ class TestTrueAskpassStillBlocked:
 
         outside = tempfile.mkdtemp(prefix="outside-vigil-")
         target = os.path.join(outside, "script.sh")
-        res = write_file_tool(target, "echo 'wwplove815'\n", task_id="t1")
+        res = write_file_tool(target, "echo 'example-pw-4711'\n", task_id="t1")
         assert "拒绝" not in res

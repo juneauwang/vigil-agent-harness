@@ -2406,7 +2406,7 @@
   写裸明文文件（`~/credential/sudo_credential`）、手写 echo 密码 askpass 脚本
   （`~/.vigil/tmp-askpass-sudo`，绕过 credential_vault 受控通道），且 review diff
   展示明文；②clarify 密码输入明文落 state.db（role=tool 消息，如 id 503）。低熵
-  裸密码（`wwplove815`：无键名形态、不足 16 字符不挂高熵门）漏过 redact 两套既有
+  裸密码（`example-pw-4711`：无键名形态、不足 16 字符不挂高熵门）漏过 redact 两套既有
   检测。本批治本：**凭据值全局登记打码（不依赖熵检测）+ 提权受控通道绑死**。
 - **任务 1（凭据值全局登记打码）**：
   1. **登记表（agent/redact.py）**：`register_credential_value()` 进程内 set +

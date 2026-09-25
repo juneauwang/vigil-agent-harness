@@ -59,11 +59,11 @@ def test_store_registers_value_in_global_redaction_registry(vault_home):
     from agent import redact
     redact._reset_registered_credential_values_for_tests()
     try:
-        cv.store("srv_pass", "wwplove815")
-        assert "wwplove815" in redact.registered_credential_values()
+        cv.store("srv_pass", "example-pw-4711")
+        assert "example-pw-4711" in redact.registered_credential_values()
         # 登记后任意输出通道打码（低熵裸值形态）
-        out = redact.redact_sensitive_text("echo 'wwplove815'", force=True)
-        assert "wwplove815" not in out
+        out = redact.redact_sensitive_text("echo 'example-pw-4711'", force=True)
+        assert "example-pw-4711" not in out
         # 值本身不打日志
     finally:
         redact._reset_registered_credential_values_for_tests()

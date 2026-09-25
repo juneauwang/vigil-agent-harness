@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # 已知凭据值登记表（OPS-DELTA 批次三十二，行为层安全）
 #
 # 覆盖 redact 两套既有检测（键名命中 + 高熵值兜底）都漏的盲区：低熵裸密码
-# （``echo 'wwplove815'``，无键名形态、长度不足 16 不挂高熵门）。登记来源：
+# （``echo 'example-pw-4711'``，无键名形态、长度不足 16 不挂高熵门）。登记来源：
 #   ① credential_vault.store() 写入的凭据值；
 #   ② clarify 交互中问题含敏感关键词（密码/password/密钥/secret/凭据…）时
 #     的答复值。
@@ -1545,7 +1545,7 @@ def redact_sensitive_text(
     text = _redact_command_inline_credentials(text)
 
     # OPS-DELTA 批次三十二：已知凭据值登记表（精确值打码，不依赖熵检测）。
-    # 覆盖键名命中 + 高熵值兜底都漏的低熵裸密码形态（``echo 'wwplove815'``）。
+    # 覆盖键名命中 + 高熵值兜底都漏的低熵裸密码形态（``echo 'example-pw-4711'``）。
     # 任何输出通道统一生效；值登记后即全局打码。
     #
     # OPS-DELTA 批次四十 §AS B2：persist_write（write_file 落盘）跳过本 pass。

@@ -59,25 +59,25 @@ def _tool_contents() -> list:
 
 
 def test_dry_run_reports_without_writing(tmp_path):
-    _seed_db("wwplove815")
+    _seed_db("example-pw-4711")
     _Args.dry_run = True
     rc = cmd_scrub_secrets(_Args)
     assert rc == 0
-    assert "wwplove815" in _tool_contents()[0]  # 未改写
+    assert "example-pw-4711" in _tool_contents()[0]  # 未改写
 
 
 def test_scrub_masks_registered_value(tmp_path):
-    _seed_db("wwplove815")
+    _seed_db("example-pw-4711")
     _Args.dry_run = False
     rc = cmd_scrub_secrets(_Args)
     assert rc == 0
     content = _tool_contents()[0]
-    assert "wwplove815" not in content
+    assert "example-pw-4711" not in content
     assert "«redacted-value»" in content
 
 
 def test_scrub_preserves_non_sensitive_content(tmp_path):
-    _seed_db("wwplove815")
+    _seed_db("example-pw-4711")
     _Args.dry_run = False
     cmd_scrub_secrets(_Args)
     db = SessionDB()
@@ -103,19 +103,19 @@ def test_scrub_extra_values(tmp_path):
 
 
 def test_scrub_session_filter(tmp_path):
-    _seed_db("wwplove815")
+    _seed_db("example-pw-4711")
     db = SessionDB()
     db.create_session("other-sess", source="test")
     db.append_message("other-sess", "tool", json.dumps({
-        "question": "请输入 sudo 密码", "user_response": "wwplove815",
+        "question": "请输入 sudo 密码", "user_response": "example-pw-4711",
     }), tool_call_id="call_9")
     db.close()
     _Args.session = "sess-1"
     cmd_scrub_secrets(_Args)
     # sess-1 已清理；other-sess 未动
     contents = _tool_contents()
-    assert "wwplove815" not in contents[0]
-    assert "wwplove815" in contents[1]
+    assert "example-pw-4711" not in contents[0]
+    assert "example-pw-4711" in contents[1]
 
 
 def test_scrub_no_registry_values_reports_empty(tmp_path):

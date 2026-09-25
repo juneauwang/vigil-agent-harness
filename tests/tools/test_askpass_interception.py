@@ -31,10 +31,10 @@ class TestWriteFileInterception:
     @pytest.mark.parametrize(
         "path,content",
         [
-            (os.path.expanduser("~/.vigil/tmp-askpass-sudo"), "#!/bin/sh\necho 'wwplove815'\n"),
-            (os.path.expanduser("~/.vigil/ask.sh"), "echo \"wwplove815\"\n"),
-            (os.path.expanduser("~/credential/sudo_credential"), "echo 'wwplove815'"),
-            (os.path.expanduser("~/credential/askpass"), "#!/bin/sh\nprintf '%s' 'wwplove815'\n"),
+            (os.path.expanduser("~/.vigil/tmp-askpass-sudo"), "#!/bin/sh\necho 'example-pw-4711'\n"),
+            (os.path.expanduser("~/.vigil/ask.sh"), "echo \"example-pw-4711\"\n"),
+            (os.path.expanduser("~/credential/sudo_credential"), "echo 'example-pw-4711'"),
+            (os.path.expanduser("~/credential/askpass"), "#!/bin/sh\nprintf '%s' 'example-pw-4711'\n"),
         ],
     )
     def test_askpass_write_blocked(self, path, content):
@@ -50,14 +50,14 @@ class TestWriteFileInterception:
         import tempfile
         outside = tempfile.mkdtemp(prefix="outside-vigil-")
         target = os.path.join(outside, "script.sh")
-        res = write_file_tool(target, "echo 'wwplove815'\n", task_id="t1")
+        res = write_file_tool(target, "echo 'example-pw-4711'\n", task_id="t1")
         assert "拒绝" not in res
 
     def test_vault_secrets_dir_still_protected(self):
         """~/.vigil/secrets 下 echo 裸值同样拦截（绕过 vault 程序化写入的形态）。"""
         res = write_file_tool(
             os.path.expanduser("~/.vigil/secrets/sudo-pw"),
-            "echo 'wwplove815'\n",
+            "echo 'example-pw-4711'\n",
             task_id="t1",
         )
         assert "拒绝" in res
@@ -67,10 +67,10 @@ class TestTerminalHardline:
     @pytest.mark.parametrize(
         "cmd",
         [
-            "echo 'wwplove815' > ~/.vigil/tmp-askpass-sudo",
-            'echo "wwplove815" >> ~/credential/sudo_credential',
-            "printf '%s\\n' 'wwplove815' > ~/.vigil/askpass",
-            "echo 'wwplove815' > $HOME/.vigil/x",
+            "echo 'example-pw-4711' > ~/.vigil/tmp-askpass-sudo",
+            'echo "example-pw-4711" >> ~/credential/sudo_credential',
+            "printf '%s\\n' 'example-pw-4711' > ~/.vigil/askpass",
+            "echo 'example-pw-4711' > $HOME/.vigil/x",
         ],
     )
     def test_askpass_write_hardline_blocked(self, cmd):
@@ -84,9 +84,9 @@ class TestTerminalHardline:
         [
             "echo 'hello' > ~/.vigil/note.txt",   # 短值（非 8-32 密码形态）
             "cat ~/.vigil/config.yaml",           # 读操作合法
-            "echo 'wwplove815' > /tmp/x",          # 非受保护目录
-            "echo 'wwplove815' > ~/credential_backup/x",  # 目录名带前缀不算
-            "echo 'wwplove815' | tee ~/.vigil/x",  # 管道形态不在本批硬拒范围
+            "echo 'example-pw-4711' > /tmp/x",          # 非受保护目录
+            "echo 'example-pw-4711' > ~/credential_backup/x",  # 目录名带前缀不算
+            "echo 'example-pw-4711' | tee ~/.vigil/x",  # 管道形态不在本批硬拒范围
         ],
     )
     def test_benign_commands_pass(self, cmd):

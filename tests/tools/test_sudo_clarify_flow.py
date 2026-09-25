@@ -53,7 +53,7 @@ class TestClarifyCollectFlow:
         prompt_log = []
         def my_clarify(question, choices=None, multi_select=False):
             prompt_log.append(question)
-            return "wwplove815"
+            return "example-pw-4711"
         sudo_tool.set_clarify_callback(my_clarify)
 
         calls = {}
@@ -73,11 +73,11 @@ class TestClarifyCollectFlow:
         vault = Path(tmp_path) / "secrets" / "sudo-localhost"
         assert vault.is_file()
         assert stat.S_IMODE(vault.stat().st_mode) == 0o600
-        assert vault.read_text(encoding="utf-8") == "wwplove815"
+        assert vault.read_text(encoding="utf-8") == "example-pw-4711"
         # 值已登记 → 全局打码
-        assert "wwplove815" in redact.registered_credential_values()
+        assert "example-pw-4711" in redact.registered_credential_values()
         # askpass 只 cat 保险箱文件，不含明文
-        assert "wwplove815" not in calls.get("askpass_content", "")
+        assert "example-pw-4711" not in calls.get("askpass_content", "")
         assert "cat" in calls.get("askpass_content", "")
         # 提问文本含敏感关键词（触发答复登记）
         assert "sudo 密码" in prompt_log[0]

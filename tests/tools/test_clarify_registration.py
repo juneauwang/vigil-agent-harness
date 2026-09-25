@@ -33,8 +33,8 @@ class TestSensitiveAnswerRegistration:
     @pytest.mark.parametrize(
         "question,answer",
         [
-            ("请输入 sudo 密码", "wwplove815"),
-            ("Please enter the password", "Wwplove815"),
+            ("请输入 sudo 密码", "example-pw-4711"),
+            ("Please enter the password", "example-pw-4711"),
             ("请提供 root 密钥", "root-secret-9"),
             ("What is the credential for the vault?", "vault-pass-77"),
         ],
@@ -73,8 +73,8 @@ class TestSensitiveAnswerRegistration:
 
     def test_plaintext_still_masked_in_output_channel(self):
         """登记值即使只出现在普通输出文本里也被打码（值层面，非键名形态）。"""
-        result = json.loads(clarify_tool("请输入 sudo 密码", callback=_cb("wwplove815")))
+        result = json.loads(clarify_tool("请输入 sudo 密码", callback=_cb("example-pw-4711")))
         out = redact.redact_sensitive_text(
             json.dumps(result, ensure_ascii=False), force=True
         )
-        assert "wwplove815" not in out
+        assert "example-pw-4711" not in out

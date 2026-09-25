@@ -69,20 +69,20 @@ def _durable_contents(db_path: Path, session_id: str) -> list[str]:
 
 
 def test_sensitive_clarify_result_masked_at_flush(tmp_path):
-    redact.register_credential_value("wwplove815")
+    redact.register_credential_value("example-pw-4711")
     agent = _make_agent(tmp_path / "state.db", "sess-1")
 
     clarify_json = json.dumps({
         "question": "请输入 sudo 密码",
         "choices_offered": None,
-        "user_response": "wwplove815",
+        "user_response": "example-pw-4711",
     }, ensure_ascii=False)
     live_msg = {"role": "tool", "name": "clarify",
                 "tool_call_id": "call_1", "content": clarify_json}
     agent._flush_messages_to_session_db([live_msg])
 
     contents = _durable_contents(tmp_path / "state.db", "sess-1")
-    assert any("wwplove815" not in c and "«redacted-value»" in c for c in contents)
+    assert any("example-pw-4711" not in c and "«redacted-value»" in c for c in contents)
     # live 内存消息保持明文
     assert live_msg["content"] == clarify_json
 
@@ -97,10 +97,10 @@ def test_non_sensitive_clarify_result_unchanged(tmp_path):
 
 
 def test_non_clarify_tool_result_unchanged(tmp_path):
-    redact.register_credential_value("wwplove815")
+    redact.register_credential_value("example-pw-4711")
     agent = _make_agent(tmp_path / "state.db", "sess-1")
     msg = {"role": "tool", "name": "web_search", "tool_call_id": "call_3",
-           "content": "results for wwplove815 search"}
+           "content": "results for example-pw-4711 search"}
     agent._flush_messages_to_session_db([msg])
     contents = _durable_contents(tmp_path / "state.db", "sess-1")
-    assert any("wwplove815" in c for c in contents)
+    assert any("example-pw-4711" in c for c in contents)
