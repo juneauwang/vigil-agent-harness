@@ -256,11 +256,17 @@ def test_exec_prod_unknown_defaults_approve_then_deny(client, env_home):
     r = client.post(f"/api/approvals/{approval_id}/deny", json={"reason": "不批"})
     assert r.status_code == 200
 
-    rec = client.get(f"/api/exec/{exec_id}").json()
-    assert rec["status"] == "denied" and rec["error"]
-
+    # 执行记录的终态是**后台 guard 线程**写回的（web_server.py::_run_guard，
+    # 在 check_all_command_guards 返回后才落盘），deny 端点只裁决审批条目 ——
+    # 所以记录不是同步终态。SSE 流是契约里的同步点：它会轮询到终态再回
+    # exec:error（同 test_exec_deny_chain 的写法）。先消费流再读记录，
+    # 否则就是和 guard 线程赛跑：实测本用例曾有 ~50% 概率在这里读到
+    # needs_approval（单跑与整文件跑都会，与文件内顺序/落盘状态无关）。
     events = _sse_events(client, f"/api/exec/{exec_id}/stream")
     assert events[0][0] == "exec:error"
+
+    rec = client.get(f"/api/exec/{exec_id}").json()
+    assert rec["status"] == "denied" and rec["error"]
 
 
 def test_exec_prod_unknown_approval_chain(client, env_home):

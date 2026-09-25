@@ -923,6 +923,312 @@ class TestRedactCdpUrl:
         assert redact_cdp_url(None) == ""
 
 
+class TestAffixedJsonKeyNames:
+    """task34 PART A — JSON / 单引号 repr 键名包含匹配。
+
+    事故形态：``docker compose config --format json | python3 -c`` 渲染口，
+    键名带前后缀（MINIO_ROOT_PASSWORD / monitor_auth_token 一类）从 JSON 口
+    全部漏；print(dict) 的单引号 repr 形态全漏。修复后：
+      - 双引号 JSON / 单引号 repr 都按「前后缀键名 + _key_has_secret_keyword
+        词边界过滤」打码（语义名单只有 helper 一份）；
+      - ``*_ACCESS_KEY_ID`` / ``*_KEY_ID`` 族纳入关键词表（key id 是账号
+        标识，渲染配置里与 secret 相邻出现；词边界规则保护 prose）；
+      - 负样本（tokenizer / secretary / author / keys / note / timestamp /
+        max_tokens）逐字节不变。
+    """
+
+    # 合成值：低熵 + 含分隔符，值形态兜底 pass 不会命中——矩阵打到的是键名通道
+    _V = "Aa1" + "-x9" * 6 + "Zz"
+
+    KEYS_AFFIXED = [
+        "root_password",
+        "db_password",
+        "POSTGRES_PASSWORD",
+        "MINIO_ROOT_PASSWORD",
+        "MINIO_ACCESS_KEY_ID",
+        "monitor_auth_token",
+    ]
+
+    @pytest.mark.parametrize("form", ["json", "repr"])
+    @pytest.mark.parametrize("key", KEYS_AFFIXED)
+    def test_affixed_keys_masked(self, key, form):
+        from agent.redact import redact_terminal_output
+
+        if form == "json":
+            text = f'{{"{key}": "{self._V}"}}'
+        else:
+            text = f"{{'{key}': '{self._V}'}}"
+        out = redact_terminal_output(text, "docker compose config --format json")
+        assert self._V not in out, f"{key}/{form} leaked: {out!r}"
+        assert key in out  # 键名保留（值打码，不是整段吞）
+
+    @pytest.mark.parametrize("form", ["json", "repr"])
+    def test_bare_exact_keys_still_masked(self, form):
+        from agent.redact import redact_terminal_output
+
+        for key in ("password", "api_key"):
+            if form == "json":
+                text = f'{{"{key}": "{self._V}"}}'
+            else:
+                text = f"{{'{key}': '{self._V}'}}"
+            out = redact_terminal_output(text, "cat config.json")
+            assert self._V not in out, f"{key}/{form} leaked"
+
+    def test_repr_exact_name_without_core_word_masked(self):
+        """passphrase / id_rsa 不含核心词——repr 通道靠全等名单兜住（与 JSON 对齐）。
+
+        注：bearer 故意不在本列——bearer-only 文本过不了严格面 _CFG_SECRET_WORD_RE
+        预筛门（JSON 双引号通道同样如此，属既有行为，非本任务回归）。
+        """
+        from agent.redact import redact_terminal_output
+
+        for key in ("passphrase", "id_rsa"):
+            text = f"{{'{key}': '{self._V}'}}"
+            out = redact_terminal_output(text, "cat bao.json")
+            assert self._V not in out, f"{key} repr leaked: {out!r}"
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            '{"tokenizer": "cl100k_base"}',
+            '{"secretary": "J.Smith"}',
+            '{"author": "J.R.R. Tolkien"}',
+            '{"keys": ["a", "b"]}',
+            '{"note": "meet at noon"}',
+            '{"timestamp": "2026-09-15T00:00:00Z"}',
+            '{"max_tokens": "4096"}',
+            "{'tokenizer': 'cl100k_base'}",
+            "{'secretary': 'J.Smith'}",
+            "{'author': 'J.R.R. Tolkien'}",
+        ],
+    )
+    def test_prose_keys_unchanged(self, text):
+        from agent.redact import redact_terminal_output
+
+        assert redact_terminal_output(text, "cat config.json") == text
+
+    def test_access_key_id_env_and_yaml_forms(self):
+        """key_id 族纳入关键词表后，env / yaml 形态同通道生效。"""
+        from agent.redact import redact_sensitive_text
+
+        env = redact_sensitive_text("MINIO_ACCESS_KEY_ID=" + self._V)
+        assert self._V not in env
+
+        yaml_text = redact_sensitive_text("minio_access_key_id: " + self._V)
+        assert self._V not in yaml_text
+        assert "minio_access_key_id:" in yaml_text
+
+    def test_access_key_id_prose_not_masked(self):
+        """key_id 词边界过滤：嵌在更大的词里不是键。"""
+        from agent.redact import redact_sensitive_text
+
+        text = "monkey_identifier=abc\nturkey_id: xyz\n"
+        assert redact_sensitive_text(text) == text
+
+    def test_already_masked_head_tail_not_collapsed(self):
+        """前缀 pass 打出的 head/tail 标记不被新通道二次打码成裸 ***。"""
+        from agent.redact import redact_terminal_output
+
+        out = redact_terminal_output(
+            '{"password": "sk-proj-abc123def456ghi789jkl012mno345"}',
+            "cat config.json",
+        )
+        assert "abc123def456" not in out
+        assert "sk-pro..." in out  # head/tail 标记保留（非 "***"）
+
+    def test_repr_skeleton_preserved(self):
+        from agent.redact import redact_sensitive_text
+
+        text = "{'db_password': '" + self._V + "', 'port': 5432}"
+        out = redact_sensitive_text(text)
+        assert self._V not in out
+        assert "'port': 5432" in out
+        assert "db_password" in out
+
+
+class TestRenderConfigCommandDetection:
+    """task34 PART B — 渲染/展开型命令进严格（env-dump）通道。
+
+    ``docker compose config`` / ``docker inspect`` / ``helm get values`` /
+    ``kubectl get|describe secret`` 的 stdout 是把 secrets 渲染进配置的展开
+    结果，必须走 code_file=False 通道（宽松 pass），否则组合键名凭据在严格
+    门控下整段漏（真实事故口）。只认每段首命令；``docker compose ps`` /
+    ``kubectl get pods`` 等判定保持不变。
+    """
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "docker compose config",
+            "docker compose config --format json",
+            "docker inspect mycontainer",
+            "helm get values myrelease",
+            "helm get values myrelease --all",
+            "kubectl get secret db-credentials",
+            "kubectl get secret db-credentials -o json",
+            "kubectl describe secret db-credentials",
+            "cat /tmp/x | docker compose config",   # 管道段的首命令
+            "printenv && docker inspect web",        # 多段，任一段命中即可
+        ],
+    )
+    def test_render_commands_detected(self, command):
+        from agent.redact import is_env_dump_command
+
+        assert is_env_dump_command(command) is True, command
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo docker compose config",   # echo 的参数，不是渲染命令
+            "docker compose ps",
+            "docker compose logs",
+            "docker compose up -d",
+            "docker ps",
+            "kubectl get pods",
+            "kubectl get secrets",          # 复数形式不在名单（保守）
+            "kubectl describe pods",
+            "helm list",
+            "",
+            None,
+        ],
+    )
+    def test_non_render_commands_unchanged(self, command):
+        from agent.redact import is_env_dump_command
+
+        assert is_env_dump_command(command) is False, command
+
+    def test_render_output_secret_masked_loose_path(self):
+        """渲染输出里的组合键名凭据走宽松通道后被打码。"""
+        from agent.redact import redact_terminal_output
+
+        v = "Aa1" + "-x9" * 6 + "Zz"
+        out = redact_terminal_output(
+            '{"MINIO_ROOT_' + 'PASSWORD": "' + v + '"}',
+            "docker compose config --format json",
+        )
+        assert v not in out
+
+    def test_env_dump_false_positive_comparison(self):
+        """误报对照（task34 验收项）：现实 env dump 样本分别走宽松
+        （code_file=False）与现状（code_file=True）通道，额外误伤的键必须
+        为 0——两张打码键名单的差异恰好等于带关键词的 4 条。"""
+        from agent.redact import redact_sensitive_text
+
+        v1 = "Aa1" + "-x9" * 6 + "Zz"
+        sample = "\n".join([
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG=C.UTF-8",
+            "PYTHON_VERSION=3.12.3",
+            "GPG_KEY=7169605F62C751356D059A34D8B939942C123456",
+            "PYTHON_SHA256=" + "a" * 4 + "b" * 8 + "c" * 4 + "d" * 44,
+            "HOSTNAME=7f3a2b1c9d0e",
+            "HOME=/root",
+            "TZ=UTC",
+            "MINIO_ROOT_PASSWORD=" + v1,
+            "POSTGRES_PASSWORD=" + v1 + "aa",
+            "NACOS_TOKEN=" + v1 + "bb",
+            "REDIS_AUTH=" + v1 + "cc",
+        ])
+
+        loose = redact_sensitive_text(sample, code_file=False, credential_values=True)
+        strict = redact_sensitive_text(sample, code_file=True, credential_values=True)
+
+        def masked_keys(out):
+            keys = set()
+            for line in out.splitlines():
+                if "=" in line:
+                    k, _, val = line.partition("=")
+                    if val != sample.split("\n")[[l.split("=")[0] for l in sample.splitlines()].index(k)].partition("=")[2]:
+                        keys.add(k)
+            return keys
+
+        loose_masked = masked_keys(loose)
+        strict_masked = masked_keys(strict)
+        # 宽松通道必须恰好打码 4 条带关键词的键，其余 8 条公共键逐字保留
+        assert loose_masked == {
+            "MINIO_ROOT_PASSWORD", "POSTGRES_PASSWORD", "NACOS_TOKEN", "REDIS_AUTH",
+        }
+        # 严格通道不比宽松通道多打码（额外误伤 = 0）
+        extra = strict_masked - loose_masked
+        assert extra == set(), f"strict path over-masks: {extra}"
+        for benign in ("PATH", "LANG", "PYTHON_VERSION", "GPG_KEY",
+                       "PYTHON_SHA256", "HOSTNAME", "HOME", "TZ"):
+            line = next(l for l in sample.splitlines() if l.startswith(benign + "="))
+            assert line in loose and line in strict, benign
+
+
+class TestUrlUserinfoSchemeGeneralization:
+    """task34 PART C — _redact_url_userinfo 的 scheme 泛化。
+
+    原来只认 HTTP/WS/FTP；``minio://`` / ``nats://`` 等对象存储/消息队列
+    DSN 的 userinfo 同样是凭据位。约束：DB 协议仍归 _DB_CONNSTR_RE（不重复
+    处理）；已打码形态幂等；无 userinfo 的普通 URL 逐字节不变。
+    """
+
+    def test_minio_userinfo_masked(self):
+        from agent.redact import _redact_url_userinfo
+
+        out = _redact_url_userinfo("minio://admin:Sup3rSecret@127.0.0.1:9000/bucket")
+        assert "Sup3rSecret" not in out
+        assert out == "minio://admin:***@127.0.0.1:9000/bucket"
+
+    def test_nats_userinfo_masked(self):
+        from agent.redact import _redact_url_userinfo
+
+        out = _redact_url_userinfo("nats://svc:tokValue123@events.internal:4222")
+        assert "tokValue123" not in out
+        assert out == "nats://svc:***@events.internal:4222"
+
+    def test_http_ws_ftp_still_masked(self):
+        from agent.redact import _redact_url_userinfo
+
+        assert _redact_url_userinfo(
+            "https://user:pwValue12345@api.example.com/v1"
+        ) == "https://user:***@api.example.com/v1"
+        assert _redact_url_userinfo(
+            "wss://user:pwValue12345@ws.example.com"
+        ) == "wss://user:***@ws.example.com"
+
+    def test_db_schemes_not_double_processed(self):
+        """DB 协议归 _DB_CONNSTR_RE 专管——userinfo 泛化 pass 不重复处理。"""
+        from agent.redact import _redact_url_userinfo, redact_cdp_url
+
+        raw = "amqp://user:amqpsecret33@host:5672/vhost"
+        assert _redact_url_userinfo(raw) == raw  # 直接调用不动（DB 通道负责）
+        out = redact_cdp_url(raw)                # 全链路由 _DB_CONNSTR_RE 打码
+        assert "amqpsecret33" not in out
+
+    def test_already_masked_is_idempotent(self):
+        from agent.redact import _redact_url_userinfo
+
+        masked = "minio://user:***@host:9000/bucket"
+        assert _redact_url_userinfo(masked) == masked
+
+    def test_url_without_userinfo_byte_identical(self):
+        from agent.redact import _redact_url_userinfo
+
+        for url in (
+            "https://example.com/search?q=secret+query&lang=zh#frag",
+            "https://example.com/path/to/page?access_token=xyz",
+            "minio://127.0.0.1:9000/bucket",
+        ):
+            assert _redact_url_userinfo(url) == url
+
+    def test_scheme_tail_not_matched(self):
+        """数字开头的标识符尾部不当 scheme（lookbehind 挡住中途起匹配）。"""
+        from agent.redact import _redact_url_userinfo
+
+        text = "9minio://user:pwValue12345@host"
+        assert _redact_url_userinfo(text) == text
+
+    def test_cdp_url_integration_minio(self):
+        from agent.redact import redact_cdp_url
+
+        out = redact_cdp_url("minio://admin:Sup3rSecret@127.0.0.1:9000/bucket")
+        assert "Sup3rSecret" not in out
+        assert "minio://admin:***@127.0.0.1:9000/bucket" == out
+
+
 class TestKeywordWordBoundary:
     """Ported from nearai/ironclaw#6129 — a secret keyword embedded inside a
     larger prose word (``Secretary`` ⊃ ``secret``, ``tokenizer`` ⊃ ``token``,
@@ -970,5 +1276,89 @@ class TestKeywordWordBoundary:
         text = "secrets: hunter2hunter2hunter2hh"
         result = redact_sensitive_text(text)
         assert "hunter2hunter2hunter2hh" not in result
+
+
+class TestNonSecretConstantCarveOutOnDumpSurface:
+    """task34b — 渲染型 dump 面上「非秘密常量豁免」曾经失效的回归。
+
+    现场（主 session 复跑发现）：task34 PART B 把 ``docker compose config`` 一类
+    渲染型命令送进严格通道（``code_file=False``），而豁免判据挂的是
+    ``_strict = code_file and credential_values`` —— 恰好在那条新通道上为 False，
+    于是 ``max_tokens: 8192`` / ``token_limit`` / ``tokens_used`` 被打成 ``***``：
+    读配置（本次的用途）被砸。
+
+    修复：豁免改挂 ``credential_values``（所有工具输出面都 True）；legacy 调用
+    （``credential_values=False``）行为不变。真凭据判据一个字没动。
+    """
+
+    _V = "Aa1" + "-x9" * 6 + "Zz"
+
+    FAMILY = [
+        "max_tokens",
+        "max_output_tokens",
+        "max_input_tokens",
+        "token_count",
+        "token_limit",
+        "token_budget",
+        "tokens_used",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "MAX_TOKENS",
+    ]
+
+    DUMP_CMDS = [
+        "docker compose config",
+        "docker compose config --format json",
+        "docker inspect node233",
+        "env",
+        "printenv",
+    ]
+
+    @pytest.mark.parametrize("cmd", DUMP_CMDS)
+    @pytest.mark.parametrize("key", FAMILY)
+    def test_constant_keys_survive_on_dump_surface(self, key, cmd):
+        from agent.redact import redact_terminal_output
+
+        for text in (
+            f"{key}: 8192",
+            '{"%s": "8192"}' % key,
+            f"{key}=8192",
+            str({key: 8192}),
+            f"model.{key}: 8192",
+        ):
+            assert redact_terminal_output(text, cmd) == text, f"{key} 在 {cmd} 面被误伤"
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            "access_tokens",
+            "refresh_tokens",
+            "client_secret",
+            "POSTGRES_PASSWORD",
+            "MINIO_ROOT_PASSWORD",
+            "MINIO_ACCESS_KEY_ID",
+        ],
+    )
+    def test_credential_family_still_masked_on_dump_surface(self, key):
+        """正向对照：同一 dump 面上，真凭据一个都不能因为这次放宽而漏。"""
+        from agent.redact import redact_terminal_output
+
+        for text in (
+            '{"%s": "%s"}' % (key, self._V),
+            f"{key}: {self._V}",
+            str({key: self._V}),
+            f"{key}={self._V}",
+        ):
+            assert self._V not in redact_terminal_output(text, "docker compose config"), (
+                f"{key} 在 dump 面漏了"
+            )
+
+    def test_legacy_call_behavior_unchanged(self):
+        """边界：豁免只挂在 credential-aware 面上；legacy 默认调用保持原行为。"""
+        from agent.redact import redact_sensitive_text
+
+        assert redact_sensitive_text("max_tokens: 8192") == "max_tokens: ***"
+
 
 

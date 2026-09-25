@@ -24,6 +24,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       getChatUsage: vi.fn(),
       getUsageAnalytics: vi.fn(),
       approveApproval: vi.fn(),
+      uploadChatImage: vi.fn(),
     },
   };
 });
@@ -57,10 +58,19 @@ const apiMock = api as unknown as {
   getChatUsage: ReturnType<typeof vi.fn>;
   getUsageAnalytics: ReturnType<typeof vi.fn>;
   approveApproval: ReturnType<typeof vi.fn>;
+  uploadChatImage: ReturnType<typeof vi.fn>;
 };
 
 if (typeof globalThis.HTMLElement !== "undefined" && !HTMLElement.prototype.scrollIntoView) {
   HTMLElement.prototype.scrollIntoView = () => {};
+}
+
+// task36: jsdom has no object-URL implementation — the composer uses it for previews.
+if (typeof URL.createObjectURL !== "function") {
+  URL.createObjectURL = () => "blob:mock-preview";
+}
+if (typeof URL.revokeObjectURL !== "function") {
+  URL.revokeObjectURL = () => {};
 }
 
 let container: HTMLDivElement;
@@ -102,6 +112,7 @@ async function mountWith(
   }));
   apiMock.createChatSession.mockResolvedValue({ chat_session_id: "C", created_at: "", model: "m-fast" });
   apiMock.chatStream.mockResolvedValue(undefined);
+  apiMock.uploadChatImage.mockResolvedValue({ ok: true, data: { path: "/tmp/vh/uploads/chat_images/mock.png", mime: "image/png", size: 12 } });
   apiMock.interruptChatSession.mockResolvedValue({ status: "interrupted" });
   apiMock.setChatSessionModel.mockImplementation(async (_sid: string, model: string) => ({
     chat_session_id: "A",
@@ -1031,5 +1042,188 @@ describe("ChatPage 多行输入框（task33）", () => {
     await act(async () => {
       resolveStream!();
     });
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// task36：聊天图片上传（composer 附件）
+// ---------------------------------------------------------------------------
+
+const _UPLOAD_PATH = "/tmp/vh/uploads/chat_images/abc123.png";
+
+function pngFile(name = "shot.png"): File {
+  return new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], name, { type: "image/png" });
+}
+
+/** 选中文件（jsdom 无真实 FileList → 直接挂 files 后派发 change）。 */
+async function attachFiles(files: File[]) {
+  const input = container.querySelector<HTMLInputElement>('input[type="file"][data-testid="chat-image-input"]');
+  if (!input) throw new Error("image input not found");
+  Object.defineProperty(input, "files", { value: files, configurable: true });
+  await act(async () => {
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(0);
+  });
+}
+
+function buttonContaining(label: string): HTMLButtonElement {
+  const found = [...container.querySelectorAll("button")].find((b) =>
+    (b.textContent ?? "").includes(label),
+  );
+  if (!found) throw new Error(`button not found: ${label}`);
+  return found as HTMLButtonElement;
+}
+
+describe("task36 ChatPage 图片上传", () => {
+  it("纯文本发送逐字节不变（无附件时不追加任何东西）", async () => {
+    await mountWith([SESSION_B]);
+    await sendMessage("看下拓扑");
+    expect(apiMock.chatStream).toHaveBeenCalledTimes(1);
+    expect(apiMock.chatStream.mock.calls[0][1]).toBe("看下拓扑");
+    expect(apiMock.uploadChatImage).not.toHaveBeenCalled();
+  });
+
+  it("选图 → 上传 → 预览出现；发送 → 请求体含图片引用路径", async () => {
+    await mountWith([SESSION_B]); // mount first: mountWith installs the default mock
+    apiMock.uploadChatImage.mockResolvedValue({
+      ok: true,
+      data: { path: _UPLOAD_PATH, mime: "image/png", size: 4 },
+    });
+    await attachFiles([pngFile()]);
+
+    expect(apiMock.uploadChatImage).toHaveBeenCalledTimes(1);
+    const strip = container.querySelector('[data-testid="chat-attachments"]');
+    expect(strip).toBeTruthy();
+    expect(strip!.querySelector("img")).toBeTruthy();
+    expect(strip!.textContent).toContain("已就绪");
+
+    await sendMessage("这是什么");
+
+    expect(apiMock.chatStream).toHaveBeenCalledTimes(1);
+    expect(apiMock.chatStream.mock.calls[0][1]).toBe(`这是什么\n${_UPLOAD_PATH}`);
+    // 发送后附件区清空（本地气泡改为缩略图）
+    expect(container.querySelector('[data-testid="chat-attachments"]')).toBeNull();
+    expect(container.querySelector('[data-testid="user-message-images"]')).toBeTruthy();
+  });
+
+  it("只有图片没有文字也能发送", async () => {
+    await mountWith([SESSION_B]);
+    apiMock.uploadChatImage.mockResolvedValue({ ok: true, data: { path: _UPLOAD_PATH } });
+    await attachFiles([pngFile()]);
+    const form = container.querySelector("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(apiMock.chatStream).toHaveBeenCalledTimes(1);
+    expect(apiMock.chatStream.mock.calls[0][1]).toBe(_UPLOAD_PATH);
+  });
+
+  it("上传失败 → 错误态 + 重试可恢复（不卡中间态）", async () => {
+    await mountWith([SESSION_B]);
+    apiMock.uploadChatImage.mockRejectedValueOnce(
+      new ApiError("unsupported_image", "无法识别的图片格式", 415),
+    );
+    await attachFiles([pngFile("bad.png")]);
+
+    const strip = container.querySelector('[data-testid="chat-attachments"]')!;
+    expect(strip.textContent).toContain("上传失败");
+
+    // 重试 → 这次成功
+    apiMock.uploadChatImage.mockResolvedValueOnce({ ok: true, data: { path: _UPLOAD_PATH } });
+    await act(async () => {
+      buttonContaining("重试").click();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(container.querySelector('[data-testid="chat-attachments"]')!.textContent).toContain("已就绪");
+  });
+
+  it("上传中禁止发送（不静默漏发图片）", async () => {
+    await mountWith([SESSION_B]);
+    let resolveUpload: (v: unknown) => void = () => {};
+    apiMock.uploadChatImage.mockImplementation(
+      () => new Promise((res) => {
+        resolveUpload = res;
+      }),
+    );
+    await attachFiles([pngFile()]);
+
+    const input = container.querySelector<HTMLTextAreaElement>("form textarea[placeholder]")!;
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value")!.set!;
+    await act(async () => {
+      setter.call(input, "先别发");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const form = input.closest("form")!;
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(apiMock.chatStream).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveUpload({ ok: true, data: { path: _UPLOAD_PATH } });
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    await act(async () => {
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(apiMock.chatStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("移除图片 → 预览消失，且不随消息发出", async () => {
+    await mountWith([SESSION_B]);
+    apiMock.uploadChatImage.mockResolvedValue({ ok: true, data: { path: _UPLOAD_PATH } });
+    await attachFiles([pngFile()]);
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('button[title="移除图片"]')!.click();
+    });
+    expect(container.querySelector('[data-testid="chat-attachments"]')).toBeNull();
+    await sendMessage("纯文本");
+    expect(apiMock.chatStream.mock.calls[0][1]).toBe("纯文本");
+  });
+
+  it("发送后不提前释放预览 URL（气泡不裂图）；消息卸载时才释放", async () => {
+    await mountWith([SESSION_A, SESSION_B]);
+    apiMock.uploadChatImage.mockResolvedValue({ ok: true, data: { path: _UPLOAD_PATH } });
+    const revoked: string[] = [];
+    const spy = vi.spyOn(URL, "revokeObjectURL").mockImplementation((u: string) => {
+      revoked.push(u);
+    });
+    try {
+      await attachFiles([pngFile()]);
+      await sendMessage("看图");
+
+      const img = container.querySelector<HTMLImageElement>(
+        '[data-testid="user-message-images"] img',
+      );
+      expect(img).toBeTruthy();
+      const src = img!.getAttribute("src")!;
+      // 回归：发送时 revoke 会让仍在渲染的 blob 变成裂图。
+      expect(revoked).not.toContain(src);
+
+      // 切走会话 → 消息卸载 → 该 blob 释放（生命周期与轮次同寿，不泄漏）。
+      switchTo(sessionSelect(), "B");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(revoked).toContain(src);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("非图片文件被忽略（不触发上传）", async () => {
+    await mountWith([SESSION_B]);
+    await attachFiles([new File(["hello"], "notes.txt", { type: "text/plain" })]);
+    expect(apiMock.uploadChatImage).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="chat-attachments"]')).toBeNull();
   });
 });

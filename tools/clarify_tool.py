@@ -37,7 +37,7 @@ _SENSITIVE_QUESTION_RE = re.compile(
 def _collect_secret_answer_shape(value: str) -> bool:
     """敏感答复登记的形状门槛：≥8 字符且含数字/符号/大写（防常见答复词误登记）。
 
-    ``wwplove815``（低熵密码现场形态）→ 含数字 → 登记；``bearer`` /
+    ``example-pw-4711``（低熵密码现场形态）→ 含数字 → 登记；``bearer`` /
     ``approved`` / ``yes`` 等答复词 → 不登记，不把常见词全局打码。
     """
     if len(value) < 8 or value.isdigit():

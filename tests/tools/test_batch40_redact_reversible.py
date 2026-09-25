@@ -98,19 +98,19 @@ class TestCredentialStillMasked:
 class TestDisplaySurfaceUnchanged:
     def test_registered_value_still_masked_on_display(self):
         """展示面（终端输出）登记值打码不回退——persist_write 只影响落盘。"""
-        redact.register_credential_value("wwplove815")
+        redact.register_credential_value("example-pw-4711")
         out = redact.redact_sensitive_text(
-            "echo 'wwplove815' > ~/.vigil/askpass", force=True
+            "echo 'example-pw-4711' > ~/.vigil/askpass", force=True
         )
-        assert "wwplove815" not in out
+        assert "example-pw-4711" not in out
         assert "«redacted-value»" in out
 
     def test_persist_write_skips_registered_values_only(self):
         """persist_write 跳过登记值 pass，但凭据形态 pass 仍生效。"""
-        redact.register_credential_value("wwplove815")
-        doc = "note: wwplove815\napi_key: sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGH\n"
+        redact.register_credential_value("example-pw-4711")
+        doc = "note: example-pw-4711\napi_key: sk-proj-abcdefghijklmnopqrstuvwxyzABCDEFGH\n"
         masked = redact.redact_sensitive_text(
             doc, code_file=True, credential_values=True, persist_write=True
         )
-        assert "wwplove815" in masked          # 裸低熵词放行（文档保真）
+        assert "example-pw-4711" in masked          # 裸低熵词放行（文档保真）
         assert "sk-proj" not in masked          # 真凭据仍打码

@@ -28,6 +28,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import contextvars
 import pytest
 
 # Ensure project root is importable
@@ -660,21 +661,373 @@ def _kanban_write_guard(_hermetic_environment, monkeypatch):
     monkeypatch.setattr(_kdb, "connect", _guarded_connect)
 
 
-# ── Module-level state reset — replaced by per-file process isolation ──────
+# ── Module-level state reset, per test FILE ────────────────────────────────
 #
 # Each test FILE runs in a freshly-spawned ``python -m pytest <file>``
 # subprocess via ``scripts/run_tests_parallel.py``, so module-level dicts /
 # sets / ContextVars from tests in one file cannot leak into tests in
-# another file. No manual per-module clearing needed.
+# another file — *under the canonical runner*. A direct multi-file
+# invocation (``pytest tests/hermes_cli``, ``pytest tests/``) shares one
+# interpreter and used to fail ~120 tests that pass individually.
 #
-# Within a single file, ordering is the author's responsibility. If your
-# tests in the same file share mutable state, either reset it explicitly
-# in a fixture or split them across files.
+# The historic ``_reset_module_state`` autouse fixture (manual per-module
+# clearing) was dropped when the runner moved to per-file subprocesses, on
+# the assumption that no other invocation mode mattered. This fixture
+# restores that capability *generically* rather than by re-adding one
+# hand-written clear per module: it snapshots process-level state at the top
+# of every test module and rolls it back when the module ends, which makes
+# any file combination behave like the per-file runner.
+#
+# Module scope (not function scope) is deliberate: it reproduces exactly the
+# per-file-process semantics, so tests that intentionally share state
+# *within* one file keep working — a function-scoped reset would over-isolate
+# and break them, i.e. make ``pytest tests/foo.py`` fail where it passes
+# today.
+#
+# What it rolls back (each face was measured, not guessed — see the task-37
+# diagnosis):
+#   * module-level dict / list / set objects under the app packages, restored
+#     in place. These hold the config / model-catalog / auth / skill caches
+#     (``hermes_cli.config._LOAD_CONFIG_CACHE``, ``agent.models_dev``,
+#     ``hermes_cli.models._PROVIDER_MODELS``, …) which are keyed on the
+#     per-test ``VIGIL_HOME`` and otherwise poison the next file.
+#   * module-level scalars and ``Path`` constants (``agent.redact.
+#     _CREDENTIAL_VALUES_LOADED``, import-time ``get_hermes_home()``
+#     snapshots).
+#   * ``sys.modules`` module IDENTITY: three kanban files do
+#     ``del sys.modules[mod]`` for every ``hermes_cli*`` module to force a
+#     re-import against a throwaway home. Without restoring the original
+#     module objects, later files end up with two divergent copies of the
+#     same module (old references vs. the re-imported object), which broke
+#     ``test_model_validation`` and friends.
+#   * ``hermes_cli.web_server.app.state`` — a process-wide FastAPI singleton
+#     (``auth_required`` flipped on by dashboard-auth tests leaked into later
+#     files, turning their expected 422 into 401).
+#   * module-level ``ContextVar`` values. Tests run in one context, so a
+#     ``var.set(...)`` in one file is still visible in the next. Real example:
+#     ``tools.approval._hermes_interactive_ctx`` — ``test_contract_compile.py``
+#     set it and "reset" it with the wrong helper (``reset_current_session_key``
+#     resets ``_approval_session_key``; the mismatch raises ValueError and is
+#     swallowed), so every later file looked like an interactive CLI session and
+#     approval prompts auto-denied instead of taking the cron path (7 failures
+#     in ``tests/tools/test_cron_approval_mode.py``).
+#   * module attributes whose *type* changed mid-file — the lazily-computed
+#     sentinel pattern (``tools.environments.local._VIGIL_BIN_DIR = _SENTINEL``
+#     → ``str`` on first use). The module recomputes it from ``_SENTINEL``, so
+#     rolling the sentinel back is the correct "fresh interpreter" state.
+#
+# Within a single file, ordering remains the author's responsibility. If your
+# tests in the same file share mutable state, either reset it explicitly in a
+# fixture or split them across files.
 #
 # The skill ``test-suite-cascade-diagnosis`` documents the cascade patterns
 # this replaces; the running example was ``test_command_guards`` failing
 # 12/15 CI runs because ``tools.approval._session_approved`` carried
 # approvals from one test's session into another's.
+
+# Packages whose module-level state the per-file reset covers. Prefix match:
+# ``hermes_cli`` also matches ``hermes_cli.config`` etc.
+_PROCESS_STATE_PACKAGES = (
+    "hermes_cli", "tools", "agent", "gateway", "tui_gateway", "cron", "kanban",
+    "hermes_state", "hermes_constants", "run_agent", "cli", "model_tools",
+    "toolsets", "trajectory_compressor", "mcp_serve", "acp_adapter",
+)
+
+# ``app.state`` is a process-wide FastAPI singleton, not a module — probe it
+# under a synthetic owner name so it flows through the same snapshot code.
+# (attributues live in ``app.state._state``, a plain dict, so the ordinary
+# container restore handles them.)
+_APP_STATE_OWNER = "hermes_cli.web_server:app.state"
+
+
+def _process_state_owner(name: str) -> bool:
+    for pkg in _PROCESS_STATE_PACKAGES:
+        if name == pkg or name.startswith(f"{pkg}."):
+            return True
+    return False
+
+
+def _new_app_modules(snapshot: dict) -> set:
+    """Application modules imported since ``snapshot`` was taken.
+
+    Their import-time side effects may have written into the very dicts we
+    roll back, and a second import is a no-op — so those additions cannot be
+    replayed and must be preserved (see the container restore below).
+    """
+    before = snapshot.get("modules", {})
+    return {n for n in list(sys.modules) if n not in before and _process_state_owner(n)}
+
+
+def _app_state_object():
+    ws = sys.modules.get("hermes_cli.web_server")
+    return getattr(getattr(ws, "app", None), "state", None)
+
+
+#: Marker for "this ContextVar was never set in this context".
+_UNSET = object()
+
+
+def _snapshot_process_state() -> dict:
+    """Copy the process-level state faces this fixture is able to roll back."""
+    containers: dict = {}
+    scalars: dict = {}
+    refs: dict = {}
+    ctxvars: list = []
+
+    def _collect(owner: str, attrs: dict) -> None:
+        for attr, val in attrs.items():
+            if attr.startswith("__"):
+                continue
+            typ = type(val)
+            try:
+                if typ is dict:
+                    containers[(owner, attr)] = ("dict", dict(val))
+                elif typ is list:
+                    containers[(owner, attr)] = ("list", list(val))
+                elif typ is set:
+                    containers[(owner, attr)] = ("set", set(val))
+                elif typ in (bool, int, float, str) or val is None or typ is Path:
+                    scalars[(owner, attr)] = val
+                elif typ is contextvars.ContextVar:
+                    # You cannot *unset* a ContextVar, but re-setting its
+                    # current value hands us a token; resetting that token
+                    # later restores the exact prior state (including unset).
+                    #
+                    # IMPORTANT: use the var's OWN default (``val.get()``), not
+                    # a marker of ours — a marker leaks into the value for the
+                    # whole file. ``tools.approval._hermes_interactive_ctx``
+                    # (default ``None``) is checked as ``is None`` vs truthy, so
+                    # seeding it with ``object()`` made every test in the file
+                    # take the interactive-approval path.
+                    try:
+                        current = val.get()
+                    except LookupError:
+                        # Unset with no default: nothing faithful to restore.
+                        continue
+                    ctxvars.append((val, val.set(current)))
+                else:
+                    # Restored by reference only if the attribute's type
+                    # changed mid-file (lazy sentinel → real value).
+                    refs[(owner, attr)] = (typ, val)
+            except Exception:
+                continue
+
+    for name, mod in list(sys.modules.items()):
+        if mod is None or not _process_state_owner(name):
+            continue
+        try:
+            _collect(name, vars(mod))
+        except Exception:
+            continue
+    app_state = _app_state_object()
+    if app_state is not None:
+        try:
+            _collect(_APP_STATE_OWNER, vars(app_state))
+        except Exception:
+            app_state = None
+    return {
+        # Module IDENTITY, not just contents: three kanban files delete every
+        # ``hermes_cli*`` entry from sys.modules to force a re-import.
+        "modules": dict(sys.modules),
+        "containers": containers,
+        "scalars": scalars,
+        "refs": refs,
+        "ctxvars": ctxvars,
+        "app_state": app_state,
+    }
+
+
+def _restore_process_state(snapshot: dict) -> None:
+    """Roll the process back to ``snapshot``. Never raises."""
+    # 1. ContextVars first: they gate code paths (interactive vs cron
+    #    approval) that the restores below may consult.
+    for var, token in snapshot.get("ctxvars", ()):
+        try:
+            var.reset(token)
+        except Exception:
+            continue
+
+    # 2. Module identity: a deleted/replaced module must come back as the
+    #    ORIGINAL object, so modules holding a reference to it stay in sync.
+    #
+    #    A file that does ``del sys.modules[...]`` + re-import (the kanban
+    #    files, ``tests/agent/test_verification_stop_caching.py``) leaves NEW
+    #    module objects behind. Putting the originals back keeps earlier
+    #    references in sync, but the re-imported copies under names that did
+    #    not exist at snapshot time would then linger — and importing those
+    #    again is a no-op, so their registration side effects never replay
+    #    against the originals. (Without dropping them,
+    #    ``test_bedrock_transport.py`` gets ``None`` from every ``get_transport``
+    #    call after ``test_verification_stop_caching.py``: 11 failures, because
+    #    ``agent.transports.bedrock`` never re-registers into the restored
+    #    ``_REGISTRY``.)
+    #
+    #    Copying the re-imported NAMESPACE over instead was measured and
+    #    rejected: the kanban files re-import the whole ``hermes_cli*`` package
+    #    against a throwaway home, and carrying those import-time path
+    #    constants into the originals took ``pytest tests/hermes_cli`` from 41
+    #    failing tests to 299. Dropping the newly-imported modules is safe and
+    #    closer to "fresh interpreter": the next file re-imports them against
+    #    whatever environment is current then.
+    new_modules = _new_app_modules(snapshot)
+    for name, mod in snapshot["modules"].items():
+        current = sys.modules.get(name)
+        if current is mod:
+            continue
+        sys.modules[name] = mod
+    # ``from pkg import sub`` — and every ``_m()``-style lazy re-import — resolves
+    # through the package ATTRIBUTE, not ``sys.modules``. A file that deletes
+    # ``sys.modules["hermes_cli.main"]`` and re-imports it (test_skills_subparser)
+    # leaves ``hermes_cli.main`` bound to the throwaway copy while we restore the
+    # original into ``sys.modules``; ``update_cmd._m()`` then returns the stale
+    # module while the test patches the original, so
+    # ``test_update_venv_health.py``'s PROJECT_ROOT patch missed and the suite ran
+    # a REAL ``git checkout main`` against the checkout root. Re-bind the
+    # attribute too (only when it still holds a module).
+    for name, mod in snapshot["modules"].items():
+        pkg, _, child = name.rpartition(".")
+        if not pkg or not _process_state_owner(name):
+            continue
+        parent = sys.modules.get(pkg)
+        if parent is None:
+            continue
+        current = getattr(parent, child, None)
+        if current is mod or not isinstance(current, type(sys)):
+            continue
+        try:
+            setattr(parent, child, mod)
+        except Exception:
+            pass
+
+    # Capture each new module's parent BEFORE popping: popping a package also
+    # removes its ``pkg.mod`` entries, so the parent has to be resolved first.
+    parent_of: dict = {}
+    for name in new_modules:
+        pkg, _, child = name.rpartition(".")
+        if pkg:
+            parent_of[name] = (pkg, child, sys.modules.get(pkg))
+    # Deepest first, so a submodule is detached before its package.
+    for name in sorted(new_modules, key=lambda n: n.count("."), reverse=True):
+        mod = sys.modules.pop(name, None)
+        if mod is None:
+            continue
+        entry = parent_of.get(name)
+        if entry is None:
+            continue
+        pkg, child, parent = entry
+        if parent is None or sys.modules.get(pkg) is not parent:
+            continue
+        # ``from pkg import sub`` resolves through the package ATTRIBUTE, not
+        # ``sys.modules``. Leaving a stale attribute pointing at the dropped
+        # module makes the next file's ``from agent import curator_backup``
+        # return the dead object, and ``importlib.reload`` then raises
+        # "module agent.curator_backup not in sys.modules" (26 errors in
+        # tests/agent, 19 in tests/hermes_cli). Drop the attribute too — but
+        # only when it still points at the very object we popped.
+        if getattr(parent, child, None) is mod:
+            try:
+                delattr(parent, child)
+            except Exception:
+                pass
+
+    def _owner(name: str):
+        if name == _APP_STATE_OWNER:
+            return snapshot["app_state"]
+        return sys.modules.get(name)
+
+    # 3. Mutable containers, restored in place (identity preserved: other
+    #    modules may hold a reference to the very same dict/set).
+    #
+    #    Entries ADDED by this file are only dropped when the file imported no
+    #    new application module. Additions made while importing one are
+    #    import-time side effects — ``agent.transports._discover_transports()``
+    #    fills ``agent.transports._REGISTRY`` via ``import agent.transports.X``
+    #    and a repeat import is a no-op, so wiping the registry is
+    #    unrecoverable. (Rolling it back broke 11 tests in a 2-file repro:
+    #    test_chat_completions.py + test_bedrock_transport.py, 56 passed on the
+    #    un-hooked baseline vs 45/11 with the wipe.) Values of keys that already
+    #    existed are always restored.
+    drop_added = not new_modules
+
+    def _same(left, right) -> bool:
+        if left is right:
+            return True
+        try:
+            return bool(left == right)
+        except Exception:
+            return False
+
+    for (name, attr), (kind, saved) in snapshot["containers"].items():
+        owner = _owner(name)
+        if owner is None:
+            continue
+        try:
+            current = getattr(owner, attr, None)
+            if kind == "dict" and type(current) is dict:
+                for key, val in saved.items():
+                    if key not in current or not _same(current[key], val):
+                        current[key] = val
+                if drop_added:
+                    for key in [k for k in current if k not in saved]:
+                        del current[key]
+            elif kind == "list" and type(current) is list:
+                for idx, val in enumerate(saved):
+                    if idx >= len(current):
+                        current.append(val)
+                    elif not _same(current[idx], val):
+                        current[idx] = val
+                if drop_added and len(current) > len(saved):
+                    del current[len(saved):]
+            elif kind == "set" and type(current) is set:
+                current.update(saved)
+                if drop_added and current != saved:
+                    current.clear()
+                    current.update(saved)
+        except Exception:
+            continue
+    # 4. Scalars / Path constants (import-time snapshots included).
+    for (name, attr), saved in snapshot["scalars"].items():
+        owner = _owner(name)
+        if owner is None:
+            continue
+        try:
+            if getattr(owner, attr, None) != saved:
+                setattr(owner, attr, saved)
+        except Exception:
+            continue
+    # 5. Attributes whose type changed (lazy sentinel → computed value). Only
+    #    the transition is restored, never an equal-type replacement of a live
+    #    object — that keeps this from resurrecting stale handles.
+    for (name, attr), (typ, saved) in snapshot.get("refs", {}).items():
+        owner = _owner(name)
+        if owner is None or not hasattr(owner, attr):
+            continue
+        try:
+            if type(getattr(owner, attr)) is not typ:
+                setattr(owner, attr, saved)
+        except Exception:
+            continue
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _reset_process_state_between_files():
+    """Roll process-level state back at every test-FILE boundary.
+
+    Module scope is load-bearing: it reproduces "one file = one fresh
+    interpreter" without over-isolating tests that legitimately share state
+    inside a single file.
+    """
+    try:
+        before = _snapshot_process_state()
+    except Exception:
+        before = None
+    yield
+    if before is None:
+        return
+    try:
+        _restore_process_state(before)
+    except Exception:
+        pass
 
 
 # ── tui_gateway.server shared-module state isolation ───────────────────────

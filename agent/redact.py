@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 # 已知凭据值登记表（OPS-DELTA 批次三十二，行为层安全）
 #
 # 覆盖 redact 两套既有检测（键名命中 + 高熵值兜底）都漏的盲区：低熵裸密码
-# （``echo 'wwplove815'``，无键名形态、长度不足 16 不挂高熵门）。登记来源：
+# （``echo 'example-pw-4711'``，无键名形态、长度不足 16 不挂高熵门）。登记来源：
 #   ① credential_vault.store() 写入的凭据值；
 #   ② clarify 交互中问题含敏感关键词（密码/password/密钥/secret/凭据…）时
 #     的答复值。
@@ -317,8 +317,12 @@ _PREFIX_PATTERNS = [
 # an all-caps key is almost never prose/code. ``PASS`` covers the sshpass /
 # sudo family (SSHPASS, SUDO_PASS, *_PASS) that the longer PASSWD/PASSWORD
 # alternatives miss — an all-caps KEY ending in PASS is a password, not prose
-# (OPS-DELTA #5).
-_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|CREDENTIAL|AUTH)"
+# (OPS-DELTA #5). ``KEY_?ID`` covers the access-key-id family
+# (``MINIO_ACCESS_KEY_ID`` / ``AWS_ACCESS_KEY_ID`` / ``*KEY_ID``): a key id is
+# an account identifier routinely rendered next to its secret in compose/
+# inventory dumps, and an all-caps KEY ending in KEY_ID is a credential slot,
+# not prose.
+_SECRET_ENV_NAMES = r"(?:API_?KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|CREDENTIAL|AUTH|KEY_?ID)"
 _ENV_ASSIGN_RE = re.compile(
     rf"([A-Z0-9_]{{0,50}}{_SECRET_ENV_NAMES}[A-Z0-9_]{{0,50}})\s*=\s*(['\"]?)(\S+)\2",
 )
@@ -348,8 +352,11 @@ _ENV_ASSIGN_RE = re.compile(
 # anchored/YAML matchers still run their own ``_key_has_secret_keyword``
 # validation, so bare-``pass``/``ssh_key`` config forms stay unchanged; only
 # the JSON/ENV passes (which do not keyword-validate) gain coverage
-# (OPS-DELTA #5).
-_SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|pass|ssh_key|private_key|passphrase|id_rsa|credential|auth)"
+# (OPS-DELTA #5). ``key[ _.\-]?id`` (access-key-id family) is here so the
+# STRICT pre-gate admits key-id-only texts into the JSON passes — without it
+# ``{"MINIO_ACCESS_KEY_ID": …}`` fails the gate and leaks whole (task34);
+# the JSON affixed pass still keyword-validates every hit.
+_SECRET_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|pass|ssh_key|private_key|passphrase|id_rsa|credential|auth|key[ _.\-]?id)"
 _CFG_VALUE = r"(['\"]?)([^\s&]+?)\2(?=[\s&]|$)"
 # Linear pre-gate for the _CFG_*_RE subs below: a text with no secret keyword
 # can never match either pattern, so the (potentially backtrack-heavy) subs
@@ -407,7 +414,9 @@ _CFG_ANCHORED_SPACED_RE = re.compile(
 # from the key set so ``Authorization:`` / ``author:`` don't match (the former
 # is masked by _AUTH_HEADER_RE); ``auth_token``/``auth-token`` still match via
 # the ``token`` keyword. Quoted values defer to _JSON_FIELD_RE via the lookahead.
-_YAML_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|credential)"
+# ``key[ _.\-]?id`` (task34): access-key-id family — helper-validated like
+# every other YAML hit, so prose (``monkey_id:``) stays untouched.
+_YAML_CFG_NAMES = r"(?:api[ _.\-]?key|token|secret|passwd|password|credential|key[ _.\-]?id)"
 # NOTE(perf): possessive quantifiers wherever the successor is disjoint; the
 # leading ``[A-Za-z0-9_.\-]*`` stays backtrackable (see _CFG_DOTTED_RE note).
 _YAML_ASSIGN_RE = re.compile(
@@ -452,9 +461,18 @@ _YAML_QUOTED_ASSIGN_RE = re.compile(
 # (``secretary``, ``tokenizer``, ``authored``, ``credentialing``) no longer
 # match. ALL-CAPS keys keep the legacy embedded matching (``MYTOKEN=…``) — an
 # all-caps key is almost never prose, the same rationale as _ENV_ASSIGN_RE.
+#
+# ``key[ _.\-]?id`` (task34): the access-key-id family — ``*_ACCESS_KEY_ID``,
+# ``*_KEY_ID``. A key id is an account identifier (semi-sensitive) that
+# rendered configs (docker compose config / cloud inventory) place right next
+# to its secret; masking it trades little: the word-boundary rules keep prose
+# safe (``monkey_identifier`` / ``turkey_id`` don't match — the keyword must
+# sit at a separator or camelCase boundary), and the AKIA value-prefix pass
+# only ever covered the AWS-shaped minority of these values.
 _KEY_KEYWORD_RE = re.compile(
     r"(?:api|auth|access|refresh|session|secret)[ _.\-]?(?:key|token)"
-    r"|token|secret|passwd|password|credential|auth",
+    r"|token|secret|passwd|password|credential|auth"
+    r"|key[ _.\-]?id",
     re.IGNORECASE,
 )
 
@@ -509,17 +527,20 @@ def _key_has_secret_keyword(key: str) -> bool:
 
 # Keys that LOOK secret (pass the keyword gate) but are well-known
 # non-secret programming/LLM constants — ``MAX_TOKENS=4096``,
-# ``prompt_tokens: 123``, ``max_tokens_for_response``. Only consulted on the
-# strict code_file surfaces (OPS-DELTA #5) so terminal/file output keeps the
+# ``prompt_tokens: 123``, ``max_tokens_for_response``. Consulted on every
+# credential-aware surface (credential_values=True: terminal/tool output, file
 # #43025 carve-out (source constants survive byte-identical); the loose
-# legacy passes on log/prose surfaces keep masking them exactly as before.
+# legacy calls (credential_values=False) keep masking them exactly as before.
+# task34b：原先这里挂的是 ``_strict``（= code_file and credential_values），
+# 而渲染型 dump 命令走 code_file=False（task34 PART B）→ 豁免在**恰好那条新
+# 通道上**失效，``max_tokens: 8192`` 被打成 ``***``（读配置的用途被砸）。
 # Prefix matching (after stripping separators) covers the affixed variants
 # that real usage stats emit: ``prompt_tokens_details``,
 # ``max_completion_tokens``, ``total_tokens`` …
 _NON_SECRET_TOKEN_KEY_PREFIXES = (
     "maxtokens", "mintokens", "numtokens", "tokencount", "tokenlimit",
     "tokenbudget", "tokenwindow", "inputtokens", "outputtokens",
-    "prompttokens", "completiontokens", "totaltokens", "tokensper",
+    "prompttokens", "completiontokens", "totaltokens", "tokensper", "tokensused",
 )
 
 
@@ -561,6 +582,32 @@ def _already_masked_value(value: str) -> bool:
 _JSON_KEY_NAMES = r"(?:api_?[Kk]ey|token|secret|passwd|password|access_token|refresh_token|auth_token|bearer|secret_value|raw_secret|secret_input|key_material|ssh_key|private_key|passphrase|client_secret|id_rsa|credential|credentials|authorization|auth)"
 _JSON_FIELD_RE = re.compile(
     rf'("{_JSON_KEY_NAMES}")\s*:\s*"([^"]+)"',
+    re.IGNORECASE,
+)
+# Full-match tester for the exact-name list above (shared with the single-quote
+# repr pass so the exact family can never drift between the two channels).
+_JSON_KEY_NAME_RE = re.compile(rf"^(?:{_JSON_KEY_NAMES})$", re.IGNORECASE)
+
+# task34 PART A — 组合键名（前后缀形态）通道。_JSON_FIELD_RE 的键名是全等匹配，
+# 渲染型输出里真实键名几乎都带前后缀（``MINIO_ROOT_PASSWORD`` / ``db_password``
+# / ``monitor_auth_token``），从 JSON 口全部漏。这里键名放宽为
+# ``[A-Za-z0-9_.\-]*<核心词>[A-Za-z0-9_.\-]*``，命中后交给既有的
+# ``_key_has_secret_keyword()`` 做词边界/prose 过滤（tokenizer / secretary /
+# author 等嵌词照旧放行）——秘密词的语义判定只有 _KEY_KEYWORD_RE 一份名单，
+# 这里只是预筛超集（含裸 ``key``：access_key_id 族的判定在 helper 里），
+# 预筛多匹配无副作用。
+_JSON_KEY_CORE = r"token|secret|passwd|password|credential|auth|key"
+_JSON_FIELD_AFFIXED_RE = re.compile(
+    rf'("[A-Za-z0-9_.\-]*(?:{_JSON_KEY_CORE})[A-Za-z0-9_.\-]*")\s*:\s*"([^"]+)"',
+    re.IGNORECASE,
+)
+
+# 单引号 repr 形态（``print(dict)`` 的现实输出，``--format json | python3 -c``
+# 的常见落地形态）：``{'api_key': 'value'}``。键名判定与 JSON pass 同源：
+# 全等名单（_JSON_KEY_NAMES，覆盖 passphrase/id_rsa/bearer 这类不含核心词的
+# 名字）或 _key_has_secret_keyword。
+_REPR_FIELD_RE = re.compile(
+    rf"('(?:{_JSON_KEY_NAMES})'|'[A-Za-z0-9_.\-]*(?:{_JSON_KEY_CORE})[A-Za-z0-9_.\-]*')\s*:\s*'([^']+)'",
     re.IGNORECASE,
 )
 
@@ -676,8 +723,17 @@ _URL_WITH_QUERY_RE = re.compile(
 # URLs containing userinfo — `scheme://user:password@host` for ANY scheme
 # (not just DB protocols already covered by _DB_CONNSTR_RE above).
 # Catches things like `https://user:token@api.example.com/v1/foo`.
+# task34 PART C：scheme 从 HTTP/WS/FTP 白名单泛化为任意合法 scheme
+# （``minio://`` / ``nats://`` / ``mcp://`` 等对象存储/消息队列 DSN 的
+# userinfo 同样是凭据位）。约束：
+#   - DB 协议（postgres/mysql/mongodb/redis/amqp）仍归 _DB_CONNSTR_RE 专管，
+#     这里负向前瞻跳过，不重复处理；
+#   - 幂等：已打码形态（user:***@）再跑一遍输出不变（*** → ***）；
+#   - scheme 前不能紧邻 scheme 合法字符（防把更长标识符的尾部当 scheme）。
 _URL_USERINFO_RE = re.compile(
-    r"(https?|wss?|ftp)://([^/\s:@]+):([^/\s@]+)@",
+    r"(?<![A-Za-z0-9+.-])"
+    r"(?!(?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|amqp)://)"
+    r"([a-z][a-z0-9+.-]*)://([^/\s:@]+):([^/\s@]+)@",
 )
 
 # Strict provider-egress URL redaction accepts more URL-reference forms than
@@ -999,10 +1055,12 @@ def _redact_url_query_params(text: str) -> str:
 
 
 def _redact_url_userinfo(text: str) -> str:
-    """Strip `user:password@` from HTTP/WS/FTP URLs.
+    """Strip `user:password@` from URLs of any scheme (task34 PART C).
 
     DB protocols (postgres, mysql, mongodb, redis, amqp) are handled
-    separately by `_DB_CONNSTR_RE`.
+    separately by `_DB_CONNSTR_RE` and are deliberately skipped here so they
+    are never processed twice. Already-masked userinfo (``user:***@``) is
+    idempotent; URLs without userinfo pass through byte-identical.
     """
     return _URL_USERINFO_RE.sub(
         lambda m: f"{m.group(1)}://{m.group(2)}:***@",
@@ -1223,6 +1281,35 @@ def redact_sensitive_text(
     # non-secret constants (MAX_TOKENS=4096, prompt_tokens: 123 — issue
     # #43025) and preserves values the prefix pass already masked.
     _strict = code_file and credential_values
+
+    def _affixed_field_redactor(quote: str):
+        """Shared callback for the affixed-key passes (double-quote JSON +
+        single-quote repr) so their guards can't drift apart.
+
+        Accepts a key when it is in the exact credential-name list OR passes
+        ``_key_has_secret_keyword`` (the single semantic keyword judge).
+        Already-masked values are skipped on every surface — an earlier pass's
+        head/tail marker or reversible placeholder must never be re-masked
+        into a bare ``***``.
+        """
+        def _redact(m):
+            key, value = m.group(1), m.group(2)
+            # Programmatic env lookups reference variable *names*, not
+            # secret values (issue #2852) — same exception as the other
+            # config/JSON passes.
+            if _ENV_LOOKUP_VALUE_RE.match(value):
+                return m.group(0)
+            bare_key = key.strip(quote)
+            if not (_JSON_KEY_NAME_RE.fullmatch(bare_key)
+                    or _key_has_secret_keyword(bare_key)):
+                return m.group(0)
+            if credential_values and _is_non_secret_constant_key(bare_key):
+                return m.group(0)
+            if _already_masked_value(value):
+                return m.group(0)
+            return f"{key}: {quote}{_mask_token(value)}{quote}"
+        return _redact
+
     if "=" in text and (not code_file or (_strict and _CFG_SECRET_WORD_RE.search(text))):
         def _redact_env(m):
             name, quote, value = m.group(1), m.group(2), m.group(3)
@@ -1246,7 +1333,7 @@ def redact_sensitive_text(
             # embedded matching inside the helper.
             if not _key_has_secret_keyword(name):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(name):
+            if credential_values and _is_non_secret_constant_key(name):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1280,12 +1367,21 @@ def redact_sensitive_text(
             # not a leaked secret value.
             if _ENV_LOOKUP_VALUE_RE.match(value):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key.strip('"')):
+            if credential_values and _is_non_secret_constant_key(key.strip('"')):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
             return f'{key}: "{_mask_token(value)}"'
         text = _JSON_FIELD_RE.sub(_redact_json, text)
+        # task34 PART A：组合键名通道——精确名单 pass 漏掉的前后缀键名
+        # （"MINIO_ROOT_PASSWORD" / "db_password" / "monitor_auth_token"），
+        # 词边界/prose 过滤在 _key_has_secret_keyword；已打码值跳过防二次打码。
+        text = _JSON_FIELD_AFFIXED_RE.sub(_affixed_field_redactor('"'), text)
+
+    # 单引号 repr 形态（print(dict) 输出）：{'api_key': '***'}。位于 JSON pass
+    # 之后、YAML pass 之前；键名判定与 JSON pass 共用同一份名单 + 同一个 helper。
+    if ":" in text and "'" in text and (not code_file or (_strict and _CFG_SECRET_WORD_RE.search(text))):
+        text = _REPR_FIELD_RE.sub(_affixed_field_redactor("'"), text)
 
     # OPS-DELTA #35：值形态检测兜底（精确键名 pass 之后，只处理它漏掉的）。
     # 严格模式（工具输出等）不要求键名含秘密词——这正是值形态检测存在的
@@ -1300,7 +1396,7 @@ def redact_sensitive_text(
             key, value = m.group(1), m.group(2)
             if _ENV_LOOKUP_VALUE_RE.match(value):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key.strip('"')):
+            if credential_values and _is_non_secret_constant_key(key.strip('"')):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1325,7 +1421,7 @@ def redact_sensitive_text(
             # document text, not credentials (nearai/ironclaw#6129).
             if not _key_has_secret_keyword(key):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key):
+            if credential_values and _is_non_secret_constant_key(key):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1342,7 +1438,7 @@ def redact_sensitive_text(
                 return m.group(0)
             if not _key_has_secret_keyword(key):
                 return m.group(0)
-            if _strict and _is_non_secret_constant_key(key):
+            if credential_values and _is_non_secret_constant_key(key):
                 return m.group(0)
             if _strict and _prefix_present and _already_masked_value(value):
                 return m.group(0)
@@ -1449,7 +1545,7 @@ def redact_sensitive_text(
     text = _redact_command_inline_credentials(text)
 
     # OPS-DELTA 批次三十二：已知凭据值登记表（精确值打码，不依赖熵检测）。
-    # 覆盖键名命中 + 高熵值兜底都漏的低熵裸密码形态（``echo 'wwplove815'``）。
+    # 覆盖键名命中 + 高熵值兜底都漏的低熵裸密码形态（``echo 'example-pw-4711'``）。
     # 任何输出通道统一生效；值登记后即全局打码。
     #
     # OPS-DELTA 批次四十 §AS B2：persist_write（write_file 落盘）跳过本 pass。
@@ -1479,19 +1575,41 @@ def redact_sensitive_text(
 # fixtures, ``postgresql://{user}`` f-string templates). See issue #43025.
 _ENV_DUMP_COMMANDS = frozenset({"env", "printenv", "set", "export", "declare"})
 
+# 渲染/展开型命令（task34 PART B）：stdout 不是源码，而是把 secrets 渲染进
+# 配置的「展开结果」——``docker compose config``（compose 文件 + env 渲染成
+# JSON/YAML，真实事故口）、``docker inspect``（含 env 段）、``helm get
+# values``（release 渲染值）、``kubectl (get|describe) secret``（secret 明文
+# /base64 值）。这些命令的输出必须走宽松的 code_file=False 通道，否则键名
+# 带前后缀的凭据（MinIO root 凭据类）在严格门控下整段漏。
+#
+# 匹配语义：命令前缀元组，只认每个段的**首命令**（tokens[0:] 前缀）——
+# ``echo docker compose config`` 是 echo，不是渲染命令。段切分沿用既有
+# ``|`` ``;`` ``&`` 规则；前缀未匹配完（段比前缀短）自然不命中；解析失败/
+# 未知 → False（保守，语义与 _ENV_DUMP_COMMANDS 一致）。
+_RENDER_CONFIG_COMMAND_PREFIXES = (
+    ("docker", "compose", "config"),
+    ("docker", "inspect"),
+    ("helm", "get", "values"),
+    ("kubectl", "get", "secret"),
+    ("kubectl", "describe", "secret"),
+)
+
 
 def is_env_dump_command(command: str | None) -> bool:
     """Return True if ``command`` dumps environment variables to stdout.
 
     Detects ``env`` / ``printenv`` / ``set`` / ``export`` / ``declare`` as the
     first token of any segment in a pipeline or sequence (``;`` / ``&&`` /
-    ``||`` / ``|``). Conservative: a parse failure or anything unrecognized
-    returns False (callers then fall back to the safer code_file=True path,
-    which still masks prefix-shaped keys).
+    ``||`` / ``|``), plus the render/expand commands whose stdout embeds
+    rendered credentials (``docker compose config``, ``docker inspect``,
+    ``helm get values``, ``kubectl get|describe secret``) by command-prefix
+    match (task34 PART B). Conservative: a parse failure or anything
+    unrecognized returns False (callers then fall back to the safer
+    code_file=True path, which still masks prefix-shaped keys).
     """
     if not command or not isinstance(command, str):
         return False
-    # Split on shell separators, then inspect the first token of each segment.
+    # Split on shell separators, then inspect the first tokens of each segment.
     segments = re.split(r"[|;&]+", command)
     for seg in segments:
         seg = seg.strip()
@@ -1501,8 +1619,14 @@ def is_env_dump_command(command: str | None) -> bool:
             tokens = shlex.split(seg)
         except ValueError:
             tokens = seg.split()
-        if tokens and tokens[0] in _ENV_DUMP_COMMANDS:
+        if not tokens:
+            continue
+        if tokens[0] in _ENV_DUMP_COMMANDS:
             return True
+        # 渲染型命令：首命令 + 后续词组成的前缀元组（段短于前缀 → 切片不等 → False）。
+        for prefix in _RENDER_CONFIG_COMMAND_PREFIXES:
+            if tuple(tokens[: len(prefix)]) == prefix:
+                return True
     return False
 
 

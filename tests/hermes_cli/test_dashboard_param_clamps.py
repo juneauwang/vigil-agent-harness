@@ -21,6 +21,16 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("VIGIL_DASHBOARD_SESSION_TOKEN", "clamp-test-token")
     from hermes_cli import web_server
 
+    # ``web_server._SESSION_TOKEN`` is an IMPORT-TIME snapshot of that env var
+    # (``_SESSION_TOKEN = _resolve_session_token()``). Setting the env var here
+    # only works if this file happens to be the FIRST importer of web_server —
+    # under ``pytest tests/hermes_cli`` an earlier file imports it with no env
+    # var set, so the module keeps a random token and every request below 401s.
+    # Pin the constant so the fixture is order-independent; the product
+    # contract ("adopt the injected token at startup") stays covered by
+    # tests/hermes_cli/test_web_server.py::TestSessionTokenInjection.
+    monkeypatch.setattr(web_server, "_SESSION_TOKEN", "clamp-test-token", raising=False)
+
     with TestClient(web_server.app, raise_server_exceptions=False) as c:
         c.headers["Authorization"] = "Bearer clamp-test-token"
         yield c

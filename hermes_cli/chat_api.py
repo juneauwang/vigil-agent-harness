@@ -22,13 +22,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
+import secrets
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, File, UploadFile
 from fastapi.responses import JSONResponse, StreamingResponse
 
 _log = logging.getLogger(__name__)
@@ -87,6 +91,28 @@ def _preview(value: Any, max_len: int = _PREVIEW_MAX) -> str:
     return out
 
 
+def _title_text(message: Any, max_len: int = 60) -> str:
+    """会话标题用的用户消息预览。
+
+    task36：带图消息的正文里带着落盘路径（``image_routing.extract_image_refs``
+    认的引用形态）。那是给模型看的定位串，不该出现在会话标题里 —— 「图里是什么
+    颜色？ /tmp/…/uploads/chat_images/ab12.png」这种标题对用户没意义。剥掉引用
+    后若还剩正文就用剥后的；纯图消息（剥完为空）退回原文，至少保留可辨识信息。
+    """
+    try:
+        from agent.image_routing import extract_image_refs
+
+        paths, urls = extract_image_refs(message if isinstance(message, str) else "")
+    except Exception:
+        paths, urls = (), ()
+    if not paths and not urls:
+        return _preview(message, max_len)
+    stripped = message
+    for ref in list(paths) + list(urls):
+        stripped = stripped.replace(str(ref), "")
+    return _preview(stripped, max_len) or _preview(message, max_len)
+
+
 def _default_ops_env() -> str:
     try:
         from hermes_cli.config import load_config_readonly
@@ -136,6 +162,92 @@ class _WebClarifyEntry:
             "multi_select": bool(self.multi_select),
             "timeout_at": self.timeout_at,
         }
+
+
+# ---------------------------------------------------------------------------
+# 聊天图片上传（task36 PART A）
+# ---------------------------------------------------------------------------
+#
+# 产品链路（与 gateway/run.py 入站链路同款，**不新造多模态链路**）：
+#   前端选图 → 本端点落盘到 VIGIL_HOME/uploads/chat_images/
+#   → 前端把「返回的绝对路径」放进消息文本 → chat turn 内由 agent.image_routing
+#   （extract_image_refs + decide_image_input_mode）决定 native（image_url
+#   content parts）/ text。
+#
+# 安全：
+#   * 文件名一律 secrets.token_hex 生成 —— 客户端 filename 只用于回显，绝不参与
+#     路径拼接（路径穿越）；
+#   * 目录 0700 / 文件 0600（对齐项目既有纪律）；
+#   * 类型以真实 magic bytes 嗅探为准（_sniff_mime_from_bytes），**不信**
+#     Content-Type 头；
+#   * 尺寸上限走 config.yaml（``dashboard.chat_image.max_bytes``），不写死常量。
+
+_CHAT_IMAGE_SUBDIR = ("uploads", "chat_images")
+_CHAT_IMAGE_DEFAULT_MAX_BYTES = 10 * 1024 * 1024   # 10 MiB（未配置时的兜底）
+_CHAT_IMAGE_CHUNK_BYTES = 1024 * 1024              # 1 MiB（照 /api/files/upload-stream）
+_CHAT_IMAGE_SNIFF_BYTES = 4096                     # 只留头部做 magic-byte 嗅探
+
+# 嗅探 MIME → 落盘扩展名。**故意只列 image_routing._IMAGE_EXTS 覆盖的格式**：
+# extract_image_refs() 只认这些后缀，存成别的后缀 = 引用抽不出来 = 图片永远
+# 到不了模型。其余可嗅探格式（avif / ico / svg）先尝试 _transcode_to_png 转
+# 成 PNG 再落盘；转不了就明确拒绝（不静默接受一个永远用不上的文件）。
+_CHAT_IMAGE_MIME_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/webp": ".webp",
+    "image/bmp": ".bmp",
+    "image/tiff": ".tiff",
+    "image/heic": ".heic",
+}
+
+
+def _chat_image_root() -> Path:
+    from hermes_constants import get_hermes_home
+
+    return Path(get_hermes_home()).resolve().joinpath(*_CHAT_IMAGE_SUBDIR)
+
+
+def _fmt_bytes(num: int) -> str:
+    """人类可读的字节数。
+
+    默认上限 10 MiB 走整数除法够用，但用户在 config.yaml 里调成 KiB 级（例如
+    压测 / 小图专用部署）时整数除法会显示成"0 MiB" —— 报错信息里的数字必须
+    是真的，否则用户按它调配置只会更困惑。
+    """
+    if num >= 1024 * 1024:
+        return f"{num / 1024 / 1024:.0f} MiB"
+    if num >= 1024:
+        return f"{num / 1024:.0f} KiB"
+    return f"{num} B"
+
+
+def _chat_image_max_bytes() -> int:
+    """尺寸上限（config.yaml ``dashboard.chat_image.max_bytes``，字节）。
+
+    读不到/非法/<=0 → 兜底默认值。行为配置走 config.yaml，绝不走 .env。
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+
+        cfg = load_config_readonly() or {}
+        blob = (cfg.get("dashboard") or {}).get("chat_image") or {}
+        value = int(blob.get("max_bytes") or 0)
+        if value > 0:
+            return value
+    except Exception:
+        _log.debug("chat image max_bytes read failed", exc_info=True)
+    return _CHAT_IMAGE_DEFAULT_MAX_BYTES
+
+
+def _chat_image_error(code: str, message: str, status: int) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"error": {"code": code, "message": message}})
+
+
+def _safe_upload_name(name: Optional[str]) -> str:
+    """客户端 filename → 仅用于回显的纯 basename（绝不参与路径拼接）。"""
+    raw = (name or "").replace("\\", "/")
+    return raw.rsplit("/", 1)[-1][:200]
 
 
 @dataclass
@@ -835,6 +947,71 @@ def _try_push_context_warning(session: "ChatSession", message: str, push_fn) -> 
         _log.debug("chat context warning check failed", exc_info=True)
 
 
+def _build_run_message(session: "ChatSession", message: str) -> Any:
+    """把消息文本里的图片引用组装成模型输入（task36：native → content parts）。
+
+    与 ``gateway/run.py`` 入站链路、``cli.py`` 单轮链路同款三步：
+    ``extract_image_refs`` 抽引用 → ``decide_image_input_mode`` 决策 →
+    ``native`` 时 ``build_native_content_parts`` 组 OpenAI 风格 content parts
+    （各 provider 适配器自己翻译）。**不新造多模态链路**：图片以本地文件为
+    唯一真相，路径由消息文本承载。
+
+    无图片引用时**原样返回字符串**——纯文本 turn 逐字节不变。任何异常都退回
+    原文（图片路由是增强，绝不能把一轮对话搞挂）。
+
+    text 模式（非 vision 主模型）：保留原文（路径已在文本里，模型可自行
+    ``vision_analyze`` 取像素）。这里**不**跑阻塞式预分析——那是 gateway/CLI
+    的选择，dashboard turn 里加一次隐式辅助模型调用属于本任务之外的行为变更
+    （见 task36 报告"未做"一节）。
+    """
+    if not isinstance(message, str) or not message:
+        return message
+    try:
+        from agent.image_routing import extract_image_refs
+
+        paths, urls = extract_image_refs(message)
+    except Exception:
+        _log.debug("chat image ref extraction failed", exc_info=True)
+        return message
+    if not paths and not urls:
+        return message
+
+    agent = session.agent
+    try:
+        from agent.image_routing import (
+            build_native_content_parts,
+            decide_image_input_mode,
+        )
+        from hermes_cli.config import load_config
+
+        mode = decide_image_input_mode(
+            (getattr(agent, "provider", "") or "").strip(),
+            (getattr(agent, "model", "") or "").strip(),
+            load_config(),
+            requested_provider=(getattr(agent, "requested_provider", "") or "").strip(),
+        )
+    except Exception:
+        _log.debug("chat image mode decision failed; keeping text", exc_info=True)
+        return message
+
+    if mode != "native":
+        _log.info("chat image routing: text mode (paths=%d urls=%d)", len(paths), len(urls))
+        return message
+    try:
+        parts, skipped = build_native_content_parts(message, paths, urls or None)
+    except Exception:
+        _log.debug("chat native content parts build failed; keeping text", exc_info=True)
+        return message
+    if skipped:
+        _log.info("chat image routing: %d path(s) skipped (unreadable/untrancodable)", len(skipped))
+    if any(isinstance(p, dict) and p.get("type") == "image_url" for p in parts):
+        _log.info("chat image routing: native (%d image part(s))", sum(
+            1 for p in parts if isinstance(p, dict) and p.get("type") == "image_url"
+        ))
+        return parts
+    return message
+
+
 def _run_chat_turn(
     session: "ChatSession",
     message: str,
@@ -876,7 +1053,7 @@ def _run_chat_turn(
 
         history = _load_conversation_history(session)
         if not session.title:
-            session.title = _preview(message, 60)
+            session.title = _title_text(message, 60)
             session.last_activity_at = time.time()
         # batch81 2d：context 用量 >=80% 时在 turn 起点推警告（不阻断对话）。
         _try_push_context_warning(session, message, _push)
@@ -944,9 +1121,11 @@ def _run_chat_turn(
         # 出——chat:reasoning 事件仅供前端折叠展示，不参与对话上下文）。
         session.agent.reasoning_callback = _reasoning_cb
 
+        # task36：消息文本里的图片引用 → native content parts（无引用时原样）。
+        run_message = _build_run_message(session, message)
         try:
             result = session.agent.run_conversation(
-                message,
+                run_message,
                 conversation_history=history,
                 task_id=session.chat_session_id,
                 stream_callback=_stream_cb,
@@ -1327,6 +1506,110 @@ async def list_chat_sessions():
             _CHAT_SESSIONS.values(), key=lambda s: s.last_activity_at, reverse=True
         )]
     return {"sessions": sessions, "total": len(sessions)}
+
+
+@router.post("/api/chat/images")
+async def chat_image_upload(file: UploadFile = File(...)):
+    """上传一张聊天图片 → 落盘 → 返回可被消息引用的本地绝对路径（task36 PART A）。
+
+    返回 ``data.path`` 就是引用形态本身：与
+    ``agent.image_routing.extract_image_refs()`` 认的形态一致（绝对路径 + 图片
+    扩展名 + 文件确实存在），前端把它放进消息文本即可，chat turn 内由
+    ``decide_image_input_mode`` 决定 native / text。**不要在别处另造"图片转
+    base64 塞 JSON"的路径。**
+
+    流式落盘（1 MiB 分块 + 原子 rename，照 ``/api/files/upload-stream``）——
+    不把整张图读进内存。类型以真实 magic bytes 嗅探为准（不信 Content-Type）；
+    尺寸上限走 config.yaml ``dashboard.chat_image.max_bytes``。超限 → 413，类型
+    不在白名单 → 415，都是**明确可读原因**，不静默截断/丢弃。
+
+    鉴权照现有 chat 端点（不进 PUBLIC_API_PATHS，dashboard 中间件兜底）。
+    """
+    from agent.image_routing import _sniff_mime_from_bytes, _transcode_to_png
+
+    root = _chat_image_root()
+    max_bytes = _chat_image_max_bytes()
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        os.chmod(root, 0o700)
+    except OSError as exc:
+        _log.exception("chat image dir create failed")
+        return _chat_image_error("upload_dir_failed", f"上传目录不可写：{exc}", 500)
+
+    tmp_fd, tmp_name = tempfile.mkstemp(prefix=".chatimg.", suffix=".part", dir=str(root))
+    tmp_path = Path(tmp_name)
+    head = b""
+    total = 0
+    stored: Optional[Path] = None
+    try:
+        with os.fdopen(tmp_fd, "wb") as out:
+            while True:
+                chunk = await file.read(_CHAT_IMAGE_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    return _chat_image_error(
+                        "image_too_large",
+                        f"图片超过大小上限（{_fmt_bytes(max_bytes)}）——"
+                        f"可在 config.yaml dashboard.chat_image.max_bytes 调整。",
+                        413,
+                    )
+                if len(head) < _CHAT_IMAGE_SNIFF_BYTES:
+                    head += chunk[: _CHAT_IMAGE_SNIFF_BYTES - len(head)]
+                out.write(chunk)
+
+        if total == 0:
+            return _chat_image_error("empty_upload", "上传内容为空。", 400)
+
+        mime = _sniff_mime_from_bytes(head)
+        if not mime:
+            return _chat_image_error(
+                "unsupported_image",
+                "无法识别的图片格式（按文件真实内容判定，不看 Content-Type 头）。",
+                415,
+            )
+        ext = _CHAT_IMAGE_MIME_EXT.get(mime)
+        if ext is None:
+            # 可嗅探但后缀抽不出引用（avif / ico / svg）→ 复用既有转码兜底。
+            converted = _transcode_to_png(tmp_path.read_bytes())
+            if converted is None:
+                return _chat_image_error(
+                    "unsupported_image",
+                    f"{mime} 无法转为 PNG（缺 Pillow 或解码失败），暂不支持上传。",
+                    415,
+                )
+            tmp_path.write_bytes(converted)
+            mime, ext, total = "image/png", ".png", len(converted)
+
+        target = root / f"{secrets.token_hex(16)}{ext}"
+        os.replace(tmp_path, target)
+        os.chmod(target, 0o600)
+        stored = target
+    except OSError as exc:
+        _log.exception("chat image write failed")
+        return _chat_image_error("upload_write_failed", f"图片写入失败：{exc}", 500)
+    finally:
+        if stored is None:
+            tmp_path.unlink(missing_ok=True)
+        try:
+            await file.close()
+        except Exception:
+            _log.debug("chat image upload close failed", exc_info=True)
+
+    # path = 消息里可直接引用的形态（绝对路径，extract_image_refs 认它）。
+    return JSONResponse(
+        status_code=201,
+        content={
+            "ok": True,
+            "data": {
+                "path": str(stored),
+                "mime": mime,
+                "size": total,
+                "original_name": _safe_upload_name(file.filename),
+            },
+        },
+    )
 
 
 @router.get("/api/chat/usage")

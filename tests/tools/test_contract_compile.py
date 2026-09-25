@@ -230,8 +230,15 @@ def _reset_approve(token) -> None:
     terminal_tool.set_approval_callback(None)
     if token is not None:
         try:
-            from tools.approval import reset_current_session_key
-            reset_current_session_key(token)
+            # _approve() binds tools.approval._hermes_interactive_ctx, so it must
+            # be reset with the matching helper. ``reset_current_session_key``
+            # resets ``_approval_session_key`` instead: ContextVar.reset() then
+            # raises ValueError ("token was created by a different ContextVar"),
+            # which the except below swallowed — leaving interactive mode ON for
+            # every file that ran after this one (approval prompts auto-denied
+            # instead of taking the cron path).
+            from tools.approval import reset_hermes_interactive_context
+            reset_hermes_interactive_context(token)
         except Exception:
             pass
 

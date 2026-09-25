@@ -163,6 +163,18 @@ const en = {
     busyUnclear: "Could not confirm the busy state was cleared; refresh the session list and retry.",
     headerTagline: "· Chat with Vigil, watch the agent work",
     sessionSwitchTitle: "Switch active session",
+    // task36: image upload (pick → on-disk file → path referenced in the message; the
+    // backend's image_routing decides native/text)
+    attachImage: "Attach image",
+    attachImageAria: "Attach an image (paste or drag & drop works too)",
+    attachRemove: "Remove image",
+    attachRemoveAria: "Remove this image",
+    attachUploading: "Uploading…",
+    attachReady: "Ready",
+    attachFailed: "Upload failed",
+    attachRetry: "Retry",
+    attachPending: "Uploading images — send is paused",
+    attachImageAlt: "Attached image",
   },
 
   runbooks: {
@@ -541,6 +553,32 @@ const en = {
     fldStartsAt: "startsAt: ",
     fldCollectedAt: "collected_at: ",
     fldSource: "source: ",
+    // task35: auto-dispatch log (alert-driven runbook auto-runs, no session → reviewed here)
+    tabAlerts: "Alerts",
+    tabAutoDispatch: "Auto-dispatch log",
+    autoDispatchHeading: "Auto-dispatch log",
+    autoDispatchCount: "{{n}}",
+    autoDispatchEmptyTitle: "No auto-dispatch records",
+    autoDispatchEmptyDesc:
+      "Empty while ops.alerts.auto_dispatch is disabled (or no alert has matched an authorized runbook yet). Once enabled, every alert-triggered runbook auto-run is recorded here.",
+    autoDispatchEmptyHint: "Records live at ~/.vigil/runtime/alert_autodispatch.jsonl; the run path has no LLM and no session.",
+    autoDispatchNote: "Unattended run · review after the fact (expand for per-step detail)",
+    thTime: "Time",
+    thAlert: "Alert",
+    thInstance: "Instance",
+    thRunbook: "Runbook",
+    thResult: "Result",
+    thDuration: "Duration",
+    needsHumanBadge: "Needs human",
+    needsHumanNote: "Engine refused to run / it failed and fell back to the advisory loop — a human must take over.",
+    stepsToggle: "{{n}} steps",
+    stepTarget: "target: ",
+    stepExit: "exit: ",
+    stepStdout: "stdout: ",
+    stepStderr: "stderr: ",
+    autoDispatchTruncated: "…{{n}} more step(s) omitted (too long; see the execution ledger for full detail)",
+    matchedKeyword: "Matched keyword: ",
+    noSteps: "(no reviewable steps for this dispatch)",
   },
 
   overview: {

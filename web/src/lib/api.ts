@@ -500,6 +500,20 @@ export interface IncidentsResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+/** task36：聊天图片上传响应（POST /api/chat/images，multipart）。
+ * ``data.path`` 是可直接放进消息文本的本地绝对路径——它同时就是
+ * ``agent.image_routing.extract_image_refs()`` 认的引用形态。 */
+export interface ChatImageUploadResponse {
+  ok?: boolean;
+  data?: {
+    path: string;
+    mime?: string;
+    size?: number;
+    original_name?: string;
+  };
+  error?: { code?: string; message?: string; details?: Record<string, unknown> };
+}
+
 // ── 批三十一契约：对话 Session（/api/chat/*）─────────────────────────────
 
 /** 批八十一：会话 context 使用率（used/limit/pct/model；用量或上限拿不到 →
@@ -782,6 +796,54 @@ export interface MonitoringAlertsTriageResponse {
   };
 }
 
+/** task35 PART C：自动派发审计（GET /api/monitoring/alerts/autodispatch-audit）。
+ *
+ * 一条 = 一次告警自动派发（no_agent cron 触发，无会话）。steps 是后端做的
+ * 回看投影：只留 id/action/status/ok/error/target/commands，stdout/stderr
+ * 已脱敏 + 逐字段截断（详情回完整执行账本）。总长封顶时尾部步骤被丢弃，
+ * 末条是 { id: "__truncated__", omitted_steps: N } 哨兵。 */
+export interface AutodispatchAuditCommand {
+  desc?: string;
+  exit_code?: number | null;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface AutodispatchAuditStep {
+  id?: string;
+  action?: string;
+  status?: string;
+  ok?: boolean;
+  error?: string;
+  target?: string;
+  commands?: AutodispatchAuditCommand[];
+  /** 仅哨兵步骤有：被总长截断丢弃的尾部步骤数。 */
+  omitted_steps?: number;
+}
+
+export interface AutodispatchAuditEntry {
+  ts?: string;
+  type?: string;
+  alertname?: string;
+  severity?: string;
+  instance?: string;
+  startsAt?: string;
+  runbook?: string;
+  matched_keyword?: string | null;
+  result?: string;
+  /** true = 引擎拒绝执行 / 失败，已降级回建议闭环（最需要人看的一条）。 */
+  needs_human?: boolean;
+  error?: string;
+  duration_s?: number;
+  steps?: AutodispatchAuditStep[];
+}
+
+export interface AutodispatchAuditResponse {
+  ok?: boolean;
+  data?: { count: number; entries: AutodispatchAuditEntry[] };
+  error?: { code?: string; message?: string; details?: Record<string, unknown> };
+}
+
 // ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -966,9 +1028,26 @@ export const api = {
   /** batch87：活跃告警 + 逐条 runbook 处置建议（只读；执行走既有确认流）。 */
   getMonitoringAlertsTriage: () =>
     fetchJSON<MonitoringAlertsTriageResponse>("/api/monitoring/alerts/triage"),
+  /** task35 PART B/C：告警自动派发审计回看（只读；从未派发过 → 空列表 200）。 */
+  getAutodispatchAudit: (params?: { limit?: number }) =>
+    fetchJSON<AutodispatchAuditResponse>(
+      `/api/monitoring/alerts/autodispatch-audit?${new URLSearchParams(
+        cleanParams({ limit: params?.limit }),
+      )}`,
+    ),
 
   // 批三十一契约：对话 Session（SSE 事件流：chat:delta/tool/tool_result/
   // approval_pending/done/error）
+  /** task36：上传一张聊天图片 → 返回可引用的本地路径（multipart，非 base64 塞 JSON）。
+   * 失败（超尺寸 413 / 类型不在白名单 415）→ ApiError（code/message 直接用）。 */
+  uploadChatImage: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetchJSON<ChatImageUploadResponse>("/api/chat/images", {
+      method: "POST",
+      body: form,
+    });
+  },
   createChatSession: (model?: string, provider?: string) =>
     fetchJSON<{ chat_session_id: string; created_at?: string; model?: string }>("/api/chat/sessions", {
       method: "POST",
