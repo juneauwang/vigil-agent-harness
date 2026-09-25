@@ -19,8 +19,22 @@ def test_no_duplicate_skills_subparser():
     # argparse.ArgumentError at module load time
     import sys
 
+    import hermes_cli
+
+    # A forced-fresh import replaces TWO bindings: ``sys.modules[...]`` and the
+    # ``hermes_cli.main`` package attribute.  Other test files do
+    # ``from hermes_cli import main as cli_main`` at import time and patch that
+    # object, while ``hermes_cli.update_cmd._m()`` (the lazy accessor used by
+    # the update code path) resolves ``from hermes_cli import main`` through
+    # the package ATTRIBUTE at call time.  Leaving the throwaway copy behind
+    # makes those two disagree, so a later file's ``PROJECT_ROOT`` patch
+    # silently misses and ``vigil update`` runs REAL ``git checkout`` against
+    # the checkout root.  Restore both bindings so this test cannot strand
+    # them.
+    original_main = sys.modules.get("hermes_cli.main")
+
     # Remove cached module if present
-    if 'hermes_cli.main' in sys.modules:
+    if original_main is not None:
         del sys.modules['hermes_cli.main']
 
     try:
@@ -32,3 +46,8 @@ def test_no_duplicate_skills_subparser():
                 "See issue #898 for details."
             ) from e
         raise
+    finally:
+        current = sys.modules.get("hermes_cli.main")
+        if original_main is not None and current is not original_main:
+            sys.modules["hermes_cli.main"] = original_main
+            hermes_cli.main = original_main
