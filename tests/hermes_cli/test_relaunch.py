@@ -99,6 +99,23 @@ class TestBuildRelaunchArgv:
 
 
 class TestRelaunch:
+    @pytest.fixture(autouse=True)
+    def _pin_host_argv(self, monkeypatch):
+        """Pin the host argv that the default ``original_argv=None`` path inherits.
+
+        ``relaunch()`` / ``build_relaunch_argv()`` deliberately fall back to
+        ``sys.argv[1:]`` when no explicit ``original_argv`` is given — that is
+        the production contract ("carry my current flags into the new
+        process").  Measured on this host, that makes these tests depend on
+        HOW pytest was invoked: appending ``-p no:cacheprovider`` to the
+        command line leaked ``-p no:cacheprovider`` (``-p`` is an
+        ``inherit_on_relaunch`` alias of ``--profile``) into the argv under
+        test, so the same file passed bare and failed with any extra flag.
+        Pinning the host argv to a bare invocation keeps the default code
+        path covered while removing the dependency on the caller's argv.
+        """
+        monkeypatch.setattr(sys, "argv", ["hermes"])
+
     def test_calls_execvp(self, monkeypatch):
         calls = []
 
