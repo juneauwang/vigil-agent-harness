@@ -46,8 +46,16 @@ ALLOWLIST = {
 }
 
 # Directories that never count (tests may build fixture configs freely).
+# ``build`` is a *generated mirror of the source tree* produced by
+# ``python -m build`` / ``uv build`` (setuptools writes ``build/lib/<pkg>``).
+# It is gitignored (.gitignore:9) so it can never ship, and every file in it is
+# a copy of a source file that is scanned on its own — counting it would only
+# turn a stale local build artefact into a phantom failure of this test
+# (measured 2026-09-25: main tree with ``build/`` present = 1 failed; the two
+# "offenders" were ``build/lib/hermes_cli/managed_scope.py`` and
+# ``build/lib/gateway/readiness.py``, i.e. stale copies of files that pass).
 EXCLUDED_DIR_PARTS = {
-    "tests", ".venv", ".git", ".worktrees", "node_modules", "website",
+    "build", "tests", ".venv", ".git", ".worktrees", "node_modules", "website",
     "docs", "scripts", "examples", "apps",
 }
 
