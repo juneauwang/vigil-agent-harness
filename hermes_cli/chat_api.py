@@ -312,6 +312,30 @@ class ChatSession:
         }
 
 
+def _resolve_max_iterations(cfg: dict) -> int:
+    """Web 会话的迭代预算：单一来源 = config.yaml ``agent.max_turns``。
+
+    历史上这里写死 60，与 CLI（``HermesCLI.max_turns``）和 gateway
+    （``_current_max_iterations()``）两条路径不一致 —— 用户把
+    ``agent.max_turns`` 写成 150，web 会话仍在第 60 次模型往返被强行收尾。
+    取值缺失/非法时回落到 schema 默认 ``DEFAULT_CONFIG["agent"]["max_turns"]``；
+    刻意不读 ``VIGIL_MAX_ITERATIONS``（``.env`` 里的陈旧幽灵值会 shadow
+    config，见 ``hermes_cli/doctor.py`` 的清理逻辑）。
+    """
+    from hermes_cli.config import DEFAULT_CONFIG
+
+    default = DEFAULT_CONFIG["agent"]["max_turns"]
+    agent_cfg = cfg.get("agent") if isinstance(cfg, dict) else None
+    raw = agent_cfg.get("max_turns") if isinstance(agent_cfg, dict) else None
+    if raw is None:
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
 def _create_chat_agent(chat_session_id: str, model: Optional[str] = None, provider: Optional[str] = None):
     """构造会话 agent（mirror oneshot 的非交互路径；平台标记 web）。
 
@@ -365,7 +389,7 @@ def _create_chat_agent(chat_session_id: str, model: Optional[str] = None, provid
         credential_pool=runtime.get("credential_pool"),
         model=effective_model,
         max_tokens=runtime.get("max_tokens") or None,
-        max_iterations=60,
+        max_iterations=_resolve_max_iterations(cfg),
         enabled_toolsets=toolsets_list,
         quiet_mode=True,
         platform="web",

@@ -262,3 +262,108 @@ def test_approval_callback_registers_web_approval_and_waits(monkeypatch):
         assert result_box["choice"] == "once"
 
     asyncio.run(_main())
+
+
+# ---------------------------------------------------------------------------
+# task39：web 会话的迭代预算必须跟 config.yaml ``agent.max_turns`` 走。
+#
+# 回归的坑：``_create_chat_agent`` 曾把 ``max_iterations`` 写死成字面量 60，
+# 与 config 无关 —— 配置写 150，web 会话仍在第 60 次模型往返被强行收尾。
+# 下面断言的是两个量的**关系**（config 值 → agent 预算），不是快照值。
+# ---------------------------------------------------------------------------
+
+
+def _write_chat_config(home, text: str) -> None:
+    """覆写隔离 home 下的 config.yaml 并清配置缓存（沿用本文件 env_home 方式）。"""
+    import hermes_cli.config as hc
+
+    (home / "config.yaml").write_text(text, encoding="utf-8")
+    hc._LOAD_CONFIG_CACHE.clear()
+
+
+def _capture_create_chat_agent_kwargs(monkeypatch) -> dict:
+    """真跑 ``_create_chat_agent`` 的 config 路径，但截获传给 AIAgent 的 kwargs。
+
+    只桩掉重依赖（LLM 运行时解析 / MCP 发现 / SQLite），**不桩** config 读取，
+    这样才测得到 config → 预算的传播。禁网络、禁真实 DB。
+    """
+    import hermes_state
+    import run_agent
+    from hermes_cli import mcp_startup, runtime_provider
+
+    captured: dict = {}
+
+    class _RecordingAgent:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    class _FakeSessionDB:
+        def create_session(self, *args, **kwargs):
+            return None
+
+    monkeypatch.setattr(run_agent, "AIAgent", _RecordingAgent)
+    monkeypatch.setattr(hermes_state, "SessionDB", _FakeSessionDB)
+    monkeypatch.setattr(
+        runtime_provider,
+        "resolve_runtime_provider",
+        lambda **kwargs: {
+            "api_key": "test-key",
+            "base_url": "http://127.0.0.1:1/v1",
+            "provider": "test",
+            "requested_provider": "test",
+            "api_mode": "chat_completions",
+            "command": None,
+            "args": [],
+            "credential_pool": None,
+            "max_tokens": None,
+        },
+    )
+    monkeypatch.setattr(
+        mcp_startup, "ensure_mcp_discovery_before_agent_build", lambda **kwargs: None
+    )
+    return captured
+
+
+def test_create_chat_agent_max_iterations_follows_config_77(env_home, monkeypatch):
+    """① config ``agent.max_turns = 77`` → agent.max_iterations == 77。"""
+    captured = _capture_create_chat_agent_kwargs(monkeypatch)
+    _write_chat_config(env_home, "agent:\n  max_turns: 77\n")
+    chat_api._create_chat_agent("chat_cfg77")
+    assert captured["max_iterations"] == 77
+
+
+def test_create_chat_agent_max_iterations_falls_back_to_schema_default(env_home, monkeypatch):
+    """② agent 段没有 max_turns → 落到 schema 默认（且明确不是旧的写死 60）。"""
+    from hermes_cli.config import DEFAULT_CONFIG
+
+    captured = _capture_create_chat_agent_kwargs(monkeypatch)
+    _write_chat_config(env_home, "approvals:\n  mode: manual\n")
+    chat_api._create_chat_agent("chat_cfgabsent")
+    assert captured["max_iterations"] == DEFAULT_CONFIG["agent"]["max_turns"]
+    assert captured["max_iterations"] != 60
+
+
+def test_create_chat_agent_max_iterations_honours_explicit_60(env_home, monkeypatch):
+    """③ 反向：config 显式写 60 时结果就是 60 —— 证明取值跟着 config 走。"""
+    captured = _capture_create_chat_agent_kwargs(monkeypatch)
+    _write_chat_config(env_home, "agent:\n  max_turns: 60\n")
+    chat_api._create_chat_agent("chat_cfg60")
+    assert captured["max_iterations"] == 60
+
+
+def test_resolve_max_iterations_relations():
+    """④ 关系式：把不同 config 值映射到预算，而非冻结某个实现值。"""
+    from hermes_cli.config import DEFAULT_CONFIG
+    from hermes_cli.chat_api import _resolve_max_iterations
+
+    default = DEFAULT_CONFIG["agent"]["max_turns"]
+    assert _resolve_max_iterations({"agent": {"max_turns": 77}}) == 77
+    assert _resolve_max_iterations({"agent": {"max_turns": 60}}) == 60
+    # 缺失 / None / 非法 / 非正 → schema 默认
+    assert _resolve_max_iterations({}) == default
+    assert _resolve_max_iterations({"agent": {}}) == default
+    assert _resolve_max_iterations({"agent": {"max_turns": None}}) == default
+    assert _resolve_max_iterations({"agent": {"max_turns": "abc"}}) == default
+    assert _resolve_max_iterations({"agent": {"max_turns": -5}}) == default
+    # 数字字符串照常解析（YAML 引号场景）
+    assert _resolve_max_iterations({"agent": {"max_turns": "88"}}) == 88
