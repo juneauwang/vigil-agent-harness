@@ -103,11 +103,14 @@ def test_runtime_state_empty_host_not_marked(tmp_path):
 # ── build_view 合并 last_seen ─────────────────────────────────────────────
 
 def test_build_view_merges_last_seen_when_recorded(topo_home):
-    mark_host_activity("node1", home=topo_home, now=float(int(time.time()) - 60))
+    # ⚠️ 时间只取一次：旧写法在 mark_host_activity 与断言里各调一次 time.time()，
+    # 跨秒时相差 1 → 概率性失败（2026-09-28 全量回归实测：首次失败、retry 才过）。
+    now = int(time.time()) - 60
+    mark_host_activity("node1", home=topo_home, now=float(now))
     view = build_view(topo_home)
     assert view is not None
     cards = {h["card"]["name"]: h["card"] for h in view["hosts"]}
-    assert cards["node1"]["last_seen"] == int(time.time()) - 60
+    assert cards["node1"]["last_seen"] == now
     # 无记录的 host 不返回该字段
     assert "last_seen" not in cards["node2"]
 
