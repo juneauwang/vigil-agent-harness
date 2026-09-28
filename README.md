@@ -146,6 +146,12 @@ runbook 执行链（操作矩阵逐动作裁决 + 审批门 + 审计），匹配
 `{alertname, severity}` 精确匹配）是命中依据；本闭环只做匹配建议、不改变既有
 执行/裁决语义（矩阵/审批门/高危门照旧）。
 
+**自动派发的显式授权**（`alert_auto_run`，可选 `alert_auto_severity` severity 白名单，
+与 `schedule` 互斥）现在可以经 `runbook_create` 直接声明了——此前这个字段只在
+schema 里写着、工具层没接线，想开启只能手改 YAML（v1.0.9 修）。授权本身仍随资产审批
+与内容哈希落盘：改授权 = 重新人工审批，审批记录里的内容哈希一漂移，上一次的豁免即失效。
+同一批修掉 `cronjob` 的 `attach_to_session` 漏传（经工具把定时任务设为"可续话"此前不生效）。
+
 ## 快速开始
 
 **30 秒安装（Linux / macOS，自动建 venv + 预装 tirith 安全扫描器）：**
