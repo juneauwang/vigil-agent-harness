@@ -205,6 +205,21 @@ class TestUnconfiguredErrorEnvelopeParity:
         monkeypatch.setattr(web_tools, "_firecrawl_client_config", None, raising=False)
         monkeypatch.setattr(web_tools, "_load_web_config", lambda: {})
 
+        # ⚠️ 本测试的前提是"ddgs 包不可用"。但 ddgs 现在装在 venv 里（实测 9.16.0），
+        # 旧写法于是退化成**真联网**搜索 → 30s 超时 → 错误文案变成 timeout，
+        # 断言必然失败（2026-09-28 全量回归）。这里显式屏蔽 ddgs 的 import，
+        # 让断言与"本机装没装 ddgs"解耦、且永不联网。
+        import builtins
+
+        _real_import = builtins.__import__
+
+        def _import_without_ddgs(name, *args, **kwargs):
+            if name == "ddgs" or name.startswith("ddgs."):
+                raise ImportError("ddgs blocked by test")
+            return _real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", _import_without_ddgs)
+
         result = json.loads(web_tools.web_search_tool("hello world", limit=3))
         assert "error" in result, f"expected top-level 'error' key, got {result}"
         assert "ddgs package is not installed" in result["error"]

@@ -12,9 +12,16 @@ import hermes_constants
 from tools import topo_tools
 from tools.topo_tools import topo_query, topo_update
 
-TOPO_YAML = """\
+import datetime as _dt
+
+# ⚠️ 夹具日期必须**相对今天**：写死日期会在 _STALE_DAYS(30) 之后让 stale 断言必然失败。
+# 旧值 2026-08-01 写死 → 2026-08-31 起 test_topo_query_entity_detail_loads_layer2
+# 永久变红（与任何代码改动无关，是测试自身到点自爆）。
+_FIXTURE_DATE = (_dt.date.today() - _dt.timedelta(days=3)).isoformat()
+
+TOPO_YAML = f"""\
 version: 1
-updated_at: 2026-08-06
+updated_at: {_FIXTURE_DATE}
 sources: [netbox, snipeit, agent]
 environments:
   - name: prod
@@ -33,7 +40,7 @@ core_entities:
     endpoint: 203.0.113.10:30443
     owner: your-name
     source: manual
-    last_verified: 2026-08-01
+    last_verified: {_FIXTURE_DATE}
     detail: entities/harbor.yaml
   - name: order-db
     type: db
@@ -237,7 +244,7 @@ def test_topo_query_entity_missing(topo_home):
 def test_topo_query_entity_detail_loads_layer2(topo_home):
     result = _load(topo_query(entity="harbor", detail=True))
     assert result["name"] == "harbor"
-    assert result["stale"] is False  # 2026-08-01 is within _STALE_DAYS of today
+    assert result["stale"] is False  # 夹具日期 = today-3d，落在 _STALE_DAYS(30) 内
     assert result["detail"]["depends_on"] == ["postgres"]
     assert result["detail"]["attrs"]["version"] == "v2.11"
     assert result["detail"]["ops"]["healthcheck"]

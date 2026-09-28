@@ -2193,6 +2193,8 @@ def _create_handler(args: Dict[str, Any], **kwargs) -> str:
         hosts=args.get("hosts"),
         schedule=args.get("schedule"),
         on_failure=args.get("on_failure"),
+        alert_auto_run=args.get("alert_auto_run"),
+        alert_auto_severity=args.get("alert_auto_severity"),
     )
 
 

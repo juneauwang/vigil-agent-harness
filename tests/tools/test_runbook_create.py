@@ -292,3 +292,52 @@ class TestRunbookCreate:
         result = _load(runbook_load(runbook="ansible-syntax-check", home=rb_home))
         assert "提议更新" in result["note"]
         assert "runbook_create overwrite=true" in result["note"]
+
+
+class TestRunbookCreateToolEntry:
+    """task40：经工具入口（registry.get_entry(...).handler）验收接线。
+
+    靶点：schema 声明了 ``alert_auto_run`` / ``alert_auto_severity``，但
+    ``_create_handler`` 曾漏转发 → 经工具路径根本开不了告警自动派发，且静默
+    失败（工具返回成功、落盘 YAML 里没这两行）。本套件只走工具入口，不直接
+    调底层 ``runbook_create``。
+    """
+
+    @staticmethod
+    def _handler():
+        from tools.registry import registry
+
+        entry = registry.get_entry("runbook_create")
+        assert entry is not None
+        return entry.handler
+
+    def test_tool_entry_forwards_alert_auto_run(self, rb_home):
+        handler = self._handler()
+        result = _load(handler(_incident_runbook(
+            runbook="alert-autorun",
+            triggers=["HarborHealthcheckDown"],
+            alert_auto_run=True,
+            alert_auto_severity=["critical"],
+        )))
+        assert result.get("status") == "created", result
+
+        path = rb_home / "runbooks" / "alert-autorun.yaml"
+        written = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert written.get("alert_auto_run") is True
+        assert written.get("alert_auto_severity") == ["critical"]
+        # 资产审批链路未被绕过：预审标记落盘。
+        assert written.get("approved_at")
+        assert written.get("approved_by")
+        assert written.get("approved_version")
+
+    def test_tool_entry_rejects_alert_auto_run_without_triggers(self, rb_home):
+        handler = self._handler()
+        result = _load(handler(_incident_runbook(
+            runbook="alert-autorun-bad",
+            triggers=[],
+            alert_auto_run=True,
+        )))
+        assert "error" in result, result
+        assert "triggers" in result["error"]
+        # 校验拒绝 → 不落盘。
+        assert not (rb_home / "runbooks" / "alert-autorun-bad.yaml").exists()

@@ -182,8 +182,12 @@ class TestRunScriptExecution:
             terminal_tool.set_approval_callback(None)
         captured = {}
         from tools import runbook_exec as rex
-        def fake_exec(home, spec, timeout=120):
+        # ⚠️ 签名必须跟住产品：_exec_script_asset(home, spec, timeout=..., target=None)
+        # （tools/runbook_exec.py:814-816）。旧 fake 只收 (home, spec, timeout)，
+        # 产品改成传 target= 之后这里 TypeError → 步骤判 failed（2026-09-28 实测）。
+        def fake_exec(home, spec, timeout=120, target=None):
             captured["spec"] = spec
+            captured["target"] = target
             return {"exit_code": 0, "stdout": "done", "stderr": ""}
         monkeypatch.setattr(rex, "_exec_script_asset", fake_exec)
         res = execute_runbook(self._rb_with_script("go", ["--x"]), home=shome)

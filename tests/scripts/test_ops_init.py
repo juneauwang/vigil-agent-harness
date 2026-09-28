@@ -23,7 +23,7 @@ import hermes_cli.config as hc
 from plugins.memory.topo import render_topo_block
 from tools.ops_permissions import check_ops_command_permission
 from tools.runbook_tools import runbook_checkpoint, runbook_load
-from tools.topo_tools import topo_query, topo_update
+from tools.topo_tools import _stale_flag, topo_query, topo_update
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 INIT_SCRIPT = PROJECT_ROOT / "scripts" / "ops_init.py"
@@ -305,7 +305,14 @@ def test_seeded_profile_renders_topo_and_queries(ops_home):
     harbor = json.loads(topo_query(entity="harbor", detail=True))
     assert harbor["name"] == "harbor"
     assert harbor["endpoint"] == "203.0.113.10:30443"
-    assert harbor["stale"] is False
+    # stale 语义 = "该重新核对了"，由该实体自己的 last_verified 与 _STALE_DAYS(=30) 决定。
+    # 样例里 harbor 的 last_verified 是**写死的固定日期**（services/node1.yaml，= 2026-08-06），
+    # 所以样例满 30 天后 stale=True 是**正确行为**；旧断言写死 `is False`，只在样例新写的
+    # 一个月内成立 → 2026-09-06 起必然变红（与任何代码改动无关，是断言自身到点自爆）。
+    # 改断言"标志与数据自洽"（行为契约），不再写快照式的 False。
+    _svc = yaml.safe_load((SAMPLE_DIR / "services" / "node1.yaml").read_text(encoding="utf-8"))
+    _harbor_lv = next(s["last_verified"] for s in _svc["services"] if s["name"] == "harbor")
+    assert harbor["stale"] is _stale_flag(_harbor_lv)
     # v0.4：depends_on 上移第二层（entity 查询顶层即 L2 行）；checks 结构化档案。
     assert harbor["depends_on"] == ["postgres"]
     assert harbor["detail"]["checks"][0]["action"] == "verify"
