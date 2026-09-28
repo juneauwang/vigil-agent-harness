@@ -74,6 +74,11 @@ _WHITELIST_REASONS: Dict[str, str] = {
 
 WHITELIST: FrozenSet[str] = frozenset(_WHITELIST_REASONS)
 
+# 覆盖率下限：本守卫是"注册表驱动"的，扫描面缩水（模块导入失败/依赖缺失）会让
+# 缺席集变空 → 守卫静默空过变绿。下限取当前实测值（venv+model_tools 下为 100）
+# 的保守值；**发现要调低它 = 先查为什么缩水**，别动这个数字。
+_SCAN_FLOOR = 90
+
 
 # ---------------------------------------------------------------------------
 # AST 采集
@@ -153,12 +158,18 @@ def _handler_tokens(handler) -> Set[str]:
     return tokens.tokens
 
 
-def _scan_missing_properties() -> Dict[str, list]:
-    """{工具名: 缺席键列表} —— schema 声明了但 handler 未出现的键。"""
+def _scan() -> "tuple[Dict[str, list], int]":
+    """({工具名: 缺席键列表}, 实际被检查的工具数)。
+
+    第二个返回值是**覆盖率**：注册表若因导入失败缩水，缺席集会变空而本守卫
+    静默空过变绿（2026-09-28 实测过这种假绿：扫到 0 个工具、命中 0、全绿）。
+    所以调用方必须同时断言扫描面够宽（见 test_scan_floor_is_met）。
+    """
     import model_tools  # noqa: F401  (触发内建工具发现，填充注册表)
     from tools.registry import registry
 
     missing: Dict[str, list] = {}
+    scanned = 0
     for name in registry.get_all_tool_names():
         schema = registry.get_schema(name)
         if not isinstance(schema, dict):
@@ -169,11 +180,17 @@ def _scan_missing_properties() -> Dict[str, list]:
         entry = registry.get_entry(name)
         if entry is None or entry.handler is None:
             continue
+        scanned += 1
         present = _handler_tokens(entry.handler)
         absent = [key for key in props if key not in present]
         if absent:
             missing[name] = absent
-    return missing
+    return missing, scanned
+
+
+def _scan_missing_properties() -> Dict[str, list]:
+    """{工具名: 缺席键列表} —— schema 声明了但 handler 未出现的键。"""
+    return _scan()[0]
 
 
 # ---------------------------------------------------------------------------
@@ -221,4 +238,18 @@ def test_whitelist_entries_are_not_stale():
     assert not stale, (
         "以下白名单条目已不再缺席——请从 _WHITELIST_REASONS 移除，保持守卫紧致："
         f"{sorted(stale)}"
+    )
+
+
+def test_scan_floor_is_met():
+    """守卫的守卫：扫描面必须够宽，否则上面那条全量断言会**空过变绿**。
+
+    实测过的假绿（2026-09-28）：扫到 0 个工具、命中 0、测试全绿 —— 因为注册表
+    在缺依赖的环境下缩水。所以覆盖率本身也是要被断言保护的量。
+    """
+    _, scanned = _scan()
+    assert scanned >= _SCAN_FLOOR, (
+        f"只扫到 {scanned} 个工具（下限 {_SCAN_FLOOR}）——注册表可能因模块导入失败"
+        "缩水，schema↔handler 全量守卫会空过变绿。先查导入失败（缺依赖 / 导入报错），"
+        "不要调低 _SCAN_FLOOR。"
     )
