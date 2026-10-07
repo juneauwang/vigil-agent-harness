@@ -333,25 +333,25 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
       prod 环境 + 变更类动作（非只读）→ 额外强制 require_confirmation=True
       （batch80，OPS-DELTA #95：执行器绕行后门收口——execute/approve 档位在
       prod 变更时也升到人工确认，覆盖 smart 自动批）。
-    batch83（OPS-DELTA #98）目标化裁决：高危变更动作（install/remove/
-    decommission/reboot/scale + kubectl delete 类）与 ssh 族受控通道执行前
-    强制目标解析（tools/target_resolve.py）——解析出实体 → 实体 env 查矩阵
-    （会话声明 env 零参与）；解析失败 → 返回 deny（目标解析层硬拦截，先于
-    矩阵查询；矩阵本身仍无 deny 档）。低危变更与只读动作维持原判（target_env
-    或会话 env；只读不解析）。
+    #103（§11.8）单一裁决源：目标解析覆盖全部动作（判据 = 命令含目标类 token，
+    tools/target_resolve.py）——命中 token（ssh族/kubectl/helm/docker/ansible）
+    → 按 token 收敛到拓扑实体；无 token → 本机实体。只读动作同样解析（否则
+    只读格子在矩阵里永久不可达）。env 一律取自目标实体：会话声明 env
+    （config ops.permissions.env）与命令级 target_env 均不再参与裁决。解析
+    失败 → 按矩阵 unresolved 行裁决（任务 3；取代 batch83 的 deny）。
     动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
 
     Args:
         command: 原始命令串（sudo/doas 前缀由 classifier 剥离）。
-        target_env: 命令目标级 env（ops_target 解析，跨环境硬约束）；None →
-            会话 env（config ops.permissions.env）。
+        target_env: 保留兼容（旧命令目标级 env）——#103 起不再参与裁决，env
+            一律取自 resolve_required_target 的目标实体。
 
     Returns:
         None  — gate disabled / env 未配置 / 矩阵档位 execute（交回原有检查）。
         dict  — {"action": "approve", "action_name", "rule", "note", "env",
                  "env_tier", "role", "level", "require_confirmation",
-                 "description", "classification"}；高危目标解析失败 →
-                 {"action": "deny", ...}（approval.py / sudo_tool 消费为拒绝）。
+                 "description", "classification", "target_explicit"}；目标
+                 解析失败 → {"action": "unresolved"/...}（任务 3 消费）。
     """
     if not isinstance(command, str) or not command.strip():
         return None
@@ -380,28 +380,21 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     )
 
     candidates = classification.get("chain") or [classification]
-    actions = {str(c.get("action") or "") for c in candidates}
 
-    # batch83（OPS-DELTA #98）：高危变更动作 / ssh 族受控通道 → 强制目标解析。
-    # 解析出实体 → 实体 env 查矩阵（会话声明 env 不参与高危变更裁决）；解析
-    # 失败 → deny（目标解析层硬拦截，发生在查矩阵之前；矩阵本身仍无 deny 档，
-    # deny 是解析层的档位，与矩阵 execute/approve/required 三档不冲突）。
-    target_label = None
-    target_entity = None
-    if command_target_required(actions, command):
-        target = resolve_required_target(command)
-        if target.get("status") != TARGET_RESOLVED:
-            return _target_deny_decision(command, classification, target)
-        env = str(target.get("env") or "").strip().lower()
-        target_label = target.get("label")
-        target_entity = target.get("entity")
-        if not env:
-            return None
-    else:
-        env = (target_env or _active_env()).strip().lower()
-        if not env:
-            # 无会话 env 且无目标级 env → 矩阵无可判定环境，交回原检查（热路径零额外开销）。
-            return None
+    # #103（§11.8）单一裁决源：解析覆盖全部动作——命令含目标类 token（ssh族/
+    # kubectl/helm/docker/ansible）→ 按该 token 收敛到拓扑实体；无 token → 本机
+    # 实体（本机已登记拓扑 = local）。env 一律取自目标实体：会话声明 env
+    # （config ops.permissions.env）与命令级 target_env 均不再参与裁决。解析
+    # 失败 → 查矩阵 unresolved 行（任务 3；deny 已被取代）。
+    target_explicit = command_target_required(command)
+    target = resolve_required_target(command)
+    if target.get("status") != TARGET_RESOLVED:
+        return _target_deny_decision(command, classification, target)
+    env = str(target.get("env") or "").strip().lower()
+    target_label = target.get("label")
+    target_entity = target.get("entity")
+    if not env:
+        return None
 
     matrix = _md.load_matrix_or_empty()
     resolved_env = _matrix_env_for(env, matrix)
@@ -471,6 +464,7 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         "description": description,
         "classification": classification,
     }
+    result["target_explicit"] = target_explicit
     if target_label:
         result["target_label"] = target_label
         result["target_entity"] = target_entity

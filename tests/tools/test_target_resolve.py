@@ -255,18 +255,18 @@ def test_high_risk_action_set():
 
 
 def test_command_target_required():
-    assert command_target_required({"install"}, "npm install -g codex") is True
-    assert command_target_required({"remove"}, "rm -rf /data") is True
-    assert command_target_required({"decommission"}, "kubectl delete ns x") is True
-    assert command_target_required({"reboot"}, "systemctl reboot") is True
-    assert command_target_required({"scale"}, "kubectl scale deploy/x --replicas=2") is True
-    # 只读动作 → 不强制解析（天然无目标实体，不误伤）
-    assert command_target_required({"query"}, "ls -la") is False
-    assert command_target_required({"fetch_log"}, "kubectl logs -f deploy/x") is False
-    assert command_target_required({"verify"}, "curl -s /health") is False
-    # 低危变更（首批过渡态）→ 暂不强制解析
-    assert command_target_required({"restart"}, "systemctl restart nginx") is False
-    assert command_target_required({"upgrade"}, "helm upgrade app chart") is False
-    # ssh 族受控通道 → 强制解析（不裸连直跑）
-    assert command_target_required({"run_script"}, "ssh root@203.0.113.11 'df -h'") is True
-    assert command_target_required({"transfer_file"}, "scp a.txt ops@host:/tmp") is True
+    """#103 判据换代：命令里有没有目标类 token（与动作无关）。"""
+    # 目标类 token → True（只读命令同样命中——只读格子不再不可达）
+    assert command_target_required("ssh root@203.0.113.11 'df -h'") is True
+    assert command_target_required("scp a.txt ops@host:/tmp") is True
+    assert command_target_required("kubectl get pods") is True
+    assert command_target_required("kubectl delete ns x") is True
+    assert command_target_required("helm upgrade app chart") is True
+    assert command_target_required("docker ps") is True
+    assert command_target_required("ansible-playbook site.yml") is True
+    # 无目标类 token → False（落本机实体，非"不解析"）
+    assert command_target_required("ls -la") is False
+    assert command_target_required("npm install -g codex") is False
+    assert command_target_required("systemctl restart nginx") is False
+    assert command_target_required("pip install requests") is False
+    assert command_target_required(None) is False

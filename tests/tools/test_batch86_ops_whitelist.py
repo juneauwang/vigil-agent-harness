@@ -54,6 +54,17 @@ def ops_env(tmp_path, monkeypatch):
         )
         if matrix is not None:
             _write_matrix(tmp_path, matrix)
+        # #103：env 一律取自目标实体——本机 workstation(env) 供无 token 命令解析。
+        (tmp_path / "topology.yaml").write_text(
+            "version: 4\n"
+            "environments:\n"
+            f"  - {{name: {env}, isolation: relaxed, role: {env}}}\n"
+            "hosts:\n"
+            f"  - {{name: workstation, type: host, env: {env}, endpoint: \"192.168.1.50\"}}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         hc._LOAD_CONFIG_CACHE.clear()
         am._read_cache.clear()
@@ -119,9 +130,11 @@ def test_destructive_shapes_never_whitelisted(ops_env):
     # 原判定不受影响：kubectl delete（remove + 目标解析失败）→ deny
     result = check_ops_command_permission("kubectl delete ns foo")
     assert result is not None and result["action"] == "deny"
-    # rm -rf（remove 高危目标解析失败）→ deny，非白名单放行
+    # rm -rf（remove）→ 非白名单放行：#103 起本机实体 prod → required 强制人工
     result = check_ops_command_permission("rm -rf /tmp/x")
-    assert result is not None and result["action"] == "deny"
+    assert result is not None
+    assert result["action"] == "approve"
+    assert result["require_confirmation"] is True
 
 
 # ---------------------------------------------------------------------------

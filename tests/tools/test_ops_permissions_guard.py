@@ -137,7 +137,14 @@ def guard_env(tmp_path, monkeypatch):
             + "  timeout: 5\n",
             encoding="utf-8",
         )
-        (tmp_path / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
+        # #103：env 一律取自目标实体——本机 workstation 跟随 activation env，
+        # 使无 token 命令（mv / pip install / systemctl restart）解析到该 env 行。
+        _topo_env = env or "prod"
+        _topo = TOPO_YAML.replace(
+            "{name: workstation, type: host, env: prod,",
+            f"{{name: workstation, type: host, env: {_topo_env},",
+        )
+        (tmp_path / "topology.yaml").write_text(_topo, encoding="utf-8")
         (tmp_path / "entities").mkdir(exist_ok=True)
         (tmp_path / "entities" / "node2.yaml").write_text(NODE2_YAML, encoding="utf-8")
         (tmp_path / "entities" / "test-web.yaml").write_text(TESTWEB_YAML, encoding="utf-8")

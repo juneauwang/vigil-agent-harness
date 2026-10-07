@@ -62,12 +62,15 @@ def perm_env(tmp_path, monkeypatch):
             "  - {name: dev, isolation: relaxed, role: dev}\n"
             "  - {name: test, isolation: relaxed, role: test}\n"
             "clusters:\n"
-            "  - {name: k3s-prod, env: prod, type: k3s, endpoint: \"https://203.0.113.15:6443\"}\n"
+            "  - {name: k3s-prod, env: prod, type: k3s, endpoint: \"https://203.0.113.15:6443\", namespaces: [argocd]}\n"
             "  - {name: k3s-dev, env: dev, type: k3s, endpoint: \"https://203.0.113.25:6443\"}\n"
             "  - {name: k3s-test, env: test, type: k3s, endpoint: \"https://203.0.113.35:6443\"}\n"
-            "hosts: []\n",
+            "hosts:\n"
+            f"  - {{name: workstation, type: host, env: {env}, endpoint: \"192.168.1.50\"}}\n",
             encoding="utf-8",
         )
+        monkeypatch.setattr(
+            "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         hc._LOAD_CONFIG_CACHE.clear()
         return tmp_path

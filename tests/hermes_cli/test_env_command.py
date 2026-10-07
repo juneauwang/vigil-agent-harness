@@ -74,6 +74,18 @@ def env_home(tmp_path, monkeypatch):
         }, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    # #103：env 一律取自目标实体（拓扑表）——本机 workstation(local) 供无 token
+    # 命令解析；/env 只改配置/展示，不再参与裁决。
+    (tmp_path / "topology.yaml").write_text(
+        "version: 4\n"
+        "environments:\n"
+        "  - {name: local, isolation: relaxed, role: local}\n"
+        "hosts:\n"
+        "  - {name: workstation, type: host, env: local, endpoint: \"192.168.1.50\"}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["workstation"])
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     hc._LOAD_CONFIG_CACHE.clear()
     banner._banner_state_cache = None
@@ -116,11 +128,11 @@ def test_env_switch_updates_config_active_env_and_banner(env_home):
     assert _active_env() == "bare_metal_prod"
     # banner ENV badge 数据源随切换更新
     assert banner._load_banner_state()["env"] == "bare_metal_prod"
-    # 操作矩阵按自定义 env 名判定（YAPL P5：unknown 动作 → 默认 approve 保守；
-    # batch83 起 rm 归 remove 高危变更 → 目标解析，unknown 语义用 git push 验证）
+    # #103：config env 不再参与裁决——无 token 命令落本机实体（local），
+    # /env 切换只改配置/展示（决策 env 不是 bare_metal_prod）。
     decision = check_ops_command_permission("git push origin main")
     assert decision is not None and decision["action"] == "approve"
-    assert decision["env"] == "bare_metal_prod"
+    assert decision["env"] == "local"
 
 
 def test_env_switch_back_to_builtin_name(env_home):
@@ -138,10 +150,10 @@ def test_env_unknown_env_errors_and_keeps_current(env_home):
     assert "未定义环境" in out
     assert "bare_metal_prod" in out  # 报错列出可用项
     assert _active_env() == "test"
-    # test 档：unknown 动作 → 默认 approve（矩阵语义，非 deny；batch83 起
-    # rm → remove 高危变更走目标解析，unknown 语义用 git push 验证）
+    # #103：判定按目标实体（本机 workstation=local），与 config env 无关。
     decision = check_ops_command_permission("git push origin main")
     assert decision is not None and decision["action"] == "approve"
+    assert decision["env"] == "local"
 
 
 def test_env_switch_persists_across_cache_clear(env_home):

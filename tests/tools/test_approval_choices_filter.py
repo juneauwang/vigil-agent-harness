@@ -157,6 +157,18 @@ class TestProdGateScenarioFlags:
             "    restart: {approve: required}\n",
             encoding="utf-8",
         )
+        # #103：env 一律取自目标实体——本机 workstation(prod) 供无 token 命令
+        # （systemctl restart）解析。
+        (tmp_path / "topology.yaml").write_text(
+            "version: 4\n"
+            "environments:\n"
+            "  - {name: prod, isolation: strict, role: prod}\n"
+            "hosts:\n"
+            "  - {name: workstation, type: host, env: prod, endpoint: \"192.168.1.50\"}\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(
+            "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
         hc._LOAD_CONFIG_CACHE.clear()
         mod._YOLO_MODE_FROZEN = False

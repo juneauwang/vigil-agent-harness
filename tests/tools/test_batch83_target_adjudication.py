@@ -187,14 +187,16 @@ def test_d_ssh_unregistered_host_change_denied(t83):
     assert "topo_query" in decision["description"]
 
 
-def test_e_readonly_commands_skip_target_resolution(t83):
-    """只读/无害命令不触发目标解析：拓扑缺失也不 deny，按矩阵只读格子走。
-    batch86（OPS-DELTA #102）内置只读种子表后：ls/cat 等种子形态归一命中 →
-    直接放行（None，跳过审批门）；未登记只读形态（grep 带模式/路径操作数、
-    topo_query）仍走 unknown→approve 原判定——两者都不产生目标解析 deny。"""
-    t83("test", topology=False)
-    assert ck("docker ps") is None          # query × test = execute → 直接过
-    assert ck("kubectl get pods") is None
+def test_e_readonly_commands_resolve_target_entity(t83):
+    """#103：只读命令同样解析目标实体（不再"只读不解析"）。
+
+    kubectl get → 单集群 k3s-prod（prod query execute → None）；docker ps →
+    本机 workstation（dev query execute → None）；ls/cat 种子直接放行；
+    grep/topo_query 无 token → 本机 dev → unknown→approve（不产生 deny）。
+    """
+    t83("test")
+    assert ck("docker ps") is None          # 本机 dev query execute → 直接过
+    assert ck("kubectl get pods") is None   # 单集群 k3s-prod prod query execute
     assert ck("ls -la") is None             # 种子 ls：归一命中 → 直接执行
     assert ck("cat /etc/hosts") is None     # 种子 cat 读形态 → 直接执行
     for cmd in ("grep -r foo /etc", "topo_query"):
@@ -260,11 +262,11 @@ def test_b_e2e_required_confirmation_rides_smart_approval(t83, monkeypatch):
     assert any("workstation (dev)" in d for d in seen["descriptions"]), seen
 
 
-def test_low_risk_change_keeps_session_env_transitional(t83):
-    """低危变更（restart/upgrade 等）首批暂用会话 env 裁决（过渡态，不强制解析）。"""
+def test_low_risk_change_uses_target_entity_env(t83):
+    """#103：低危变更（restart/upgrade 等）同样解析目标实体——落本机 dev 行。"""
     t83("test")
     decision = ck("systemctl restart myapp")
     assert decision is not None
     assert decision["action_name"] == "restart"
-    assert decision["env"] == "test"         # 低危变更暂用会话 env（过渡态）
+    assert decision["env"] == "dev"          # 本机实体 env=dev，非会话 test
     assert decision["require_confirmation"] is False
