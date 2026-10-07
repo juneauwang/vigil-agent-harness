@@ -137,7 +137,8 @@ def test_approve_level_rides_smart_approval(tmatrix, monkeypatch):
     test_batch80_prod_change_hardgate），approve 档 smart 自动放行语义在非 prod
     （dev）验证。
     """
-    tmatrix("dev", mode="smart")
+    tmatrix("dev", mode="smart",
+           matrix={"dev": {"query": "execute", "restart": "approve"}})
     _ask_env(monkeypatch)
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
@@ -262,7 +263,8 @@ def test_chain_takes_strictest_matrix_level(tmatrix, monkeypatch):
     batch80 起 prod 变更动作强制人工，approve 档 smart 自动放行的链式语义在
     dev 验证；prod 验证 required 覆盖 smart（不变）。
     """
-    tmatrix("dev", mode="smart")
+    tmatrix("dev", mode="smart",
+           matrix={"dev": {"query": "execute", "restart": "approve"}})
     _ask_env(monkeypatch)
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
     result = approval_module.check_all_command_guards(

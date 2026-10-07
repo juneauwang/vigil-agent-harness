@@ -204,11 +204,12 @@ def test_custom_env_name_matches_matrix(perm_env):
 
 
 def test_custom_env_name_missing_matrix_maps_tier(perm_env):
-    """自定义 env 名不在矩阵 → 档位映射名兜底（uat→prod）；仍无 → 默认 approve。"""
+    """自定义 env 名不在矩阵 → 档位映射名兜底（uat→prod）；仍无 → required（#103）。"""
     perm_env("uat", matrix={"dev": {"restart": "approve"}})
-    # uat → prod 档，但矩阵没有 prod 行 → get_level 默认 approve（保守）
+    # uat → prod 档，但矩阵没有 prod 行 → env 名不在矩阵 → required（堵默认 approve
+    # 放水口，#103 任务 4：不许自动放行、可人工放行）
     decision = check_ops_command_permission("systemctl restart myapp")
-    assert decision is not None and decision["level"] == "approve"
+    assert decision is not None and decision["level"] == "required"
 
 
 def test_target_env_overrides_session_env(perm_env):

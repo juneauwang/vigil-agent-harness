@@ -157,7 +157,7 @@ def test_init_seeds_permission_matrix(tmp_path):
     assert matrix_path.is_file()
     data = yaml.safe_load(matrix_path.read_text(encoding="utf-8"))
     assert data["base_template"] == "template2"
-    assert set(data["matrix"]) == {"local", "test", "dev", "prod"}
+    assert set(data["matrix"]) == {"local", "test", "dev", "prod", "unresolved"}
     assert data["matrix"]["test"] == data["matrix"]["dev"]  # test = dev 档
 
     # 用户改过的矩阵，重跑不覆盖

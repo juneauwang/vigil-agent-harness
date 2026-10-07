@@ -65,6 +65,7 @@ def build_matrix_parser(subparsers, *, cmd_matrix: Callable) -> None:
         description=(
             "生成操作矩阵（~/.vigil/matrix.yaml）。模板 1 单人本地 / 模板 2 小团队"
             "（local/test/dev/prod）/ 模板 3 中型团队（local/test/uat/dev/prod）/ 模板 4 自定义"
+            "；四模板均含 unresolved 行（目标未登记时整行强制人工）"
             "（三步级联多选）。已存在时报错（安全资产防误覆盖），--force 可重建。"
         ),
     )
@@ -92,7 +93,7 @@ def build_matrix_parser(subparsers, *, cmd_matrix: Callable) -> None:
         description="把某动作×环境的档位改为 execute / approve / required（required = 强制人工）。修改即审计。",
     )
     set_parser.add_argument("action", help="动作（schemas.yaml actions，如 restart）")
-    set_parser.add_argument("env", help="环境名（如 local/dev/prod）")
+    set_parser.add_argument("env", help="环境名（如 local/dev/prod；unresolved = 未解析目标行）")
     set_parser.add_argument("level", choices=("execute", "approve", "required"),
                             help="execute / approve / required（{approve: required} 强制人工）")
     set_parser.set_defaults(func=cmd_matrix)

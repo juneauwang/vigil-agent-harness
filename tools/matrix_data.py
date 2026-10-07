@@ -95,6 +95,11 @@ _T2_PROD_REQUIRED = (
 
 TEMPLATE_NAMES = ("template1", "template2", "template3", "template4")
 
+# 未解析目标 fallback 行（OPS-DELTA #103 / yapl-design.md §11.8）：目标解析
+# 失败（未登记拓扑 / 无法提取）时按此 env 行裁决——整行 {approve: required}
+# （含只读动作），语义 = 不许自动放行、可人工放行。四模板均生成此行。
+UNRESOLVED_ENV = "unresolved"
+
 # 模板展示名（CLI/UI 用）。
 TEMPLATE_LABELS = {
     "template1": "单人本地项目",
@@ -347,6 +352,12 @@ def get_level(data: Dict[str, Any], env: str, action: str) -> Dict[str, Any]:
             "source": ((data.get("sources") or {}).get(env) or {}).get(action, ""),
             "configured": True,
         }
+    if not isinstance(env_cfg, dict):
+        # env 名不在矩阵（#103：堵"env 名不在矩阵 → 默认 approve"的隐式放水口）
+        # → 不许默认 approve；env 缺失是权限系统覆盖不到的范围，按最高严格度
+        # required（不许自动放行、可人工放行）。action 漏配（env 在、动作缺）
+        # 仍按既有铁律默认 approve（保守，加载时有 warning）。
+        return {"level": LEVEL_REQUIRED, "source": "", "configured": False}
     return {"level": LEVEL_APPROVE, "source": "", "configured": False}
 
 
@@ -372,6 +383,16 @@ def _build_cells(actions_: List[str], *, execute: set, approve: set,
         else:
             cells[act] = LEVEL_EXECUTE
     return cells
+
+
+def _unresolved_cells(actions_: List[str]) -> Dict[str, str]:
+    """未解析目标行：整行 {approve: required}（含只读动作）。
+
+    与 ``_build_cells`` 同款跳过 runbook 动作（runbook 不进 setup 四模板）。
+    """
+    return _build_cells(
+        actions_, execute=set(), approve=set(), required=set(actions_),
+    )
 
 
 def _template1_cells(actions_: List[str]) -> Dict[str, str]:
@@ -429,15 +450,17 @@ def _template3_cells(actions_: List[str], env: str) -> Dict[str, str]:
 
 
 _TEMPLATE_ENVS = {
-    "template1": ("local",),
-    "template2": ("local", "test", "dev", "prod"),
-    "template3": ("local", "test", "uat", "dev", "prod"),
+    "template1": ("local", UNRESOLVED_ENV),
+    "template2": ("local", "test", "dev", "prod", UNRESOLVED_ENV),
+    "template3": ("local", "test", "uat", "dev", "prod", UNRESOLVED_ENV),
 }
 
 
 def template_cells(template: str, env: str, actions_: Optional[List[str]] = None) -> Dict[str, str]:
     """模板 × 环境 → {action: level}（静态定义，§11.3 逐字）。"""
     acts = actions_ if actions_ is not None else actions()
+    if env == UNRESOLVED_ENV:
+        return _unresolved_cells(acts)
     if template == "template1":
         return _template1_cells(acts)
     if template == "template2":
@@ -482,7 +505,9 @@ def template_matrix(template: str, actions_: Optional[List[str]] = None,
                 acts, execute=execute_set, approve=approve_set,
                 required=set(acts) - execute_set - approve_set,
             )
-        return {"matrix": matrix, "envs": ["local", "test", "dev", "prod"]}
+        matrix[UNRESOLVED_ENV] = _unresolved_cells(acts)
+        return {"matrix": matrix,
+                "envs": ["local", "test", "dev", "prod", UNRESOLVED_ENV]}
 
     envs = _TEMPLATE_ENVS[template]
     matrix = {env: template_cells(template, env, acts) for env in envs}
