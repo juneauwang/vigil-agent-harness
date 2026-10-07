@@ -19,6 +19,8 @@ deny 是目标解析层的硬拦截、发生在查矩阵之前；矩阵本身仍
 - ssh/scp/sftp/rsync 的 user@host / 裸 IP → host 实体（主机名/别名/IP 匹配）。
 - kubectl --context/--namespace/--kubeconfig → cluster/service 实体；未指定且
   唯一集群 → 该集群；多集群无法确定 → 失败。
+- helm --kube-context/--namespace(-n)/--kubeconfig → cluster 实体（与 kubectl
+  同款：helm 的 -n 就是 namespace；未指定且唯一集群 → 该集群；多集群 → 失败）。
 - docker -H/--host/--context → host 实体；本地 socket/无目标 → 本机 host。
 - ansible -i <inventory> 主机组 → 实体集合（集合内 env 一致 → 该 env；跨环境
   → 失败；含拓扑表外主机 → 失败）。
@@ -48,6 +50,7 @@ HIGH_RISK_MUTATING_ACTIONS: frozenset = frozenset({
 
 _SSH_FAMILY_RE = re.compile(r"(?<!\w)(?:ssh|scp|sftp|rsync)\b", re.IGNORECASE)
 _KUBECTL_RE = re.compile(r"(?<!\w)kubectl\b", re.IGNORECASE)
+_HELM_RE = re.compile(r"(?<!\w)helm\b", re.IGNORECASE)
 _DOCKER_RE = re.compile(r"(?<!\w)docker\b", re.IGNORECASE)
 _DOCKER_CONTEXT_RE = re.compile(
     r"docker\s+context\s+(?:use|create|update)\s+(\S+)", re.IGNORECASE
@@ -225,6 +228,69 @@ def _resolve_kubectl(topo: Dict[str, Any], entities: List[Dict[str, Any]],
     return _failed(
         "kubectl 未指定 --context/--namespace/--kubeconfig 且拓扑表有多个集群，"
         "无法确定目标——先 topo_query 查集群名，或显式 --context 指定。"
+    )
+
+
+def _resolve_helm(topo: Dict[str, Any], entities: List[Dict[str, Any]],
+                  command: str, home: Path) -> Dict[str, Any]:
+    """helm → cluster 实体：--kube-context/--namespace(-n)/--kubeconfig 收敛。
+
+    与 ``_resolve_kubectl`` 同款（helm 的 -n/--namespace 就是 namespace）：显式
+    上下文/命名空间/凭据 → 对应集群；未指定且唯一集群 → 该集群；多集群无法
+    确定 → failed。
+    """
+    clusters = [dict(c) for c in (topo.get("clusters") or [])
+                if isinstance(c, dict) and c.get("name")]
+    if not clusters:
+        clusters = [dict(e) for e in entities
+                    if str(e.get("type") or "").lower() in _K8S_TYPES]
+
+    def _by_name(needle: str) -> Optional[Dict[str, Any]]:
+        needle = str(needle).strip().lower()
+        for c in clusters:
+            if str(c.get("name") or "").lower() == needle \
+                    or str(c.get("context") or "").lower() == needle:
+                return c
+        return None
+
+    ctx = _flag_value(command, ("--kube-context",))
+    if ctx:
+        cluster = _by_name(ctx)
+        if cluster is not None:
+            return _resolved(topo, cluster, f"helm --kube-context {ctx}")
+        return _failed(
+            f"helm 上下文 {ctx!r} 未匹配拓扑集群/实体——修复指引：先 topo_query "
+            "查集群名（或集群行的 context 字段），核对 --kube-context 拼写。"
+        )
+    ns = _flag_value(command, ("--namespace", "-n"))
+    if ns:
+        for c in clusters:
+            namespaces = c.get("namespaces") or []
+            if isinstance(namespaces, list) \
+                    and ns in {str(n) for n in namespaces}:
+                return _resolved(topo, c, f"helm --namespace {ns}")
+        if len(clusters) == 1:
+            return _resolved(topo, clusters[0], f"helm --namespace {ns}（单集群）")
+        return _failed(
+            f"helm 命名空间 {ns!r} 未匹配拓扑集群（且集群数 > 1，无法唯一确定）"
+            "——先 topo_query 查集群名，或用 --kube-context 显式指定。"
+        )
+    kubeconfig = _flag_value(command, ("--kubeconfig",))
+    if kubeconfig:
+        for c in clusters:
+            if str(c.get("kubeconfig") or "") == kubeconfig:
+                return _resolved(topo, c, "helm --kubeconfig")
+        if len(clusters) == 1:
+            return _resolved(topo, clusters[0], "helm --kubeconfig（单集群）")
+        return _failed(
+            f"helm --kubeconfig {kubeconfig!r} 未匹配拓扑集群（且集群数 > 1）"
+            "——先 topo_query 查集群名。"
+        )
+    if len(clusters) == 1:
+        return _resolved(topo, clusters[0], "helm（唯一集群）")
+    return _failed(
+        "helm 未指定 --kube-context/--namespace/--kubeconfig 且拓扑表有多个集群，"
+        "无法确定目标——先 topo_query 查集群名，或显式 --kube-context 指定。"
     )
 
 
@@ -410,6 +476,8 @@ def resolve_required_target(command: str, *,
         )
     if _KUBECTL_RE.search(command):
         return _resolve_kubectl(topo, entities, command, home)
+    if _HELM_RE.search(command):
+        return _resolve_helm(topo, entities, command, home)
     if _DOCKER_RE.search(command):
         return _resolve_docker(topo, entities, command, home, local_identities)
     from tools.ansible_inventory_guard import _extract_inventory_arg, _is_ansible_command
