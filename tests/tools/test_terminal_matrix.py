@@ -135,9 +135,8 @@ def test_pipe_query_passes_directly(tmatrix):
 def test_approve_level_rides_smart_approval(tmatrix, monkeypatch):
     """矩阵 approve 档 → smart 判 approve 可自动放行（非 required）。
 
-    batch80（OPS-DELTA #95）起 prod 变更动作一律强制人工（见
-    test_batch80_prod_change_hardgate），approve 档 smart 自动放行语义在非 prod
-    （dev）验证。
+    #103（§11.8）起矩阵是唯一裁决源——approve 档 smart 自动放行语义在 dev 验证
+    （prod 行若为 {approve: required} 才强制人工；batch80 硬门已退役）。
     """
     tmatrix("dev", mode="smart",
            matrix={"dev": {"query": "execute", "restart": "approve"}})

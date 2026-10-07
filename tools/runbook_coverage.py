@@ -88,14 +88,20 @@ def high_risk_actions(home: Optional[Path] = None) -> List[str]:
     """matrix.yaml ``{approve: required}`` 高危动作集（任一 env 命中 required）。
 
     只读矩阵（load_matrix_or_empty，热生效）；空矩阵 → 空列表。
+    #103（§11.8）：``unresolved`` 是解析失败的兜底行（整行 required），不是动作
+    的"高危"分类——排除，否则会把全部动作计成高危、污染覆盖率分母。
     """
-    from tools.matrix_data import LEVEL_REQUIRED, load_matrix_or_empty
+    from tools.matrix_data import (
+        LEVEL_REQUIRED,
+        UNRESOLVED_ENV,
+        load_matrix_or_empty,
+    )
 
     data = load_matrix_or_empty(home)
     matrix = data.get("matrix") or {}
     actions: set = set()
     for env, rows in matrix.items():
-        if not isinstance(rows, dict):
+        if env == UNRESOLVED_ENV or not isinstance(rows, dict):
             continue
         for action, level in rows.items():
             if level == LEVEL_REQUIRED:

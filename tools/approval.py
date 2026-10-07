@@ -4481,9 +4481,10 @@ def check_all_command_guards(command: str, env_type: str,
                 ),
             }
 
-    # OPS-DELTA #32 prod 变更强制确认门：require_confirmation 的 approve 决策
-    # 不因 yolo / mode=off / 永久 allowlist / smart-approval 自动放行——强制
-    # 走人工确认门（与 L2 approve 同一条审批通道），用户确认后才执行。
+    # 强制确认门（OPS-DELTA #32 / §11.8 #4）：require_confirmation 的 approve
+    # 决策（矩阵 {approve: required} 或 unresolved 行）不因 yolo / mode=off /
+    # 永久 allowlist / smart-approval 自动放行——强制走人工确认门（与 L2 approve
+    # 同一条审批通道），用户确认后才执行。
     _ops_confirmation_required = bool(
         ops_decision is not None
         and ops_decision.get("action") == "approve"

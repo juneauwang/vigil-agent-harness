@@ -128,8 +128,7 @@ def test_matrix_required_forces_confirmation(perm_env):
 
 
 def test_action_missing_from_matrix_defaults_approve(perm_env):
-    """矩阵漏配 action×env → 默认 approve（保守；dev 非 prod——prod 变更另走
-    batch80 硬门强制人工，见 test_batch80_prod_change_hardgate）。"""
+    """矩阵漏配 action×env → 默认 approve（保守；#103 起硬门退役，不再升级）。"""
     perm_env("dev", matrix={"dev": {"query": "execute"}})
     decision = check_ops_command_permission("systemctl restart myapp")
     assert decision is not None
