@@ -5317,3 +5317,111 @@
   pages/ChatPage.tsx,i18n/{zh,en}.ts}（+ 两个 .test.tsx）、tests/hermes_cli/
   test_task33_incident_marks.py + OPS-DELTA.md 本条登记。不发版（攒 dogfood 一起发
   v1.0.6；PyPI 现为 1.0.5）。
+
+### 103. 单一裁决源收档：矩阵 env 归目标实体 + 硬门退役 + 未解析目标 fallback（定案 + 任务书，待实施）
+
+- **触发**（2026-10-07 dogfood，用户实报）：`helm upgrade` 改 vllm-stack（目标
+  heyuan_cluster，拓扑 env=prod）**静默放行、无人工弹窗**。用户回忆"2 之前就改过
+  这次怎么又有了"——排查发现不是单点回退，是三条独立缺口叠加。设计侧定案见
+  yapl-design.md §11.8（反转 #11）。
+
+- **用户定案原话**（保留原话防转译失真）：
+  - 「这个不应该影响实际的模式 应该走 matrix——他是 v0.x 的依据 不应该是 v1.x 的依据」
+  - 「这个 env 应该是 topology 里面项目的 env 不是 config 里面的 env；config 里的
+    env 类似于 hermes 的 profile，所以我说这个 v0.x 的功能」
+  - 「只读本来就应该是 execute 有什么问题」
+  - 「ssh 打一台没登记过的机器……做 bootstrap 的时候 机器不会被登记 这个是不是要
+    fallback 到 required」
+  - 「unresolved -> required」
+
+- **根因（代码 + 运行日志实锤，四条独立缺口）**：
+  1. **非高危动作的 env 来源是会话声明，与目标无关**：`ops_permissions.py:401`
+     `env = (target_env or _active_env())`；`_active_env()`（:215-217）读 config
+     `ops.permissions.env`，当前值 **test**（`~/.vigil/config.yaml:736`）。#98 定案⑤
+     "会话声明 env 不参与任何裁决"只兑现了 5 个高危动作 + ssh 族，其余仍走这条。
+  2. **helm 无目标解析路径**：`resolve_required_target`（`target_resolve.py:399-418`）
+     只识别 ssh族/kubectl/docker/ansible → helm 落 `_resolve_local` → 本机
+     `LAPTOP-T2JA2ERE`（`topology.yaml:65-67`，env=**local**）。分类器
+     `helm install→deploy`(:181) / `upgrade→upgrade`(:182) /
+     `uninstall|delete→decommission`(:183) / `rollback→rollback`(:184)——
+     `deploy`/`upgrade`/`rollback` 均不在 `HIGH_RISK_MUTATING_ACTIONS`(:45-47)，
+     只有 `uninstall` 在集合内（但会被解析成本机）。
+     ⇒ 实测后果：`helm install`/`rollback` 对 prod 集群走 `test.deploy`/`test.rollback`
+     = **execute（连审批门都不进）**；`helm upgrade` 走 `test.upgrade` = approve
+     （smart 可批，本次踩的）；`helm uninstall` 走 `local.decommission`。
+     ★ 正向对照：ssh 族 / kubectl 有解析路径，实测日志里 09-05 `kubectl delete pvc`
+     → `decommission × prod = {approve: required}`、09-26 `ssh` → `run_script × prod
+     = {approve: required}` 均正常人工弹窗 ⇒ **helm 是唯一被系统性打错的工具。**
+  3. **硬门（batch80 / #95）结构性冗余**：日志实证（`~/.vigil/logs/agent.log`）——硬门
+     专属文案「prod 变更强制人工确认」**0 次**；矩阵 required 档文案「操作矩阵强制人工
+     确认」**92 次**。硬门只在"env_tier==prod + 动作 ∈ 19 个变更类 + 矩阵档位非
+     required"时产生增量，而实际解析到 prod 的场景里动作要么本就在 required 集合内
+     （冗余），要么是 run_script/transfer_file（不在集合，不适用）⇒ 从未产生额外拦截。
+  4. **解析失败处置 deny（#98 定案②）过度**：deny 实现为 `approval.py:4448-4458`
+     直接 `approved=False` 返回，**无人工确认路径 = 人也不能放行**。日志实证 12 次 deny
+     全部落在 bootstrap / 发现 / 重建场景：
+     - `08-31 19:55` `rm -f topology.yaml entities/*.yaml` → 拒（"本机未在拓扑表登记"）
+     - `08-31 20:09` `vigil topo-discover -H 39.106.217.32,...,8.140.60.44 --dry-run`
+       → 拒（"目标主机未在拓扑表登记"）★ 而错误信息的修复指引恰是"用 topo_update /
+       **topo-discover** 登记"——**指引指向的命令自己就被拒**（死锁闭环，已实际发生）
+     - `09-26 18:17` terraform state 检查 ssh → 拒（重建中实体未回填）
+     - `09-27 09:16` 批探测新机 → 拒
+     ★ 论证边界修正：#98 定案②原文理由"解析不出实体就没有可裁决的环境，任何旁路都
+     不得放行"只推出**「不许自动放行」**，推不出**「不许人工放行」**——`{approve:
+     required}` 已能覆盖前者的全部语义（覆盖 smart / yolo / mode=off / 永久 allowlist）。
+  5. **死格子（配置写了不生效）**：prod 行 `enable/disable/backup/apply_config/runbook`
+     被硬门踩平（`prod.enable=approve` 实际强制人工）；只读格子在"只读不解析"
+     （#98 定案③）下不可达（`env=""` → `ops_permissions.py:403-404 return None`）。
+     ⇒ **死格子是"用户去改全局开关"的直接诱因**（改 prod 行没反应 → 只能动
+     `ops.permissions.env`）。
+
+- **设计定案（详见 yapl-design.md §11.8）**：
+  1. **矩阵是唯一裁决源**。env 维度一律来自**目标实体（拓扑表）**；config
+     `ops.permissions.env` 与 `/env` 退场（#11 反转）。
+  2. **目标解析覆盖所有动作**；判据从"是否高危动作"改为"命令里有没有目标类 token"
+     （ssh族/kubectl/helm/docker/ansible）；无 token → 本机实体（本机已登记拓扑 = local）。
+     只读同样解析（否则只读格子永久不可达）。
+  3. **解析失败 ≠ 拒绝**：查矩阵新增的 **`unresolved` 行**。
+  4. **`unresolved` 行整行 `{approve: required}`**（用户定案，含只读动作与
+     `--dry-run` 类发现命令）：不许自动放行，但人可放行。
+  5. **硬门退役**；严格度全部交回矩阵。
+  6. **保留** `matrix.yaml` 缺失 → deny（batch83-fix #99）；只删"目标解析失败 → deny"
+     这一处。
+
+- **任务（5 项，待排批次）**：
+  1. `tools/target_resolve.py` 补 helm 分支（照抄 `_resolve_kubectl`：`--kube-context`/
+     `--kubeconfig`/`-n`；未指定且唯一集群 → 该集群（:223-224 同款兜底）；
+     多集群无法确定 → failed）。
+  2. `tools/target_resolve.py` `command_target_required`（:350-362）判据改为"命令含目标类
+     token"，解析覆盖全部动作；失败态语义从 deny 改为"→ unresolved 行"。
+  3. `tools/ops_permissions.py` `_target_deny_decision`（:480+）改为按 `unresolved` 行
+     裁决（`require_confirmation=True`，文案标注"目标未在拓扑登记——按最高严格度强制
+     人工确认；建议随后 topo_update 登记（不阻断本次执行）"）。
+  4. `tools/matrix_data.py` + 四模板 + `hermes_cli/ops_init.py` + CLI/UI：新增
+     `unresolved` 行（整行 required；sources 追踪 / 热生效 / 校验器同款）。顺带堵掉
+     "env 名不在矩阵 → get_level 默认 approve"这一隐式放水口（#98 发现②同款）。
+  5. `tools/ops_permissions.py` 删 `prod_change_hardgate`（:424-441）；拆 `_active_env()`
+     载体（config 字段保留读取兼容 + deprecate 警告、不再参与裁决；`/env` 退场或改语义）。
+
+- **验收**：
+  - a `helm upgrade|install|rollback|uninstall` 打 heyuan_cluster → 强制人工确认，
+    审批文案带「目标: heyuan_cluster (prod)」。
+  - b ★ **把 config `ops.permissions.env` 改成 local/test/prod 任意值 → 同批命令裁决
+    结果不变**（"载体拆干净"的可验证判据）。
+  - c `ssh` 未登记主机 / `vigil topo-discover ... --dry-run` → 不再 BLOCKED，改弹人工
+    确认；点同意即执行（bootstrap / 拓扑重建 / 新机发现三条路径解开）。
+  - d 未解析目标的**只读**动作 → 同样 required（用户定案）。
+  - e `ls`/`cat`/`pip install`（无目标 token）→ 落本机 local 行 → 只读 execute 直接跑
+    （unresolved 全 required 不污染日常命令）。
+  - f 硬门删除后 `kubectl delete`/`kubectl apply` 打 prod 结果不变（矩阵 required 与
+    硬门同结果）。
+  - g 矩阵 `prod.enable/disable/backup/apply_config` 恢复生效（smart 可批，噪声下台阶=
+    用户最初"审批过多"诉求的正解）。
+  - h 回归：test_ops_permissions / test_batch83_target_adjudication /
+    test_batch80_prod_change_hardgate（删除或改写）/ test_change_command_coverage /
+    test_terminal_matrix / test_ops_permissions_guard / test_env_command。
+  - i **误伤率实测**（#98 定案④的收档判据）：扩范围后统计"解析失败 → required"触发次数，
+    与其中"本应放行"的比例。
+
+- **状态**：⬜ 未实施（待排批次，批次号实施时回填）。本条目 = 定案 + 任务书；实施后回填
+  commit 与验收实测。
