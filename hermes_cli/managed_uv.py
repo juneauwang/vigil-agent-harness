@@ -424,6 +424,17 @@ def _remove_tree(path: Path, *, boundary: Path) -> None:
     shutil.rmtree(path, ignore_errors=True)
 
 
+def _remove_staging_temp(generation: Path, *, boundary: Path) -> None:
+    """Drop uv's ``.temp`` staging tree once a generation has landed.
+
+    uv downloads into ``<install_dir>/.temp/.tmp*`` and renames the result
+    into place; the staging tree is normally consumed on success. Removing
+    any residue keeps a landed generation free of orphaned download files
+    (and is a no-op when uv already cleaned up after itself).
+    """
+    _remove_tree(generation / ".temp", boundary=boundary)
+
+
 def _make_world_traversable(path: Path) -> None:
     """Keep root/FHS-managed runtimes executable by non-root callers."""
     try:
@@ -552,91 +563,101 @@ def _attempt_install_generation(
     generation.mkdir(parents=True, exist_ok=False)
     _make_world_traversable(generation)
 
-    env = managed_python_env(project_root, install_dir=generation)
-    install = subprocess.run(
-        [
-            uv_bin,
-            "python",
-            "install",
-            request,
-            "--reinstall",
-            "--no-bin",
-            "--no-registry",
-            "--no-config",
-        ],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if install.returncode != 0:
-        logger.warning(
-            "private Python install failed for %s (rc=%d): %s",
-            request,
-            install.returncode,
-            (install.stderr or install.stdout or "").strip(),
-        )
-        _remove_tree(generation, boundary=python_root)
-        return None
-
-    found = subprocess.run(
-        [
-            uv_bin,
-            "python",
-            "find",
-            request,
-            "--managed-python",
-            "--no-config",
-        ],
-        cwd=project_root,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if found.returncode != 0 or not found.stdout.strip():
-        logger.warning(
-            "private Python lookup failed for %s (rc=%d): %s",
-            request,
-            found.returncode,
-            (found.stderr or "").strip(),
-        )
-        _remove_tree(generation, boundary=python_root)
-        return None
-
-    python = Path(found.stdout.strip().splitlines()[-1])
     try:
-        python.resolve().relative_to(generation.resolve())
-    except (OSError, ValueError):
-        logger.warning("uv resolved Python outside the Vigil generation: %s", python)
-        _remove_tree(generation, boundary=python_root)
-        return None
+        env = managed_python_env(project_root, install_dir=generation)
+        install = subprocess.run(
+            [
+                uv_bin,
+                "python",
+                "install",
+                request,
+                "--reinstall",
+                "--no-bin",
+                "--no-registry",
+                "--no-config",
+            ],
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if install.returncode != 0:
+            logger.warning(
+                "private Python install failed for %s (rc=%d): %s",
+                request,
+                install.returncode,
+                (install.stderr or install.stdout or "").strip(),
+            )
+            _remove_tree(generation, boundary=python_root)
+            return None
+        # uv renames its staged download into place on success; drop any
+        # residue so a landed generation never carries a stale .temp tree.
+        _remove_staging_temp(generation, boundary=python_root)
 
-    candidate = probe_sqlite_runtime(python)
-    if candidate is None:
-        logger.warning("could not probe candidate Python runtime: %s", python)
-        _remove_tree(generation, boundary=python_root)
-        return None
-    if candidate.python_version[:2] != current.python_version[:2] or (
-        candidate.python_version < current.python_version
-    ):
-        logger.warning(
-            "candidate Python drifted off the %s minor line or downgraded: %s",
-            ".".join(str(p) for p in current.python_version[:2]),
-            candidate.python_version,
+        found = subprocess.run(
+            [
+                uv_bin,
+                "python",
+                "find",
+                request,
+                "--managed-python",
+                "--no-config",
+            ],
+            cwd=project_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
         )
+        if found.returncode != 0 or not found.stdout.strip():
+            logger.warning(
+                "private Python lookup failed for %s (rc=%d): %s",
+                request,
+                found.returncode,
+                (found.stderr or "").strip(),
+            )
+            _remove_tree(generation, boundary=python_root)
+            return None
+
+        python = Path(found.stdout.strip().splitlines()[-1])
+        try:
+            python.resolve().relative_to(generation.resolve())
+        except (OSError, ValueError):
+            logger.warning("uv resolved Python outside the Vigil generation: %s", python)
+            _remove_tree(generation, boundary=python_root)
+            return None
+
+        candidate = probe_sqlite_runtime(python)
+        if candidate is None:
+            logger.warning("could not probe candidate Python runtime: %s", python)
+            _remove_tree(generation, boundary=python_root)
+            return None
+        if candidate.python_version[:2] != current.python_version[:2] or (
+            candidate.python_version < current.python_version
+        ):
+            logger.warning(
+                "candidate Python drifted off the %s minor line or downgraded: %s",
+                ".".join(str(p) for p in current.python_version[:2]),
+                candidate.python_version,
+            )
+            _remove_tree(generation, boundary=python_root)
+            return None
+        if candidate.wal_reset_vulnerable:
+            logger.warning(
+                "candidate Python still links vulnerable SQLite %s (%s)",
+                candidate.sqlite_version_string,
+                candidate.sqlite_source_id,
+            )
+            _remove_tree(generation, boundary=python_root)
+            return None
+        return generation, python, candidate
+    except BaseException:
+        # A killed/interrupted provision (KeyboardInterrupt, SystemExit, a
+        # raising subprocess, ...) must not strand the generation — and its
+        # .temp staging tree — under the shared install dir.
         _remove_tree(generation, boundary=python_root)
-        return None
-    if candidate.wal_reset_vulnerable:
-        logger.warning(
-            "candidate Python still links vulnerable SQLite %s (%s)",
-            candidate.sqlite_version_string,
-            candidate.sqlite_source_id,
-        )
-        _remove_tree(generation, boundary=python_root)
-        return None
-    return generation, python, candidate
+        raise
 
 
 def _install_safe_python_generation(
@@ -1107,6 +1128,98 @@ def _sweep_stale_runtime_backups(
         _remove_tree(candidate, boundary=root)
 
 
+def _has_landed_python(generation: Path) -> bool:
+    """True when uv renamed a staged interpreter into *generation*.
+
+    uv downloads into ``<install_dir>/.temp`` and only promotes the
+    interpreter on success, so a tree whose only content is ``.temp`` (plus
+    uv's own ``.lock``/``.gitignore`` markers) is a provision that never
+    landed. Walk with ``.temp`` pruned: any python binary outside it means a
+    real install and the generation is not ours to reclaim.
+    """
+    try:
+        for _dirpath, dirnames, filenames in os.walk(generation):
+            dirnames[:] = [name for name in dirnames if name != ".temp"]
+            for name in filenames:
+                bare = name[:-4] if name.endswith(".exe") else name
+                if bare == "python" or bare == "python3" or bare.startswith("python3."):
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _sweep_orphan_generations(
+    python_root: Path,
+    *,
+    keep: Path | None = None,
+    min_age_seconds: float = 3600.0,
+) -> None:
+    """Reclaim ``generation-*`` dirs left behind by an interrupted provision.
+
+    A completed generation holds a landed interpreter; a provision killed
+    mid-download (or one whose uv install never finished) leaves a
+    ``.temp/.tmp*`` staging tree and no interpreter. Those are pure orphans —
+    no cut-over ever pointed a live venv at them — so reclaim them (and their
+    ``.temp``) under the same install boundary used by the provisioner.
+    ``min_age_seconds`` guards a concurrent in-flight provision in a sibling
+    process. Best-effort: never raises.
+    """
+    try:
+        candidates = list(python_root.glob("generation-*"))
+    except OSError:
+        return
+    now = time.time()
+    for generation in candidates:
+        if keep is not None and generation == keep:
+            continue
+        try:
+            if not generation.is_dir():
+                continue
+            if now - generation.stat().st_mtime < min_age_seconds:
+                continue
+        except OSError:
+            continue
+        if _has_landed_python(generation):
+            continue
+        _remove_tree(generation, boundary=python_root)
+
+
+def _sweep_stale_repair_lock(
+    runtime_root: Path,
+    *,
+    min_age_seconds: float = 3600.0,
+) -> None:
+    """Delete a ``runtime-repair.lock`` that no live process is holding.
+
+    The lock is an OS advisory lock (flock / msvcrt), so a dead process's
+    lock is already released by the kernel — but the 0-byte *file* lingers
+    and reads like an active repair, and it is what makes ``.hermes-runtime``
+    show up as untracked. Reclaim it only when we can actually take the lock
+    (proving no live holder) and the file is old enough not to belong to a
+    repair that just started. Best-effort: never raises.
+    """
+    path = runtime_root / _REPAIR_LOCK_NAME
+    try:
+        if not path.is_file():
+            return
+        if time.time() - path.stat().st_mtime < min_age_seconds:
+            return
+    except OSError:
+        return
+    lock = _acquire_repair_lock(runtime_root)
+    if lock is None:
+        # A live process holds it — leave both the lock and the file alone.
+        return
+    try:
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    finally:
+        _release_repair_lock(lock)
+
+
 def repair_vulnerable_runtime(
     uv_bin: str,
     *,
@@ -1131,13 +1244,18 @@ def repair_vulnerable_runtime(
             f"could not probe live interpreter {live_python}",
         )
     if not current.wal_reset_vulnerable:
-        # The runtime is already fixed — any venv.stale.runtime-* markers
-        # next to the live venv are leftovers from a past repair (or from
-        # a build predating the post-repair cleanup) and will never be
-        # rolled back to. Sweep them so they don't leak ~1 GB each
-        # forever (issue #73109). Age-gated to avoid racing an in-flight
-        # repair in a sibling process.
+        # The runtime is already fixed — clean up leftovers a past repair
+        # (or a build predating the post-repair cleanup) may have stranded:
+        #   * venv.stale.runtime-* markers next to the live venv (each ~1 GB,
+        #     issue #73109);
+        #   * generation-* dirs whose provision never landed (interrupted
+        #     mid-download, leaving a .temp staging tree — ~48M each);
+        #   * a runtime-repair.lock no live process holds (reads like an
+        #     active repair and shows up as untracked).
+        # All are age-gated to avoid racing a repair in a sibling process.
         _sweep_stale_runtime_backups(live, root=root)
+        _sweep_orphan_generations(managed_python_install_dir(root))
+        _sweep_stale_repair_lock(root / _RUNTIME_DIR_NAME)
         return RuntimeRepairResult(
             "safe",
             sqlite_before=current.sqlite_version_string,
