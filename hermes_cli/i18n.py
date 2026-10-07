@@ -250,7 +250,6 @@ _EN: dict[str, str] = {
     "monitoring.alertmanager_unavailable": "Alertmanager not configured (config ops.prometheus.alertmanager); only health probing is available.",
 
     # ── interactive session: slash help / boot hints / usage panel ─────────
-    "slash.env_help": "View/switch the session ops environment (from the defined ops.environments list; /env with no argument shows the current environment and the available list)",
     "slash.topo_help": "In-session topology discovery — runs the discovery engine locally (/topo [host...] [--env prod] [--user root] [--key path]; no args = interactive collection). Note: --sudo-password is not supported in-session (credential discipline: passwords never enter LLM session arguments); root-only probes need `vigil topo-discover --sudo-password` at the CLI layer or a pre-provisioned topology credential",
     "boot.loadingConfig": "· Loading config and models…",
     "boot.ready": "· Startup ready",
