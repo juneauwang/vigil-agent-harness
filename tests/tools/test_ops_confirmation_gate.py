@@ -105,8 +105,8 @@ def perm_env(tmp_path, monkeypatch):
     def _activate(env, *, enabled=True):
         _cfg(tmp_path, env, enabled=enabled)
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
-        # batch83：本机（docker/helm/裸变更命令的目标）登记为 workstation，
-        # 否则高危变更目标解析失败 → deny，测不到矩阵档位。
+        # #103：本机（docker/helm/裸变更命令的目标）登记为 workstation，env
+        # 跟随 activation——否则无 token 命令目标解析失败，测不到矩阵档位。
         monkeypatch.setattr(
             "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         hc._LOAD_CONFIG_CACHE.clear()

@@ -250,14 +250,15 @@ def test_env_flag_custom_env_maps_to_tier(tmp_path, monkeypatch):
     prod = next(d for d in env_defs if d["name"] == "prod")
     assert prod["role"] == "prod" and prod["isolation"] == "strict"
 
-    # 操作矩阵按映射后的档位判定（batch83 起：rm → remove 高危变更，本机未登记
-    # 样例拓扑 → 目标解析 deny；unknown 命令 → 默认 approve；restart → prod 矩阵
-    # 档位）。matrix.yaml 由 ops-init 铺入（template2，任务 4）。
+    # 操作矩阵按映射后的档位判定（#103：rm → remove，本机未登记样例拓扑 →
+    # 矩阵 unresolved 行 required 人工确认；unknown 命令 → 默认 approve；
+    # restart → prod 矩阵档位）。matrix.yaml 由 ops-init 铺入（template2，任务 4）。
     monkeypatch.setattr(
         "tools.target_resolve._local_host_identities", lambda: ["not-in-topology"])
     decision = check_ops_command_permission("rm -rf /var/log")
-    assert decision is not None and decision["action"] == "deny"
-    assert decision["target_deny"] is True
+    assert decision is not None and decision["action"] == "approve"
+    assert decision["target_unresolved"] is True
+    assert decision["require_confirmation"] is True
     decision = check_ops_command_permission("git push origin main")
     assert decision is not None and decision["action"] == "approve"
     decision = check_ops_command_permission("systemctl restart myapp")
@@ -274,16 +275,20 @@ def test_env_flag_legacy_uat_maps_prod_tier(tmp_path, monkeypatch):
     monkeypatch.setenv("VIGIL_HOME", str(home))
     perms = _load_permissions(home)
     assert perms["env"] == "prod" and perms["role"] == "prod"
-    # 权限判定 = prod 档语义（batch83 起：rm → remove 高危变更，本机未登记拓扑 →
-    # deny；unknown → 默认 approve；restart → 矩阵判定，env_tier 映射 prod）。
+    # 权限判定 = prod 档语义（#103：rm → remove，本机未登记拓扑 → unresolved 行
+    # required 人工确认；unknown → 默认 approve；restart → 矩阵判定，env_tier prod）。
     monkeypatch.setattr(
         "tools.target_resolve._local_host_identities", lambda: ["not-in-topology"])
     denied = check_ops_command_permission("rm -rf /var/log")
-    assert denied is not None and denied["action"] == "deny" and denied["target_deny"] is True
+    assert denied is not None and denied["action"] == "approve"
+    assert denied["target_unresolved"] is True and denied["require_confirmation"] is True
+    # #103：config env 不再参与裁决——本机未登记样例拓扑 → unresolved 行。
     unknown = check_ops_command_permission("git push origin main")
-    assert unknown is not None and unknown["action"] == "approve" and unknown["env_tier"] == "prod"
+    assert unknown is not None and unknown["action"] == "approve"
+    assert unknown["target_unresolved"] is True
     approve = check_ops_command_permission("systemctl restart myapp")
-    assert approve is not None and approve["action"] == "approve" and approve["env_tier"] == "prod"
+    assert approve is not None and approve["action"] == "approve"
+    assert approve["target_unresolved"] is True
 
 
 def test_env_flag_invalid_name_errors_listing_available(tmp_path):
@@ -344,8 +349,18 @@ def test_topo_update_test_entity_writes_source_agent(ops_home):
     assert data["last_verified"] == _dt.date.today().isoformat()
 
 
-def test_default_env_test_does_not_block_l2(ops_home):
+def test_default_env_test_does_not_block_l2(ops_home, monkeypatch):
     # 安全默认（env=test）下矩阵放行常规操作，不会给新用户意外弹审批。
+    # #103：env 取自目标实体——登记本机 workstation(env=test) 后 restart 落
+    # test 行 execute。
+    topo = yaml.safe_load((ops_home / "topology.yaml").read_text(encoding="utf-8"))
+    topo.setdefault("hosts", []).append(
+        {"name": "workstation", "type": "host", "env": "test",
+         "endpoint": "192.168.1.50"})
+    (ops_home / "topology.yaml").write_text(
+        yaml.safe_dump(topo, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["workstation"])
     assert check_ops_command_permission("systemctl restart myapp") is None
 
 

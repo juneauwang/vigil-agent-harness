@@ -389,7 +389,7 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     target_explicit = command_target_required(command)
     target = resolve_required_target(command)
     if target.get("status") != TARGET_RESOLVED:
-        return _target_deny_decision(command, classification, target)
+        return _target_unresolved_decision(command, classification, target)
     env = str(target.get("env") or "").strip().lower()
     target_label = target.get("label")
     target_entity = target.get("entity")
@@ -471,35 +471,57 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     return result
 
 
-def _target_deny_decision(command: str, classification: Dict[str, Any],
-                          target: Dict[str, Any]) -> Dict[str, Any]:
-    """batch83 目标解析失败 → deny（先于矩阵的硬拦截；矩阵本身仍无 deny 档）。
+def _target_unresolved_decision(command: str, classification: Dict[str, Any],
+                                target: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """#103：目标解析失败 → 查矩阵 ``unresolved`` 行（取代 batch83 的 deny）。
 
-    交互会话里 confirm 会被 smart 自动批绕过（本次 npm 逃逸的机制），deny 才
-    成立：解析不出目标实体 = 拒绝执行，错误信息带修复指引（先 topo_query 查
-    实体名）。sudo_tool 已按 ``action == "deny"`` 消费（tool_error），
-    approval.py 在本批同步加 deny 分支（先于 yolo/mode=off 旁路）。
+    目标未在拓扑登记（bootstrap / 拓扑重建 / 新机发现）时，deny 形成死锁——
+    实测 12 次 deny 全落在这些场景，且错误信息的修复指引（topo-discover）自己
+    也被拒。改为按矩阵新增的 ``unresolved`` 行裁决：默认整行
+    ``{approve: required}``（含只读）= **不许自动放行、可人工放行**。
+    未识别动作（unknown，如 ``vigil topo-discover``）按最高严格度 required。
+    返回 approve 决策（require_confirmation=True）交人工确认门；用户把该格改为
+    execute → 返回 None（矩阵是唯一裁决源）。矩阵缺失仍走 deny（fail-closed 不变）。
     """
-    action_name = str(classification.get("action") or "unknown")
+    from tools import matrix_data as _md
+    from tools.target_resolve import command_target_required
+    matrix = _md.load_matrix_or_empty()
+    candidates = classification.get("chain") or [classification]
+    rank = {_md.LEVEL_EXECUTE: 0, _md.LEVEL_APPROVE: 1, _md.LEVEL_REQUIRED: 2}
+    best = None
+    for cand in candidates:
+        action = str(cand.get("action") or "unknown")
+        if action == "unknown":
+            level = _md.LEVEL_REQUIRED  # 未识别动作 = 最高严格度（不许自动放行）
+        else:
+            level = _md.get_level(matrix, _md.UNRESOLVED_ENV, action)["level"]
+        weight = rank.get(level, 2)
+        if best is None or weight > best[0]:
+            best = (weight, level, action, cand)
+    _weight, level, action_name, primary = best
+    if level == _md.LEVEL_EXECUTE:
+        return None
     reason = str(target.get("reason") or "目标实体未解析/不在拓扑表")
+    description = (
+        "⚠ 目标未在拓扑登记——按最高严格度强制人工确认；建议随后 topo_update "
+        "登记（不阻断本次执行）。"
+        f"动作 {action_name} × {_md.UNRESOLVED_ENV}：{reason}"
+    )
     return {
-        "action": "deny",
+        "action": "approve",
         "action_name": action_name,
-        "rule": str(classification.get("rule") or "").strip() or None,
-        "note": str(classification.get("note") or "").strip() or None,
-        "env": None,
+        "rule": str(primary.get("rule") or "").strip() or None,
+        "note": str(primary.get("note") or "").strip() or None,
+        "env": _md.UNRESOLVED_ENV,
         "env_tier": None,
         "role": _active_role(),
-        "level": None,
-        "require_confirmation": False,
-        "description": (
-            f"⛔ 高危变更目标未解析，操作已拒绝（{action_name} × 目标解析失败）："
-            f"{reason}。矩阵按目标实体 env 裁决，解析不出实体 = deny（目标解析层"
-            "硬拦截，先于矩阵）；修复指引：先 topo_query 查目标实体名（主机名/"
-            "别名/IP/集群上下文），或用 topo_update 登记后再执行。"
-        ),
+        "level": level,
+        "require_confirmation": level == _md.LEVEL_REQUIRED,
+        "description": description,
         "classification": classification,
-        "target_deny": True,
+        "target_unresolved": True,
+        "target_explicit": command_target_required(command),
+        "unresolved_reason": reason,
     }
 
 
@@ -508,9 +530,9 @@ def _matrix_missing_deny(command: str,
     """batch83-fix 矩阵缺失 → deny（去掉 OPS-DELTA #76 惰性放行）。
 
     矩阵是权限裁决的前提：缺失 = 权限系统不可用，任何动作（含只读）都不放行。
-    返回形态与 ``_target_deny_decision`` 同构（action=deny），approval.py 的
-    deny 分支 / sudo_tool 同款消费（硬拦截，先于 yolo/mode=off 旁路）；错误
-    信息带修复指引（先跑 vigil setup 或 vigil ops-init 生成 matrix.yaml）。
+    返回 action=deny，approval.py 的 deny 分支 / sudo_tool 同款消费（硬拦截，
+    先于 yolo/mode=off 旁路）；错误信息带修复指引（先跑 vigil setup 或
+    vigil ops-init 生成 matrix.yaml）。
     setup/ops-init 自身生成矩阵走 matrix_data.init_matrix 直写，不经过本裁决。
     """
     action_name = str(classification.get("action") or "unknown")

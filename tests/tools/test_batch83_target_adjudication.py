@@ -157,8 +157,9 @@ def test_b_local_install_uses_local_host_env_and_requires_confirmation(t83):
     assert decision.get("target_label") == "workstation (dev)"
 
 
-def test_c_local_rm_judged_by_entity_env_then_deny_unregistered(t83):
-    """本机 rm -f → 目标=本机实体 → 实体 env 矩阵裁决；本机未登记拓扑 → deny。"""
+def test_c_local_rm_judged_by_entity_env_then_confirmation_unregistered(t83):
+    """本机 rm -f → 目标=本机实体 → 实体 env 矩阵裁决；本机未登记拓扑 →
+    #103 起改走矩阵 unresolved 行（人工确认，不再是 deny）。"""
     t83("test")
     decision = ck("rm -f /tmp/x")
     assert decision is not None
@@ -166,25 +167,28 @@ def test_c_local_rm_judged_by_entity_env_then_deny_unregistered(t83):
     assert decision["env"] == "dev"          # 实体 env=dev，非会话 test
     assert decision["level"] == "approve"
 
-    # 本机未登记拓扑 → 高危变更解析失败 → 直接 deny（不是 confirm）
+    # 本机未登记拓扑 → 目标解析失败 → unresolved 行 required（可人工放行）
     t83("test", local="ghost-machine")
     decision = ck("rm -f /tmp/x")
     assert decision is not None
-    assert decision["action"] == "deny"
-    assert decision["target_deny"] is True
-    assert "操作已拒绝" in decision["description"]
-    assert "topo_query" in decision["description"]
-    assert decision["require_confirmation"] is False
+    assert decision["action"] == "approve"
+    assert decision.get("target_unresolved") is True
+    assert decision["env"] == "unresolved"
+    assert decision["require_confirmation"] is True
+    assert "目标未在拓扑登记" in decision["description"]
+    assert "topo_update" in decision["description"]
 
 
-def test_d_ssh_unregistered_host_change_denied(t83):
-    """ssh 未登记主机跑变更 → 解析失败 → deny（不再借会话 env 兜底）。"""
+def test_d_ssh_unregistered_host_needs_confirmation(t83):
+    """ssh 未登记主机 → #103 起弹人工确认（unresolved 行），不再 BLOCKED。"""
     t83("test")
     decision = ck("ssh root@203.0.113.99 'rm -rf /var/log'")
     assert decision is not None
-    assert decision["action"] == "deny"
-    assert "未在拓扑表登记" in decision["description"]
-    assert "topo_query" in decision["description"]
+    assert decision["action"] == "approve"
+    assert decision.get("target_unresolved") is True
+    assert decision["require_confirmation"] is True
+    assert "目标未在拓扑登记" in decision["description"]
+    assert "topo_update" in decision["description"]
 
 
 def test_e_readonly_commands_resolve_target_entity(t83):
@@ -204,13 +208,14 @@ def test_e_readonly_commands_resolve_target_entity(t83):
         assert decision is not None, cmd
         assert decision["action"] == "approve", cmd
         assert decision["action_name"] == "unknown", cmd
-        assert decision.get("target_deny") is not True, cmd
+        assert decision.get("target_unresolved") is not True, cmd
 
 
-def test_deny_is_hard_not_bypassed_by_yolo_or_mode_off(t83, monkeypatch):
-    """deny 是目标解析层硬拦截：yolo / approvals.mode=off 都不能放行。"""
+def test_unresolved_not_bypassed_by_yolo_or_mode_off(t83, monkeypatch):
+    """unresolved 行 required：yolo / approvals.mode=off 都不能自动放行
+    （无人在场 → fail-closed BLOCKED）。"""
     t83("test", local="ghost-machine")
-    monkeypatch.setenv("VIGIL_SESSION_KEY", "batch83-deny-hard")
+    monkeypatch.setenv("VIGIL_SESSION_KEY", "batch83-unresolved-hard")
     monkeypatch.setattr(approval_module, "_YOLO_MODE_FROZEN", True)
     monkeypatch.setattr(
         "tools.tirith_security.check_command_security",
@@ -218,9 +223,8 @@ def test_deny_is_hard_not_bypassed_by_yolo_or_mode_off(t83, monkeypatch):
     )
     result = approval_module.check_all_command_guards("npm install -g codex", "local")
     assert result["approved"] is False
-    assert result.get("ops_target_deny") is True
-    assert "操作已拒绝" in result["message"]
-    assert "topo_query" in result["message"]
+    assert "目标未在拓扑登记" in result["message"]
+    assert "强制人工确认" in result["message"]
 
 
 def test_b_e2e_required_confirmation_rides_smart_approval(t83, monkeypatch):
