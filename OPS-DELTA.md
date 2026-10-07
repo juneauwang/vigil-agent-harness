@@ -5318,7 +5318,7 @@
   test_task33_incident_marks.py + OPS-DELTA.md 本条登记。不发版（攒 dogfood 一起发
   v1.0.6；PyPI 现为 1.0.5）。
 
-### 103. 单一裁决源收档：矩阵 env 归目标实体 + 硬门退役 + 未解析目标 fallback（定案 + 任务书，待实施）
+### 103. 单一裁决源收档：矩阵 env 归目标实体 + 硬门退役 + 未解析目标 fallback（定案 + 已实施）
 
 - **触发**（2026-10-07 dogfood，用户实报）：`helm upgrade` 改 vllm-stack（目标
   heyuan_cluster，拓扑 env=prod）**静默放行、无人工弹窗**。用户回忆"2 之前就改过
@@ -5423,5 +5423,30 @@
   - i **误伤率实测**（#98 定案④的收档判据）：扩范围后统计"解析失败 → required"触发次数，
     与其中"本应放行"的比例。
 
-- **状态**：⬜ 未实施（待排批次，批次号实施时回填）。本条目 = 定案 + 任务书；实施后回填
-  commit 与验收实测。
+- **状态**：✅ **已实施**（2026-10-07，6 commit，均在 v1.0 分支、未 push）：
+
+  | 任务 | commit | 内容 |
+  |---|---|---|
+  | 1 | `1aa3b6b7` | helm 目标解析分支（`_HELM_RE` + `_resolve_helm`，照抄 kubectl 语义） |
+  | 4 | `005dca1a` | 矩阵新增 `unresolved` 行 + 堵 get_level 环境名缺省 approve 放水口 |
+  | 2 | `58302f79` | 解析覆盖全部动作（判据 = 目标类 token，与动作无关） |
+  | 3 | `53ae0a2f` | 解析失败 deny → 查 `unresolved` 行（不许自动放行、可人工放行） |
+  | 5 | `3ff1ab38` | 删 prod 变更硬门 + 拆 `_active_env()` 载体 |
+  | 5b | `8551594f` | **方案 A**：`/env` 命令与三条 env 显示载体退场 |
+
+  - 顺序严格 1→4→2→3→5（parent 链已逐一验证），5b 为定案后追加。
+  - **5b 超出原任务书清单两处**（用户定："没有老用户，直接改 A"）：除 banner ENV 行外，
+    一并退场 compact ops 行 env 徽标与 **TUI prompt 的 `[env] ` 前缀** —— 只删 banner
+    会让 prompt 上继续挂 `[test]` 徽标，比不删更误导。
+  - 验收 a–i 逐条实测通过（详见交付报告）；误伤率：保留日志 6 次 deny 全部落在
+    bootstrap / 拓扑重建 / 新机发现 ⇒ 6/6 属"本应放行"（样本小，仅作方向判据）。
+  - **保留（刻意）**：`ops.permissions.env` 字段（读取兼容 + 启动 deprecate 警告）、
+    `_active_env()` 兼容读取、skin 的 `ops_env_*` / `ops-env-*` 颜色 key（通用样式系统）。
+  - ⚠️ **实施中发现、留给后续批次的三处残留**：
+    1. `get_level` 对"env 在、**动作缺配**"仍默认 `approve` —— 同类隐式放水口，本批只
+       堵了 env 维度；将来新增动作而存量矩阵未更新时该格会静默降为 approve。
+    2. `HIGH_RISK_MUTATING_ACTIONS` 已成**死代码**（定义 + `__all__` 导出，零调用点）。
+    3. `unresolved` 行若被改成 execute，解析失败会直接放行（"矩阵唯一裁决源"的预期
+       语义，但需知晓该旋钮存在）。
+  - 真实 `~/.vigil/matrix.yaml` **尚无显式 `unresolved` 行**，当前靠 `get_level` 兜底
+    返回 `required`；要显式行跑 `vigil matrix init --force`（矩阵是人工安全资产，LLM 不写）。
