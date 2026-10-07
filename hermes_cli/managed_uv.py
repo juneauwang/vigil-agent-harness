@@ -432,6 +432,31 @@ def _make_world_traversable(path: Path) -> None:
         pass
 
 
+_RUNTIME_GITIGNORE_NAME = ".gitignore"
+_RUNTIME_GITIGNORE_CONTENT = "*"
+
+
+def _ensure_runtime_gitignore(runtime_root: Path) -> None:
+    """Drop a ``*`` .gitignore inside the runtime dir (idempotent).
+
+    The checkout's own ``.gitignore`` lists ``.hermes-runtime/``, but that
+    guard lives in the *host repo*: a non-git checkout, or a user who edits
+    ``.gitignore``, would let uv's runtime artifacts (the 0-byte repair lock
+    and up to ~48M of generations) surface as untracked — and be swept into
+    the ``vigil update`` autostash (``git stash -u``). A ``*`` marker *inside*
+    the directory makes it self-ignoring regardless of the host repo. Never
+    rewrites an existing file, so it can be called on every repair.
+    """
+    marker = runtime_root / _RUNTIME_GITIGNORE_NAME
+    try:
+        if marker.exists():
+            return
+        runtime_root.mkdir(parents=True, exist_ok=True)
+        marker.write_text(_RUNTIME_GITIGNORE_CONTENT, encoding="utf-8")
+    except OSError:
+        pass
+
+
 def _runtime_request(info: SQLiteRuntimeInfo) -> str:
     """Pin the candidate to the current CPython minor line (e.g. ``3.11``).
 
@@ -622,6 +647,7 @@ def _install_safe_python_generation(
 ) -> tuple[Path, Path, SQLiteRuntimeInfo] | None:
     runtime_root = project_root / _RUNTIME_DIR_NAME
     python_root = managed_python_install_dir(project_root)
+    _ensure_runtime_gitignore(runtime_root)
     _make_world_traversable(runtime_root)
     _make_world_traversable(python_root)
 
@@ -896,6 +922,7 @@ def _cut_over_candidate(
 def _acquire_repair_lock(runtime_root: Path) -> _RepairLock | None:
     """Acquire an OS-held install lock that is released on process exit."""
     runtime_root.mkdir(parents=True, exist_ok=True)
+    _ensure_runtime_gitignore(runtime_root)
     _make_world_traversable(runtime_root)
     path = runtime_root / _REPAIR_LOCK_NAME
     try:

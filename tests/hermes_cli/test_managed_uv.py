@@ -1100,3 +1100,105 @@ class TestVenvPythonUpdateBoundary:
             "/opt/hermes/venv/bin/python"
         )
 
+
+
+def _fake_provision_run(*, staged: bool = True, interrupt_on_find: bool = False):
+    """Fake ``subprocess.run`` for ``_install_safe_python_generation``.
+
+    Returns ``(fake_run, state)``; ``state["generation"]`` is filled once the
+    install step runs. When ``staged`` the install writes a uv-style
+    ``.temp/.tmp*/python/bin/python3`` tree before promoting (or, with
+    ``interrupt_on_find``, before the process is interrupted).
+    """
+    state: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        if "install" in cmd:
+            generation = Path(kwargs["env"]["UV_PYTHON_INSTALL_DIR"])
+            state["generation"] = generation
+            if staged:
+                staged_bin = generation / ".temp" / ".tmpX" / "python" / "bin"
+                staged_bin.mkdir(parents=True, exist_ok=True)
+                (staged_bin / "python3").write_text("staged", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if interrupt_on_find:
+            raise KeyboardInterrupt("provision interrupted")
+        python = state["generation"] / "cpython" / "bin" / "python3"
+        python.parent.mkdir(parents=True, exist_ok=True)
+        python.write_text("landed", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout=str(python), stderr="")
+
+    return fake_run, state
+
+
+def _fixed_runtime_info(executable: Path):
+    from hermes_cli.sqlite_runtime import SQLiteRuntimeInfo
+
+    return SQLiteRuntimeInfo(
+        executable=Path(executable),
+        base_prefix=Path(executable).parent.parent,
+        python_version=(3, 11, 15),
+        sqlite_version=(3, 53, 1),
+        sqlite_version_string="3.53.1",
+        sqlite_source_id="fixed",
+    )
+
+
+def _vulnerable_runtime_info(executable: Path):
+    from hermes_cli.sqlite_runtime import SQLiteRuntimeInfo
+
+    return SQLiteRuntimeInfo(
+        executable=Path(executable),
+        base_prefix=Path(executable).parent.parent,
+        python_version=(3, 11, 14),
+        sqlite_version=(3, 50, 4),
+        sqlite_version_string="3.50.4",
+        sqlite_source_id="old",
+    )
+
+
+class TestRuntimeSelfIgnore:
+    """PART A: the runtime dir carries its own ``*`` .gitignore."""
+
+    def test_provisioning_writes_self_ignoring_gitignore(self, tmp_path, monkeypatch):
+        """供给 runtime 目录时写 <root>/.hermes-runtime/.gitignore == '*'.
+
+        The root ``.gitignore`` entry (4fabbb44) only protects checkouts whose
+        host repo still lists ``.hermes-runtime/``; a marker *inside* the dir
+        keeps it self-ignoring when that host guard is absent or user-edited.
+        """
+        import hermes_cli.managed_uv as managed_uv
+
+        fake_run, _state = _fake_provision_run(staged=False)
+        monkeypatch.setattr(managed_uv.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            managed_uv,
+            "probe_sqlite_runtime",
+            lambda python, **kw: _fixed_runtime_info(python),
+        )
+
+        result = managed_uv._install_safe_python_generation(
+            "uv",
+            project_root=tmp_path,
+            current=_vulnerable_runtime_info(Path("/venv/bin/python")),
+        )
+        assert result is not None
+
+        marker = tmp_path / ".hermes-runtime" / ".gitignore"
+        assert marker.is_file(), "runtime dir must be self-ignoring"
+        assert marker.read_text(encoding="utf-8") == "*"
+
+    def test_ensure_runtime_gitignore_is_idempotent(self, tmp_path):
+        """已存在的 .gitignore 不被覆盖（用户可能改过）。"""
+        import hermes_cli.managed_uv as managed_uv
+
+        runtime_root = tmp_path / ".hermes-runtime"
+        runtime_root.mkdir()
+        marker = runtime_root / ".gitignore"
+        marker.write_text("# user-edited\n", encoding="utf-8")
+
+        managed_uv._ensure_runtime_gitignore(runtime_root)
+
+        assert marker.read_text(encoding="utf-8") == "# user-edited\n"
+
+
