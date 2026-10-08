@@ -139,6 +139,36 @@ def call(params, *, home=None, context=None, runner=None):
 '''
 
 
+# 四种 topo kind 的沙箱拓扑验收（缺口一）：契约声明的 kind 决定沙箱实体层级。
+# 复用 VALID_WRAPPER，只替换 resolve_topo_ref 的 kind 与生成动作。
+def _wrapper_for_kind(kind: str, action: str = "query") -> str:
+    return (VALID_WRAPPER
+            .replace('kind="service"', f'kind="{kind}"')
+            .replace('generate_commands("verify"',
+                     f'generate_commands("{action}"'))
+
+
+def _kind_contract(kind: str, ref: str = "ent-one") -> dict:
+    """action=query 的四 kind 契约：正常用例引用 ref，错误用例引用不存在实体。"""
+    return {
+        "name": f"query-{kind}",
+        "description": f"沙箱拓扑 {kind} 层验收（缺口一）",
+        "action": "query",
+        "params": {
+            "target": {"type": "topo_ref", "kind": kind, "required": True},
+        },
+        "returns": {"status": "string"},
+        "tests": [
+            {"name": "正常查询",
+             "input": {"target": ref},
+             "expect": {"status": "ok"}},
+            {"name": "目标不存在（参数层错误）",
+             "input": {"target": "ghost-entity"},
+             "expect": {"error": "entity_not_found"}},
+        ],
+    }
+
+
 SYNTAX_BROKEN = "def call(params, *, home=None, context=None, runner=None):\n    if True\n"
 
 
@@ -441,6 +471,27 @@ class TestSandboxSelftest:
         result = cc.sandbox_selftest(INFINITE_LOOP_WRAPPER, contract, chome, timeout=1)
         assert result["ok"] is False
         assert "超时" in result["error"]
+
+    @pytest.mark.parametrize("kind", ["service", "host", "cluster", "host_group"])
+    def test_sandbox_topo_builds_declared_kind(self, kind, chome):
+        """缺口一：沙箱按契约 kind 造实体——四种 kind 的自证都必须过。
+
+        反证（基线 531dbdad）：host/cluster/host_group 三条红（只造 service，
+        正常用例被解析成 entity_not_found）。
+        """
+        data = _kind_contract(kind)
+        result = cc.sandbox_selftest(_wrapper_for_kind(kind), data, chome)
+        assert result["ok"] is True, result.get("error")
+        by_name = {c["name"]: c for c in result["cases"]}
+        assert by_name["正常查询"]["ok"] is True
+        # entity_not_found 用例专属引用仍不建实体（拒绝路径未被破坏）
+        assert by_name["目标不存在（参数层错误）"]["output"]["error"] == "entity_not_found"
+
+    def test_sandbox_topo_refs_carry_kind(self, chome):
+        """_collect_sandbox_refs 返回 (ref, kind)，kind 取自参数声明。"""
+        refs = cc._collect_sandbox_refs(_kind_contract("host", ref="gpu1"))
+        assert ("gpu1", "host") in refs
+        assert ("ghost-entity", "host") not in refs  # entity_not_found 专属不建
 
 
 # ---------------------------------------------------------------------------

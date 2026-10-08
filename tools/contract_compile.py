@@ -38,7 +38,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -304,38 +304,55 @@ def _norm_ref(value: Any) -> str:
     return s.split(":", 1)[-1] if ":" in s else s
 
 
-def _collect_sandbox_refs(contract: Dict[str, Any]) -> List[str]:
-    """自证沙箱拓扑的实体清单：正常用例的 topo_ref 值必须存在；
-    ``{error: entity_not_found}`` 用例专属的引用值**不**建实体（验证拒绝路径）。"""
+def _collect_sandbox_refs(contract: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """自证沙箱拓扑的实体清单：``[(裸名, kind)]``——正常用例的 topo_ref 值
+    必须存在；``{error: entity_not_found}`` 用例专属的引用值**不**建实体
+    （验证拒绝路径）。
+
+    kind 取自参数声明（topo_ref.kind / list items.kind，∈ _TOPO_KINDS）——
+    沙箱必须按 kind 造对应层级的实体，否则 kind=host/cluster/host_group 的
+    契约在自证时会被当成 service 解析 → 正常用例必 ``entity_not_found``。
+    """
     params = contract.get("params") or {}
-    topo_params = {
-        k: v for k, v in params.items()
-        if v.get("type") == "topo_ref"
-        or (v.get("type") == "list" and (v.get("items") or {}).get("type") == "topo_ref")
-    }
+    topo_params: Dict[str, Dict[str, Any]] = {}
+    for k, v in params.items():
+        if not isinstance(v, dict):
+            continue
+        if v.get("type") == "topo_ref":
+            topo_params[k] = {"kind": v.get("kind"), "list": False}
+        elif v.get("type") == "list" and (v.get("items") or {}).get("type") == "topo_ref":
+            topo_params[k] = {"kind": (v.get("items") or {}).get("kind"), "list": True}
     present: set = set()
     for case in contract.get("tests") or []:
         inp = case.get("input") or {}
         is_enf = (case.get("expect") or {}).get("error") == "entity_not_found"
         for key, value in inp.items():
-            if key not in topo_params:
+            spec = topo_params.get(key)
+            if spec is None:
                 continue
-            spec = topo_params[key]
-            values = value if spec.get("type") == "list" else [value]
+            values = value if spec.get("list") else [value]
+            kind = str(spec.get("kind") or "service")
             for v in values:
                 ref = _norm_ref(v)
                 if ref and not is_enf:
                     # 只建正常用例引用的实体——entity_not_found 用例专属的
                     # 引用值不建实体（验证拒绝路径），同一实体既正常又不存在
                     # = 契约自相矛盾，沙箱按"存在"建，该用例自然失败。
-                    present.add(ref)
+                    present.add((ref, kind))
     return sorted(present)
 
 
 def _build_sandbox_topo(sandbox_home: Path, contract: Dict[str, Any]) -> None:
-    """合成沙箱拓扑：hosts + services（测试用例引用到的实体）。"""
+    """合成沙箱拓扑：按契约声明的 kind 造 service/host/cluster/host_group。
+
+    字段对齐 v4 topology 结构与 resolve_target/topo_ref 的读取约定：
+    - service → sandbox-host 的 services 索引（services/sandbox-host.yaml）
+    - host → 第一层 hosts 行（type/env/cluster/endpoint/os）
+    - cluster → 第一层 clusters 行（type/env/host_groups）
+    - host_group → sandbox cluster 的 host_groups 行（{name}）
+    """
     (sandbox_home / "services").mkdir(parents=True, exist_ok=True)
-    topology = {
+    topology: Dict[str, Any] = {
         "version": 4,
         "environments": [{"name": "sandbox"}],
         "clusters": [{"name": "sandbox", "type": "docker",
@@ -344,12 +361,26 @@ def _build_sandbox_topo(sandbox_home: Path, contract: Dict[str, Any]) -> None:
                    "cluster": "sandbox", "endpoint": "127.0.0.1",
                    "os": "sandbox"}],
     }
+    services: List[Dict[str, Any]] = []
+    for ref, kind in _collect_sandbox_refs(contract):
+        if kind == "host":
+            topology["hosts"].append({
+                "name": ref, "type": "host", "env": "sandbox",
+                "cluster": "sandbox", "endpoint": "127.0.0.1", "os": "sandbox",
+            })
+        elif kind == "cluster":
+            topology["clusters"].append({
+                "name": ref, "type": "docker", "env": "sandbox",
+                "host_groups": [],
+            })
+        elif kind == "host_group":
+            topology["clusters"][0]["host_groups"].append({"name": ref})
+        else:  # service（含未声明 kind 的兜底）
+            services.append({"name": ref, "type": "service",
+                             "managed_by": "docker_compose", "source": "manual"})
     (sandbox_home / "topology.yaml").write_text(
         yaml.safe_dump(topology, allow_unicode=True, sort_keys=False),
         encoding="utf-8")
-    services = [{"name": ref, "type": "service", "managed_by": "docker_compose",
-                 "source": "manual"}
-                for ref in _collect_sandbox_refs(contract)]
     (sandbox_home / "services" / "sandbox-host.yaml").write_text(
         yaml.safe_dump({"host": "sandbox-host", "services": services},
                        allow_unicode=True, sort_keys=False),
