@@ -12,16 +12,17 @@
   ``handler: {status: failed}`` 用例 mock 返回失败，验证错误传播）；全过 =
   自证通过；失败带用例名/期望/实际 → LLM 重试（上限 3 次）；超时（60s）
   防死循环生成物。
-- 审批：tirith 扫描（block 拒 / warn 强制人工）+ 内容审批
-  （``request_asset_approval``，asset_type=contract）——拒绝不落注册。
+- 审批：内容审批（``request_asset_approval``，asset_type=contract）——拒绝
+  不落注册。（tirith 是命令级扫描器，不再扫生成的 Python 源码——那里面没有
+  命令；命令面安全由执行层 ``runbook_exec._run_spec`` 的统一 tirith 门把关。）
 - 注册：编译代码落 ``~/.vigil/contracts/compiled/<name>.py``（0600，只读
   语义）+ ``registry.yaml`` 状态记录 + 动态注册进工具表（toolset=contract，
   schema 由契约 params 自动生成，执行入口 = 薄包装 call，带 action 元数据）。
   启动钩子（``ensure_compiled_tools_registered``）把 registry.yaml 已注册
   契约热加载进运行时工具表（幂等）。
 
-安全：生成代码不可信——tirith + 沙箱双保险；沙箱不落盘主目录（临时目录）；
-注册代码只读。
+安全：生成代码不可信——越界扫描 + 沙箱自证双保险；命令面 tirith 在执行层
+（``_run_spec``）扫描。沙箱不落盘主目录（临时目录）；注册代码只读。
 """
 
 from __future__ import annotations
@@ -671,14 +672,18 @@ def ensure_compiled_tools_registered(home: Optional[Path] = None) -> int:
 # 编译状态机
 # ---------------------------------------------------------------------------
 
-def _code_summary(code: str) -> str:
-    lines = [ln for ln in code.splitlines() if ln.strip()]
-    head = ""
-    for ln in lines[:2]:
-        if ln.lstrip().startswith("#"):
-            head = ln.strip().lstrip("#").strip()
-            break
-    return f"{len(lines)} 行" + (f"，首行注释：{head[:60]}" if head else "")
+def _contract_summary(data: Dict[str, Any]) -> str:
+    """契约摘要（给人看的说明书）——审批卡片展示它而非代码行数。
+
+    ``_code_summary`` 只给“82 行 + 首行注释”，对人零信息量；契约五字段
+    （action / params / returns / tests）本来就是这个工具“做什么”的说明。
+    """
+    action = str(data.get("action") or "-")
+    params = ", ".join(str(k) for k in (data.get("params") or {})) or "-"
+    returns = ", ".join(str(k) for k in (data.get("returns") or {})) or "-"
+    cases = len(data.get("tests") or [])
+    return (f"action={action}；params: {params}；returns: {returns}；"
+            f"tests: {cases} 用例")
 
 
 def compile_contract(home: Optional[Path] = None, name: str = "",
@@ -751,34 +756,21 @@ def compile_contract(home: Optional[Path] = None, name: str = "",
                     "token_usage": usage}
         stage = "selftested"
 
-        # tirith 扫描（内容级安全，block 拒 / warn 强制人工——照 script_asset 流程）
-        tirith_warn = False
-        tirith_note = ""
-        try:
-            from tools.tirith_security import check_command_security
-            scan = check_command_security(code)
-            action = str(scan.get("action") or "allow")
-            if action == "block":
-                return {"status": "failed", "stage": stage,
-                        "code": "tirith_blocked",
-                        "error": f"生成代码被 tirith 拦截（block）："
-                                 f"{scan.get('summary') or '安全扫描不通过'}"}
-            if action == "warn":
-                tirith_warn = True
-                tirith_note = f"；tirith warn: {scan.get('summary') or '有安全提示'}"
-        except Exception as exc:
-            logger.warning("contract tirith 扫描失败（fail-open 继续）: %s", exc)
-
+        # 缺口二（2026-10-08）：不再拿命令级扫描器（tirith）扫生成的 Python
+        # 源码——生成代码里没有命令（命令由信任层运行时产生），扫它恒判
+        # "Nested executable body could not be resolved" → 误 block 合格代码。
+        # tirith 已挪到真正有命令的那一层：runbook_exec._run_spec（执行前扫
+        # cmd/argv，见 _tirith_command_gate），覆盖 runbook + 编译契约两条通道。
         from tools.approval import request_asset_approval
         approval = request_asset_approval(
             asset_type="contract",
             asset_name=name,
             description=(
                 f"编译契约 {name} 注册审批——沙箱自证已过 + "
-                f"{_code_summary(code)}{tirith_note}"
+                f"{_contract_summary(data)}"
             ),
             env="",
-            force_manual=tirith_warn,
+            force_manual=False,
             smart_low_risk=False,
             approval_callback=approval_callback,
         )

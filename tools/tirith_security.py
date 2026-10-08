@@ -1024,3 +1024,44 @@ def _is_app_tld_finding(finding: dict) -> bool:
         if val is not None and ".app" in str(val).lower():
             return True
     return False
+
+
+def format_findings_human(scan: dict, limit: int = 3) -> str:
+    """把 tirith 扫描结果里的人话诊断拼成一串可读文本。
+
+    调用方过去只取 ``scan['summary']``——可 ``summary`` 恒为空串（allow/block
+    实测都是 ''），于是人只看到七个字“有安全提示”，审批等于签字。真正的信息
+    在 ``findings``：``title``（规则名/结论）+ ``description``（人话描述）+
+    ``evidence[].raw|matched``（证据片段）。``limit`` 限制条数防灌屏（默认 3）。
+
+    无 findings（或全是无字段的占位）时回落到 summary，最后兜底“有安全提示”。
+    """
+    findings = scan.get("findings") or []
+    parts: list = []
+    for finding in findings[: max(1, int(limit))]:
+        if not isinstance(finding, dict):
+            continue
+        title = str(finding.get("title") or finding.get("rule_id") or "").strip()
+        desc = str(finding.get("description") or "").strip()
+        evidence = ""
+        for ev in finding.get("evidence") or []:
+            if isinstance(ev, dict):
+                raw = ev.get("raw") or ev.get("matched")
+                if raw:
+                    evidence = str(raw).strip()
+                    break
+            elif ev:
+                evidence = str(ev).strip()
+                break
+        severity = str(finding.get("severity") or "").strip()
+        piece = f"[{severity}] {title}" if severity and title else title
+        if desc:
+            piece = f"{piece}: {desc}" if piece else desc
+        if evidence:
+            snippet = evidence.replace("\n", " ")[:120]
+            piece = f"{piece}（证据: {snippet}）" if piece else f"（证据: {snippet}）"
+        if piece:
+            parts.append(piece)
+    if not parts:
+        return str(scan.get("summary") or "").strip() or "有安全提示"
+    return "；".join(parts)
