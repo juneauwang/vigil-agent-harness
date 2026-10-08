@@ -130,19 +130,21 @@ def script_asset_create(
     tirith_warn = False
     tirith_note = ""
     try:
-        from tools.tirith_security import check_command_security
+        from tools.tirith_security import (
+            check_command_security,
+            format_findings_human,
+        )
         scan = check_command_security(content)
         action = str(scan.get("action") or "allow")
         if action == "block":
             return tool_error(
                 f"脚本资产内容被 tirith 拦截（block）："
-                f"{scan.get('summary') or '安全扫描不通过'}"
-                f"{'；findings: ' + json.dumps(scan.get('findings') or [], ensure_ascii=False) if scan.get('findings') else ''}"
+                f"{format_findings_human(scan)}"
                 "——请修改脚本内容后重试"
             )
         if action == "warn":
             tirith_warn = True
-            tirith_note = f"；tirith warn: {scan.get('summary') or '有安全提示'}"
+            tirith_note = f"；tirith warn: {format_findings_human(scan)}"
     except Exception as exc:
         logger.warning("脚本资产 tirith 扫描失败（fail-open 继续）: %s", exc)
 
