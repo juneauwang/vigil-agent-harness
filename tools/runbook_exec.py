@@ -960,56 +960,13 @@ def _exec_script_asset_remote(home: Path, target: Dict[str, Any],
             "stdout": _clip(proc.stdout or ""), "stderr": _clip(proc.stderr or "")}
 
 
-def _tirith_command_surface(spec: Dict[str, Any]) -> str:
-    """命令规格里真正会执行的命令面（transfer/script_asset 无命令面 → 空）。"""
-    if "argv" in spec:
-        return " ".join(shlex.quote(str(a)) for a in (spec.get("argv") or []))
-    if "cmd" in spec:
-        return str(spec.get("cmd") or "")
-    return ""
-
-
-def _tirith_command_gate(spec: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """执行前 tirith 命令级安全扫描：block → 拒绝执行结果（命令不外发）。
-
-    缺口二（2026-10-08）：编译契约过去拿命令级扫描器（tirith）扫生成的 Python
-    源码——错对象，恒判 "Nested executable body could not be resolved" 误 block
-    合格代码；而真正的命令面（runbook + 编译契约都在这里执行）反而没有任何
-    tirith 兜底。现在统一落在 ``_run_spec`` 这个执行咽喉。
-
-    ``transfer``/``script_asset`` 无命令面（脚本内容在 script_asset 创建时已
-    扫过）→ 跳过。扫描自身的失败（二进制缺失/超时）由 tirith_security 的
-    fail_open 语义决定，这里只消费 verdict；异常按 fail-open 放行。
-    """
-    command = _tirith_command_surface(spec)
-    if not command.strip():
-        return None
-    try:
-        from tools.tirith_security import (
-            check_command_security,
-            format_findings_human,
-        )
-        scan = check_command_security(command)
-    except Exception as exc:
-        logger.warning("runbook tirith 扫描失败（fail-open 继续）: %s", exc)
-        return None
-    if str(scan.get("action") or "allow") != "block":
-        return None
-    return {
-        "exit_code": 1,
-        "stdout": "",
-        "blocked": True,
-        "stderr": t("runbook_exec.tirith_blocked",
-                    "tirith 命令安全扫描拦截（block）：{detail}",
-                    detail=format_findings_human(scan)),
-    }
-
-
 def _run_spec(home: Path, target: Dict[str, Any],
               spec: Dict[str, Any]) -> Dict[str, Any]:
-    blocked = _tirith_command_gate(spec)
-    if blocked is not None:
-        return blocked
+    # 结构化命令通道（runbook / 编译契约）：命令由 generate_commands 按
+    # action × target × managed_by 确定性生成，合法性已由操作矩阵在动作层裁决
+    # ——不在本层接 tirith（§9 定案 iv；tirith 对 raw_ip_url 等误报会打穿
+    # 生产 runbook 的 IP 探活）。自由文本命令通道（terminal / script_asset）
+    # 仍在各自入口过 tirith。
     if "transfer" in spec:
         return _exec_transfer(home, spec["transfer"])
     if "script_asset" in spec:
