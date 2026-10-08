@@ -5454,3 +5454,70 @@
        语义，但需知晓该旋钮存在）。
   - 真实 `~/.vigil/matrix.yaml` **尚无显式 `unresolved` 行**，当前靠 `get_level` 兜底
     返回 `required`；要显式行跑 `vigil matrix init --force`（矩阵是人工安全资产，LLM 不写）。
+
+### 104. 契约编译管线三处缺口修复（沙箱拓扑 kind / tirith 挪位 / 诊断可读，2026-10-08）
+
+- **背景**：阶段 A/B 代码闭环、测试全绿，但**从没走过真实端到端**。2026-10-07
+  主 session 隔离 `VIGIL_HOME` 真跑 `vigil contract compile` 三轮，定位三处让
+  它跑不到 `registered` 的缺口（不是读代码推测，是跑出来的）。元层观察（用户
+  认同）：这条管线**设计出来是为了防"没验证的东西进库"，自己却恰恰没被验证过
+  —— 机制没自证自己**。
+- **缺口一（沙箱拓扑只造 service）**：`_collect_sandbox_refs` 只返回实体名、
+  丢掉 kind，`_build_sandbox_topo` 硬编码 `type: service`；而
+  `_TOPO_KINDS = service/host/cluster/host_group` 四种都允许契约声明 →
+  `kind: host` 的契约把 `gpu1` 造成了 service → 按 host 解析必
+  `entity_not_found` → 自证永远过不去（主机/集群类运维是契约主要用例）。
+  修：`_collect_sandbox_refs → List[Tuple[ref, kind]]`（含 list items.kind）；
+  `_build_sandbox_topo` 按 kind 造四层实体（字段对齐 v4 topology 结构）。
+  commit `4ccd84e2`。
+- **缺口二（tirith 扫错对象）**：`tools/tirith_security` 头注释即写明"Runs the
+  tirith binary to scan **commands**"。把未修改的合格生成代码喂真 tirith →
+  `block`（`analysis_incomplete`：Nested executable body could not be
+  resolved）——因为**生成代码里根本没有命令**（命令由信任层
+  `generate_commands` 运行时产生）。定案 **(a) 挪位置**（非 (b) 降级）；
+  前置：盘点 `_run_spec`/`_exec_*` 确认下游**无任何 tirith 兜底**，故先补
+  执行层再删——
+  - `runbook_exec._tirith_command_gate`：`_run_spec` 执行前扫 cmd/argv，
+    block 拒发命令（覆盖 runbook + 编译契约两条通道）；transfer/script_asset
+    无命令面跳过（脚本内容在建资产时已扫）。
+  - `contract_compile` 删掉对生成 Python 的 tirith 扫描（含 `tirith_blocked`
+    错误码）；审批描述由"代码摘要（82 行 + 首行注释）"改**契约摘要**
+    （action/params/returns/tests）。
+  commit `a9e56252`。
+- **缺口三（诊断被丢）**：调用方只取 `scan['summary']`，而实测 summary 恒为
+  空串（allow/block 都是 ''）→ 人只看到七个字"有安全提示"，审批空转。
+  `tirith_security.format_findings_human` 把 findings 的
+  `title`+`description`+`evidence` 拼成人话（限 3 条）；`script_assets` 的
+  block/warn 一并改（同款代码，全 Vigil tirith warn 场景都中招）。commit
+  `652d8d31`。
+- **反证（基线 `531dbdad`，新建 worktree 跑新测试）**：
+  - kind 沙箱四用例：host/cluster/host_group 三条红，断言原文
+    `期望 {'status': 'ok'}，实际 {'error': 'entity_not_found', ...}`。
+  - 编译期不再扫生成代码：基线红（`assert 'failed' == 'registered'`——假
+    block 扫描器在基线把编译拒了）。
+  - 真 tirith 门/诊断用例：基线红（`module 'tools.runbook_exec' has no
+    attribute '_tirith_command_gate'`）。
+  - script_assets warn 诊断：基线红，原文
+    `assert 'Lookalike TLD' in '...tirith warn: 有安全提示'`。
+  - 端到端 `kind: host` 契约：基线红，`generation_failed` /
+    `沙箱自证未通过（2/3 用例失败）… entity_not_found`。
+  - 直接复现缺口二前提：基线 `check_command_security(<82 行生成物>)` →
+    `action=block`（HIGH `analysis_incomplete`）。
+- **验收（零成本重放：真 tirith + 固定 `generated.py` 注入 `llm_generate`，
+  隔离 `VIGIL_HOME`，不调模型）**：
+  - a 端到端：`kind: host` 契约 `validated → generating → selftested →
+    approved → registered`（selftest 3/3，approved_by=wpwang）。
+  - b `vigil contract list` 输出 name/action/status/compiled_at/approved_by/
+    path 齐全。
+  - c `ensure_compiled_tools_registered` 热加载 → `get_tool_definitions(
+    enabled_toolsets=["contract"])` 含该契约（required=["target"]）。
+  - d 四 kind 沙箱用例全绿；e 真 tirith 集成用例全绿（常规命令 allow、
+    `curl|bash` block）；f 真外部依赖（tirith）有不 mock 用例；g/h warn/block
+    信息含规则名 + 人话 + 证据。
+- **改过旧预期**：删 `test_tirith_block_rejected` /
+  `test_tirith_warn_force_manual_still_requires_approval`（编译期 tirith 行为
+  已按定案移除），替换为"编译期不再扫生成代码"回归护栏。
+- **未做/不确定**：#103 三处残留（get_level 动作缺配默认 approve /
+  `HIGH_RISK_MUTATING_ACTIONS` 死代码 / unresolved 行 set-to-execute）仍不在
+  本批；命令层 tirith block 对**存量** runbook（含 curl|bash 类安装脚本）
+  的影响未做全量 dogfood 扫描。
