@@ -5470,20 +5470,24 @@
   修：`_collect_sandbox_refs → List[Tuple[ref, kind]]`（含 list items.kind）；
   `_build_sandbox_topo` 按 kind 造四层实体（字段对齐 v4 topology 结构）。
   commit `4ccd84e2`。
-- **缺口二（tirith 扫错对象）**：`tools/tirith_security` 头注释即写明"Runs the
-  tirith binary to scan **commands**"。把未修改的合格生成代码喂真 tirith →
-  `block`（`analysis_incomplete`：Nested executable body could not be
-  resolved）——因为**生成代码里根本没有命令**（命令由信任层
-  `generate_commands` 运行时产生）。定案 **(a) 挪位置**（非 (b) 降级）；
-  前置：盘点 `_run_spec`/`_exec_*` 确认下游**无任何 tirith 兜底**，故先补
-  执行层再删——
-  - `runbook_exec._tirith_command_gate`：`_run_spec` 执行前扫 cmd/argv，
-    block 拒发命令（覆盖 runbook + 编译契约两条通道）；transfer/script_asset
-    无命令面跳过（脚本内容在建资产时已扫）。
+- **缺口二（tirith 扫错对象）→ 复验再定案**：`tools/tirith_security` 头注释即
+  写明 "scan **commands**"。把未修改的合格生成代码喂真 tirith → `block`
+  （`analysis_incomplete`）——因为**生成代码里根本没有命令**
+  （命令由信任层 `generate_commands` 运行时产生）。先按 (a) 挪位置到命令执行层
+  （commit `a9e56252`：`_run_spec` 前 `_tirith_command_gate` 扫 cmd/argv）。
+  **复验发现误报面被放大**：真 tirith 对 `raw_ip_url` 判 block，而生产 runbook
+  的探活目标全是裸 IP（`curl -sS -L http://47.120.50.110:30151/models`）——
+  命令根本不外发、步骤直接失败，且打在 Vigil 核心资产上（21 条抽样 allow 19 /
+  warn 1 / block 1）。用户 2026-10-08 定案 **(iv)：两通道两判据** ——
+  - **自由文本命令通道（tirith 管）**：terminal 直跑 + script_asset 内容
+    （创建时扫）——保留。
+  - **结构化命令通道（矩阵管，tirith 撤出）**：runbook / 编译契约（命令由
+    `generate_commands` 按 action×target×managed_by 确定性生成，合法性已在操作
+    矩阵动作层裁决）——撤掉 tirith。commit `369ced89`（删
+    `_tirith_command_gate`/`_tirith_command_surface`，不留死代码）。
   - `contract_compile` 删掉对生成 Python 的 tirith 扫描（含 `tirith_blocked`
     错误码）；审批描述由"代码摘要（82 行 + 首行注释）"改**契约摘要**
     （action/params/returns/tests）。
-  commit `a9e56252`。
 - **缺口三（诊断被丢）**：调用方只取 `scan['summary']`，而实测 summary 恒为
   空串（allow/block 都是 ''）→ 人只看到七个字"有安全提示"，审批空转。
   `tirith_security.format_findings_human` 把 findings 的
@@ -5495,8 +5499,16 @@
     `期望 {'status': 'ok'}，实际 {'error': 'entity_not_found', ...}`。
   - 编译期不再扫生成代码：基线红（`assert 'failed' == 'registered'`——假
     block 扫描器在基线把编译拒了）。
-  - 真 tirith 门/诊断用例：基线红（`module 'tools.runbook_exec' has no
-    attribute '_tirith_command_gate'`）。
+  - （a9e56252 阶段）真 tirith 门/诊断用例：基线红（`module
+    'tools.runbook_exec' has no attribute '_tirith_command_gate'`）；其中命令层
+    门测试已在 §9 撤出时删除。
+  - §9 结构化通道守卫（基线 `a9e56252`，worktree 跑新测试）：三条红，原文
+    `assert ['true'] == []`（`_run_spec` 仍调 tirith）、`assert 1 == 0`（IP 探活
+    被 block、到不了执行器）、`hasattr(..., '_tirith_command_gate')` 为真；自由
+    通道守卫（真 tirith 仍 block `raw_ip_url`、script_asset 仍扫内容）仍绿。
+  - §9 直连复现（基线 `a9e56252`）：`_run_spec({"cmd":"curl -sS -L
+    http://47.120.50.110:30151/models"})` → `blocked=True exit=1`，stderr
+    `[MEDIUM] URL uses raw IP address ... raw_ip_url`。
   - script_assets warn 诊断：基线红，原文
     `assert 'Lookalike TLD' in '...tirith warn: 有安全提示'`。
   - 端到端 `kind: host` 契约：基线红，`generation_failed` /
@@ -5511,13 +5523,17 @@
     path 齐全。
   - c `ensure_compiled_tools_registered` 热加载 → `get_tool_definitions(
     enabled_toolsets=["contract"])` 含该契约（required=["target"]）。
-  - d 四 kind 沙箱用例全绿；e 真 tirith 集成用例全绿（常规命令 allow、
-    `curl|bash` block）；f 真外部依赖（tirith）有不 mock 用例；g/h warn/block
-    信息含规则名 + 人话 + 证据。
-- **改过旧预期**：删 `test_tirith_block_rejected` /
-  `test_tirith_warn_force_manual_still_requires_approval`（编译期 tirith 行为
-  已按定案移除），替换为"编译期不再扫生成代码"回归护栏。
+  - d 四 kind 沙箱用例全绿；e 真 tirith 前提/自由通道用例全绿（真 tirith 对
+    `raw_ip_url` 判 block → 证明结构化通道必须撤出；terminal/script_asset 仍扫）；
+    f 真外部依赖（tirith）有不 mock 用例；g/h warn/block 信息含规则名 + 人话 +
+    证据（script_asset 属自由内容，保留）。
+- **改过旧预期**：
+  1. 删契约编译的 `test_tirith_block_rejected` /
+     `test_tirith_warn_force_manual_still_requires_approval`（编译期 tirith 按
+     定案移除），替换为"编译期不再扫生成代码"回归护栏。
+  2. 删 `a9e56252` 引入的命令层门测试（`_tirith_command_gate` 相关 5 条），
+     替换为结构化通道守卫（不接 tirith）+ 自由通道守卫（仍接）。
 - **未做/不确定**：#103 三处残留（get_level 动作缺配默认 approve /
   `HIGH_RISK_MUTATING_ACTIONS` 死代码 / unresolved 行 set-to-execute）仍不在
-  本批；命令层 tirith block 对**存量** runbook（含 curl|bash 类安装脚本）
-  的影响未做全量 dogfood 扫描。
+  本批；结构化通道撤出 tirith 后，若某天要让命令级扫描回归，必须先量化
+  raw_ip_url / credential_file_sweep 等误报率并改扫描器策略（不能直接重挂）。
