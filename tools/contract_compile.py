@@ -14,15 +14,18 @@
   防死循环生成物。
 - 审批：内容审批（``request_asset_approval``，asset_type=contract）——拒绝
   不落注册。（tirith 是命令级扫描器，不再扫生成的 Python 源码——那里面没有
-  命令；命令面安全由执行层 ``runbook_exec._run_spec`` 的统一 tirith 门把关。）
+  命令。§9 定案 (iv)：结构化命令通道（runbook + 编译契约）的合法性由操作矩阵
+  在动作层裁决，执行层 ``runbook_exec._run_spec`` 不接 tirith；tirith 只覆盖
+  自由文本命令通道 terminal / script_asset。）
 - 注册：编译代码落 ``~/.vigil/contracts/compiled/<name>.py``（0600，只读
   语义）+ ``registry.yaml`` 状态记录 + 动态注册进工具表（toolset=contract，
   schema 由契约 params 自动生成，执行入口 = 薄包装 call，带 action 元数据）。
   启动钩子（``ensure_compiled_tools_registered``）把 registry.yaml 已注册
   契约热加载进运行时工具表（幂等）。
 
-安全：生成代码不可信——越界扫描 + 沙箱自证双保险；命令面 tirith 在执行层
-（``_run_spec``）扫描。沙箱不落盘主目录（临时目录）；注册代码只读。
+安全：生成代码不可信——越界扫描 + 沙箱自证双保险。命令面由操作矩阵在动作层
+裁决（§9 定案 iv：``_run_spec`` 不接 tirith）。沙箱不落盘主目录（临时目录）；
+注册代码只读。
 """
 
 from __future__ import annotations
@@ -759,8 +762,10 @@ def compile_contract(home: Optional[Path] = None, name: str = "",
         # 缺口二（2026-10-08）：不再拿命令级扫描器（tirith）扫生成的 Python
         # 源码——生成代码里没有命令（命令由信任层运行时产生），扫它恒判
         # "Nested executable body could not be resolved" → 误 block 合格代码。
-        # tirith 已挪到真正有命令的那一层：runbook_exec._run_spec（执行前扫
-        # cmd/argv，见 _tirith_command_gate），覆盖 runbook + 编译契约两条通道。
+        # §9 定案 (iv)：结构化命令通道（runbook + 编译契约）的命令由
+        # generate_commands 确定性生成、已在动作层被操作矩阵裁决，执行层
+        # runbook_exec._run_spec 不再接 tirith（撤出而非挪入）；tirith 只保留在
+        # 自由文本命令通道 terminal / script_asset。
         from tools.approval import request_asset_approval
         approval = request_asset_approval(
             asset_type="contract",
