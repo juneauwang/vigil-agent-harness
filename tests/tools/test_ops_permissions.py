@@ -35,7 +35,8 @@ def _write_matrix(home, matrix: dict) -> None:
     }, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
 
-def _cfg(tmp_path, env, *, enabled=True, extra="", matrix=None) -> str:
+def _cfg(tmp_path, env, *, enabled=True, extra="", matrix=None,
+         topo_env=None) -> str:
     (tmp_path / "config.yaml").write_text(
         "ops:\n"
         "  permissions:\n"
@@ -47,14 +48,32 @@ def _cfg(tmp_path, env, *, enabled=True, extra="", matrix=None) -> str:
     )
     if matrix is not None:
         _write_matrix(tmp_path, matrix)
+    # #103：env 一律取自目标实体（拓扑表）。本机（无 token 命令）登记为
+    # workstation（env 跟随 topo_env），另铺单集群 + prod 主机供 token 命令解析。
+    te = topo_env if topo_env is not None else (env or "test")
+    (tmp_path / "topology.yaml").write_text(
+        "version: 4\n"
+        "environments:\n"
+        f"  - {{name: {te}, isolation: relaxed, role: {te}}}\n"
+        f"  - {{name: prod, isolation: strict, role: prod}}\n"
+        "clusters:\n"
+        f"  - {{name: k3s-{te}, env: {te}, type: k3s, endpoint: \"https://203.0.113.15:6443\"}}\n"
+        "hosts:\n"
+        f"  - {{name: workstation, type: host, env: {te}, endpoint: \"192.168.1.50\"}}\n"
+        "  - {name: node-prod, type: host, env: prod, endpoint: \"203.0.113.11\"}\n",
+        encoding="utf-8",
+    )
     return str(tmp_path)
 
 
 @pytest.fixture
 def perm_env(tmp_path, monkeypatch):
-    def _activate(env, *, enabled=True, extra="", matrix=None):
-        _cfg(tmp_path, env, enabled=enabled, extra=extra, matrix=matrix)
+    def _activate(env, *, enabled=True, extra="", matrix=None, topo_env=None):
+        _cfg(tmp_path, env, enabled=enabled, extra=extra, matrix=matrix,
+             topo_env=topo_env)
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+        monkeypatch.setattr(
+            "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         hc._LOAD_CONFIG_CACHE.clear()
         return tmp_path
 
@@ -109,8 +128,7 @@ def test_matrix_required_forces_confirmation(perm_env):
 
 
 def test_action_missing_from_matrix_defaults_approve(perm_env):
-    """矩阵漏配 action×env → 默认 approve（保守；dev 非 prod——prod 变更另走
-    batch80 硬门强制人工，见 test_batch80_prod_change_hardgate）。"""
+    """矩阵漏配 action×env → 默认 approve（保守；#103 起硬门退役，不再升级）。"""
     perm_env("dev", matrix={"dev": {"query": "execute"}})
     decision = check_ops_command_permission("systemctl restart myapp")
     assert decision is not None
@@ -174,8 +192,10 @@ def test_disabled_gate_returns_none(perm_env):
     assert check_ops_command_permission("systemctl restart myapp") is None
 
 
-def test_empty_env_returns_none(perm_env):
-    perm_env("", matrix=T2)
+def test_empty_config_env_still_adjudicates_by_target_entity(perm_env):
+    """#103：config env 空不再关闭判定——env 取自目标实体（本机 workstation=test）。"""
+    perm_env("", topo_env="test", matrix=T2)
+    # test 行 restart=execute → 无审批；证明判定按实体 env 进行而非"空 env 直接放行"
     assert check_ops_command_permission("systemctl restart myapp") is None
 
 
@@ -204,36 +224,45 @@ def test_custom_env_name_matches_matrix(perm_env):
 
 
 def test_custom_env_name_missing_matrix_maps_tier(perm_env):
-    """自定义 env 名不在矩阵 → 档位映射名兜底（uat→prod）；仍无 → 默认 approve。"""
+    """自定义 env 名不在矩阵 → 档位映射名兜底（uat→prod）；仍无 → required（#103）。"""
     perm_env("uat", matrix={"dev": {"restart": "approve"}})
-    # uat → prod 档，但矩阵没有 prod 行 → get_level 默认 approve（保守）
+    # uat → prod 档，但矩阵没有 prod 行 → env 名不在矩阵 → required（堵默认 approve
+    # 放水口，#103 任务 4：不许自动放行、可人工放行）
     decision = check_ops_command_permission("systemctl restart myapp")
-    assert decision is not None and decision["level"] == "approve"
+    assert decision is not None and decision["level"] == "required"
 
 
-def test_target_env_overrides_session_env(perm_env):
-    """test 会话 + 目标 prod → 按 prod 矩阵判定（跨环境硬约束）。"""
+def test_config_env_does_not_drive_adjudication(perm_env):
+    """#103：config env 不再参与裁决——env 取自目标实体。
+
+    config env=prod，但本机实体 env=test → 无 token 命令落 test 行（restart
+    execute），证明配置里的 env 没有把判定拉到 prod required。
+    """
+    perm_env("prod", topo_env="test", matrix=T2)
+    assert check_ops_command_permission("systemctl restart myapp") is None
+    # token 命令仍按目标实体：kubectl → 单集群 k3s-test → test query execute
+    assert check_ops_command_permission("kubectl get pods") is None
+
+
+def test_target_entity_env_drives_cross_session(perm_env):
+    """test 会话 + ssh 打 prod 实体（node-prod）→ 按 prod 矩阵 required。"""
     perm_env("test", matrix=T2)
-    assert check_ops_command_permission("docker ps") is None  # test query execute
+    assert check_ops_command_permission("docker ps") is None  # 本机 test query execute
 
-    decision = check_ops_command_permission("systemctl restart myapp", target_env="prod")
+    decision = check_ops_command_permission("ssh root@203.0.113.11 'df -h'")
     assert decision is not None
     assert decision["env"] == "prod"
     assert decision["level"] == "required"
-
-    assert check_ops_command_permission("docker ps", target_env="prod") is None
-
-
-def test_target_env_matches_session_env(perm_env):
-    perm_env("prod", matrix=T2)
-    decision = check_ops_command_permission("systemctl restart myapp", target_env="prod")
-    assert decision is not None and decision["env"] == "prod"
+    assert decision["require_confirmation"] is True
 
 
-def test_target_env_empty_falls_back_to_session_env(perm_env):
-    perm_env("prod", matrix=T2)
-    decision = check_ops_command_permission("systemctl restart myapp", target_env="")
-    assert decision is not None and decision["env"] == "prod"
+def test_target_env_param_no_longer_used(perm_env):
+    """命令级 target_env 不再参与裁决（单一裁决源：目标实体）。"""
+    perm_env("test", matrix=T2)
+    # 无 token 命令 → 本机 test（restart execute）；target_env=prod 被忽略
+    assert check_ops_command_permission("systemctl restart myapp", target_env="prod") is None
+    # 有 token → 按 token 实体；target_env 亦不改写
+    assert check_ops_command_permission("kubectl get pods", target_env="prod") is None
 
 
 def test_gate_disabled_target_zero_impact(perm_env):

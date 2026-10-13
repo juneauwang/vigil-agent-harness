@@ -267,7 +267,7 @@ export default function MatrixPage() {
                       key={env}
                       className="border-b border-r border-[var(--vigil-border)] px-2 py-2 text-left font-medium last:border-r-0"
                     >
-                      <span className={cn("vigil-env", env === "prod" ? "env-prod" : env === "local" ? "env-local" : "env-test")}>
+                      <span className={cn("vigil-env", env === "prod" ? "env-prod" : env === "local" ? "env-local" : env === "unresolved" ? "env-other" : "env-test")}>
                         {env}
                       </span>
                     </th>

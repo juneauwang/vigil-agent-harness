@@ -44,7 +44,7 @@ def test_setup_matrix_writes_template2_by_default(_home, monkeypatch):
     assert path.is_file()
     data = _matrix_data(_home)
     assert data["base_template"] == "template2"
-    assert set(data["matrix"]) == {"local", "test", "dev", "prod"}
+    assert set(data["matrix"]) == {"local", "test", "dev", "prod", "unresolved"}
 
 
 def test_setup_matrix_template_choice_is_respected(_home, monkeypatch):
@@ -58,7 +58,7 @@ def test_setup_matrix_template_choice_is_respected(_home, monkeypatch):
 
     data = _matrix_data(_home)
     assert data["base_template"] == "template1"
-    assert set(data["matrix"]) == {"local"}
+    assert set(data["matrix"]) == {"local", "unresolved"}
 
 
 def test_setup_matrix_keeps_existing_matrix(_home, monkeypatch):

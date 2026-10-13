@@ -12,15 +12,19 @@
   ``handler: {status: failed}`` 用例 mock 返回失败，验证错误传播）；全过 =
   自证通过；失败带用例名/期望/实际 → LLM 重试（上限 3 次）；超时（60s）
   防死循环生成物。
-- 审批：tirith 扫描（block 拒 / warn 强制人工）+ 内容审批
-  （``request_asset_approval``，asset_type=contract）——拒绝不落注册。
+- 审批：内容审批（``request_asset_approval``，asset_type=contract）——拒绝
+  不落注册。（tirith 是命令级扫描器，不再扫生成的 Python 源码——那里面没有
+  命令。§9 定案 (iv)：结构化命令通道（runbook + 编译契约）的合法性由操作矩阵
+  在动作层裁决，执行层 ``runbook_exec._run_spec`` 不接 tirith；tirith 只覆盖
+  自由文本命令通道 terminal / script_asset。）
 - 注册：编译代码落 ``~/.vigil/contracts/compiled/<name>.py``（0600，只读
   语义）+ ``registry.yaml`` 状态记录 + 动态注册进工具表（toolset=contract，
   schema 由契约 params 自动生成，执行入口 = 薄包装 call，带 action 元数据）。
   启动钩子（``ensure_compiled_tools_registered``）把 registry.yaml 已注册
   契约热加载进运行时工具表（幂等）。
 
-安全：生成代码不可信——tirith + 沙箱双保险；沙箱不落盘主目录（临时目录）；
+安全：生成代码不可信——越界扫描 + 沙箱自证双保险。命令面由操作矩阵在动作层
+裁决（§9 定案 iv：``_run_spec`` 不接 tirith）。沙箱不落盘主目录（临时目录）；
 注册代码只读。
 """
 
@@ -38,7 +42,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -304,38 +308,55 @@ def _norm_ref(value: Any) -> str:
     return s.split(":", 1)[-1] if ":" in s else s
 
 
-def _collect_sandbox_refs(contract: Dict[str, Any]) -> List[str]:
-    """自证沙箱拓扑的实体清单：正常用例的 topo_ref 值必须存在；
-    ``{error: entity_not_found}`` 用例专属的引用值**不**建实体（验证拒绝路径）。"""
+def _collect_sandbox_refs(contract: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """自证沙箱拓扑的实体清单：``[(裸名, kind)]``——正常用例的 topo_ref 值
+    必须存在；``{error: entity_not_found}`` 用例专属的引用值**不**建实体
+    （验证拒绝路径）。
+
+    kind 取自参数声明（topo_ref.kind / list items.kind，∈ _TOPO_KINDS）——
+    沙箱必须按 kind 造对应层级的实体，否则 kind=host/cluster/host_group 的
+    契约在自证时会被当成 service 解析 → 正常用例必 ``entity_not_found``。
+    """
     params = contract.get("params") or {}
-    topo_params = {
-        k: v for k, v in params.items()
-        if v.get("type") == "topo_ref"
-        or (v.get("type") == "list" and (v.get("items") or {}).get("type") == "topo_ref")
-    }
+    topo_params: Dict[str, Dict[str, Any]] = {}
+    for k, v in params.items():
+        if not isinstance(v, dict):
+            continue
+        if v.get("type") == "topo_ref":
+            topo_params[k] = {"kind": v.get("kind"), "list": False}
+        elif v.get("type") == "list" and (v.get("items") or {}).get("type") == "topo_ref":
+            topo_params[k] = {"kind": (v.get("items") or {}).get("kind"), "list": True}
     present: set = set()
     for case in contract.get("tests") or []:
         inp = case.get("input") or {}
         is_enf = (case.get("expect") or {}).get("error") == "entity_not_found"
         for key, value in inp.items():
-            if key not in topo_params:
+            spec = topo_params.get(key)
+            if spec is None:
                 continue
-            spec = topo_params[key]
-            values = value if spec.get("type") == "list" else [value]
+            values = value if spec.get("list") else [value]
+            kind = str(spec.get("kind") or "service")
             for v in values:
                 ref = _norm_ref(v)
                 if ref and not is_enf:
                     # 只建正常用例引用的实体——entity_not_found 用例专属的
                     # 引用值不建实体（验证拒绝路径），同一实体既正常又不存在
                     # = 契约自相矛盾，沙箱按"存在"建，该用例自然失败。
-                    present.add(ref)
+                    present.add((ref, kind))
     return sorted(present)
 
 
 def _build_sandbox_topo(sandbox_home: Path, contract: Dict[str, Any]) -> None:
-    """合成沙箱拓扑：hosts + services（测试用例引用到的实体）。"""
+    """合成沙箱拓扑：按契约声明的 kind 造 service/host/cluster/host_group。
+
+    字段对齐 v4 topology 结构与 resolve_target/topo_ref 的读取约定：
+    - service → sandbox-host 的 services 索引（services/sandbox-host.yaml）
+    - host → 第一层 hosts 行（type/env/cluster/endpoint/os）
+    - cluster → 第一层 clusters 行（type/env/host_groups）
+    - host_group → sandbox cluster 的 host_groups 行（{name}）
+    """
     (sandbox_home / "services").mkdir(parents=True, exist_ok=True)
-    topology = {
+    topology: Dict[str, Any] = {
         "version": 4,
         "environments": [{"name": "sandbox"}],
         "clusters": [{"name": "sandbox", "type": "docker",
@@ -344,12 +365,26 @@ def _build_sandbox_topo(sandbox_home: Path, contract: Dict[str, Any]) -> None:
                    "cluster": "sandbox", "endpoint": "127.0.0.1",
                    "os": "sandbox"}],
     }
+    services: List[Dict[str, Any]] = []
+    for ref, kind in _collect_sandbox_refs(contract):
+        if kind == "host":
+            topology["hosts"].append({
+                "name": ref, "type": "host", "env": "sandbox",
+                "cluster": "sandbox", "endpoint": "127.0.0.1", "os": "sandbox",
+            })
+        elif kind == "cluster":
+            topology["clusters"].append({
+                "name": ref, "type": "docker", "env": "sandbox",
+                "host_groups": [],
+            })
+        elif kind == "host_group":
+            topology["clusters"][0]["host_groups"].append({"name": ref})
+        else:  # service（含未声明 kind 的兜底）
+            services.append({"name": ref, "type": "service",
+                             "managed_by": "docker_compose", "source": "manual"})
     (sandbox_home / "topology.yaml").write_text(
         yaml.safe_dump(topology, allow_unicode=True, sort_keys=False),
         encoding="utf-8")
-    services = [{"name": ref, "type": "service", "managed_by": "docker_compose",
-                 "source": "manual"}
-                for ref in _collect_sandbox_refs(contract)]
     (sandbox_home / "services" / "sandbox-host.yaml").write_text(
         yaml.safe_dump({"host": "sandbox-host", "services": services},
                        allow_unicode=True, sort_keys=False),
@@ -640,14 +675,18 @@ def ensure_compiled_tools_registered(home: Optional[Path] = None) -> int:
 # 编译状态机
 # ---------------------------------------------------------------------------
 
-def _code_summary(code: str) -> str:
-    lines = [ln for ln in code.splitlines() if ln.strip()]
-    head = ""
-    for ln in lines[:2]:
-        if ln.lstrip().startswith("#"):
-            head = ln.strip().lstrip("#").strip()
-            break
-    return f"{len(lines)} 行" + (f"，首行注释：{head[:60]}" if head else "")
+def _contract_summary(data: Dict[str, Any]) -> str:
+    """契约摘要（给人看的说明书）——审批卡片展示它而非代码行数。
+
+    ``_code_summary`` 只给“82 行 + 首行注释”，对人零信息量；契约五字段
+    （action / params / returns / tests）本来就是这个工具“做什么”的说明。
+    """
+    action = str(data.get("action") or "-")
+    params = ", ".join(str(k) for k in (data.get("params") or {})) or "-"
+    returns = ", ".join(str(k) for k in (data.get("returns") or {})) or "-"
+    cases = len(data.get("tests") or [])
+    return (f"action={action}；params: {params}；returns: {returns}；"
+            f"tests: {cases} 用例")
 
 
 def compile_contract(home: Optional[Path] = None, name: str = "",
@@ -720,34 +759,23 @@ def compile_contract(home: Optional[Path] = None, name: str = "",
                     "token_usage": usage}
         stage = "selftested"
 
-        # tirith 扫描（内容级安全，block 拒 / warn 强制人工——照 script_asset 流程）
-        tirith_warn = False
-        tirith_note = ""
-        try:
-            from tools.tirith_security import check_command_security
-            scan = check_command_security(code)
-            action = str(scan.get("action") or "allow")
-            if action == "block":
-                return {"status": "failed", "stage": stage,
-                        "code": "tirith_blocked",
-                        "error": f"生成代码被 tirith 拦截（block）："
-                                 f"{scan.get('summary') or '安全扫描不通过'}"}
-            if action == "warn":
-                tirith_warn = True
-                tirith_note = f"；tirith warn: {scan.get('summary') or '有安全提示'}"
-        except Exception as exc:
-            logger.warning("contract tirith 扫描失败（fail-open 继续）: %s", exc)
-
+        # 缺口二（2026-10-08）：不再拿命令级扫描器（tirith）扫生成的 Python
+        # 源码——生成代码里没有命令（命令由信任层运行时产生），扫它恒判
+        # "Nested executable body could not be resolved" → 误 block 合格代码。
+        # §9 定案 (iv)：结构化命令通道（runbook + 编译契约）的命令由
+        # generate_commands 确定性生成、已在动作层被操作矩阵裁决，执行层
+        # runbook_exec._run_spec 不再接 tirith（撤出而非挪入）；tirith 只保留在
+        # 自由文本命令通道 terminal / script_asset。
         from tools.approval import request_asset_approval
         approval = request_asset_approval(
             asset_type="contract",
             asset_name=name,
             description=(
                 f"编译契约 {name} 注册审批——沙箱自证已过 + "
-                f"{_code_summary(code)}{tirith_note}"
+                f"{_contract_summary(data)}"
             ),
             env="",
-            force_manual=tirith_warn,
+            force_manual=False,
             smart_low_risk=False,
             approval_callback=approval_callback,
         )

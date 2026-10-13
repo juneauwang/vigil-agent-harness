@@ -731,17 +731,12 @@ def _render_banner(console, *, model: str, cwd: str, session_id: Optional[str],
     right_lines: List[str] = []
     profile_name = str(state.get("profile") or "default")
     right_lines.append(f"[dim {dim}]PROFILE[/]     [{text}]{profile_name}[/]")
-    if ops_on:
-        env = str(state.get("env") or "unknown")
-        env_color = _c(f"ops_env_{env}", "#4A90D9")
-        env_badge = f"[{env_color} bold]\\[{env}][/]" if env_color else f"[bold]\\[{env}][/]"
-    else:
-        env_badge = f"[dim {dim}]—[/]"
-    right_lines.append(f"[dim {dim}]ENV[/]         {env_badge}")
+    # #103（§11.8）：ENV badge 退场——env 维度一律取自操作目标实体（拓扑表），
+    # 会话级 config env 不再参与任何裁决，继续显示会误导（看着像"当前生效环境"）。
     if ops_on and state.get("matrix_enabled"):
         right_lines.append(
             f"[dim {dim}]GATES[/]       [{ok} bold]matrix ON[/] "
-            f"[dim {dim}]· L1–L4 × env → execute / approve / deny[/]"
+            f"[dim {dim}]· 动作 × 目标实体 env → 矩阵档位[/]"
         )
     elif ops_on:
         right_lines.append(

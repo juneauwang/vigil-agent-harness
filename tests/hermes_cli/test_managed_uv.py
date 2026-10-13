@@ -1100,3 +1100,203 @@ class TestVenvPythonUpdateBoundary:
             "/opt/hermes/venv/bin/python"
         )
 
+
+
+def _fake_provision_run(*, staged: bool = True, interrupt_on_find: bool = False):
+    """Fake ``subprocess.run`` for ``_install_safe_python_generation``.
+
+    Returns ``(fake_run, state)``; ``state["generation"]`` is filled once the
+    install step runs. When ``staged`` the install writes a uv-style
+    ``.temp/.tmp*/python/bin/python3`` tree before promoting (or, with
+    ``interrupt_on_find``, before the process is interrupted).
+    """
+    state: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        if "install" in cmd:
+            generation = Path(kwargs["env"]["UV_PYTHON_INSTALL_DIR"])
+            state["generation"] = generation
+            if staged:
+                staged_bin = generation / ".temp" / ".tmpX" / "python" / "bin"
+                staged_bin.mkdir(parents=True, exist_ok=True)
+                (staged_bin / "python3").write_text("staged", encoding="utf-8")
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if interrupt_on_find:
+            raise KeyboardInterrupt("provision interrupted")
+        python = state["generation"] / "cpython" / "bin" / "python3"
+        python.parent.mkdir(parents=True, exist_ok=True)
+        python.write_text("landed", encoding="utf-8")
+        return SimpleNamespace(returncode=0, stdout=str(python), stderr="")
+
+    return fake_run, state
+
+
+def _fixed_runtime_info(executable: Path):
+    from hermes_cli.sqlite_runtime import SQLiteRuntimeInfo
+
+    return SQLiteRuntimeInfo(
+        executable=Path(executable),
+        base_prefix=Path(executable).parent.parent,
+        python_version=(3, 11, 15),
+        sqlite_version=(3, 53, 1),
+        sqlite_version_string="3.53.1",
+        sqlite_source_id="fixed",
+    )
+
+
+def _vulnerable_runtime_info(executable: Path):
+    from hermes_cli.sqlite_runtime import SQLiteRuntimeInfo
+
+    return SQLiteRuntimeInfo(
+        executable=Path(executable),
+        base_prefix=Path(executable).parent.parent,
+        python_version=(3, 11, 14),
+        sqlite_version=(3, 50, 4),
+        sqlite_version_string="3.50.4",
+        sqlite_source_id="old",
+    )
+
+
+class TestRuntimeSelfIgnore:
+    """PART A: the runtime dir carries its own ``*`` .gitignore."""
+
+    def test_provisioning_writes_self_ignoring_gitignore(self, tmp_path, monkeypatch):
+        """供给 runtime 目录时写 <root>/.hermes-runtime/.gitignore == '*'.
+
+        The root ``.gitignore`` entry (4fabbb44) only protects checkouts whose
+        host repo still lists ``.hermes-runtime/``; a marker *inside* the dir
+        keeps it self-ignoring when that host guard is absent or user-edited.
+        """
+        import hermes_cli.managed_uv as managed_uv
+
+        fake_run, _state = _fake_provision_run(staged=False)
+        monkeypatch.setattr(managed_uv.subprocess, "run", fake_run)
+        monkeypatch.setattr(
+            managed_uv,
+            "probe_sqlite_runtime",
+            lambda python, **kw: _fixed_runtime_info(python),
+        )
+
+        result = managed_uv._install_safe_python_generation(
+            "uv",
+            project_root=tmp_path,
+            current=_vulnerable_runtime_info(Path("/venv/bin/python")),
+        )
+        assert result is not None
+
+        marker = tmp_path / ".hermes-runtime" / ".gitignore"
+        assert marker.is_file(), "runtime dir must be self-ignoring"
+        assert marker.read_text(encoding="utf-8") == "*"
+
+    def test_ensure_runtime_gitignore_is_idempotent(self, tmp_path):
+        """已存在的 .gitignore 不被覆盖（用户可能改过）。"""
+        import hermes_cli.managed_uv as managed_uv
+
+        runtime_root = tmp_path / ".hermes-runtime"
+        runtime_root.mkdir()
+        marker = runtime_root / ".gitignore"
+        marker.write_text("# user-edited\n", encoding="utf-8")
+
+        managed_uv._ensure_runtime_gitignore(runtime_root)
+
+        assert marker.read_text(encoding="utf-8") == "# user-edited\n"
+
+
+class TestRuntimeOrphanReclaim:
+    """PART B: reclaim staging / orphan generations / stale repair lock."""
+
+    def test_interrupted_provision_reclaims_generation(self, tmp_path, monkeypatch):
+        """供给中途被打断 → 不留 generation，也不留 .temp staging。"""
+        import hermes_cli.managed_uv as managed_uv
+
+        fake_run, _state = _fake_provision_run(
+            staged=True, interrupt_on_find=True
+        )
+        monkeypatch.setattr(managed_uv.subprocess, "run", fake_run)
+
+        with pytest.raises(KeyboardInterrupt):
+            managed_uv._install_safe_python_generation(
+                "uv",
+                project_root=tmp_path,
+                current=_vulnerable_runtime_info(Path("/venv/bin/python")),
+            )
+
+        python_root = tmp_path / ".hermes-runtime" / "python"
+        leftovers = list(python_root.glob("generation-*")) if python_root.exists() else []
+        assert leftovers == [], (
+            f"an interrupted provision must not strand a generation: {leftovers}"
+        )
+
+    def test_safe_runtime_sweeps_orphan_generation_and_stale_lock(self, tmp_path):
+        """孤儿 generation（无落位产物）+ 陈旧 lock 在 safe 路径被回收。"""
+        import os
+        import time as _time
+
+        from hermes_cli.managed_uv import repair_vulnerable_runtime
+
+        root, live, sentinel = _make_runtime_install(tmp_path)
+        runtime_root = root / ".hermes-runtime"
+        python_root = runtime_root / "python"
+
+        orphan = python_root / "generation-1-2-orphan"
+        (orphan / ".temp" / ".tmpAbc" / "python" / "bin").mkdir(parents=True)
+        (orphan / ".temp" / ".tmpAbc" / "python" / "bin" / "python3").write_text(
+            "staged", encoding="utf-8"
+        )
+        (orphan / ".gitignore").write_text("*", encoding="utf-8")
+        (orphan / ".lock").write_text("", encoding="utf-8")
+
+        landed = python_root / "generation-9-9-landed"
+        (landed / "cpython" / "bin").mkdir(parents=True)
+        (landed / "cpython" / "bin" / "python3").write_text("landed", encoding="utf-8")
+
+        stale = _time.time() - 7200
+        for path in (orphan, landed):
+            os.utime(path, (stale, stale))
+
+        lock = runtime_root / "runtime-repair.lock"
+        lock.write_text("", encoding="utf-8")
+        os.utime(lock, (stale, stale))
+
+        current = _runtime_info(live / "bin" / "python", (3, 53, 1))
+        with patch("hermes_cli.managed_uv.platform.system", return_value="Linux"), \
+             patch(
+                 "hermes_cli.managed_uv.probe_sqlite_runtime",
+                 return_value=current,
+             ):
+            result = repair_vulnerable_runtime("uv", project_root=root)
+
+        assert result.status == "safe"
+        assert not orphan.exists(), "orphan generation must be reclaimed"
+        assert landed.exists(), "a landed generation must be preserved"
+        assert not lock.exists(), "a stale repair lock must be reclaimed"
+        assert sentinel.read_text(encoding="utf-8") == "live"
+
+    def test_orphan_sweep_respects_install_boundary(self, tmp_path):
+        """同名 generation-* 目录在 managed_python_install_dir() 之外不被动。"""
+        import os
+        import time as _time
+
+        from hermes_cli.managed_uv import (
+            _sweep_orphan_generations,
+            managed_python_install_dir,
+        )
+
+        root = tmp_path / "checkout"
+        python_root = managed_python_install_dir(root)
+        inside = python_root / "generation-inside"
+        (inside / ".temp" / ".tmpX").mkdir(parents=True)
+        # Same prefix, but OUTSIDE the managed python install dir.
+        outside = root / ".hermes-runtime" / "generation-outside"
+        (outside / ".temp" / ".tmpX").mkdir(parents=True)
+
+        stale = _time.time() - 7200
+        for path in (inside, outside):
+            os.utime(path, (stale, stale))
+
+        _sweep_orphan_generations(python_root)
+
+        assert not inside.exists(), "orphan inside the boundary must be reclaimed"
+        assert outside.exists(), (
+            "sweep must never reach outside managed_python_install_dir()"
+        )

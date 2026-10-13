@@ -5317,3 +5317,223 @@
   pages/ChatPage.tsx,i18n/{zh,en}.ts}（+ 两个 .test.tsx）、tests/hermes_cli/
   test_task33_incident_marks.py + OPS-DELTA.md 本条登记。不发版（攒 dogfood 一起发
   v1.0.6；PyPI 现为 1.0.5）。
+
+### 103. 单一裁决源收档：矩阵 env 归目标实体 + 硬门退役 + 未解析目标 fallback（定案 + 已实施）
+
+- **触发**（2026-10-07 dogfood，用户实报）：`helm upgrade` 改 vllm-stack（目标
+  heyuan_cluster，拓扑 env=prod）**静默放行、无人工弹窗**。用户回忆"2 之前就改过
+  这次怎么又有了"——排查发现不是单点回退，是三条独立缺口叠加。设计侧定案见
+  yapl-design.md §11.8（反转 #11）。
+
+- **用户定案原话**（保留原话防转译失真）：
+  - 「这个不应该影响实际的模式 应该走 matrix——他是 v0.x 的依据 不应该是 v1.x 的依据」
+  - 「这个 env 应该是 topology 里面项目的 env 不是 config 里面的 env；config 里的
+    env 类似于 hermes 的 profile，所以我说这个 v0.x 的功能」
+  - 「只读本来就应该是 execute 有什么问题」
+  - 「ssh 打一台没登记过的机器……做 bootstrap 的时候 机器不会被登记 这个是不是要
+    fallback 到 required」
+  - 「unresolved -> required」
+
+- **根因（代码 + 运行日志实锤，四条独立缺口）**：
+  1. **非高危动作的 env 来源是会话声明，与目标无关**：`ops_permissions.py:401`
+     `env = (target_env or _active_env())`；`_active_env()`（:215-217）读 config
+     `ops.permissions.env`，当前值 **test**（`~/.vigil/config.yaml:736`）。#98 定案⑤
+     "会话声明 env 不参与任何裁决"只兑现了 5 个高危动作 + ssh 族，其余仍走这条。
+  2. **helm 无目标解析路径**：`resolve_required_target`（`target_resolve.py:399-418`）
+     只识别 ssh族/kubectl/docker/ansible → helm 落 `_resolve_local` → 本机
+     `LAPTOP-T2JA2ERE`（`topology.yaml:65-67`，env=**local**）。分类器
+     `helm install→deploy`(:181) / `upgrade→upgrade`(:182) /
+     `uninstall|delete→decommission`(:183) / `rollback→rollback`(:184)——
+     `deploy`/`upgrade`/`rollback` 均不在 `HIGH_RISK_MUTATING_ACTIONS`(:45-47)，
+     只有 `uninstall` 在集合内（但会被解析成本机）。
+     ⇒ 实测后果：`helm install`/`rollback` 对 prod 集群走 `test.deploy`/`test.rollback`
+     = **execute（连审批门都不进）**；`helm upgrade` 走 `test.upgrade` = approve
+     （smart 可批，本次踩的）；`helm uninstall` 走 `local.decommission`。
+     ★ 正向对照：ssh 族 / kubectl 有解析路径，实测日志里 09-05 `kubectl delete pvc`
+     → `decommission × prod = {approve: required}`、09-26 `ssh` → `run_script × prod
+     = {approve: required}` 均正常人工弹窗 ⇒ **helm 是唯一被系统性打错的工具。**
+  3. **硬门（batch80 / #95）结构性冗余**：日志实证（`~/.vigil/logs/agent.log`）——硬门
+     专属文案「prod 变更强制人工确认」**0 次**；矩阵 required 档文案「操作矩阵强制人工
+     确认」**92 次**。硬门只在"env_tier==prod + 动作 ∈ 19 个变更类 + 矩阵档位非
+     required"时产生增量，而实际解析到 prod 的场景里动作要么本就在 required 集合内
+     （冗余），要么是 run_script/transfer_file（不在集合，不适用）⇒ 从未产生额外拦截。
+  4. **解析失败处置 deny（#98 定案②）过度**：deny 实现为 `approval.py:4448-4458`
+     直接 `approved=False` 返回，**无人工确认路径 = 人也不能放行**。日志实证 12 次 deny
+     全部落在 bootstrap / 发现 / 重建场景：
+     - `08-31 19:55` `rm -f topology.yaml entities/*.yaml` → 拒（"本机未在拓扑表登记"）
+     - `08-31 20:09` `vigil topo-discover -H 39.106.217.32,...,8.140.60.44 --dry-run`
+       → 拒（"目标主机未在拓扑表登记"）★ 而错误信息的修复指引恰是"用 topo_update /
+       **topo-discover** 登记"——**指引指向的命令自己就被拒**（死锁闭环，已实际发生）
+     - `09-26 18:17` terraform state 检查 ssh → 拒（重建中实体未回填）
+     - `09-27 09:16` 批探测新机 → 拒
+     ★ 论证边界修正：#98 定案②原文理由"解析不出实体就没有可裁决的环境，任何旁路都
+     不得放行"只推出**「不许自动放行」**，推不出**「不许人工放行」**——`{approve:
+     required}` 已能覆盖前者的全部语义（覆盖 smart / yolo / mode=off / 永久 allowlist）。
+  5. **死格子（配置写了不生效）**：prod 行 `enable/disable/backup/apply_config/runbook`
+     被硬门踩平（`prod.enable=approve` 实际强制人工）；只读格子在"只读不解析"
+     （#98 定案③）下不可达（`env=""` → `ops_permissions.py:403-404 return None`）。
+     ⇒ **死格子是"用户去改全局开关"的直接诱因**（改 prod 行没反应 → 只能动
+     `ops.permissions.env`）。
+
+- **设计定案（详见 yapl-design.md §11.8）**：
+  1. **矩阵是唯一裁决源**。env 维度一律来自**目标实体（拓扑表）**；config
+     `ops.permissions.env` 与 `/env` 退场（#11 反转）。
+  2. **目标解析覆盖所有动作**；判据从"是否高危动作"改为"命令里有没有目标类 token"
+     （ssh族/kubectl/helm/docker/ansible）；无 token → 本机实体（本机已登记拓扑 = local）。
+     只读同样解析（否则只读格子永久不可达）。
+  3. **解析失败 ≠ 拒绝**：查矩阵新增的 **`unresolved` 行**。
+  4. **`unresolved` 行整行 `{approve: required}`**（用户定案，含只读动作与
+     `--dry-run` 类发现命令）：不许自动放行，但人可放行。
+  5. **硬门退役**；严格度全部交回矩阵。
+  6. **保留** `matrix.yaml` 缺失 → deny（batch83-fix #99）；只删"目标解析失败 → deny"
+     这一处。
+
+- **任务（5 项，待排批次）**：
+  1. `tools/target_resolve.py` 补 helm 分支（照抄 `_resolve_kubectl`：`--kube-context`/
+     `--kubeconfig`/`-n`；未指定且唯一集群 → 该集群（:223-224 同款兜底）；
+     多集群无法确定 → failed）。
+  2. `tools/target_resolve.py` `command_target_required`（:350-362）判据改为"命令含目标类
+     token"，解析覆盖全部动作；失败态语义从 deny 改为"→ unresolved 行"。
+  3. `tools/ops_permissions.py` `_target_deny_decision`（:480+）改为按 `unresolved` 行
+     裁决（`require_confirmation=True`，文案标注"目标未在拓扑登记——按最高严格度强制
+     人工确认；建议随后 topo_update 登记（不阻断本次执行）"）。
+  4. `tools/matrix_data.py` + 四模板 + `hermes_cli/ops_init.py` + CLI/UI：新增
+     `unresolved` 行（整行 required；sources 追踪 / 热生效 / 校验器同款）。顺带堵掉
+     "env 名不在矩阵 → get_level 默认 approve"这一隐式放水口（#98 发现②同款）。
+  5. `tools/ops_permissions.py` 删 `prod_change_hardgate`（:424-441）；拆 `_active_env()`
+     载体（config 字段保留读取兼容 + deprecate 警告、不再参与裁决；`/env` 退场或改语义）。
+
+- **验收**：
+  - a `helm upgrade|install|rollback|uninstall` 打 heyuan_cluster → 强制人工确认，
+    审批文案带「目标: heyuan_cluster (prod)」。
+  - b ★ **把 config `ops.permissions.env` 改成 local/test/prod 任意值 → 同批命令裁决
+    结果不变**（"载体拆干净"的可验证判据）。
+  - c `ssh` 未登记主机 / `vigil topo-discover ... --dry-run` → 不再 BLOCKED，改弹人工
+    确认；点同意即执行（bootstrap / 拓扑重建 / 新机发现三条路径解开）。
+  - d 未解析目标的**只读**动作 → 同样 required（用户定案）。
+  - e `ls`/`cat`/`pip install`（无目标 token）→ 落本机 local 行 → 只读 execute 直接跑
+    （unresolved 全 required 不污染日常命令）。
+  - f 硬门删除后 `kubectl delete`/`kubectl apply` 打 prod 结果不变（矩阵 required 与
+    硬门同结果）。
+  - g 矩阵 `prod.enable/disable/backup/apply_config` 恢复生效（smart 可批，噪声下台阶=
+    用户最初"审批过多"诉求的正解）。
+  - h 回归：test_ops_permissions / test_batch83_target_adjudication /
+    test_batch80_prod_change_hardgate（删除或改写）/ test_change_command_coverage /
+    test_terminal_matrix / test_ops_permissions_guard / test_env_command。
+  - i **误伤率实测**（#98 定案④的收档判据）：扩范围后统计"解析失败 → required"触发次数，
+    与其中"本应放行"的比例。
+
+- **状态**：✅ **已实施**（2026-10-07，6 commit，均在 v1.0 分支、**未 push**）。
+  ⏳ **收口纪律（用户 2026-10-07 定案）**：全量回归跑绿 → **先本地 dogfood 一段时间**
+  （确认无回退）→ 再 push。次日收口。即 #103 的代码已就位但**尚未视为完成**——
+  狗粮期的目标是验"载体真拆干净了"（改 config env 无副作用、prompt/banner 不再显示
+  env、日常命令裁决稳定），而不是只看测试绿。
+
+  | 任务 | commit | 内容 |
+  |---|---|---|
+  | 1 | `1aa3b6b7` | helm 目标解析分支（`_HELM_RE` + `_resolve_helm`，照抄 kubectl 语义） |
+  | 4 | `005dca1a` | 矩阵新增 `unresolved` 行 + 堵 get_level 环境名缺省 approve 放水口 |
+  | 2 | `58302f79` | 解析覆盖全部动作（判据 = 目标类 token，与动作无关） |
+  | 3 | `53ae0a2f` | 解析失败 deny → 查 `unresolved` 行（不许自动放行、可人工放行） |
+  | 5 | `3ff1ab38` | 删 prod 变更硬门 + 拆 `_active_env()` 载体 |
+  | 5b | `8551594f` | **方案 A**：`/env` 命令与三条 env 显示载体退场 |
+
+  - 顺序严格 1→4→2→3→5（parent 链已逐一验证），5b 为定案后追加。
+  - **5b 超出原任务书清单两处**（用户定："没有老用户，直接改 A"）：除 banner ENV 行外，
+    一并退场 compact ops 行 env 徽标与 **TUI prompt 的 `[env] ` 前缀** —— 只删 banner
+    会让 prompt 上继续挂 `[test]` 徽标，比不删更误导。
+  - 验收 a–i 逐条实测通过（详见交付报告）；误伤率：保留日志 6 次 deny 全部落在
+    bootstrap / 拓扑重建 / 新机发现 ⇒ 6/6 属"本应放行"（样本小，仅作方向判据）。
+  - **保留（刻意）**：`ops.permissions.env` 字段（读取兼容 + 启动 deprecate 警告）、
+    `_active_env()` 兼容读取、skin 的 `ops_env_*` / `ops-env-*` 颜色 key（通用样式系统）。
+  - ⚠️ **实施中发现、留给后续批次的三处残留**：
+    1. `get_level` 对"env 在、**动作缺配**"仍默认 `approve` —— 同类隐式放水口，本批只
+       堵了 env 维度；将来新增动作而存量矩阵未更新时该格会静默降为 approve。
+    2. `HIGH_RISK_MUTATING_ACTIONS` 已成**死代码**（定义 + `__all__` 导出，零调用点）。
+    3. `unresolved` 行若被改成 execute，解析失败会直接放行（"矩阵唯一裁决源"的预期
+       语义，但需知晓该旋钮存在）。
+  - 真实 `~/.vigil/matrix.yaml` **尚无显式 `unresolved` 行**，当前靠 `get_level` 兜底
+    返回 `required`；要显式行跑 `vigil matrix init --force`（矩阵是人工安全资产，LLM 不写）。
+
+### 104. 契约编译管线三处缺口修复（沙箱拓扑 kind / tirith 挪位 / 诊断可读，2026-10-08）
+
+- **背景**：阶段 A/B 代码闭环、测试全绿，但**从没走过真实端到端**。2026-10-07
+  主 session 隔离 `VIGIL_HOME` 真跑 `vigil contract compile` 三轮，定位三处让
+  它跑不到 `registered` 的缺口（不是读代码推测，是跑出来的）。元层观察（用户
+  认同）：这条管线**设计出来是为了防"没验证的东西进库"，自己却恰恰没被验证过
+  —— 机制没自证自己**。
+- **缺口一（沙箱拓扑只造 service）**：`_collect_sandbox_refs` 只返回实体名、
+  丢掉 kind，`_build_sandbox_topo` 硬编码 `type: service`；而
+  `_TOPO_KINDS = service/host/cluster/host_group` 四种都允许契约声明 →
+  `kind: host` 的契约把 `gpu1` 造成了 service → 按 host 解析必
+  `entity_not_found` → 自证永远过不去（主机/集群类运维是契约主要用例）。
+  修：`_collect_sandbox_refs → List[Tuple[ref, kind]]`（含 list items.kind）；
+  `_build_sandbox_topo` 按 kind 造四层实体（字段对齐 v4 topology 结构）。
+  commit `4ccd84e2`。
+- **缺口二（tirith 扫错对象）→ 复验再定案**：`tools/tirith_security` 头注释即
+  写明 "scan **commands**"。把未修改的合格生成代码喂真 tirith → `block`
+  （`analysis_incomplete`）——因为**生成代码里根本没有命令**
+  （命令由信任层 `generate_commands` 运行时产生）。先按 (a) 挪位置到命令执行层
+  （commit `a9e56252`：`_run_spec` 前 `_tirith_command_gate` 扫 cmd/argv）。
+  **复验发现误报面被放大**：真 tirith 对 `raw_ip_url` 判 block，而生产 runbook
+  的探活目标全是裸 IP（`curl -sS -L http://47.120.50.110:30151/models`）——
+  命令根本不外发、步骤直接失败，且打在 Vigil 核心资产上（21 条抽样 allow 19 /
+  warn 1 / block 1）。用户 2026-10-08 定案 **(iv)：两通道两判据** ——
+  - **自由文本命令通道（tirith 管）**：terminal 直跑 + script_asset 内容
+    （创建时扫）——保留。
+  - **结构化命令通道（矩阵管，tirith 撤出）**：runbook / 编译契约（命令由
+    `generate_commands` 按 action×target×managed_by 确定性生成，合法性已在操作
+    矩阵动作层裁决）——撤掉 tirith。commit `369ced89`（删
+    `_tirith_command_gate`/`_tirith_command_surface`，不留死代码）。
+  - `contract_compile` 删掉对生成 Python 的 tirith 扫描（含 `tirith_blocked`
+    错误码）；审批描述由"代码摘要（82 行 + 首行注释）"改**契约摘要**
+    （action/params/returns/tests）。
+- **缺口三（诊断被丢）**：调用方只取 `scan['summary']`，而实测 summary 恒为
+  空串（allow/block 都是 ''）→ 人只看到七个字"有安全提示"，审批空转。
+  `tirith_security.format_findings_human` 把 findings 的
+  `title`+`description`+`evidence` 拼成人话（限 3 条）；`script_assets` 的
+  block/warn 一并改（同款代码，全 Vigil tirith warn 场景都中招）。commit
+  `652d8d31`。
+- **反证（基线 `531dbdad`，新建 worktree 跑新测试）**：
+  - kind 沙箱四用例：host/cluster/host_group 三条红，断言原文
+    `期望 {'status': 'ok'}，实际 {'error': 'entity_not_found', ...}`。
+  - 编译期不再扫生成代码：基线红（`assert 'failed' == 'registered'`——假
+    block 扫描器在基线把编译拒了）。
+  - （a9e56252 阶段）真 tirith 门/诊断用例：基线红（`module
+    'tools.runbook_exec' has no attribute '_tirith_command_gate'`）；其中命令层
+    门测试已在 §9 撤出时删除。
+  - §9 结构化通道守卫（基线 `a9e56252`，worktree 跑新测试）：三条红，原文
+    `assert ['true'] == []`（`_run_spec` 仍调 tirith）、`assert 1 == 0`（IP 探活
+    被 block、到不了执行器）、`hasattr(..., '_tirith_command_gate')` 为真；自由
+    通道守卫（真 tirith 仍 block `raw_ip_url`、script_asset 仍扫内容）仍绿。
+  - §9 直连复现（基线 `a9e56252`）：`_run_spec({"cmd":"curl -sS -L
+    http://47.120.50.110:30151/models"})` → `blocked=True exit=1`，stderr
+    `[MEDIUM] URL uses raw IP address ... raw_ip_url`。
+  - script_assets warn 诊断：基线红，原文
+    `assert 'Lookalike TLD' in '...tirith warn: 有安全提示'`。
+  - 端到端 `kind: host` 契约：基线红，`generation_failed` /
+    `沙箱自证未通过（2/3 用例失败）… entity_not_found`。
+  - 直接复现缺口二前提：基线 `check_command_security(<82 行生成物>)` →
+    `action=block`（HIGH `analysis_incomplete`）。
+- **验收（零成本重放：真 tirith + 固定 `generated.py` 注入 `llm_generate`，
+  隔离 `VIGIL_HOME`，不调模型）**：
+  - a 端到端：`kind: host` 契约 `validated → generating → selftested →
+    approved → registered`（selftest 3/3，approved_by=wpwang）。
+  - b `vigil contract list` 输出 name/action/status/compiled_at/approved_by/
+    path 齐全。
+  - c `ensure_compiled_tools_registered` 热加载 → `get_tool_definitions(
+    enabled_toolsets=["contract"])` 含该契约（required=["target"]）。
+  - d 四 kind 沙箱用例全绿；e 真 tirith 前提/自由通道用例全绿（真 tirith 对
+    `raw_ip_url` 判 block → 证明结构化通道必须撤出；terminal/script_asset 仍扫）；
+    f 真外部依赖（tirith）有不 mock 用例；g/h warn/block 信息含规则名 + 人话 +
+    证据（script_asset 属自由内容，保留）。
+- **改过旧预期**：
+  1. 删契约编译的 `test_tirith_block_rejected` /
+     `test_tirith_warn_force_manual_still_requires_approval`（编译期 tirith 按
+     定案移除），替换为"编译期不再扫生成代码"回归护栏。
+  2. 删 `a9e56252` 引入的命令层门测试（`_tirith_command_gate` 相关 5 条），
+     替换为结构化通道守卫（不接 tirith）+ 自由通道守卫（仍接）。
+- **未做/不确定**：#103 三处残留（get_level 动作缺配默认 approve /
+  `HIGH_RISK_MUTATING_ACTIONS` 死代码 / unresolved 行 set-to-execute）仍不在
+  本批；结构化通道撤出 tirith 后，若某天要让命令级扫描回归，必须先量化
+  raw_ip_url / credential_file_sweep 等误报率并改扫描器策略（不能直接重挂）。

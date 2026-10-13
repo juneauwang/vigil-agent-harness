@@ -212,46 +212,52 @@ def _map_env_tier(env: str, ops_config: Optional[Dict[str, Any]] = None) -> str:
     return mapped
 
 
+# #103（§11.8）：config ``ops.permissions.env`` 退场——字段保留读取兼容（老
+# config 仍可读、不报错），但不再参与任何裁决（env 维度一律取自操作目标实体）。
+# 一次性 deprecate 警告（参照 _LEGACY_ENV_TIER_MAP / _WARNED_ENVS 风格）。
+_WARNED_ENV_CARRIER: bool = False
+
+
 def _active_env() -> str:
+    """config ``ops.permissions.env`` 原始值（**读取兼容**，不参与裁决）。
+
+    #103（§11.8 / OPS-DELTA #103）后该字段退场：env 维度一律取自操作目标实体
+    （拓扑表）。本函数仅为兼容/展示保留读取，调用方不得用它做权限判定。
+    """
     config = _load_config()
     return str(config.get("env") or "").strip().lower()
 
 
+def warn_deprecated_active_env() -> None:
+    """启动时一次性 deprecate 警告：config ``ops.permissions.env`` 非空则提示。
+
+    #103（§11.8）退场字段——env 维度已归操作目标实体（拓扑表），config env
+    不再参与裁决。字段保留读取兼容（不迁移、不报错），仅提示一次。
+    """
+    global _WARNED_ENV_CARRIER
+    if _WARNED_ENV_CARRIER:
+        return
+    value = _active_env()
+    if not value:
+        return
+    _WARNED_ENV_CARRIER = True
+    logger.warning(
+        "ops_permissions: config ops.permissions.env=%r 已退场（OPS-DELTA #103 / "
+        "yapl-design §11.8）——env 维度一律取自操作目标实体（拓扑表），该字段不再"
+        "参与任何裁决（本机命令落本机实体 env）。字段保留读取兼容，无需迁移；"
+        "请改在 topology.yaml 为实体声明 env。",
+        value,
+    )
+
+
 def _active_role() -> str:
+    """信息展示用 role（不参与裁决）；#103 起不再回落 config env。
+
+    旧实现 ``role or _active_env()`` 会把已退场的 config env 带进返回结果，
+    与"载体拆干净"（config env 对裁决零影响）冲突，故去掉 env 回落。
+    """
     config = _load_config()
-    return str(config.get("role") or _active_env() or "").strip().lower()
-
-
-# batch80（OPS-DELTA #95）：prod 变更强制人工确认的动作集合。与 runbook 执行器
-# （tools/runbook_exec.py）的 _EXPECT_CHANGE_ACTIONS 同款"变更 vs 只读"划分，
-# 另把 apply_config / runbook 也纳入——prod 语义里改配置与嵌套 runbook 同样是
-# 变更。unknown 不在集合内 → 不强制（识别不出可能是 ls/echo 等无害命令被误判）。
-_MUTATING_ACTIONS: frozenset = frozenset({
-    "start", "stop", "restart", "reload", "enable", "disable", "reboot",
-    "shutdown", "deploy", "rollback", "scale", "decommission", "backup",
-    "restore", "apply_config", "install", "upgrade", "remove", "runbook",
-})
-
-
-def _is_mutating_action(action_name: str) -> bool:
-    """变更类动作判定（prod 强制人工门用）：动作词表内 → True。
-
-    只读（query/fetch_log/verify/transfer_file/run_script）不在集合内；
-    unknown 不在集合内 → False（不误伤无害命令）。
-    """
-    return str(action_name or "").strip() in _MUTATING_ACTIONS
-
-
-def _is_prod_env(env: str) -> bool:
-    """prod 档位判定（batch80 强制人工门用）：档位映射 == prod。
-
-    复用 _map_env_tier（uat→prod 等老自定义名同样视为 prod——权限语义不放松，
-    与 env_tier 计算同款）。
-    """
-    try:
-        return _map_env_tier(env, _load_ops_config()) == "prod"
-    except Exception:
-        return False
+    return str(config.get("role") or "").strip().lower()
 
 
 def _matrix_env_for(env: str, matrix_data: Dict[str, Any]) -> str:
@@ -272,8 +278,7 @@ def _matrix_env_for(env: str, matrix_data: Dict[str, Any]) -> str:
 
 def _matrix_description(command: str, action_name: str, level: str, env: str,
                         primary: Dict[str, Any],
-                        classification: Dict[str, Any],
-                        prod_hardgate: bool = False) -> str:
+                        classification: Dict[str, Any]) -> str:
     """审批展示文案：动作 × env 档位 / unknown 保守提示 / 链式取保守说明。"""
     from tools import matrix_data as _md
     from hermes_cli.i18n import t
@@ -283,13 +288,6 @@ def _matrix_description(command: str, action_name: str, level: str, env: str,
             "opsperm.required",
             "⚠ 操作矩阵强制人工确认（{action} × {env} = "
             "{{approve: required}}，覆盖 approvals.mode）",
-            action=action_name, env=env,
-        )
-    elif prod_hardgate:
-        desc = t(
-            "opsperm.prod_hardgate",
-            "⚠ prod 变更强制人工确认（{action} × {env}）：terminal 裸命令"
-            "不得绕过 runbook 执行器矩阵裁决（OPS-DELTA #95）",
             action=action_name, env=env,
         )
     elif action_name == "unknown":
@@ -326,32 +324,35 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     保守 = approve（走审批门）不是拒绝；硬底线 / sudo stdin / 用户 deny /
     ansible inventory guard 等无条件层由 approval.py 在本函数之前执行。
 
-    档位语义：
+    档位语义（矩阵是唯一裁决源，§11.8）：
       execute → 返回 None（交回原有检查，直接执行）；
       approve → 返回 {"action": "approve", ...} 走现有审批门（smart/manual）；
       {approve: required} → require_confirmation=True 强制人工（覆盖 mode）。
-      prod 环境 + 变更类动作（非只读）→ 额外强制 require_confirmation=True
-      （batch80，OPS-DELTA #95：执行器绕行后门收口——execute/approve 档位在
-      prod 变更时也升到人工确认，覆盖 smart 自动批）。
-    batch83（OPS-DELTA #98）目标化裁决：高危变更动作（install/remove/
-    decommission/reboot/scale + kubectl delete 类）与 ssh 族受控通道执行前
-    强制目标解析（tools/target_resolve.py）——解析出实体 → 实体 env 查矩阵
-    （会话声明 env 零参与）；解析失败 → 返回 deny（目标解析层硬拦截，先于
-    矩阵查询；矩阵本身仍无 deny 档）。低危变更与只读动作维持原判（target_env
-    或会话 env；只读不解析）。
+      #103 起 batch80 的"prod + 变更类 → 强制人工"硬门退役：其覆盖范围已由矩阵
+      prod 行表达（日志实证硬门专属文案 0 次、矩阵 required 文案 92 次 = 从未
+      产生额外拦截），严格度全部交回矩阵（含 prod.enable/disable/backup/
+      apply_config 恢复 smart 可批）。唯一 deny 来源 = matrix.yaml 缺失
+      （fail-closed，batch83-fix #99）。
+    #103（§11.8）单一裁决源：目标解析覆盖全部动作（判据 = 命令含目标类 token，
+    tools/target_resolve.py）——命中 token（ssh族/kubectl/helm/docker/ansible）
+    → 按 token 收敛到拓扑实体；无 token → 本机实体。只读动作同样解析（否则
+    只读格子在矩阵里永久不可达）。env 一律取自目标实体：会话声明 env
+    （config ops.permissions.env）与命令级 target_env 均不再参与裁决。解析
+    失败 → 按矩阵 unresolved 行裁决（任务 3；取代 batch83 的 deny）。
     动作识别不出（unknown）→ 矩阵漏配 → 默认 approve（保守）+ warning。
 
     Args:
         command: 原始命令串（sudo/doas 前缀由 classifier 剥离）。
-        target_env: 命令目标级 env（ops_target 解析，跨环境硬约束）；None →
-            会话 env（config ops.permissions.env）。
+        target_env: 保留兼容（旧命令目标级 env）——#103 起不再参与裁决，env
+            一律取自 resolve_required_target 的目标实体。
 
     Returns:
         None  — gate disabled / env 未配置 / 矩阵档位 execute（交回原有检查）。
         dict  — {"action": "approve", "action_name", "rule", "note", "env",
                  "env_tier", "role", "level", "require_confirmation",
-                 "description", "classification"}；高危目标解析失败 →
-                 {"action": "deny", ...}（approval.py / sudo_tool 消费为拒绝）。
+                 "description", "classification", "target_explicit"}；目标
+                 解析失败 → action=approve + require_confirmation=True
+                 （查矩阵 unresolved 行，任务 3 消费）。
     """
     if not isinstance(command, str) or not command.strip():
         return None
@@ -380,28 +381,21 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
     )
 
     candidates = classification.get("chain") or [classification]
-    actions = {str(c.get("action") or "") for c in candidates}
 
-    # batch83（OPS-DELTA #98）：高危变更动作 / ssh 族受控通道 → 强制目标解析。
-    # 解析出实体 → 实体 env 查矩阵（会话声明 env 不参与高危变更裁决）；解析
-    # 失败 → deny（目标解析层硬拦截，发生在查矩阵之前；矩阵本身仍无 deny 档，
-    # deny 是解析层的档位，与矩阵 execute/approve/required 三档不冲突）。
-    target_label = None
-    target_entity = None
-    if command_target_required(actions, command):
-        target = resolve_required_target(command)
-        if target.get("status") != TARGET_RESOLVED:
-            return _target_deny_decision(command, classification, target)
-        env = str(target.get("env") or "").strip().lower()
-        target_label = target.get("label")
-        target_entity = target.get("entity")
-        if not env:
-            return None
-    else:
-        env = (target_env or _active_env()).strip().lower()
-        if not env:
-            # 无会话 env 且无目标级 env → 矩阵无可判定环境，交回原检查（热路径零额外开销）。
-            return None
+    # #103（§11.8）单一裁决源：解析覆盖全部动作——命令含目标类 token（ssh族/
+    # kubectl/helm/docker/ansible）→ 按该 token 收敛到拓扑实体；无 token → 本机
+    # 实体（本机已登记拓扑 = local）。env 一律取自目标实体：会话声明 env
+    # （config ops.permissions.env）与命令级 target_env 均不再参与裁决。解析
+    # 失败 → 查矩阵 unresolved 行（任务 3；deny 已被取代）。
+    target_explicit = command_target_required(command)
+    target = resolve_required_target(command)
+    if target.get("status") != TARGET_RESOLVED:
+        return _target_unresolved_decision(command, classification, target)
+    env = str(target.get("env") or "").strip().lower()
+    target_label = target.get("label")
+    target_entity = target.get("entity")
+    if not env:
+        return None
 
     matrix = _md.load_matrix_or_empty()
     resolved_env = _matrix_env_for(env, matrix)
@@ -421,31 +415,21 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
             best = (weight, level, action, cand)
     _weight, level, action_name, primary = best
 
-    # batch80（OPS-DELTA #95）：执行器绕行后门收口——prod 环境 + 变更类动作
-    # （非只读）→ 强制人工确认（require_confirmation=True 覆盖 smart 自动批，
-    # approval.py 的 _ops_confirmation_required 机制现成）。防 LLM 回退
-    # terminal 用裸命令绕过 runbook 执行器矩阵裁决（2026-08-26 实证：kubectl
-    # scale / set resources 不在黑名单 → smart 自动批 = 矩阵后门）。
-    # 行为边界：非 prod 完全不变（execute 放行、approve 走 smart）；prod +
-    # 只读动作不变（诊断不阻）；unknown 不强制（无害命令不误伤）；矩阵已
-    # {approve: required} 保持。只把"prod + 变更"从 smart 升到人工，不放松
-    # 任何现有门。
     env_tier = _map_env_tier(env, _load_ops_config())
-    prod_change_hardgate = env_tier == "prod" and _is_mutating_action(action_name)
 
-    if level == _md.LEVEL_EXECUTE and not prod_change_hardgate:
+    if level == _md.LEVEL_EXECUTE:
         return None  # 直接执行（交回原有检查）
 
+    # 矩阵是唯一裁决源（§11.8）：require_confirmation 只由矩阵 required 档决定
+    # （batch80 的 prod + 变更硬门已退役——其覆盖范围矩阵 prod 行已表达）。
     require_confirmation = level == _md.LEVEL_REQUIRED
-    if not require_confirmation:
-        require_confirmation = prod_change_hardgate
 
     # batch86（OPS-DELTA #102）：命令级自进化白名单——只对"矩阵档位 approve /
     # unknown→approve"生效：矩阵 execute 档本就直接放行（上面已返回）；required
-    # 强制人工与 prod 变更硬门永不跳过（红线：高危门不放松）。归一化命中 active
+    # 强制人工永不跳过（红线：高危门不放松）。归一化命中 active
     # 模板 → 返回 None 直接执行（跳过审批门，交回原有检查）。链式/管道/动态参数/
-    # 黑名单形态 normalize=None 永不命中，永远走原判定；矩阵缺失 deny / 高危目标
-    # 解析 deny 等无条件层都在本检查之前，白名单不参与。读故障只少一次跳过
+    # 黑名单形态 normalize=None 永不命中，永远走原判定；矩阵缺失 deny 等无条件层
+    # 都在本检查之前，白名单不参与。读故障只少一次跳过
     # （fail-open 于"少弹一次审批"，绝不 deny）。
     if not require_confirmation:
         try:
@@ -456,7 +440,6 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
             logger.debug("approval_memory query failed; falling through", exc_info=True)
     description = _matrix_description(
         command, action_name, level, env, primary, classification,
-        prod_hardgate=prod_change_hardgate,
     )
     result = {
         "action": "approve",
@@ -471,41 +454,64 @@ def check_ops_command_permission(command: str, target_env: Optional[str] = None)
         "description": description,
         "classification": classification,
     }
+    result["target_explicit"] = target_explicit
     if target_label:
         result["target_label"] = target_label
         result["target_entity"] = target_entity
     return result
 
 
-def _target_deny_decision(command: str, classification: Dict[str, Any],
-                          target: Dict[str, Any]) -> Dict[str, Any]:
-    """batch83 目标解析失败 → deny（先于矩阵的硬拦截；矩阵本身仍无 deny 档）。
+def _target_unresolved_decision(command: str, classification: Dict[str, Any],
+                                target: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """#103：目标解析失败 → 查矩阵 ``unresolved`` 行（取代 batch83 的 deny）。
 
-    交互会话里 confirm 会被 smart 自动批绕过（本次 npm 逃逸的机制），deny 才
-    成立：解析不出目标实体 = 拒绝执行，错误信息带修复指引（先 topo_query 查
-    实体名）。sudo_tool 已按 ``action == "deny"`` 消费（tool_error），
-    approval.py 在本批同步加 deny 分支（先于 yolo/mode=off 旁路）。
+    目标未在拓扑登记（bootstrap / 拓扑重建 / 新机发现）时，deny 形成死锁——
+    实测 12 次 deny 全落在这些场景，且错误信息的修复指引（topo-discover）自己
+    也被拒。改为按矩阵新增的 ``unresolved`` 行裁决：默认整行
+    ``{approve: required}``（含只读）= **不许自动放行、可人工放行**。
+    未识别动作（unknown，如 ``vigil topo-discover``）按最高严格度 required。
+    返回 approve 决策（require_confirmation=True）交人工确认门；用户把该格改为
+    execute → 返回 None（矩阵是唯一裁决源）。矩阵缺失仍走 deny（fail-closed 不变）。
     """
-    action_name = str(classification.get("action") or "unknown")
+    from tools import matrix_data as _md
+    from tools.target_resolve import command_target_required
+    matrix = _md.load_matrix_or_empty()
+    candidates = classification.get("chain") or [classification]
+    rank = {_md.LEVEL_EXECUTE: 0, _md.LEVEL_APPROVE: 1, _md.LEVEL_REQUIRED: 2}
+    best = None
+    for cand in candidates:
+        action = str(cand.get("action") or "unknown")
+        if action == "unknown":
+            level = _md.LEVEL_REQUIRED  # 未识别动作 = 最高严格度（不许自动放行）
+        else:
+            level = _md.get_level(matrix, _md.UNRESOLVED_ENV, action)["level"]
+        weight = rank.get(level, 2)
+        if best is None or weight > best[0]:
+            best = (weight, level, action, cand)
+    _weight, level, action_name, primary = best
+    if level == _md.LEVEL_EXECUTE:
+        return None
     reason = str(target.get("reason") or "目标实体未解析/不在拓扑表")
+    description = (
+        "⚠ 目标未在拓扑登记——按最高严格度强制人工确认；建议随后 topo_update "
+        "登记（不阻断本次执行）。"
+        f"动作 {action_name} × {_md.UNRESOLVED_ENV}：{reason}"
+    )
     return {
-        "action": "deny",
+        "action": "approve",
         "action_name": action_name,
-        "rule": str(classification.get("rule") or "").strip() or None,
-        "note": str(classification.get("note") or "").strip() or None,
-        "env": None,
+        "rule": str(primary.get("rule") or "").strip() or None,
+        "note": str(primary.get("note") or "").strip() or None,
+        "env": _md.UNRESOLVED_ENV,
         "env_tier": None,
         "role": _active_role(),
-        "level": None,
-        "require_confirmation": False,
-        "description": (
-            f"⛔ 高危变更目标未解析，操作已拒绝（{action_name} × 目标解析失败）："
-            f"{reason}。矩阵按目标实体 env 裁决，解析不出实体 = deny（目标解析层"
-            "硬拦截，先于矩阵）；修复指引：先 topo_query 查目标实体名（主机名/"
-            "别名/IP/集群上下文），或用 topo_update 登记后再执行。"
-        ),
+        "level": level,
+        "require_confirmation": level == _md.LEVEL_REQUIRED,
+        "description": description,
         "classification": classification,
-        "target_deny": True,
+        "target_unresolved": True,
+        "target_explicit": command_target_required(command),
+        "unresolved_reason": reason,
     }
 
 
@@ -514,9 +520,9 @@ def _matrix_missing_deny(command: str,
     """batch83-fix 矩阵缺失 → deny（去掉 OPS-DELTA #76 惰性放行）。
 
     矩阵是权限裁决的前提：缺失 = 权限系统不可用，任何动作（含只读）都不放行。
-    返回形态与 ``_target_deny_decision`` 同构（action=deny），approval.py 的
-    deny 分支 / sudo_tool 同款消费（硬拦截，先于 yolo/mode=off 旁路）；错误
-    信息带修复指引（先跑 vigil setup 或 vigil ops-init 生成 matrix.yaml）。
+    返回 action=deny，approval.py 的 deny 分支 / sudo_tool 同款消费（硬拦截，
+    先于 yolo/mode=off 旁路）；错误信息带修复指引（先跑 vigil setup 或
+    vigil ops-init 生成 matrix.yaml）。
     setup/ops-init 自身生成矩阵走 matrix_data.init_matrix 直写，不经过本裁决。
     """
     action_name = str(classification.get("action") or "unknown")

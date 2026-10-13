@@ -1,19 +1,26 @@
-"""Tests for the /env slash command (OPS-DELTA #11 — session operation env).
+"""Tests for the retired /env slash command (OPS-DELTA #103 / yapl-design §11.8).
 
-covers: command registration, no-arg listing, switch persistence (config +
-_active_env + banner badge), unknown-env error, and the permission matrix
-following the switch for a custom env name.
+#103 定案：env 维度一律取自**操作目标实体**（拓扑表），会话声明的
+``ops.permissions.env`` 不参与任何裁决。既然它不再决定任何事，载体就必须退场
+——留一个"改了没用"的旋钮正是 OPS-DELTA #11 的翻车模式（同一个坑，换个形式）。
+
+本文件是**退场守卫**：断言三条载体都不复存在（命令 / banner ENV 行 / prompt
+"[env]" 前缀），并保留 #103 的核心语义守卫（config env 改了也不影响裁决）。
+
+反证（起点 3ff1ab38）：/env 仍在 COMMAND_REGISTRY、仍可 resolve、banner 仍渲染
+ENV 行、prompt 仍带 "[env]" 前缀 → 本文件三条载体断言全失败。
 """
 
-from unittest.mock import MagicMock
+from __future__ import annotations
+
+import pathlib
 
 import pytest
 import yaml
 
-from cli import HermesCLI
-from hermes_cli.commands import resolve_command
 import hermes_cli.banner as banner
 import hermes_cli.config as hc
+from hermes_cli.commands import COMMAND_REGISTRY, resolve_command
 from tools.ops_permissions import _active_env, check_ops_command_permission
 
 CONFIG_TPL = """\
@@ -25,9 +32,6 @@ ops:
     - name: bare_metal_prod
       isolation: strict
       role: prod
-    - name: local
-      isolation: relaxed
-      role: test
   permissions:
     enabled: true
     env: {env}
@@ -35,38 +39,13 @@ ops:
 """
 
 
-def _make_cli():
-    cli_obj = HermesCLI.__new__(HermesCLI)
-    cli_obj.config = {}
-    cli_obj.console = MagicMock()
-    cli_obj.agent = None
-    cli_obj.conversation_history = []
-    cli_obj.session_id = "session-123"
-    cli_obj._app = None
-    cli_obj.compact = True
-    cli_obj.model = "gpt-5"
-    cli_obj.provider = "openai"
-    cli_obj.enabled_toolsets = []
-    cli_obj._session_db = None
-    cli_obj._battery_visible = False
-    # 非交互路径会走 show_banner()——stub 掉避免控制台噪音
-    cli_obj.show_banner = lambda: None
-    return cli_obj
-
-
 @pytest.fixture
 def env_home(tmp_path, monkeypatch):
-    (tmp_path / "config.yaml").write_text(
-        CONFIG_TPL.format(env="test"), encoding="utf-8"
-    )
-    # 初始化矩阵：P5 矩阵语义（unknown → 默认 approve）在矩阵存在时对任意 env
-    # 全量生效；矩阵未初始化（OPS-DELTA #76 惰性）只对 prod 档门控、test 档
-    # 交回原检查——与本测试"矩阵跟随 /env 切换"的意图不符，故 fixture 显式
-    # 初始化（对齐真实运维环境：配置自定义 env 的部署已跑过 vigil matrix init）。
+    (tmp_path / "config.yaml").write_text(CONFIG_TPL.format(env="test"), encoding="utf-8")
     (tmp_path / "matrix.yaml").write_text(
         yaml.safe_dump({
             "schema_version": 1,
-            "updated_at": "2026-08-23T00:00:00+08:00",
+            "updated_at": "2026-10-07T00:00:00+08:00",
             "source": "test",
             "base_template": "template2",
             "matrix": {"prod": {"restart": {"approve": "required"}}},
@@ -74,6 +53,17 @@ def env_home(tmp_path, monkeypatch):
         }, allow_unicode=True, sort_keys=False),
         encoding="utf-8",
     )
+    # env 一律取自目标实体（拓扑表）——本机 workstation(local) 供无 token 命令解析。
+    (tmp_path / "topology.yaml").write_text(
+        "version: 4\n"
+        "environments:\n"
+        "  - {name: local, isolation: relaxed, role: local}\n"
+        "hosts:\n"
+        "  - {name: workstation, type: host, env: local, endpoint: \"192.168.1.50\"}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["workstation"])
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
     hc._LOAD_CONFIG_CACHE.clear()
     banner._banner_state_cache = None
@@ -82,71 +72,39 @@ def env_home(tmp_path, monkeypatch):
     banner._banner_state_cache = None
 
 
-def _printed(cli_obj) -> str:
-    return "\n".join(str(c.args[0]) for c in cli_obj.console.print.call_args_list)
+# ── 载体①：slash 命令 ───────────────────────────────────────────────────────
+
+def test_env_command_retired_from_registry():
+    """/env 已从 COMMAND_REGISTRY 摘除，resolve_command 不再认得它。"""
+    assert "env" not in {c.name for c in COMMAND_REGISTRY}
+    assert resolve_command("env") is None
+    assert resolve_command("/env") is None
 
 
-def test_env_command_registered_in_cli_registry():
-    cmd = resolve_command("env")
-    assert cmd is not None
-    assert cmd.name == "env"
-    assert cmd.cli_only is True
-    assert cmd.category == "Session"
+# ── 载体②③：banner ENV 行 / prompt "[env]" 前缀（源码级守卫）───────────────
+
+def test_banner_env_row_retired():
+    """banner 不再渲染 ENV 行（#103 前是 `ENV         [test]`）。"""
+    src = (pathlib.Path(__file__).resolve().parents[2]
+           / "hermes_cli" / "banner.py").read_text(encoding="utf-8")
+    assert 'ENV[/]' not in src
 
 
-def test_env_no_args_lists_current_and_available(env_home):
-    cli_obj = _make_cli()
-    assert cli_obj.process_command("/env") is True
-    out = _printed(cli_obj)
-    assert "当前操作环境" in out
-    assert "test" in out
-    assert "bare_metal_prod" in out
-    assert "local" in out
+def test_prompt_env_prefix_retired():
+    """TUI prompt 不再带 "[env] " 前缀（#103 前是 `[test] >`）。"""
+    src = (pathlib.Path(__file__).resolve().parents[2]
+           / "cli.py").read_text(encoding="utf-8")
+    assert "class:ops-env-" not in src
 
 
-def test_env_switch_updates_config_active_env_and_banner(env_home):
-    cli_obj = _make_cli()
-    assert cli_obj.process_command("/env bare_metal_prod") is True
+# ── #103 核心语义守卫：config env 不再驱动裁决 ──────────────────────────────
 
+def test_config_env_change_does_not_drive_adjudication(env_home):
+    """改 config ops.permissions.env（字段仍在，读取兼容）不影响裁决——env 取自目标实体。"""
+    (env_home / "config.yaml").write_text(
+        CONFIG_TPL.format(env="bare_metal_prod"), encoding="utf-8")
     hc._LOAD_CONFIG_CACHE.clear()
-    perms = hc.load_config_readonly()["ops"]["permissions"]
-    assert perms["env"] == "bare_metal_prod"
-    # role 跟随所选环境定义的 role（不是环境名本身）
-    assert perms["role"] == "prod"
-    assert _active_env() == "bare_metal_prod"
-    # banner ENV badge 数据源随切换更新
-    assert banner._load_banner_state()["env"] == "bare_metal_prod"
-    # 操作矩阵按自定义 env 名判定（YAPL P5：unknown 动作 → 默认 approve 保守；
-    # batch83 起 rm 归 remove 高危变更 → 目标解析，unknown 语义用 git push 验证）
+    assert _active_env() == "bare_metal_prod"  # 兼容读取仍在
     decision = check_ops_command_permission("git push origin main")
     assert decision is not None and decision["action"] == "approve"
-    assert decision["env"] == "bare_metal_prod"
-
-
-def test_env_switch_back_to_builtin_name(env_home):
-    cli_obj = _make_cli()
-    assert cli_obj.process_command("/env bare_metal_prod") is True
-    assert cli_obj.process_command("/env test") is True
-    assert _active_env() == "test"
-    assert banner._load_banner_state()["env"] == "test"
-
-
-def test_env_unknown_env_errors_and_keeps_current(env_home):
-    cli_obj = _make_cli()
-    assert cli_obj.process_command("/env nope") is True
-    out = _printed(cli_obj)
-    assert "未定义环境" in out
-    assert "bare_metal_prod" in out  # 报错列出可用项
-    assert _active_env() == "test"
-    # test 档：unknown 动作 → 默认 approve（矩阵语义，非 deny；batch83 起
-    # rm → remove 高危变更走目标解析，unknown 语义用 git push 验证）
-    decision = check_ops_command_permission("git push origin main")
-    assert decision is not None and decision["action"] == "approve"
-
-
-def test_env_switch_persists_across_cache_clear(env_home):
-    """切换写 config（持久），清缓存后 _active_env 仍为新 env（跨会话保留）。"""
-    cli_obj = _make_cli()
-    assert cli_obj.process_command("/env local") is True
-    hc._LOAD_CONFIG_CACHE.clear()
-    assert _active_env() == "local"
+    assert decision["env"] == "local"  # 裁决取目标实体（本机 workstation=local）

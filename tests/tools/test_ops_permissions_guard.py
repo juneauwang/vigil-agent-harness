@@ -137,7 +137,14 @@ def guard_env(tmp_path, monkeypatch):
             + "  timeout: 5\n",
             encoding="utf-8",
         )
-        (tmp_path / "topology.yaml").write_text(TOPO_YAML, encoding="utf-8")
+        # #103：env 一律取自目标实体——本机 workstation 跟随 activation env，
+        # 使无 token 命令（mv / pip install / systemctl restart）解析到该 env 行。
+        _topo_env = env or "prod"
+        _topo = TOPO_YAML.replace(
+            "{name: workstation, type: host, env: prod,",
+            f"{{name: workstation, type: host, env: {_topo_env},",
+        )
+        (tmp_path / "topology.yaml").write_text(_topo, encoding="utf-8")
         (tmp_path / "entities").mkdir(exist_ok=True)
         (tmp_path / "entities" / "node2.yaml").write_text(NODE2_YAML, encoding="utf-8")
         (tmp_path / "entities" / "test-web.yaml").write_text(TESTWEB_YAML, encoding="utf-8")
@@ -351,9 +358,11 @@ def test_custom_env_role_prod_unknown_still_approve(guard_env):
     assert result["ops_matrix"]["env"] == "bare_metal_prod"
 
 
-def test_custom_env_role_prod_approves_l2(guard_env, monkeypatch):
-    """自定义 env bare_metal_prod → 矩阵精确名：只读 approve 档 smart 可判；
-    prod 变更动作（install）另走 batch80 硬门强制人工（不 smart 自动批）。"""
+def test_custom_env_role_prod_approve_smart_approves(guard_env, monkeypatch):
+    """自定义 env bare_metal_prod → 矩阵精确名（#103：矩阵是唯一裁决源）。
+
+    硬门退役后 install × bare_metal_prod=approve → smart 可自动批（与只读同款）。
+    """
     guard_env("bare_metal_prod", environments=[
         {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
     ], matrix={"bare_metal_prod": {"query": "approve", "install": "approve"}})
@@ -365,7 +374,22 @@ def test_custom_env_role_prod_approves_l2(guard_env, monkeypatch):
     assert result["approved"] is True
     assert result["smart_approved"] is True  # 只读 approve 档 smart 可自动放行
 
-    # prod 变更（install）→ 硬门强制人工：smart 判 approve 也不自动放行
+    result = approval_module.check_all_command_guards("pip install requests", "local")
+    assert result["approved"] is True
+    assert result.get("smart_approved") is True  # #103：install approve 档 smart 可批
+    assert result.get("user_approved") is None
+
+
+def test_custom_env_role_prod_required_forces_human(guard_env, monkeypatch):
+    """矩阵 required → 强制人工（覆盖 smart）——严格度交回矩阵。"""
+    guard_env("bare_metal_prod", environments=[
+        {"name": "bare_metal_prod", "isolation": "strict", "role": "prod"},
+    ], matrix={"bare_metal_prod": {"query": "approve",
+                                   "install": {"approve": "required"}}})
+    _ask_env(monkeypatch)
+    monkeypatch.setattr(approval_module, "_get_approval_config", lambda: {"mode": "smart"})
+    monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
+
     _register_gateway_auto_approve()
     try:
         result = approval_module.check_all_command_guards("pip install requests", "local")

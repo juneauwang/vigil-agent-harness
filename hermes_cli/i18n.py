@@ -152,7 +152,6 @@ _EN: dict[str, str] = {
 
     # ── ops permission matrix descriptions ─────────────────────────────────
     "opsperm.required": "⚠ Ops matrix forces human confirmation ({action} × {env} = {{approve: required}}, overriding approvals.mode)",
-    "opsperm.prod_hardgate": "⚠ prod change forces human confirmation ({action} × {env}): bare terminal commands must not bypass runbook-executor matrix adjudication (OPS-DELTA #95)",
     "opsperm.unknown": "⚠ Could not recognize command intent (unknown): {command} is not in the command-classification rule table, matrix coverage gap → handled conservatively (default approve goes through the approval gate); register a new rule in OPS-DELTA.",
     "opsperm.approve": "Ops matrix adjudicated {action} × {env} as requiring approval (approve)",
     "opsperm.rule_suffix": "{desc} (rule {rule})",
@@ -251,7 +250,6 @@ _EN: dict[str, str] = {
     "monitoring.alertmanager_unavailable": "Alertmanager not configured (config ops.prometheus.alertmanager); only health probing is available.",
 
     # ── interactive session: slash help / boot hints / usage panel ─────────
-    "slash.env_help": "View/switch the session ops environment (from the defined ops.environments list; /env with no argument shows the current environment and the available list)",
     "slash.topo_help": "In-session topology discovery — runs the discovery engine locally (/topo [host...] [--env prod] [--user root] [--key path]; no args = interactive collection). Note: --sudo-password is not supported in-session (credential discipline: passwords never enter LLM session arguments); root-only probes need `vigil topo-discover --sudo-password` at the CLI layer or a pre-provisioned topology credential",
     "boot.loadingConfig": "· Loading config and models…",
     "boot.ready": "· Startup ready",

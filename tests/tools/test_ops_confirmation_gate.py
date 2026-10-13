@@ -81,6 +81,8 @@ def _write_topology(home, env) -> None:
         "hosts": [
             {"name": "workstation", "type": "host", "env": env,
              "endpoint": "192.168.1.50"},
+            {"name": "node-prod", "type": "host", "env": "prod",
+             "endpoint": "203.0.113.11"},
         ],
     }, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
@@ -103,8 +105,8 @@ def perm_env(tmp_path, monkeypatch):
     def _activate(env, *, enabled=True):
         _cfg(tmp_path, env, enabled=enabled)
         monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
-        # batch83：本机（docker/helm/裸变更命令的目标）登记为 workstation，
-        # 否则高危变更目标解析失败 → deny，测不到矩阵档位。
+        # #103：本机（docker/helm/裸变更命令的目标）登记为 workstation，env
+        # 跟随 activation——否则无 token 命令目标解析失败，测不到矩阵档位。
         monkeypatch.setattr(
             "tools.target_resolve._local_host_identities", lambda: ["workstation"])
         hc._LOAD_CONFIG_CACHE.clear()
@@ -218,10 +220,10 @@ def test_non_required_approve_in_prod_not_gated(perm_env):
         assert result["require_confirmation"] is False, cmd
 
 
-def test_target_env_prod_triggers_confirmation_in_test_session(perm_env):
-    """test 会话 + 目标 prod 实体（跨环境）→ 同样按 prod 判定触发确认门。"""
+def test_target_entity_prod_triggers_confirmation_in_test_session(perm_env):
+    """#103：test 会话 + ssh 打 prod 实体（node-prod）→ 按目标实体 env=prod 判定。"""
     perm_env("test")
-    result = check_ops_command_permission("systemctl restart myapp", target_env="prod")
+    result = check_ops_command_permission("ssh root@203.0.113.11 'df -h'")
     assert result is not None
     assert result["require_confirmation"] is True
     assert result["env"] == "prod"

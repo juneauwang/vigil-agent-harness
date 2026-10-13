@@ -163,6 +163,7 @@ class TestMatrixLoad:
         data = md.load_matrix(mhome)
         assert data["matrix"]["prod"]["query"] == "execute"
         assert any("漏配" in w for w in data["warnings"])
+        # env 在矩阵、动作缺 → 仍按既有铁律默认 approve（保守）
         level = md.get_level(data, "prod", "restart")
         assert level["level"] == "approve" and level["configured"] is False
 
@@ -170,8 +171,9 @@ class TestMatrixLoad:
         data = md.load_matrix_or_empty(mhome)
         assert data["matrix"] == {}
         assert any("不存在" in w for w in data["warnings"])
+        # #103 任务 4：env 名不在矩阵 → 不再默认 approve，按最高严格度 required
         level = md.get_level(data, "prod", "restart")
-        assert level["level"] == "approve"
+        assert level["level"] == "required"
 
     def test_source_tracking_roundtrip(self, mhome):
         _write_matrix(mhome, {"prod": {"query": "execute"}},
@@ -203,7 +205,7 @@ class TestHotReload:
 class TestTemplates:
     def test_template1_solo(self, mhome):
         t = md.template_matrix("template1")
-        assert t["envs"] == ["local"]
+        assert t["envs"] == ["local", "unresolved"]
         cells = t["matrix"]["local"]
         assert len(cells) == 23
         for act, level in cells.items():
@@ -214,7 +216,7 @@ class TestTemplates:
 
     def test_template2_small_team(self, mhome):
         t = md.template_matrix("template2")
-        assert t["envs"] == ["local", "test", "dev", "prod"]
+        assert t["envs"] == ["local", "test", "dev", "prod", "unresolved"]
         local = t["matrix"]["local"]
         test = t["matrix"]["test"]
         dev = t["matrix"]["dev"]
@@ -254,7 +256,7 @@ class TestTemplates:
 
     def test_template3_medium_team(self, mhome):
         t3 = md.template_matrix("template3")
-        assert t3["envs"] == ["local", "test", "uat", "dev", "prod"]
+        assert t3["envs"] == ["local", "test", "uat", "dev", "prod", "unresolved"]
         t2 = md.template_matrix("template2")
         assert t3["matrix"]["local"] == t2["matrix"]["local"]
         assert t3["matrix"]["test"] == t2["matrix"]["test"]
@@ -270,9 +272,14 @@ class TestTemplates:
             "approve": ["backup", "restore"],
         })
         for env, cells in t4["matrix"].items():
+            if env == "unresolved":
+                continue
             assert cells["query"] == "execute" and cells["backup"] == "approve"
             assert cells["reboot"] == "required"
             assert cells["restart"] == "required"
+        # #103 任务 4：未解析目标行整行 required
+        assert all(l == "required" for a, l in t4["matrix"]["unresolved"].items()
+                   if a != "runbook")
 
         # 级联语义：execute 与 approve 不得重叠
         with pytest.raises(ValueError, match="不得重叠"):

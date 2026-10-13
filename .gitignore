@@ -24,4 +24,9 @@ hermes_cli/web_dist/
 
 # First-run bootstrap marker — `git stash -u` (hermes update autostash) must skip it
 .hermes-bootstrap-complete
+
+# Managed Python runtime store — checkout-scoped, self-installed by
+# hermes_cli/managed_uv.py (`<checkout>/.hermes-runtime/python`). Same class as
+# .hermes-bootstrap-complete above: `git stash -u` / `git add -A` must skip it.
+.hermes-runtime/
 dist/

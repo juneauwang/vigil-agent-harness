@@ -1,24 +1,30 @@
-"""Ops Agent Harness — 目标解析层（batch83：矩阵按目标实体 env 裁决）。
+"""Ops Agent Harness — 目标解析层（矩阵按目标实体 env 裁决）。
 
-设计定案（2026-08-30，yapl-design.md §11.1/§六 topo_ref 三层闭环同源）：
-执行请求 → classifier 动作枚举 → **变更类动作强制目标解析**（从命令文本提取
-目标拓扑实体）→ 实体 env → 查操作矩阵。解析不出实体 → **拒绝执行（deny）**，
-deny 是目标解析层的硬拦截、发生在查矩阵之前；矩阵本身仍无 deny 档。
+设计定案（2026-10-07，yapl-design.md §11.8 单一裁决源）：
+执行请求 → classifier 动作枚举 → **目标解析**（命令含目标类 token → 按 token
+收敛到拓扑实体；无 token → 本机实体）→ 实体 env → 查操作矩阵。#103 起解析
+覆盖全部动作（含只读——否则只读格子在矩阵里永久不可达），判据从"是否高危
+动作"换成"命令里有没有目标类 token"；env 一律取自目标实体（会话声明 env 与
+命令级 target_env 均不参与裁决）。解析失败交给调用方按矩阵 unresolved 行
+裁决（不许自动放行、可人工放行；#103 任务 3）。
 
 本模块职责（只读、无副作用）：
-- ``resolve_required_target``：高危变更动作的目标解析，返回 resolved 或 failed
-  （永不静默取会话 env 兜底）。
-- 首批高危动作集 ``HIGH_RISK_MUTATING_ACTIONS``（install/remove/decommission/
-  reboot/scale + kubectl delete 类——classifier 归 decommission）。
+- ``resolve_required_target``：目标解析，返回 resolved 或 failed（永不静默取
+  会话 env 兜底）。
+- ``command_target_required``：命令是否显式携带目标类 token（判据）。
 - ssh/scp/sftp/rsync 受控通道：远端执行目标必须解析（"不裸连直跑"，未登记
   拓扑 → 解析失败）。
 - 本机命令目标 = 拓扑表里本机 host 实体（按主机名/网卡 IP 匹配）；本机未登记
   拓扑 = 解析失败（无"本机默认 dev"兜底）。
+- ``HIGH_RISK_MUTATING_ACTIONS``：batch83 首批高危动作集（保留参考；#103 后
+  解析判据已换成目标类 token，不再用它做门槛）。
 
 解析源（命令文本 → 拓扑实体）：
 - ssh/scp/sftp/rsync 的 user@host / 裸 IP → host 实体（主机名/别名/IP 匹配）。
 - kubectl --context/--namespace/--kubeconfig → cluster/service 实体；未指定且
   唯一集群 → 该集群；多集群无法确定 → 失败。
+- helm --kube-context/--namespace(-n)/--kubeconfig → cluster 实体（与 kubectl
+  同款：helm 的 -n 就是 namespace；未指定且唯一集群 → 该集群；多集群 → 失败）。
 - docker -H/--host/--context → host 实体；本地 socket/无目标 → 本机 host。
 - ansible -i <inventory> 主机组 → 实体集合（集合内 env 一致 → 该 env；跨环境
   → 失败；含拓扑表外主机 → 失败）。
@@ -46,11 +52,15 @@ HIGH_RISK_MUTATING_ACTIONS: frozenset = frozenset({
     "install", "remove", "decommission", "reboot", "scale",
 })
 
-_SSH_FAMILY_RE = re.compile(r"(?<!\w)(?:ssh|scp|sftp|rsync)\b", re.IGNORECASE)
 _KUBECTL_RE = re.compile(r"(?<!\w)kubectl\b", re.IGNORECASE)
+_HELM_RE = re.compile(r"(?<!\w)helm\b", re.IGNORECASE)
 _DOCKER_RE = re.compile(r"(?<!\w)docker\b", re.IGNORECASE)
 _DOCKER_CONTEXT_RE = re.compile(
     r"docker\s+context\s+(?:use|create|update)\s+(\S+)", re.IGNORECASE
+)
+# #103（§11.8）目标类 token 判据：ssh族 / kubectl / helm / docker / ansible。
+_TARGET_TOKEN_RE = re.compile(
+    r"(?<!\w)(?:ssh|scp|sftp|rsync|kubectl|helm|docker|ansible)\b", re.IGNORECASE
 )
 _K8S_TYPES = frozenset({"k8s", "k3s", "kind"})
 _SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
@@ -228,6 +238,69 @@ def _resolve_kubectl(topo: Dict[str, Any], entities: List[Dict[str, Any]],
     )
 
 
+def _resolve_helm(topo: Dict[str, Any], entities: List[Dict[str, Any]],
+                  command: str, home: Path) -> Dict[str, Any]:
+    """helm → cluster 实体：--kube-context/--namespace(-n)/--kubeconfig 收敛。
+
+    与 ``_resolve_kubectl`` 同款（helm 的 -n/--namespace 就是 namespace）：显式
+    上下文/命名空间/凭据 → 对应集群；未指定且唯一集群 → 该集群；多集群无法
+    确定 → failed。
+    """
+    clusters = [dict(c) for c in (topo.get("clusters") or [])
+                if isinstance(c, dict) and c.get("name")]
+    if not clusters:
+        clusters = [dict(e) for e in entities
+                    if str(e.get("type") or "").lower() in _K8S_TYPES]
+
+    def _by_name(needle: str) -> Optional[Dict[str, Any]]:
+        needle = str(needle).strip().lower()
+        for c in clusters:
+            if str(c.get("name") or "").lower() == needle \
+                    or str(c.get("context") or "").lower() == needle:
+                return c
+        return None
+
+    ctx = _flag_value(command, ("--kube-context",))
+    if ctx:
+        cluster = _by_name(ctx)
+        if cluster is not None:
+            return _resolved(topo, cluster, f"helm --kube-context {ctx}")
+        return _failed(
+            f"helm 上下文 {ctx!r} 未匹配拓扑集群/实体——修复指引：先 topo_query "
+            "查集群名（或集群行的 context 字段），核对 --kube-context 拼写。"
+        )
+    ns = _flag_value(command, ("--namespace", "-n"))
+    if ns:
+        for c in clusters:
+            namespaces = c.get("namespaces") or []
+            if isinstance(namespaces, list) \
+                    and ns in {str(n) for n in namespaces}:
+                return _resolved(topo, c, f"helm --namespace {ns}")
+        if len(clusters) == 1:
+            return _resolved(topo, clusters[0], f"helm --namespace {ns}（单集群）")
+        return _failed(
+            f"helm 命名空间 {ns!r} 未匹配拓扑集群（且集群数 > 1，无法唯一确定）"
+            "——先 topo_query 查集群名，或用 --kube-context 显式指定。"
+        )
+    kubeconfig = _flag_value(command, ("--kubeconfig",))
+    if kubeconfig:
+        for c in clusters:
+            if str(c.get("kubeconfig") or "") == kubeconfig:
+                return _resolved(topo, c, "helm --kubeconfig")
+        if len(clusters) == 1:
+            return _resolved(topo, clusters[0], "helm --kubeconfig（单集群）")
+        return _failed(
+            f"helm --kubeconfig {kubeconfig!r} 未匹配拓扑集群（且集群数 > 1）"
+            "——先 topo_query 查集群名。"
+        )
+    if len(clusters) == 1:
+        return _resolved(topo, clusters[0], "helm（唯一集群）")
+    return _failed(
+        "helm 未指定 --kube-context/--namespace/--kubeconfig 且拓扑表有多个集群，"
+        "无法确定目标——先 topo_query 查集群名，或显式 --kube-context 指定。"
+    )
+
+
 def _docker_host_value(command: str) -> Optional[str]:
     """docker -H/--host 的值（-H host / --host host / --host=host / -Hhost）。"""
     try:
@@ -347,19 +420,17 @@ def _resolved_env(topo: Dict[str, Any], entity: Dict[str, Any]) -> str:
         return str(entity.get("env") or "").strip().lower()
 
 
-def command_target_required(actions: set, command: str) -> bool:
-    """高危变更动作 / ssh 族受控通道 → 需要强制目标解析。
+def command_target_required(command: str) -> bool:
+    """命令是否显式携带目标类 token（ssh族 / kubectl / helm / docker / ansible）。
 
-    - 动作命中 ``HIGH_RISK_MUTATING_ACTIONS`` → True。
-    - ssh/scp/sftp/rsync（classifier 归 run_script/transfer_file，动作不在高危
-      集）→ True：受控通道"不裸连直跑"，远端目标必须解析，未登记 → deny。
-    - 只读动作（query/fetch_log/verify）→ False（天然无目标实体，不误伤）。
+    #103（§11.8）判据换代：从"是否高危动作"改为"命令里有没有目标类 token"。
+    命中 → ``resolve_required_target`` 按该 token 收敛到拓扑实体；不命中 →
+    本机实体（``_resolve_local``，本机已登记拓扑 = local）。只读动作同样解析
+    ——否则只读格子在矩阵里永久不可达。本函数回答"目标是否显式"，与动作无关。
     """
-    if actions & HIGH_RISK_MUTATING_ACTIONS:
-        return True
     if not isinstance(command, str):
         return False
-    return bool(_SSH_FAMILY_RE.search(command))
+    return bool(_TARGET_TOKEN_RE.search(command))
 
 
 def resolve_required_target(command: str, *,
@@ -410,6 +481,8 @@ def resolve_required_target(command: str, *,
         )
     if _KUBECTL_RE.search(command):
         return _resolve_kubectl(topo, entities, command, home)
+    if _HELM_RE.search(command):
+        return _resolve_helm(topo, entities, command, home)
     if _DOCKER_RE.search(command):
         return _resolve_docker(topo, entities, command, home, local_identities)
     from tools.ansible_inventory_guard import _extract_inventory_arg, _is_ansible_command

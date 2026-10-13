@@ -311,7 +311,7 @@ def _write_sample_matrix(profile_dir: Path, force: bool) -> None:
         print(f"· matrix.yaml 已存在，跳过（--force 覆盖）：{matrix_dst}")
         return
     init_matrix("template2", home=profile_dir, force=True)
-    print(f"· 写入 matrix.yaml（template2：local/test/dev/prod）：{matrix_dst}")
+    print(f"· 写入 matrix.yaml（template2：local/test/dev/prod + unresolved）：{matrix_dst}")
 
 
 def _warn_topology_env_sync(profile_dir: Path, env: str) -> None:

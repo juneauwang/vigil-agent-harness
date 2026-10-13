@@ -139,6 +139,36 @@ def call(params, *, home=None, context=None, runner=None):
 '''
 
 
+# 四种 topo kind 的沙箱拓扑验收（缺口一）：契约声明的 kind 决定沙箱实体层级。
+# 复用 VALID_WRAPPER，只替换 resolve_topo_ref 的 kind 与生成动作。
+def _wrapper_for_kind(kind: str, action: str = "query") -> str:
+    return (VALID_WRAPPER
+            .replace('kind="service"', f'kind="{kind}"')
+            .replace('generate_commands("verify"',
+                     f'generate_commands("{action}"'))
+
+
+def _kind_contract(kind: str, ref: str = "ent-one") -> dict:
+    """action=query 的四 kind 契约：正常用例引用 ref，错误用例引用不存在实体。"""
+    return {
+        "name": f"query-{kind}",
+        "description": f"沙箱拓扑 {kind} 层验收（缺口一）",
+        "action": "query",
+        "params": {
+            "target": {"type": "topo_ref", "kind": kind, "required": True},
+        },
+        "returns": {"status": "string"},
+        "tests": [
+            {"name": "正常查询",
+             "input": {"target": ref},
+             "expect": {"status": "ok"}},
+            {"name": "目标不存在（参数层错误）",
+             "input": {"target": "ghost-entity"},
+             "expect": {"error": "entity_not_found"}},
+        ],
+    }
+
+
 SYNTAX_BROKEN = "def call(params, *, home=None, context=None, runner=None):\n    if True\n"
 
 
@@ -355,10 +385,21 @@ class TestCompileStateMachine:
         from tools.registry import registry
         assert registry.get_entry(contract["name"]) is None
 
-    def test_tirith_block_rejected(self, contract, chome, monkeypatch):
-        def fake_scan(code):
+    def test_compile_does_not_scan_generated_code_with_tirith(self, contract, chome, monkeypatch):
+        """缺口二（改过旧预期）：编译期不再拿 tirith 扫生成的 Python 源码。
+
+        旧行为是扫描生成代码、block 拒（test_tirith_block_rejected）；现在
+        tirith 挪到命令执行层（runbook_exec._run_spec）。这里用“必 block”的
+        假扫描器证明编译管线**不再**消费它——真扫描器会误 block 合格代码，
+        所以这条同时是回归护栏（源码扫描回归即失败）。
+        """
+        calls = []
+
+        def fake_scan(command):
+            calls.append(command)
             return {"action": "block", "findings": [{"id": "x"}],
-                    "summary": "malicious pattern"}
+                    "summary": "would block generated code"}
+
         monkeypatch.setattr("tools.tirith_security.check_command_security", fake_scan)
         token = _approve("once")
         try:
@@ -366,32 +407,8 @@ class TestCompileStateMachine:
                                       llm_generate=QueueGen(VALID_WRAPPER))
         finally:
             _reset_approve(token)
-        assert out["status"] == "failed"
-        assert out["code"] == "tirith_blocked"
-        assert "tirith" in out["error"]
-        assert not (chome / "contracts" / "compiled").exists()
-
-    def test_tirith_warn_force_manual_still_requires_approval(self, contract, chome, monkeypatch):
-        seen = []
-        def fake_scan(code):
-            return {"action": "warn", "findings": [{"id": "w"}], "summary": "有安全提示"}
-        monkeypatch.setattr("tools.tirith_security.check_command_security", fake_scan)
-        from tools import terminal_tool
-        def cb(*a, **k):
-            seen.append(k.get("allow_permanent"))
-            return "once"
-        token = None
-        from tools.approval import set_hermes_interactive_context
-        token = set_hermes_interactive_context("1")
-        terminal_tool.set_approval_callback(cb)
-        try:
-            out = cc.compile_contract(home=chome, name=contract["name"],
-                                      llm_generate=QueueGen(VALID_WRAPPER))
-        finally:
-            _reset_approve(token)
         assert out["status"] == "registered"
-        # warn = 强制人工：不透出 permanent/session 选项
-        assert seen and seen[0] is False
+        assert calls == []  # 编译期一次都不该扫
 
 
 # ---------------------------------------------------------------------------
@@ -441,6 +458,27 @@ class TestSandboxSelftest:
         result = cc.sandbox_selftest(INFINITE_LOOP_WRAPPER, contract, chome, timeout=1)
         assert result["ok"] is False
         assert "超时" in result["error"]
+
+    @pytest.mark.parametrize("kind", ["service", "host", "cluster", "host_group"])
+    def test_sandbox_topo_builds_declared_kind(self, kind, chome):
+        """缺口一：沙箱按契约 kind 造实体——四种 kind 的自证都必须过。
+
+        反证（基线 531dbdad）：host/cluster/host_group 三条红（只造 service，
+        正常用例被解析成 entity_not_found）。
+        """
+        data = _kind_contract(kind)
+        result = cc.sandbox_selftest(_wrapper_for_kind(kind), data, chome)
+        assert result["ok"] is True, result.get("error")
+        by_name = {c["name"]: c for c in result["cases"]}
+        assert by_name["正常查询"]["ok"] is True
+        # entity_not_found 用例专属引用仍不建实体（拒绝路径未被破坏）
+        assert by_name["目标不存在（参数层错误）"]["output"]["error"] == "entity_not_found"
+
+    def test_sandbox_topo_refs_carry_kind(self, chome):
+        """_collect_sandbox_refs 返回 (ref, kind)，kind 取自参数声明。"""
+        refs = cc._collect_sandbox_refs(_kind_contract("host", ref="gpu1"))
+        assert ("gpu1", "host") in refs
+        assert ("ghost-entity", "host") not in refs  # entity_not_found 专属不建
 
 
 # ---------------------------------------------------------------------------
@@ -619,3 +657,121 @@ class TestSchemaGeneration:
         assert "verify-service" in prompt
         note = cc.build_generation_prompt(contract, retry_note="上一轮自证失败")
         assert "上一轮自证失败" in note
+
+
+# ---------------------------------------------------------------------------
+# §9 定案 (iv)：结构化命令通道撤出 tirith；自由通道保留；诊断可读
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def real_tirith(monkeypatch):
+    """把真 tirith 二进制接上（TIRITH_BIN = 显式配置，非 monkeypatch 扫描器）。
+
+    重置 tirith_security 的进程级解析缓存 / 熔断计数——本测试文件前面用 tmp
+    VIGIL_HOME 跑过，缓存里可能是 “未找到”（fail-open）。二进制不存在则跳过
+    （CI 无 tirith 的环境不误报）。
+    """
+    import shutil
+    from pathlib import Path
+    from tools import tirith_security as ts
+
+    candidate = shutil.which("tirith") or str(Path.home() / ".vigil" / "bin" / "tirith")
+    if not Path(candidate).is_file():
+        pytest.skip("tirith binary unavailable")
+    monkeypatch.setenv("TIRITH_BIN", candidate)
+    monkeypatch.setenv("TIRITH_ENABLED", "1")
+    monkeypatch.setattr(ts, "_resolved_path", None)
+    monkeypatch.setattr(ts, "_install_failure_reason", "")
+    monkeypatch.setattr(ts, "_crash_count", 0)
+    monkeypatch.setattr(ts, "_circuit_open", False)
+    return candidate
+
+
+class TestStructuredChannelNoTirith:
+    """§9 定案 (iv)：runbook / 编译契约（generate_commands 确定性生成）不接 tirith。"""
+
+    def test_run_spec_does_not_consult_tirith(self, monkeypatch, tmp_path):
+        """守卫（§9.4.5）：_run_spec 一次都不该调 tirith，命令照常执行。
+
+        基础版本 a9e56252 在 _run_spec 首行调 _tirith_command_gate —— 本用例
+        用“必 block”假扫描器 + 调用记录戳穿它（反证：a9e56252 上必红）。
+        """
+        from tools import runbook_exec as re_
+
+        calls = []
+
+        def must_block(command):
+            calls.append(command)
+            return {"action": "block", "findings": [], "summary": "must block"}
+
+        monkeypatch.setattr("tools.tirith_security.check_command_security", must_block)
+        out = re_._run_spec(tmp_path, {"name": "h", "remote": False},
+                            {"argv": ["true"]})
+        assert calls == []                       # 结构化通道不接 tirith
+        assert out.get("blocked") is not True
+        assert out["exit_code"] == 0             # 命令正常执行
+
+    def test_run_spec_raw_ip_probe_reaches_executor(self, real_tirith, monkeypatch, tmp_path):
+        """§9.6 实测复现：IP 探活命令（真 tirith 判 raw_ip_url block）过
+        _run_spec 必须到执行器、不被拦（real_tirith 确保扫描器真在、不 fail-open）。"""
+        from tools import runbook_exec as re_
+
+        seen = {}
+
+        def fake_exec(argv, timeout=None):
+            seen["argv"] = argv
+            return {"exit_code": 0, "stdout": "", "stderr": ""}
+
+        monkeypatch.setattr(re_, "_exec_local", fake_exec)
+        out = re_._run_spec(
+            tmp_path, {"name": "h", "remote": False},
+            {"cmd": "curl -sS -L http://47.120.50.110:30151/models", "shell": False})
+        assert out["exit_code"] == 0
+        assert "47.120.50.110" in " ".join(seen.get("argv") or [])
+
+    def test_gate_helpers_removed(self):
+        """§9.4.2：不得留死代码——命令层 tirith 门符号确实删除。"""
+        from tools import runbook_exec as re_
+        assert not hasattr(re_, "_tirith_command_gate")
+        assert not hasattr(re_, "_tirith_command_surface")
+
+
+class TestFreeChannelKeepsTirith:
+    """§9.4.5 守卫：自由文本命令通道（terminal / script_asset）仍有 tirith。"""
+
+    def test_real_tirith_blocks_raw_ip_probe(self, real_tirith):
+        """前提：真 tirith 确实 block IP 探活命令（故结构化通道必须撤出）。"""
+        from tools.tirith_security import check_command_security
+        scan = check_command_security(
+            "curl -sS -L http://47.120.50.110:30151/models")
+        assert scan["action"] == "block"
+        assert any(f.get("rule_id") == "raw_ip_url"
+                   for f in scan.get("findings") or [])
+
+    def test_script_asset_content_still_scanned(self, monkeypatch, tmp_path):
+        """script_asset 属自由内容：创建时仍过 tirith（不回退）。"""
+        from tools import script_assets as sa
+        calls = []
+
+        def fake_scan(content):
+            calls.append(content)
+            return {"action": "warn",
+                    "findings": [{"severity": "HIGH", "title": "T",
+                                  "description": "D", "evidence": [{"raw": "ev"}]}],
+                    "summary": ""}
+
+        monkeypatch.setattr("tools.tirith_security.check_command_security", fake_scan)
+        sa.script_asset_create(name="probe", content="echo hi\n", home=tmp_path)
+        assert calls, "script_asset 创建必须仍调 tirith"
+
+
+class TestTirithDiagnostics:
+    def test_format_findings_human_variants(self):
+        from tools.tirith_security import format_findings_human
+        # 无 findings → 回落 summary / 兜底
+        assert format_findings_human({"findings": [], "summary": ""}) == "有安全提示"
+        assert format_findings_human({"findings": [], "summary": "boom"}) == "boom"
+        msg = format_findings_human({"findings": [
+            {"severity": "HIGH", "title": "T", "description": "D",
+             "evidence": [{"raw": "ev"}]}], "summary": ""})
+        assert "[HIGH] T" in msg and "D" in msg and "ev" in msg

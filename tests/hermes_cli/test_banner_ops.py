@@ -107,8 +107,10 @@ def test_unified_banner_renders_console_header_for_ops_profile():
     out = _render(_ops_state())
 
     assert "PROFILE" in out
-    assert "ENV" in out
-    assert "[test]" in out
+    # #103（§11.8）：ENV 行与 [env] 徽标退场——env 由操作目标实体决定，会话声明的
+    # config env 不再参与任何裁决，继续显示会误导。反向断言 = 退场守卫。
+    assert "ENV" not in out
+    assert "[test]" not in out
     assert "matrix ON" in out
     assert "3 entities" in out
     assert "2 loaded" in out
@@ -118,12 +120,16 @@ def test_unified_banner_renders_console_header_for_ops_profile():
     assert "Available Skills" not in out
 
 
-def test_unified_banner_renders_custom_env_badge():
-    """自定义环境名（bare_metal_prod）渲染进 ENV badge，不锁死 test/uat/prod。"""
+def test_unified_banner_no_longer_renders_env_badge():
+    """#103（§11.8）：ENV badge 退场——自定义环境名也不再出现在 banner 里。
+
+    （原测试 `test_unified_banner_renders_custom_env_badge` 断言
+    `[bare_metal_prod]` 渲染进 badge；#103 后 env 与裁决解耦，该断言随之反转。）
+    """
     out = _render(_ops_state(env="bare_metal_prod"))
 
-    assert "ENV" in out
-    assert "[bare_metal_prod]" in out
+    assert "ENV" not in out
+    assert "[bare_metal_prod]" not in out
     assert "matrix ON" in out
 
 

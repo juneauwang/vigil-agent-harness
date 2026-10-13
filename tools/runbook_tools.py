@@ -1889,10 +1889,17 @@ def _asset_approve_runbook(data: Dict[str, Any], name: str, home: Path,
         )
 
     acts = _runbook_v2_actions(data)
-    matrix = load_matrix_or_empty(home)
-    levels = {a: get_level(matrix, env, a) for a in acts}
-    force_manual = any(v["level"] == "required" for v in levels.values())
-    smart_low_risk = bool(acts) and all(v["level"] == "execute" for v in levels.values())
+    if ops_permissions_enabled():
+        matrix = load_matrix_or_empty(home)
+        levels = {a: get_level(matrix, env, a) for a in acts}
+        force_manual = any(v["level"] == "required" for v in levels.values())
+        smart_low_risk = bool(acts) and all(v["level"] == "execute" for v in levels.values())
+    else:
+        # 权限系统显式关闭 → 矩阵不参与裁决，交回 approvals.mode 语义（与 terminal
+        # 路径一致；#103 任务 4：env 名不在矩阵不再默认 approve，若仍读空矩阵会把
+        # 关闭态误升级为强制人工）。
+        force_manual = False
+        smart_low_risk = False
     action_desc = ", ".join(acts) or "(无动作)"
     result = request_asset_approval(
         asset_type="runbook",

@@ -43,6 +43,11 @@ def env_home(tmp_path, monkeypatch):
     """隔离 VIGIL_HOME + 进程内注册表/执行记录，避免跨测试串扰。"""
     from tools.approval import clear_web_approvals
     monkeypatch.setenv("VIGIL_HOME", str(tmp_path))
+    # #103：env 取自目标实体（拓扑表）——注入固定本机身份并登记进拓扑，
+    # 使无 token 命令（echo/iptables/docker ps）解析到本机实体（_cfg 同步 env）。
+    monkeypatch.setattr(
+        "tools.target_resolve._local_host_identities", lambda: ["local-workstation"])
+    _write_topology(tmp_path, "test")
     hc._LOAD_CONFIG_CACHE.clear()
     web_server._EXEC_RECORDS.clear()
     clear_web_approvals()
@@ -54,7 +59,22 @@ def env_home(tmp_path, monkeypatch):
     _op._WARNED_ENVS.clear()
 
 
+def _write_topology(home, env: str) -> None:
+    """#103：拓扑表 + 本机 host（env 跟随 _cfg），使无 token 命令落本机实体。"""
+    isolation = "strict" if env == "prod" else "relaxed"
+    (home / "topology.yaml").write_text(
+        "version: 4\n"
+        "environments:\n"
+        f"  - {{name: {env}, isolation: {isolation}, role: {env}}}\n"
+        f"  - {{name: local, isolation: relaxed, role: local}}\n"
+        "hosts:\n"
+        f"  - {{name: local-workstation, type: host, env: {env}, endpoint: \"127.0.0.1\"}}\n",
+        encoding="utf-8",
+    )
+
+
 def _cfg(home, env, *, extra="", enabled=True) -> None:
+    _write_topology(home, env)
     (home / "config.yaml").write_text(
         "ops:\n"
         "  permissions:\n"

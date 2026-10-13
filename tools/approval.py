@@ -4440,20 +4440,20 @@ def check_all_command_guards(command: str, env_type: str,
     except Exception as _ops_exc:
         logger.debug("Ops permission matrix check failed: %s", _ops_exc)
     if ops_decision is not None:
-        # batch83（OPS-DELTA #98）：高危变更目标解析失败 → 硬拒绝。目标解析层
-        # deny 先于矩阵查询，也先于 yolo / mode=off / 永久 allowlist / 无人在场
-        # fail-closed 分支——解析不出目标实体（未登记拓扑/无法提取）就没有可
-        # 裁决的环境，任何旁路都不得放行。矩阵本身仍无 deny 档（deny 是解析层
-        # 的档位，sudo_tool 同款消费）。
+        # 唯一 deny 来源：矩阵缺失（batch83-fix，OPS-DELTA #99）——权限系统
+        # 不可用 = fail-closed 拒绝，先于 yolo / mode=off / 永久 allowlist /
+        # 无人在场分支（sudo_tool 同款消费）。#103 起"目标解析失败"不再 deny：
+        # 改走矩阵 unresolved 行（action=approve + require_confirmation=True），
+        # 交人工确认门（不许自动放行、可人工放行；bootstrap/重建不再死锁）。
         if ops_decision.get("action") == "deny":
             logger.warning(
-                "Ops target resolution deny: %s (command: %s)",
+                "Ops matrix deny: %s (command: %s)",
                 ops_decision.get("description"), command[:200],
             )
             return {
                 "approved": False,
                 "ops_matrix": ops_decision,
-                "ops_target_deny": True,
+                "ops_matrix_missing": bool(ops_decision.get("matrix_missing")),
                 "message": f"BLOCKED: {ops_decision['description']}",
             }
         # 矩阵无 deny（classifier 不产出 deny，保守 = approve 不是拒绝）；硬底线 /
@@ -4481,9 +4481,10 @@ def check_all_command_guards(command: str, env_type: str,
                 ),
             }
 
-    # OPS-DELTA #32 prod 变更强制确认门：require_confirmation 的 approve 决策
-    # 不因 yolo / mode=off / 永久 allowlist / smart-approval 自动放行——强制
-    # 走人工确认门（与 L2 approve 同一条审批通道），用户确认后才执行。
+    # 强制确认门（OPS-DELTA #32 / §11.8 #4）：require_confirmation 的 approve
+    # 决策（矩阵 {approve: required} 或 unresolved 行）不因 yolo / mode=off /
+    # 永久 allowlist / smart-approval 自动放行——强制走人工确认门（与 L2 approve
+    # 同一条审批通道），用户确认后才执行。
     _ops_confirmation_required = bool(
         ops_decision is not None
         and ops_decision.get("action") == "approve"

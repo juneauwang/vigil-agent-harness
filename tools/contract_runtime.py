@@ -4,7 +4,8 @@
 tools.runbook_exec / tools.topo_tools / tools.topo_ref / 本模块）——执行细节
 全部落在信任层：目标富化（resolve_target）、命令生成（generate_commands）、
 真实通道（runbook_exec._run_spec）或注入 runner（沙箱 mock）。生成代码不
-直接 subprocess/ssh（越界检查 + tirith + 沙箱三重兜底）。
+直接 subprocess/ssh（越界检查 + 沙箱双保险；§9 定案 iv：结构化通道的命令由
+generate_commands 生成、操作矩阵在动作层裁决，执行层不接 tirith）。
 """
 
 from __future__ import annotations

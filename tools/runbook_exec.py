@@ -962,6 +962,11 @@ def _exec_script_asset_remote(home: Path, target: Dict[str, Any],
 
 def _run_spec(home: Path, target: Dict[str, Any],
               spec: Dict[str, Any]) -> Dict[str, Any]:
+    # 结构化命令通道（runbook / 编译契约）：命令由 generate_commands 按
+    # action × target × managed_by 确定性生成，合法性已由操作矩阵在动作层裁决
+    # ——不在本层接 tirith（§9 定案 iv；tirith 对 raw_ip_url 等误报会打穿
+    # 生产 runbook 的 IP 探活）。自由文本命令通道（terminal / script_asset）
+    # 仍在各自入口过 tirith。
     if "transfer" in spec:
         return _exec_transfer(home, spec["transfer"])
     if "script_asset" in spec:

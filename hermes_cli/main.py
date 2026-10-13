@@ -752,6 +752,15 @@ try:
 except Exception:
     pass  # best-effort — don't crash the CLI if logging setup fails
 
+# #103（yapl-design §11.8）：config ops.permissions.env 退场——启动时一次性
+# deprecate 警告（字段保留读取兼容，不再参与任何裁决；env 维度已归操作目标实体）。
+try:
+    from tools.ops_permissions import warn_deprecated_active_env as _warn_dep_env
+
+    _warn_dep_env()
+except Exception:
+    pass  # best-effort — 退场提示失败不影响启动
+
 # Apply IPv4 preference early, before any HTTP clients are created.
 # We already determined whether to force IPv4 from the raw yaml read above —
 # this just calls the toggle without a redundant load_config() round trip.

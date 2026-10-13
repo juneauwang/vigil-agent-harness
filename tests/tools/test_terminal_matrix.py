@@ -43,16 +43,6 @@ def tmatrix(tmp_path, monkeypatch):
     """隔离 VIGIL_HOME + config（env + approvals.mode）+ 定制矩阵。"""
     _session_token = approval_module.set_current_session_key(SESSION)
 
-    # batch83：高危变更（reboot 等）按目标实体裁决——铺拓扑表（本机 workstation
-    # env=prod）并注入本机身份，使 systemctl reboot 落到 prod 矩阵行。
-    (tmp_path / "topology.yaml").write_text(
-        "version: 1\n"
-        "environments:\n"
-        "  - {name: prod, isolation: strict, role: prod, core_entities: [workstation]}\n"
-        "core_entities:\n"
-        "  - {name: workstation, type: host, env: prod, endpoint: \"192.168.1.50\"}\n",
-        encoding="utf-8",
-    )
     monkeypatch.setattr(
         "tools.target_resolve._local_host_identities", lambda: ["workstation"])
 
@@ -60,6 +50,18 @@ def tmatrix(tmp_path, monkeypatch):
         if matrix is None:
             matrix = {"prod": {"query": "execute", "restart": "approve",
                                "reboot": {"approve": "required"}}}
+        # #103：env 一律取自目标实体——本机 workstation 与单集群 k3s-<env>
+        # 都登记为该 env，使无 token / kubectl / docker 命令解析到 env 矩阵行。
+        (tmp_path / "topology.yaml").write_text(
+            "version: 4\n"
+            "environments:\n"
+            f"  - {{name: {env}, isolation: relaxed, role: {env}}}\n"
+            "clusters:\n"
+            f"  - {{name: k3s-{env}, env: {env}, type: k3s, endpoint: \"https://203.0.113.15:6443\"}}\n"
+            "hosts:\n"
+            f"  - {{name: workstation, type: host, env: {env}, endpoint: \"192.168.1.50\"}}\n",
+            encoding="utf-8",
+        )
         _write_matrix(tmp_path, matrix)
         (tmp_path / "config.yaml").write_text(
             "ops:\n  permissions:\n    enabled: true\n"
@@ -133,11 +135,11 @@ def test_pipe_query_passes_directly(tmatrix):
 def test_approve_level_rides_smart_approval(tmatrix, monkeypatch):
     """矩阵 approve 档 → smart 判 approve 可自动放行（非 required）。
 
-    batch80（OPS-DELTA #95）起 prod 变更动作一律强制人工（见
-    test_batch80_prod_change_hardgate），approve 档 smart 自动放行语义在非 prod
-    （dev）验证。
+    #103（§11.8）起矩阵是唯一裁决源——approve 档 smart 自动放行语义在 dev 验证
+    （prod 行若为 {approve: required} 才强制人工；batch80 硬门已退役）。
     """
-    tmatrix("dev", mode="smart")
+    tmatrix("dev", mode="smart",
+           matrix={"dev": {"query": "execute", "restart": "approve"}})
     _ask_env(monkeypatch)
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
 
@@ -262,7 +264,8 @@ def test_chain_takes_strictest_matrix_level(tmatrix, monkeypatch):
     batch80 起 prod 变更动作强制人工，approve 档 smart 自动放行的链式语义在
     dev 验证；prod 验证 required 覆盖 smart（不变）。
     """
-    tmatrix("dev", mode="smart")
+    tmatrix("dev", mode="smart",
+           matrix={"dev": {"query": "execute", "restart": "approve"}})
     _ask_env(monkeypatch)
     monkeypatch.setattr(approval_module, "_smart_approve", lambda *_: "approve")
     result = approval_module.check_all_command_guards(
