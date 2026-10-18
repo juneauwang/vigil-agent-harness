@@ -8,6 +8,7 @@ import type { ApprovalItem, ApprovalScope } from "@/lib/api";
 import { isMockEnabled, MOCK_APPROVALS } from "@/lib/mock";
 import { cn } from "@/lib/ops";
 import { notifyApprovalResolved } from "@/lib/approvalEvents";
+import { PageHeader } from "@/components/PageHeader";
 
 /**
  * Approvals center (batch 28 contract):
@@ -182,31 +183,33 @@ export default function ApprovalsPage() {
 
   return (
     <div className="mx-auto w-full max-w-6xl">
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="size-5 text-[var(--vigil-muted)]" />
-          <h1 className="text-lg font-semibold">Approvals</h1>
-        </div>
-        <span className="rounded-full bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-xs text-[var(--vigil-muted)]">
-          {t("approvals.totalBadge", { n: total })}
-        </span>
-        <span className="ml-auto text-xs text-[var(--vigil-muted)]">
-          {t("approvals.timeoutNote")}
-        </span>
-      </div>
-
-      {mockNote && (
-        <div className="mb-3 inline-flex items-center gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-          <Clock className="size-3" /> {t("approvals.mockBadge")}
-        </div>
-      )}
+      <PageHeader
+        icon={<ShieldCheck className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.approvals")}
+        description={t("pageHeader.approvalsDesc")}
+        meta={
+          <>
+            <span className="vigil-badge">{t("approvals.totalBadge", { n: total })}</span>
+            <span className="vigil-badge">{t("approvals.timeoutNote")}</span>
+            {mockNote && (
+              <span className="vigil-badge border-amber-500/40 bg-amber-500/10 text-amber-600">
+                <Clock className="size-3" />
+                {t("approvals.mockBadge")}
+              </span>
+            )}
+          </>
+        }
+        className="mb-4"
+      />
 
       {/* Filter + pagination toolbar */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
+      <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-2 shadow-sm">
         <select
           value={envFilter}
           onChange={(e) => setEnvFilter(e.target.value)}
-          className="vigil-input h-8 w-28 text-xs"
+          className="vigil-input h-8 text-xs"
+          style={{ width: 112 }}
         >
           <option value="">{t("approvals.envAll")}</option>
           <option value="prod">prod</option>
@@ -217,7 +220,8 @@ export default function ApprovalsPage() {
         <select
           value={statusFilter}
           onChange={(e) => setStatusFilter(e.target.value as typeof statusFilter)}
-          className="vigil-input h-8 w-32 text-xs"
+          className="vigil-input h-8 text-xs"
+          style={{ width: 132 }}
         >
           <option value="">{t("approvals.statusAll")}</option>
           <option value="pending">pending</option>
@@ -296,7 +300,8 @@ export default function ApprovalsPage() {
                           <select
                             value={scopeSel[item.id] ?? "once"}
                             onChange={(e) => setScopeSel((m) => ({ ...m, [item.id]: e.target.value as ApprovalScope }))}
-                            className="vigil-input h-6 w-20 text-[10px]"
+                            className="vigil-input h-6 text-[10px]"
+                            style={{ width: 84 }}
                           >
                             <option value="once">once</option>
                             {item.allow_session && <option value="session">session</option>}

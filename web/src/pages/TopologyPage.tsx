@@ -18,11 +18,32 @@ import {
 import { api } from "@/lib/api";
 import type { TopologyCard, TopologyHost, TopologyService, TopologyView } from "@/lib/api";
 import TopologyGraph from "@/components/TopologyGraph";
+import { PageHeader } from "@/components/PageHeader";
 import DetailDrawer from "@/components/DetailDrawer";
 import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
 import { EnvBadge, StatusDot, StatusPill } from "@/components/StatusBits";
 import { cn, lastSeenInfo, matchesSearch, statusAccentClass, statusMatchesFilter, type StatusFilterId } from "@/lib/ops";
 import { entityRawId, type GraphEntityRef } from "@/lib/topologyGraph";
+
+/** Defensive normalization: API mocks / older backends may omit optional
+ *  TopologyView collections; the page must render (and show a useful empty
+ *  state) rather than crash on `undefined.length`. */
+function normalizeTopologyView(data: TopologyView): TopologyView {
+  return {
+    ...data,
+    generated_at: data.generated_at ?? "",
+    data_root: data.data_root ?? "",
+    clusters: data.clusters ?? [],
+    hosts: (data.hosts ?? []).map((host) => ({
+      ...host,
+      services: host.services ?? [],
+    })),
+    cross_host: data.cross_host ?? [],
+    key_paths: data.key_paths ?? [],
+    key_path_entity_names: data.key_path_entity_names ?? [],
+    details: data.details ?? {},
+  };
+}
 
 const STATUS_FILTER_LABELS: Array<{ id: StatusFilterId; key: string }> = [
   { id: "all", key: "topology.filter.all" },
@@ -76,6 +97,30 @@ function ActivityLine({ lastSeen }: { lastSeen?: number }) {
         )}
       />
       <span>{t("topology.activity", { label: info.label })}</span>
+    </div>
+  );
+}
+
+function TopoStat({
+  tone,
+  icon,
+  label,
+  value,
+}: {
+  tone: "clusters" | "hosts" | "services" | "cross" | "deps";
+  icon: React.ReactNode;
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="vigil-card flex items-center gap-3 p-3.5">
+      <div className="topo-stat-icon" data-tone={tone}>
+        {icon}
+      </div>
+      <div className="min-w-0">
+        <div className="truncate text-[11px] text-[var(--vigil-muted)]">{label}</div>
+        <div className="text-lg font-semibold leading-tight tabular-nums">{value}</div>
+      </div>
     </div>
   );
 }
@@ -384,7 +429,7 @@ export default function TopologyPage() {
     api
       .getTopology()
       .then((resp) => {
-        if (resp.ok && resp.data) setView(resp.data);
+        if (resp.ok && resp.data) setView(normalizeTopologyView(resp.data));
       })
       .catch(() => {});
   };
@@ -395,7 +440,7 @@ export default function TopologyPage() {
       .getTopology()
       .then((resp) => {
         if (!alive) return;
-        if (resp.ok && resp.data) setView(resp.data);
+        if (resp.ok && resp.data) setView(normalizeTopologyView(resp.data));
         else setError(resp.error ?? t("topology.loadFailed"));
       })
       .catch((e: unknown) => {
@@ -506,103 +551,119 @@ export default function TopologyPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Toolbar */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2">
-          <Network className="size-5 text-[var(--vigil-muted)]" />
-          <h1 className="text-lg font-semibold">Topology</h1>
+      <PageHeader
+        icon={<Network className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.topology")}
+        description={t("pageHeader.topologyDesc")}
+        meta={
+          view ? (
+            <span className="vigil-badge">
+              <Database className="size-3.5" />
+              {t("topology.dataRoot", { root: view.data_root })}
+            </span>
+          ) : undefined
+        }
+        className="mb-4 shrink-0"
+      >
+        {/* Status filter */}
+        <div className="flex items-center gap-0.5 rounded-[10px] border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
+          {STATUS_FILTER_LABELS.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setFilter(f.id)}
+              className={cn(
+                "rounded-md px-2.5 py-1 text-[11px] transition-colors",
+                filter === f.id
+                  ? "bg-[var(--vigil-primary)] text-white shadow-sm"
+                  : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]",
+              )}
+            >
+              {t(f.key)}
+            </button>
+          ))}
         </div>
 
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          {/* Status filter */}
-          <div className="flex items-center gap-0.5 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
-            {STATUS_FILTER_LABELS.map((f) => (
-              <button
-                key={f.id}
-                type="button"
-                onClick={() => setFilter(f.id)}
-                className={cn(
-                  "rounded px-2 py-0.5 text-[11px] transition-colors",
-                  filter === f.id
-                    ? "bg-[var(--vigil-primary)] text-white"
-                    : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]",
-                )}
-              >
-                {t(f.key)}
-              </button>
-            ))}
-          </div>
-
-          {/* List/card switch */}
-          <div className="flex items-center gap-0.5 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
-            <button
-              type="button"
-              onClick={() => setViewMode("card")}
-              aria-label={t("topology.cardViewAria")}
-              className={cn(
-                "rounded p-1",
-                viewMode === "card"
-                  ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]"
-                  : "text-[var(--vigil-muted)]",
-              )}
-            >
-              <LayoutGrid className="size-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => setViewMode("list")}
-              aria-label={t("topology.listViewAria")}
-              className={cn(
-                "rounded p-1",
-                viewMode === "list"
-                  ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]"
-                  : "text-[var(--vigil-muted)]",
-              )}
-            >
-              <List className="size-3.5" />
-            </button>
-          </div>
-
-          {/* Search（task27 B2: Enter 聚焦首个命中 + 清除按钮 + 命中数提示） */}
-          <div className="flex h-8 w-56 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
-            <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && searchMatch?.first) setFocused(searchMatch.first);
-                if (e.key === "Escape") setQuery("");
-              }}
-              placeholder={t("topology.searchPlaceholder")}
-              data-testid="topology-search"
-              className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
-            />
-            {query ? (
-              <button
-                type="button"
-                onClick={() => setQuery("")}
-                aria-label={t("common.searchClearAria")}
-                className="rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
-              >
-                <X className="size-3.5" />
-              </button>
-            ) : null}
-          </div>
-
-          {/* Batch 85: clear-topology entry (destructive, confirm dialog) */}
+        {/* List/card switch */}
+        <div className="flex items-center gap-0.5 rounded-[10px] border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-0.5">
           <button
             type="button"
-            onClick={() => void handleReset()}
-            disabled={resetting}
-            className="vigil-btn h-8 gap-1 px-2.5 text-xs"
-            aria-label={t("topology.clearTopology")}
-            title={t("topology.clearTitle")}
+            onClick={() => setViewMode("card")}
+            aria-label={t("topology.cardViewAria")}
+            className={cn(
+              "rounded-md p-1.5 transition-colors",
+              viewMode === "card"
+                ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]"
+                : "text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]",
+            )}
           >
-            <Trash2 className="size-3.5" />
-            {resetting ? t("topology.clearing") : t("topology.clearTopology")}
+            <LayoutGrid className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setViewMode("list")}
+            aria-label={t("topology.listViewAria")}
+            className={cn(
+              "rounded-md p-1.5 transition-colors",
+              viewMode === "list"
+                ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]"
+                : "text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]",
+            )}
+          >
+            <List className="size-3.5" />
           </button>
         </div>
-      </div>
+
+        {/* Search */}
+        <div className="flex h-8 w-60 items-center gap-2 rounded-[10px] border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-2.5 focus-within:border-[var(--vigil-primary)] focus-within:ring-2 focus-within:ring-[color-mix(in_srgb,var(--vigil-primary)_16%,transparent)]">
+          <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && searchMatch?.first) setFocused(searchMatch.first);
+              if (e.key === "Escape") setQuery("");
+            }}
+            placeholder={t("topology.searchPlaceholder")}
+            data-testid="topology-search"
+            className="h-full min-w-0 flex-1 bg-transparent text-xs text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
+          />
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              aria-label={t("common.searchClearAria")}
+              className="rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+            >
+              <X className="size-3.5" />
+            </button>
+          ) : null}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => void handleReset()}
+          disabled={resetting}
+          className="vigil-btn ml-auto h-8 gap-1.5 border border-[var(--vigil-error)]/25 px-2.5 text-xs text-[var(--vigil-error)] hover:bg-[var(--vigil-error)]/10 hover:text-[var(--vigil-error)]"
+          aria-label={t("topology.clearTopology")}
+          title={t("topology.clearTitle")}
+        >
+          <Trash2 className="size-3.5" />
+          {resetting ? t("topology.clearing") : t("topology.clearTopology")}
+        </button>
+      </PageHeader>
+
+      {view && !error ? (
+        <div className="mb-4 grid shrink-0 grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-5">
+          <TopoStat tone="clusters" icon={<Layers className="size-4" />} label={t("topology.clustersLabel")} value={view.clusters.length} />
+          <TopoStat tone="hosts" icon={<Server className="size-4" />} label={t("topology.hostsLabel")} value={view.hosts.length} />
+          <TopoStat tone="services" icon={<Database className="size-4" />} label={t("topology.servicesLabel")} value={view.hosts.reduce((n, h) => n + h.services.length, 0)} />
+          <TopoStat tone="cross" icon={<Network className="size-4" />} label={t("topology.crossLabel")} value={view.cross_host.length} />
+          <TopoStat tone="deps" icon={<Link2 className="size-4" />} label={t("topology.depsLabel")} value={depCount} />
+          <span className="sr-only">{t("topology.depCount", { n: depCount })}</span>
+        </div>
+      ) : null}
 
       {error ? (
         <div className="vigil-card border-dashed p-10 text-center text-sm text-[var(--vigil-muted)]">
@@ -610,30 +671,23 @@ export default function TopologyPage() {
         </div>
       ) : view ? (
         <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-          {/* Meta + key-path graph thumbnail */}
-          <div className="mb-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-[var(--vigil-muted)]">
-            <span>{t("topology.dataRoot", { root: view.data_root })}</span>
-            <span>{t("topology.clustersCount", { n: view.clusters.length })}</span>
-            <span>{t("topology.hostsCount", { n: view.hosts.length })}</span>
-            <span>{t("topology.servicesCount", { n: view.hosts.reduce((n, h) => n + h.services.length, 0) })}</span>
-            <span>{t("topology.crossCount", { n: view.cross_host.length })}</span>
-            <span>{t("topology.depCount", { n: depCount })}</span>
-            {searchMatch ? (
+          {searchMatch ? (
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
               <span
                 data-testid="topo-search-hint"
                 className={cn(
-                  "rounded px-1.5 py-px text-[11px]",
+                  "rounded-full px-2 py-0.5 text-[11px]",
                   searchMatch.matched === 0
                     ? "bg-[var(--vigil-muted-bg)] text-[var(--vigil-muted)]"
-                    : "bg-[var(--vigil-muted-bg)] text-[var(--vigil-text)]",
+                    : "bg-[var(--vigil-accent-bg)] text-[var(--vigil-accent-text)]",
                 )}
               >
                 {searchMatch.matched === 0
                   ? t("topology.searchEmpty", { query: query.trim() })
                   : t("topology.searchMatched", { matched: searchMatch.matched, total: searchMatch.total })}
               </span>
-            ) : null}
-          </div>
+            </div>
+          ) : null}
 
           <div className="vigil-card mb-4 p-3">
             <div

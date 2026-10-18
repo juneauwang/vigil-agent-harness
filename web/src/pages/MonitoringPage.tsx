@@ -13,6 +13,7 @@ import type {
   MonitoringValidateTarget,
 } from "@/lib/api";
 import { EmptyState } from "@/components/EmptyState";
+import { PageHeader } from "@/components/PageHeader";
 import { cn, isAlertmanagerUnconfiguredError, isPrometheusUnavailableError } from "@/lib/ops";
 import { translateBackendMessage } from "@/lib/backendMsg";
 
@@ -433,11 +434,13 @@ export default function MonitoringPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl">
-      <div className="mb-4 flex items-center gap-2">
-        <Activity className="size-5 text-[var(--vigil-muted)]" />
-        <h1 className="text-lg font-semibold">Monitoring</h1>
-        <span className="text-xs text-[var(--vigil-muted)]">{t("monitoring.subtitle")}</span>
-      </div>
+      <PageHeader
+        icon={<Activity className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.monitoring")}
+        description={t("pageHeader.monitoringDesc")}
+        className="mb-4"
+      />
 
       <div className="space-y-4">
         {/* 1. Service health */}
@@ -688,14 +691,16 @@ export default function MonitoringPage() {
               onChange={(e) => setDuration(e.target.value)}
               placeholder="duration 30m"
               title={t("monitoring.durationTitle")}
-              className="vigil-input w-28 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2 py-1.5 text-xs outline-none focus:border-[var(--vigil-primary)]"
+              className="vigil-input h-8 text-xs"
+              style={{ width: 132 }}
             />
             <input
               value={step}
               onChange={(e) => setStep(e.target.value)}
               placeholder="step 60s"
               title={t("monitoring.stepTitle")}
-              className="vigil-input w-28 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2 py-1.5 text-xs outline-none focus:border-[var(--vigil-primary)]"
+              className="vigil-input h-8 text-xs"
+              style={{ width: 132 }}
             />
             <button
               type="submit"

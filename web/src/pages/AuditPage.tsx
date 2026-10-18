@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import type { AuditEvent, AuditSessionSummary } from "@/lib/api";
 import { isMockEnabled, MOCK_AUDIT_EVENTS, MOCK_AUDIT_SESSIONS } from "@/lib/mock";
 import { cn } from "@/lib/ops";
+import { PageHeader } from "@/components/PageHeader";
 
 /**
  * Audit page (batch 28 contract, data source already exists — JSON-ified
@@ -133,20 +134,23 @@ export default function AuditPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <History className="size-5 text-[var(--vigil-muted)]" />
-          <h1 className="text-lg font-semibold">Audit</h1>
-          <span className="text-xs text-[var(--vigil-muted)]">{t("audit.subtitle")}</span>
-        </div>
-        <span className="ml-auto text-xs text-[var(--vigil-muted)]">{t("audit.readonlyNote")}</span>
-      </div>
-
-      {mockNote && (
-        <div className="mb-3 inline-flex w-fit items-center gap-1.5 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] text-amber-600 dark:text-amber-400">
-          {t("audit.mockBadge")}
-        </div>
-      )}
+      <PageHeader
+        icon={<History className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.audit")}
+        description={t("pageHeader.auditDesc")}
+        meta={
+          <>
+            <span className="vigil-badge">{t("audit.readonlyNote")}</span>
+            {mockNote && (
+              <span className="vigil-badge border-amber-500/40 bg-amber-500/10 text-amber-600">
+                {t("audit.mockBadge")}
+              </span>
+            )}
+          </>
+        }
+        className="mb-4 shrink-0"
+      />
 
       {error && (
         <div className="mb-3 flex items-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-3 py-2 text-xs">
@@ -209,7 +213,8 @@ export default function AuditPage() {
                 setTypeFilter(e.target.value);
                 setDetail(null); // filter change: clear detail, list refetches
               }}
-              className="vigil-input h-8 w-36 text-xs"
+              className="vigil-input h-8 text-xs"
+              style={{ width: 148 }}
             >
               <option value="">{t("audit.allTypes")}</option>
               <option value="terminal">terminal</option>

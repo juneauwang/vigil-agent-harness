@@ -370,7 +370,7 @@ export default function TopologyGraph({
         // On remount (tab switch back) restore the user's last zoom/pan; fitView only without cache.
         defaultViewport={cachedViewport ?? undefined}
         fitView={cachedViewport == null}
-        fitViewOptions={{ padding: 0.15 }}
+        fitViewOptions={{ padding: 0.08, minZoom: 0.25, maxZoom: 1.0 }}
         minZoom={0.1}
         maxZoom={2.5}
         nodesDraggable
