@@ -38,9 +38,13 @@ from tools.topo_discovery import (
     _L2_INDEX_SYNC_FIELDS,
     _build_local_runner,
     _build_ssh_runner,
+    _env_tier,
     _parse_docker_ps,
+    _read_host_index,
+    _safe_filename,
     discover_host,
     sync_l2_index_row,
+    write_discovery,
 )
 from tools.registry import registry, tool_error
 
@@ -159,11 +163,13 @@ _TOPO_DISCOVER_SCHEMA = {
     "name": "topo_discover",
     "description": (
         "SSH 自动发现主机拓扑（docker/k8s/systemd/端口/GPU/硬件层）并返回 schema v0.4 "
-        "片段。仅发现、不自动落盘（needs_review=true，dry_run 语义默认开启）；"
-        "发现结果只是草案，未经确认不参与权限判定——下一步用 topo_query 查看待审"
-        "实体、topo_update 逐条确认（修正名称/类型/endpoint 并置 needs_review=false）"
-        "后实体才进入权威拓扑。SSH 凭据走 ssh-agent/私钥或既有保险箱+askpass "
-        "注入，不接受明文密码参数。"
+        "片段。默认只出草案：仅发现、不落盘（commit=false），返回片段与下一步指引；"
+        "commit=true 才把发现结果落盘为 needs_review=true 的待审草案（合并语义，"
+        "不改已有人工字段）。PROD 环境落盘需人工审批（非交互场景按审批策略失败）。"
+        "落盘后仍需用 topo_query 查看待审实体，再用 topo_update 逐条确认并置 "
+        "needs_review=false，实体才进入权威拓扑；未经确认不参与权限判定。"
+        "工具不会替你确认。SSH 凭据走 ssh-agent/私钥或既有保险箱+askpass 注入，"
+        "不接受明文密码参数。"
     ),
     "parameters": {
         "type": "object",
@@ -188,13 +194,31 @@ _TOPO_DISCOVER_SCHEMA = {
                 "type": "string",
                 "description": "SSH 私钥路径；缺省走 ssh-agent。",
             },
+            "commit": {
+                "type": "boolean",
+                "description": (
+                    "true = 把发现结果落盘为 needs_review=true 草案（合并语义，"
+                    "不改已有人工 endpoint/type/managed_by 等字段）。默认 false，"
+                    "只返回片段不落盘。PROD 落盘需人工审批。"
+                ),
+            },
+            "reason": {
+                "type": "string",
+                "description": "落盘原因（审批展示与审计用）。",
+            },
             "dry_run": {
                 "type": "boolean",
-                "description": "只预览发现片段，不落盘。工具场景默认 true。",
+                "description": (
+                    "预览开关（commit=false 时有效）；commit=true 显式请求落盘，"
+                    "以 commit 为准。"
+                ),
             },
             "force": {
                 "type": "boolean",
-                "description": "工具场景不自动落盘，此参数仅保留 CLI 对齐。",
+                "description": (
+                    "仅保留 CLI 对齐；工具侧永远不传 force=True——落盘只走合并语义，"
+                    "不允许整体替换用户拓扑。"
+                ),
             },
         },
         "required": ["host", "env"],
@@ -1620,25 +1644,137 @@ def _update_handler(args: Dict[str, Any], **kwargs) -> str:
     )
 
 
+def _tool_bool(value: Any, default: bool = False) -> bool:
+    """工具参数布尔化：兼容 JSON bool / 字符串 / 数字。"""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _discover_handler(args: Dict[str, Any], **kwargs) -> str:
-    """会话内发起拓扑发现：复用 discover_host，只返回片段，不落盘。"""
+    """会话内发起拓扑发现。
+
+    默认（commit=false）复用 discover_host，只返回片段，不落盘——行为与旧版
+    完全一致。commit=true 时把发现结果交给 ``write_discovery(merge=True)``
+    落成 needs_review=true 草案；PROD 档位先过人工审批，且工具侧永不传
+    ``force=True``（不允许整体替换用户拓扑）。
+    """
     host = args.get("host")
     env = args.get("env")
     if not host or not env:
         return tool_error("topo_discover 需要 host 与 env")
+    commit = _tool_bool(args.get("commit"), default=False)
+    reason = str(args.get("reason") or "").strip()[:200]
     creds: Dict[str, Any] = {"user": args.get("user") or "root"}
     if args.get("key"):
         creds["key_path"] = args.get("key")
+    home = _hermes_home()
     discovery = discover_host(str(host), str(env), creds,
                               cluster=str(args.get("cluster") or ""),
-                              home=_hermes_home())
-    pending = len(discovery.get("services") or [])
-    guide = (
-        f"发现完成：{pending} 个实体（全部 needs_review=true）。下一步："
-        "1) topo_query 查看待审实体；2) topo_update 逐条确认（修正名称/类型/"
-        "endpoint，置 needs_review=false）；3) 全部确认后告知用户，实体进入权威拓扑。"
+                              home=home)
+    if not commit:
+        pending = len(discovery.get("services") or [])
+        guide = (
+            f"发现完成：{pending} 个实体（全部 needs_review=true）。下一步："
+            "1) topo_query 查看待审实体；2) topo_update 逐条确认（修正名称/类型/"
+            "endpoint，置 needs_review=false）；3) 全部确认后告知用户，实体进入权威拓扑。"
+        )
+        return json.dumps({**discovery, "_guide": guide}, ensure_ascii=False, default=str)
+
+    # 落盘分支：create 的风险高于 update——prod 必须先过人工审批。
+    # 审批失败时不写 topology.yaml / services / entities / hardware。
+    tier = _env_tier(str(env))
+    approval_used = False
+    if tier == "prod":
+        from tools.approval import request_tool_approval
+        approval_used = True
+        approval = request_tool_approval(
+            "topo_discover",
+            (
+                f"落盘 PROD 拓扑发现草案：host={host} env={env}，"
+                f"服务实体 {len(discovery.get('services') or [])} 个"
+                + (f"，原因：{reason}" if reason else "")
+            ),
+            rule_key=f"topo_discover:commit:{host}:prod",
+        )
+        if not approval.get("approved"):
+            return tool_error(
+                approval.get("message") or "PROD 拓扑发现落盘未获审批，已取消。",
+                approved=False,
+            )
+
+    host_row = discovery.get("host") or {}
+    hostname = _safe_filename(str(host_row.get("name") or ""))
+    before_rows = _read_host_index(home, hostname).get("services") or []
+    before_names = {
+        str(row.get("name")) for row in before_rows
+        if isinstance(row, dict) and row.get("name")
+    }
+
+    try:
+        # 只走合并路径；force 参数仅为 CLI 对齐保留，工具侧永不传 True。
+        result = write_discovery(home=home, discovery=discovery, merge=True)
+    except Exception as exc:
+        return tool_error(f"拓扑发现落盘失败: {exc}")
+
+    after_rows = [
+        row for row in (_read_host_index(home, hostname).get("services") or [])
+        if isinstance(row, dict) and row.get("name")
+    ]
+    new_rows = [
+        row for row in after_rows
+        if str(row.get("name")) not in before_names
+    ]
+    host_is_new = not bool(result.get("merged"))
+    drafts: List[str] = []
+    if host_is_new:
+        drafts.append(hostname)
+    drafts.extend(str(row.get("name")) for row in new_rows)
+
+    review_rows: List[Dict[str, Any]] = list(new_rows)
+    if host_is_new:
+        try:
+            topo = yaml.safe_load((home / _TOPO_FILENAME).read_text(encoding="utf-8")) or {}
+            merged_host = next(
+                (h for h in (topo.get("hosts") or [])
+                 if isinstance(h, dict) and h.get("name") == hostname),
+                None,
+            )
+            if isinstance(merged_host, dict):
+                review_rows.append(merged_host)
+        except Exception:
+            pass
+    all_needs_review = all(
+        row.get("needs_review") is True for row in review_rows
     )
-    return json.dumps({**discovery, "_guide": guide}, ensure_ascii=False, default=str)
+
+    logger.info(
+        "topo_discover commit: host=%s env=%s tier=%s approval=%s "
+        "appended=%s kept=%s drafts=%s reason=%s",
+        host, env, tier, approval_used, result.get("appended"),
+        result.get("kept"), len(drafts), reason[:120],
+    )
+
+    return json.dumps(
+        {
+            "status": "committed",
+            "written": result.get("written") or [],
+            "topology": str(result.get("topology") or ""),
+            "index": str(result.get("index") or ""),
+            "appended": int(result.get("appended") or 0),
+            "kept": int(result.get("kept") or 0),
+            "merged": bool(result.get("merged")),
+            "drafts": drafts,
+            "all_needs_review": all_needs_review,
+            "next": "topo_query 查看待审实体 → topo_update 置 needs_review=false",
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
 
 
 def _status_sync_handler(args: Dict[str, Any], **kwargs) -> str:

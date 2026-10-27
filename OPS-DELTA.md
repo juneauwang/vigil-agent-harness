@@ -5537,3 +5537,33 @@
   `HIGH_RISK_MUTATING_ACTIONS` 死代码 / unresolved 行 set-to-execute）仍不在
   本批；结构化通道撤出 tirith 后，若某天要让命令级扫描回归，必须先量化
   raw_ip_url / credential_file_sweep 等误报率并改扫描器策略（不能直接重挂）。
+
+### 待分配：topo_discover 落盘分支（commit，2026-10-27）
+
+- **背景**：会话内 `topo_discover` 只返回发现片段、不落盘；`topo_update` 又
+  只认已存在实体，导致 agent 无法新建拓扑实体，用户只能手改 YAML 或退回
+  `vigil topo-discover` CLI。schema v0.4 的 `source=agent` 与
+  `needs_review=true` 草案态机制早已存在，缺的是工具侧落盘实现。
+- **改动**：`tools/topo_tools.py` 的 `_TOPO_DISCOVER_SCHEMA` 增加 `commit`
+  （boolean，默认 false）与 `reason`（string），description 改为如实描述
+  「默认不落盘 / commit=true 落草案 / prod 需审批 / 确认仍走 topo_update」。
+  `_discover_handler` 增加 commit 分支：`_env_tier(env) == "prod"` 时先调
+  `request_tool_approval("topo_discover", ..., rule_key=
+  "topo_discover:commit:<host>:prod")`，未批返回 `approved=False` 且不落盘；
+  通过后只调 `write_discovery(merge=True)`，工具侧永不传 `force=True`。
+  返回 `status/written/topology/index/appended/kept/merged/drafts/
+  all_needs_review/next`，不替人把 `needs_review` 置 false。
+- **合并边界**：复用既有 `write_discovery` 语义——同名服务逐字保留
+  `endpoint/type/managed_by/needs_review`；host 治理字段保留、只刷新
+  `last_verified`；同 host 重跑 `appended=0`、实体数不增加；落盘仍是
+  `version: 4`，不出现 `sources/cross_host/key_paths`。
+- **验收**：`tests/tools/test_topo_discover_commit.py` 7 条全绿（commit=false
+  不落盘 / local 落盘 / 人工字段保留 / 幂等 / prod 拒绝 / prod 通过 /
+  v0.4 不降级）；`pytest tests/tools -q -k topo` 回归；本机
+  `127.0.0.1/env=local` 真机预览与落盘、`topo_query` 待审可见、
+  `topo_update` 确认路径已实测。真机落盘前已按目录约定备份。
+- **文档**：`docs/topo-discover-commit.md`（默认行为、commit 语义、prod 审批、
+  幂等与合并边界、备份/回滚、已知限制）。
+- **未做**：`pending_review` 仍不落盘；不改 CLI 参数语义；不改矩阵/权限矩阵；
+  未 push。
+- **任务号**：待用户分配（未自行续编）。
