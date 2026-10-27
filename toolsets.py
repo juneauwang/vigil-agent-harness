@@ -40,6 +40,9 @@ _VIGIL_CORE_TOOLS = [
     "read_terminal", "close_terminal", "open_preview", "read_preview", "focus_pane", "react_to_message",
     # File manipulation
     "read_file", "write_file", "patch", "search_files",
+    # 发布（BookStack；Confluence 只留接口）。无凭证时也常驻工具列表，
+    # 调用时才报缺哪个变量，避免 cron 静默失败。
+    "publish_bookstack",
     # Vision + image generation
     "vision_analyze", "image_generate",
     # BFL FLUX 3 video generation
@@ -218,6 +221,12 @@ TOOLSETS = {
     "file": {
         "description": "File manipulation tools: read, write, patch (with fuzzy matching), and search (content + files)",
         "tools": ["read_file", "write_file", "patch", "search_files"],
+        "includes": []
+    },
+
+    "bookstack": {
+        "description": "Publish Markdown reports to BookStack (create or update by page name)",
+        "tools": ["publish_bookstack"],
         "includes": []
     },
     
