@@ -130,6 +130,24 @@ class TestRunJobScript:
         assert success is True
         assert output == "ABSENT"
 
+    def test_job_context_env_passed_to_script(self, cron_env):
+        """预跑脚本能拿到当前 job 的 id/name（周报排除自身会话用）。"""
+        from cron.scheduler import _run_job_script
+
+        script = cron_env / "scripts" / "job_probe.py"
+        script.write_text(
+            "import os\n"
+            "print(os.environ.get('VIGIL_CRON_JOB_ID', ''))\n"
+            "print(os.environ.get('VIGIL_CRON_JOB_NAME', ''))\n"
+        )
+
+        success, output = _run_job_script(
+            "job_probe.py",
+            job={"id": "job-123", "name": "Vigil 周报"},
+        )
+        assert success is True
+        assert output.splitlines() == ["job-123", "Vigil 周报"]
+
     def test_windows_uv_venv_python_script_bypasses_launcher(self, cron_env, tmp_path, monkeypatch):
         from cron import scheduler as sched_mod
         from cron.scheduler import _run_job_script
