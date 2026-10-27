@@ -65,17 +65,54 @@ def _first(value: Any, *keys: str) -> Any:
     return None
 
 
+def _resolve_from_digest_config() -> Tuple[Dict[str, Any], Optional[str]]:
+    """回落到 ``ops.digest.publish.bookstack``（与 ``vigil digest --publish`` 同一份配置）。
+
+    agent 侧工具与 CLI 侧发布必须读同一处，否则蓝图生成的 agent job 发布不了
+    （配置在 ops.digest 里，工具却只认 env / credentials 文件）。
+    凭证走 ``credential_vault``（值形如 ``token_id:token_secret`` 或 JSON）。
+    """
+    try:
+        from ops.digest import _bookstack_credentials  # 同一解析路径，避免第二份真相
+
+        base_url, book_id, token_id, token_secret = _bookstack_credentials()
+    except Exception as exc:  # 未配置 / 凭据缺失 / 读取失败
+        return {}, str(exc)
+    return {
+        "base_url": base_url,
+        "book_id": book_id,
+        "token_id": token_id,
+        "token_secret": token_secret,
+    }, None
+
+
 def _resolve_config(args: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-    """按「参数 > 环境变量 > 凭证文件」解析配置。"""
+    """按「参数 > 环境变量 > ops.digest 配置 > 旧 credentials 文件」解析配置。"""
     path = get_hermes_home() / _CREDENTIALS_RELATIVE
     file_cfg, file_error = _load_credentials_file(path)
+    digest_cfg, digest_error = ({}, None)
+    if not (args.get("base_url") or args.get("token_id") or args.get("token_secret")) and not os.environ.get(
+        "BOOKSTACK_URL"
+    ) and not os.environ.get("BOOKSTACK_TOKEN_ID"):
+        digest_cfg, digest_error = _resolve_from_digest_config()
 
-    base_url = args.get("base_url") or os.environ.get("BOOKSTACK_URL") or _first(file_cfg, "base_url", "url")
-    token_id = args.get("token_id") or os.environ.get("BOOKSTACK_TOKEN_ID") or _first(file_cfg, "token_id")
+    base_url = (
+        args.get("base_url")
+        or os.environ.get("BOOKSTACK_URL")
+        or _first(file_cfg, "base_url", "url")
+        or _first(digest_cfg, "base_url")
+    )
+    token_id = (
+        args.get("token_id")
+        or os.environ.get("BOOKSTACK_TOKEN_ID")
+        or _first(file_cfg, "token_id")
+        or _first(digest_cfg, "token_id")
+    )
     token_secret = (
         args.get("token_secret")
         or os.environ.get("BOOKSTACK_TOKEN_SECRET")
         or _first(file_cfg, "token_secret", "token")
+        or _first(digest_cfg, "token_secret")
     )
 
     missing_env = []
@@ -87,6 +124,8 @@ def _resolve_config(args: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Opt
         missing_env.append("BOOKSTACK_TOKEN_SECRET")
     if missing_env:
         message = _MISSING_CRED_HELP.format(path=path)
+        if digest_error:
+            message += f"（ops.digest.publish：{digest_error}）"
         if file_error:
             message += f"（{file_error}）"
         return None, message
@@ -95,7 +134,10 @@ def _resolve_config(args: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Opt
         "base_url": str(base_url).strip(),
         "token_id": str(token_id).strip(),
         "token_secret": str(token_secret).strip(),
-        "book_id": args.get("book_id") or os.environ.get("BOOKSTACK_BOOK_ID") or _first(file_cfg, "book_id"),
+        "book_id": args.get("book_id")
+        or os.environ.get("BOOKSTACK_BOOK_ID")
+        or _first(file_cfg, "book_id")
+        or _first(digest_cfg, "book_id"),
     }, None
 
 

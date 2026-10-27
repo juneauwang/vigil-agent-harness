@@ -269,3 +269,36 @@ def test_confluence_target_is_reserved():
 def test_build_target_rejects_unknown():
     with pytest.raises(PublishTargetError):
         build_target("wordpress")
+
+
+def test_resolve_config_falls_back_to_digest_config(monkeypatch):
+    """agent 工具必须能读 ops.digest.publish（否则蓝图生成的 agent job 发不出去）。"""
+    from tools import bookstack_tool as bt
+
+    for env in ("BOOKSTACK_URL", "BOOKSTACK_TOKEN_ID", "BOOKSTACK_TOKEN_SECRET", "BOOKSTACK_BOOK_ID"):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setattr(
+        bt,
+        "_resolve_from_digest_config",
+        lambda: (
+            {"base_url": "http://127.0.0.1:8080", "book_id": 7, "token_id": "tid", "token_secret": "tsec"},
+            None,
+        ),
+    )
+    cfg, err = bt._resolve_config({})
+    assert err is None
+    assert cfg["base_url"] == "http://127.0.0.1:8080"
+    assert cfg["book_id"] == 7
+    assert cfg["token_id"] == "tid"
+    assert cfg["token_secret"] == "tsec"
+
+
+def test_resolve_config_reports_digest_error(monkeypatch):
+    from tools import bookstack_tool as bt
+
+    for env in ("BOOKSTACK_URL", "BOOKSTACK_TOKEN_ID", "BOOKSTACK_TOKEN_SECRET", "BOOKSTACK_BOOK_ID"):
+        monkeypatch.delenv(env, raising=False)
+    monkeypatch.setattr(bt, "_resolve_from_digest_config", lambda: ({}, "未配置 BookStack 发布目标"))
+    cfg, err = bt._resolve_config({})
+    assert cfg is None
+    assert "ops.digest.publish" in err
