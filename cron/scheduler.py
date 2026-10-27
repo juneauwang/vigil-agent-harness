@@ -11,7 +11,9 @@ runs at a time if multiple processes overlap.
 import asyncio
 import atexit
 import concurrent.futures
+import contextlib
 import contextvars
+import io
 import json
 import logging
 import os
@@ -2207,6 +2209,58 @@ def _windows_cron_python_invocation(python_exe: str) -> tuple[str, dict[str, str
     return str(interpreter), env_overlay
 
 
+def _run_builtin_script(script_path: str, job: Optional[dict] = None) -> tuple[bool, str]:
+    """直接 import 执行 ``builtin:<name>``，不起子进程/不做路径 resolve。
+
+    当前只白名单 ``builtin:digest``；job 的 ``script_args`` 原样作为 argv，
+    job id/name 直接传给 ``ops.digest.main``（collect 用 job id 排除自身会话）。
+    stdout/stderr 被捕获并按 cron 脚本同样的规则脱敏后返回。
+    """
+    from cron.builtin_scripts import BUILTIN_SCRIPTS, builtin_name
+
+    name = builtin_name(script_path)
+    if not name or name not in BUILTIN_SCRIPTS:
+        return False, f"Unknown builtin script: {script_path!r}"
+
+    args = [str(arg) for arg in ((job or {}).get("script_args") or [])]
+    job_id = str((job or {}).get("id") or "")
+    job_name = str((job or {}).get("name") or "")
+
+    stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
+    try:
+        if name == "digest":
+            from ops.digest import main as digest_main
+
+            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+                code = digest_main(args, job_id=job_id, job_name=job_name)
+        else:  # pragma: no cover - 白名单已挡住
+            return False, f"Unsupported builtin script: {name!r}"
+    except SystemExit as exc:
+        code = int(exc.code or 0)
+    except Exception as exc:
+        logger.exception("Builtin cron script %s failed", name)
+        return False, f"Builtin script {name} failed: {type(exc).__name__}: {exc}"
+
+    stdout = stdout_buf.getvalue().strip()
+    stderr = stderr_buf.getvalue().strip()
+    try:
+        from agent.redact import redact_sensitive_text
+
+        stdout = redact_sensitive_text(stdout)
+        stderr = redact_sensitive_text(stderr)
+    except Exception:
+        pass
+
+    if code != 0:
+        parts = [f"Builtin script {name} exited with code {code}"]
+        if stderr:
+            parts.append(f"stderr:\n{stderr}")
+        if stdout:
+            parts.append(f"stdout:\n{stdout}")
+        return False, "\n".join(parts)
+    return True, stdout
+
+
 def _run_job_script(
     script_path: str,
     workdir: Optional[str] = None,
@@ -2236,6 +2290,9 @@ def _run_job_script(
     ``VIGIL_CRON_JOB_ID`` / ``VIGIL_CRON_JOB_NAME`` so data-collection
     scripts can exclude their own job's sessions (e.g. weekly digests).
 
+    ``builtin:<name>`` scripts are handled in-process by
+    :func:`_run_builtin_script`; they never touch the scripts directory.
+
     Args:
         script_path: Path to the script.  Relative paths are resolved
             against VIGIL_HOME/scripts/.  Absolute and ~-prefixed paths
@@ -2251,6 +2308,9 @@ def _run_job_script(
         (success, output) — on failure *output* contains the error message so the
         LLM can report the problem to the user.
     """
+    if str(script_path or "").strip().startswith("builtin:"):
+        return _run_builtin_script(str(script_path).strip(), job=job)
+
     scripts_dir = _get_hermes_home() / "scripts"
     scripts_dir.mkdir(parents=True, exist_ok=True)
     scripts_dir_resolved = scripts_dir.resolve()

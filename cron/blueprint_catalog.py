@@ -97,6 +97,9 @@ class AutomationBlueprint:
     deliver_default: str = "origin"
     skills: tuple = ()        # skills the job loads before running
     tags: tuple = ()
+    # Optional builtin script. When set, fill_blueprint emits
+    # script=<name> (e.g. "builtin:digest") instead of a physical file path.
+    script: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +189,58 @@ CATALOG: List[AutomationBlueprint] = [
             _DELIVER,
         ],
         tags=("weekly", "review"),
+    ),
+    AutomationBlueprint(
+        key="weekly-oplog",
+        title="Weekly work log (digest)",
+        description="按「我提的任务 → 实际做的变更」汇总一周，出 Markdown 并可发布到 BookStack",
+        category="weekly",
+        schedule_template="{minute} {hour} * * {dow}",
+        prompt_template=(
+            "你是 Vigil 作业周报撰写者。上面注入的 JSON 是采集器从 state.db "
+            "确定性抽取的作业事实：每个 task 是「用户提出的任务」，task.changes "
+            "是这次任务里真正落地的变更（拓扑字段、文件、runbook、技能、命令）。\n\n"
+            "禁止修改任何数字、时间、对象名、参数值；表格必须与 JSON 逐值一致。\n\n"
+            "按 facts.days 分组写第 1 段。固定五段：\n"
+            "## 1. 本周做了什么\n"
+            "每个 task 一行，写成「做了什么 → 结果」的人话；按天分组，不超过 8 行。\n"
+            "## 2. 变更明细（服务 / 配置 / 参数）\n"
+            "表格五列：时间 | 类型 | 对象 | 变更内容 | 会话。只放 kind 为 "
+            "拓扑/文件/runbook/技能/发布/记忆 的行，参数值原样保留。\n"
+            "## 3. 执行过的写类命令（摘）\n"
+            "每行一条：时间 [动作] 命令摘要；最多 12 条，超出写「另有 N 条未列出」。\n"
+            "## 4. 未闭环与待跟进\n"
+            "只写 end_reason 不是 cli_close/turn_complete 的任务、以及 gaps。\n"
+            "## 5. 下周期\n"
+            "1-3 条，必须对应第 4 段的未闭环项；没有就写「无」。\n\n"
+            "写完后把 Markdown 写到 facts.db 所在目录的 "
+            "reports/Vigil-作业周报-<facts.window.label>.md，然后调用 "
+            "publish_bookstack 发布：name=文件名去 .md，markdown=刚写文件的内容，"
+            "book_id 由工具配置解析。禁止用 curl/terminal 自行发布；发布失败最多"
+            "重试 1 次，仍失败只报错误，禁止编造 URL。最后回报两行：MD 绝对路径；"
+            "BookStack 返回的 action + url。"
+        ),
+        slots=[
+            _TIME("18:00"),
+            BlueprintSlot(
+                name="day", type="enum", label="Which day?",
+                default="friday",
+                options=("friday", "sunday", "monday", "saturday"),
+            ),
+            BlueprintSlot(
+                name="window", type="enum", label="Window",
+                default="7d", options=("7d", "14d"),
+                help="digest 的时间窗",
+            ),
+            BlueprintSlot(
+                name="publish", type="enum", label="Publish to",
+                default="bookstack", options=("bookstack", "file", "none"),
+                help="bookstack 需要先配置 ops.digest.publish",
+            ),
+            _DELIVER,
+        ],
+        script="builtin:digest",
+        tags=("weekly", "digest"),
     ),
     AutomationBlueprint(
         key="workday-start",
@@ -692,6 +747,15 @@ def fill_blueprint(
             )
         resolved[s.name] = raw
 
+    # weekly-oplog 的 publish 默认值跟随 ops.digest.publish.target；未显式
+    # 配置时仍按蓝图默认 bookstack，由 _apply_builtin_script 回退 file。
+    if blueprint.script and "publish" in known and "publish" not in values:
+        from ops.digest import default_publish_target
+
+        configured_target = default_publish_target()
+        if configured_target in ("file", "none"):
+            resolved["publish"] = configured_target
+
     schedule = _resolve_schedule(blueprint, resolved)
 
     # Render the prompt with whatever slots it references.
@@ -710,4 +774,47 @@ def fill_blueprint(
         spec["skills"] = list(blueprint.skills)
     if origin is not None:
         spec["origin"] = origin
+    if blueprint.script:
+        _apply_builtin_script(blueprint, resolved, spec)
     return spec
+
+
+def _apply_builtin_script(
+    blueprint: AutomationBlueprint,
+    resolved: Dict[str, Any],
+    spec: Dict[str, Any],
+) -> None:
+    """把 builtin 脚本蓝图落成 job spec（weekly-oplog 用）。
+
+    默认 agent 模式：``builtin:digest`` 只产 facts，agent 写五段并调用
+    ``publish_bookstack``。publish=file/none 或 BookStack 未配置时回退为
+    no_agent + 确定性 Markdown（未配置发布目标时明确写在 prompt 里）。
+    """
+    from ops.digest import publish_configured
+
+    choice = str(resolved.get("publish") or "bookstack").strip().lower()
+    window = str(resolved.get("window") or "7d")
+    spec["script"] = blueprint.script
+    if choice == "bookstack" and publish_configured():
+        spec["script_args"] = ["--window", window, "--format", "facts"]
+        try:
+            from hermes_cli.config import load_config_readonly
+            from hermes_cli.tools_config import _get_platform_tools
+
+            toolsets = set(_get_platform_tools(load_config_readonly(), "cron"))
+        except Exception:
+            toolsets = set()
+        # publish_bookstack 已从核心工具移除，只挂在 bookstack toolset；
+        # 这条 agent job 显式带上它，避免用户还得手动勾选。
+        toolsets.add("bookstack")
+        spec["enabled_toolsets"] = sorted(toolsets)
+        return
+
+    target = choice if choice in ("file", "none") else "file"
+    spec["script_args"] = ["--window", window, "--format", "md", "--publish", target]
+    spec["no_agent"] = True
+    if choice == "bookstack":
+        spec["prompt"] = spec["prompt"] + (
+            "\n\n注意：未配置 BookStack 发布目标（ops.digest.publish），"
+            "本次回退为 no_agent + file。"
+        )

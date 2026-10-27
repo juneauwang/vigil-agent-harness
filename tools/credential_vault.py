@@ -194,6 +194,23 @@ def retrieve(name: str) -> str:
     return value
 
 
+def list_names() -> list[str]:
+    """列出保险箱中的凭据名（不读值、不打印明文）。"""
+    secrets = _secrets_dir()
+    if not secrets.is_dir():
+        return []
+    names = []
+    for path in secrets.iterdir():
+        try:
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            if _NAME_RE.fullmatch(path.name):
+                names.append(path.name)
+        except OSError:
+            continue
+    return sorted(names)
+
+
 def expire(name: str) -> bool:
     """标记过期并删除保险箱文件（生命周期结束清理）。
 
