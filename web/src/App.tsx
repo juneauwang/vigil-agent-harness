@@ -56,6 +56,12 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/monitoring", label: "common.nav.monitoring", icon: Activity },
 ];
 
+const NAV_GROUPS: Array<{ id: "operate" | "respond" | "observe"; paths: string[] }> = [
+  { id: "operate", paths: ["/chat", "/overview", "/topology", "/runbooks", "/matrix"] },
+  { id: "respond", paths: ["/incidents", "/approvals"] },
+  { id: "observe", paths: ["/audit", "/monitoring"] },
+];
+
 const THEME_KEY = "vigil-console-theme";
 
 function useConsoleTheme() {
@@ -135,10 +141,11 @@ export default function App() {
   // Sidebar: 60px icons-only by default, expandable to 200px
   const [collapsed, setCollapsed] = useState(() => {
     try {
-      return localStorage.getItem("vigil-sidebar-collapsed") !== "0";
-    } catch {
-      return true;
-    }
+      const saved = localStorage.getItem("vigil-sidebar-collapsed");
+      if (saved === "0") return false;
+      if (saved === "1") return true;
+    } catch { /* ignore */ }
+    return typeof window !== "undefined" ? window.innerWidth < 1024 : true;
   });
   const toggleCollapsed = useCallback(() => {
     setCollapsed((prev) => {
@@ -164,12 +171,19 @@ export default function App() {
   return (
     <div className="flex h-dvh min-h-0 flex-col overflow-hidden">
       {/* Top header (h-14, Doubao layout) */}
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-[var(--vigil-border)] bg-[var(--vigil-card)] px-4">
+      <header className="app-header flex h-14 shrink-0 items-center gap-3 border-b border-[var(--vigil-border)] px-4">
         <div className="flex w-[220px] shrink-0 items-center gap-2">
-          <button type="button" onClick={() => navigate("/overview")} className="flex items-center gap-2" aria-label="Vigil">
-            <img src="/favicon.png" alt="Vigil" className="size-5 rounded" />
-            <span className="text-base font-semibold" style={{ color: "var(--vigil-primary)" }}>
-              Vigil
+          <button type="button" onClick={() => navigate("/overview")} className="flex items-center gap-2.5" aria-label="Vigil">
+            <span className="flex size-8 items-center justify-center rounded-[10px] bg-[var(--vigil-accent-bg)] ring-1 ring-[var(--vigil-border)]">
+              <img src="/favicon.png" alt="" className="size-4 rounded" />
+            </span>
+            <span className="flex flex-col items-start leading-none">
+              <span className="text-[15px] font-semibold tracking-tight" style={{ color: "var(--vigil-text)" }}>
+                Vigil
+              </span>
+              <span className="mt-1 hidden text-[8px] font-semibold uppercase tracking-[0.18em] text-[var(--vigil-muted)] sm:block">
+                Ops console
+              </span>
             </span>
           </button>
           {headerMeta.env && (
@@ -192,7 +206,7 @@ export default function App() {
         <div className="ml-auto flex items-center gap-3 text-sm">
           {/* API healthy */}
           <span
-            className={cn("vigil-badge hidden lg:inline-flex", headerMeta.apiOk ? "text-[var(--vigil-ok)]" : "text-[var(--vigil-error)]")}
+            className={cn("vigil-badge vigil-header-meta hidden lg:inline-flex", headerMeta.apiOk ? "text-[var(--vigil-ok)]" : "text-[var(--vigil-error)]")}
             title={t("common.apiHealthTitle")}
           >
             <span className={cn("vigil-status-dot", headerMeta.apiOk ? "dot-ok" : "dot-error")} />
@@ -204,13 +218,13 @@ export default function App() {
             type="button"
             onClick={() => navigate("/approvals")}
             title={t("common.approvalsBadgeTitle")}
-            className="vigil-badge hidden lg:inline-flex hover:bg-[var(--vigil-muted-bg)]"
+            className="vigil-badge vigil-header-meta hidden lg:inline-flex hover:bg-[var(--vigil-muted-bg)]"
           >
             Approvals {approvalPoll.total}
           </button>
 
           {/* Agent uptime */}
-          <span className="vigil-badge hidden lg:inline-flex">Agent upt: {headerMeta.uptime}</span>
+          <span className="vigil-badge vigil-header-meta hidden lg:inline-flex">Agent upt: {headerMeta.uptime}</span>
 
           {/* Light/dark toggle */}
           <button
@@ -238,37 +252,46 @@ export default function App() {
         {/* Left narrow sidebar (60px icons-only by default, expandable to 200px) */}
         <aside
           className={cn(
-            "flex shrink-0 flex-col border-r border-[var(--vigil-border)] bg-[var(--vigil-card)] py-3",
-            collapsed ? "w-[60px]" : "w-[200px]",
+            "app-sidebar flex shrink-0 flex-col border-r border-[var(--vigil-border)] py-3",
+            collapsed ? "w-[60px]" : "w-[220px]",
           )}
         >
-          <nav className="flex flex-1 flex-col items-center gap-1">
-            {NAV_ITEMS.map((item) => {
-              const active = pathname === item.path || pathname.startsWith(item.path + "/");
-              const Icon = item.icon;
-              return (
-                <NavLink
-                  key={item.path}
-                  to={item.path}
-                  title={collapsed ? t(item.label) : undefined}
-                  onClick={() => {
-                    // Clicking the active nav item = back to overview (collapsed-state interaction)
-                    if (active) navigate("/overview");
-                  }}
-                  className={cn(
-                    "flex h-10 items-center rounded-md",
-                    "transition-[background-color,color,box-shadow] ease-out duration-150",
-                    collapsed ? "w-10 justify-center" : "w-[176px] gap-2 px-2.5",
-                    active
-                      ? "bg-gradient-to-r from-[var(--vigil-primary)]/12 to-transparent text-[var(--vigil-primary)] shadow-[inset_3px_0_0_var(--vigil-primary)]"
-                      : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]",
-                  )}
-                >
-                  <Icon className="size-[18px] shrink-0" />
-                  {!collapsed && <span className="truncate text-sm">{t(item.label)}</span>}
-                </NavLink>
-              );
-            })}
+          <nav className="flex flex-1 flex-col gap-1 overflow-y-auto px-2">
+            {NAV_GROUPS.map((group) => (
+              <div key={group.id} className="flex flex-col gap-0.5">
+                {!collapsed && (
+                  <div className="px-2 pb-1 pt-2 text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--vigil-muted)]">
+                    {t(`common.navGroup.${group.id}`)}
+                  </div>
+                )}
+                {NAV_ITEMS.filter((item) => group.paths.includes(item.path)).map((item) => {
+                  const active = pathname === item.path || pathname.startsWith(item.path + "/");
+                  const Icon = item.icon;
+                  return (
+                    <NavLink
+                      key={item.path}
+                      to={item.path}
+                      title={collapsed ? t(item.label) : undefined}
+                      onClick={() => {
+                        // Clicking the active nav item = back to overview.
+                        if (active) navigate("/overview");
+                      }}
+                      className={cn(
+                        "flex h-9 items-center rounded-[9px]",
+                        "transition-[background-color,color,box-shadow] ease-out duration-150",
+                        collapsed ? "mx-auto w-10 justify-center" : "w-full gap-2.5 px-2.5",
+                        active
+                          ? "bg-gradient-to-r from-[var(--vigil-primary)]/14 to-transparent text-[var(--vigil-primary)] shadow-[inset_3px_0_0_var(--vigil-primary)]"
+                          : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]",
+                      )}
+                    >
+                      <Icon className="size-[18px] shrink-0" />
+                      {!collapsed && <span className="truncate text-[13px] font-medium">{t(item.label)}</span>}
+                    </NavLink>
+                  );
+                })}
+              </div>
+            ))}
           </nav>
 
           <div className="flex flex-col items-center gap-1.5 pt-2">
@@ -297,7 +320,7 @@ export default function App() {
         </aside>
 
         {/* Main content */}
-        <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <main className="vigil-app-bg flex min-h-0 min-w-0 flex-1 flex-col">
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             <Suspense
               fallback={

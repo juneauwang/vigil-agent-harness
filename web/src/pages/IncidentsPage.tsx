@@ -7,6 +7,7 @@ import { api, ApiError } from "@/lib/api";
 import type { AutodispatchAuditEntry, AutodispatchAuditStep, IncidentItem } from "@/lib/api";
 import { isMockEnabled } from "@/lib/mock";
 import { EmptyState } from "@/components/EmptyState";
+import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/ops";
 
 /**
@@ -480,18 +481,20 @@ export default function IncidentsPage() {
 
   return (
     <div className="mx-auto w-full max-w-5xl">
-      <div className="mb-4 flex items-center gap-2">
-        <TriangleAlert className="size-5 text-[var(--vigil-muted)]" />
-        <h1 className="text-lg font-semibold">Incidents</h1>
-        <span className="text-xs text-[var(--vigil-muted)]">{t("incidents.subtitle")}</span>
-        {loaded && !error && total > 0 && (
-          <span className="ml-auto rounded bg-[var(--vigil-muted-bg)] px-2 py-0.5 text-xs text-[var(--vigil-muted)]">
-            {t("incidents.totalBadge", { n: total })}
-          </span>
-        )}
-      </div>
+      <PageHeader
+        icon={<TriangleAlert className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.incidents")}
+        description={t("pageHeader.incidentsDesc")}
+        meta={
+          loaded && !error && total > 0 ? (
+            <span className="vigil-badge">{t("incidents.totalBadge", { n: total })}</span>
+          ) : undefined
+        }
+        className="mb-4"
+      />
 
-      <div role="tablist" className="mb-4 flex items-center gap-1.5">
+      <div role="tablist" className="mb-4 flex w-fit items-center gap-1 rounded-xl border border-[var(--vigil-border)] bg-[var(--vigil-card)] p-1 shadow-sm">
         {(["alerts", "autodispatch"] as const).map((key) => {
           const active = tab === key;
           return (
@@ -502,10 +505,10 @@ export default function IncidentsPage() {
               aria-selected={active}
               onClick={() => setTab(key)}
               className={cn(
-                "vigil-btn inline-flex h-8 items-center gap-1.5 border px-3 text-xs",
+                "vigil-btn inline-flex h-8 items-center gap-1.5 border-0 px-3 text-xs",
                 active
-                  ? "border-[var(--vigil-primary)] text-[var(--vigil-text)]"
-                  : "border-[var(--vigil-border)] text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)]",
+                  ? "bg-[var(--vigil-accent-bg)] text-[var(--vigil-accent-text)] shadow-sm"
+                  : "text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)]",
               )}
             >
               {key === "alerts" ? t("incidents.tabAlerts") : t("incidents.tabAutoDispatch")}

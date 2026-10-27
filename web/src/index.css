@@ -64,44 +64,64 @@
 }
 
 /* ------------------------------------------------------------------ */
-/* 豆包色值（浅色默认 / 暗色变体 #0f1c2d 系）                            */
+/* Vigil console design tokens — deep ink / indigo / cyan                */
 /* ------------------------------------------------------------------ */
 :root {
-  --vigil-bg: #f6f8fa;
-  --vigil-primary: #2563eb;
-  --vigil-dark: #0f1c2d;
+  --vigil-bg: #f4f6fb;
+  --vigil-primary: #4f46e5;
+  --vigil-primary-strong: #4338ca;
+  --vigil-primary-soft: #eef2ff;
+  --vigil-dark: #0b1220;
   --vigil-card: #ffffff;
-  --vigil-border: #e1e5eb;
-  --vigil-text: #1f2937;
-  --vigil-text-secondary: #4b5563;
-  --vigil-muted: #6b7280;
-  --vigil-muted-bg: #f1f3f6;
-  --vigil-accent-bg: #e8effd;
-  --vigil-accent-text: #1d4ed8;
-  --vigil-ok: #22c55e;
-  --vigil-warn: #f59e0b;
-  --vigil-error: #ef4444;
-  --vigil-offline: #6b7280;
-  --vigil-terminal-bg: #0f1c2d;
-  --vigil-terminal-text: #d7e0ea;
-  --vigil-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  --vigil-card-soft: #fbfcff;
+  --vigil-border: #e4e9f2;
+  --vigil-border-strong: #d5dce9;
+  --vigil-text: #101828;
+  --vigil-text-secondary: #475467;
+  --vigil-muted: #667085;
+  --vigil-muted-bg: #f0f3f9;
+  --vigil-accent-bg: #eef2ff;
+  --vigil-accent-text: #4338ca;
+  --vigil-cyan: #06b6d4;
+  --vigil-ok: #12b76a;
+  --vigil-warn: #f79009;
+  --vigil-error: #f04438;
+  --vigil-offline: #98a2b3;
+  --vigil-terminal-bg: #0b1220;
+  --vigil-terminal-text: #d0d5dd;
+  --vigil-radius: 14px;
+  --vigil-radius-sm: 10px;
+  --vigil-shadow: 0 1px 2px rgba(16, 24, 40, 0.04), 0 16px 40px -24px rgba(16, 24, 40, 0.22);
+  --vigil-shadow-hover: 0 2px 4px rgba(16, 24, 40, 0.05), 0 24px 48px -24px rgba(16, 24, 40, 0.26);
+  --vigil-ring: 0 0 0 3px color-mix(in srgb, var(--vigil-primary) 18%, transparent);
 }
 
 [data-theme='dark'] {
-  --vigil-bg: #0f1c2d;
-  --vigil-primary: #3b82f6;
-  --vigil-dark: #0a1524;
-  --vigil-card: #16263a;
-  --vigil-border: #24344a;
-  --vigil-text: #e5e7eb;
-  --vigil-text-secondary: #aab6c2;
-  --vigil-muted: #9aa9b8;
-  --vigil-muted-bg: #1c2e44;
-  --vigil-accent-bg: #1c3a5f;
-  --vigil-accent-text: #93c5fd;
-  --vigil-terminal-bg: #0a1524;
-  --vigil-terminal-text: #c9d6e2;
-  --vigil-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  --vigil-bg: #070b14;
+  --vigil-primary: #818cf8;
+  --vigil-primary-strong: #a5b4fc;
+  --vigil-primary-soft: #1b1f4d;
+  --vigil-dark: #050810;
+  --vigil-card: #0d1526;
+  --vigil-card-soft: #111b30;
+  --vigil-border: #1d2a40;
+  --vigil-border-strong: #2a3a55;
+  --vigil-text: #eef2f6;
+  --vigil-text-secondary: #c3ccda;
+  --vigil-muted: #8b9ab0;
+  --vigil-muted-bg: #121e33;
+  --vigil-accent-bg: #1b1f4d;
+  --vigil-accent-text: #c7d2fe;
+  --vigil-cyan: #22d3ee;
+  --vigil-ok: #32d583;
+  --vigil-warn: #fdb022;
+  --vigil-error: #f97066;
+  --vigil-offline: #667085;
+  --vigil-terminal-bg: #050810;
+  --vigil-terminal-text: #cfd8e3;
+  --vigil-shadow: 0 1px 2px rgba(0, 0, 0, 0.45), 0 18px 44px -22px rgba(0, 0, 0, 0.75);
+  --vigil-shadow-hover: 0 2px 6px rgba(0, 0, 0, 0.5), 0 28px 56px -24px rgba(0, 0, 0, 0.85);
+  --vigil-ring: 0 0 0 3px color-mix(in srgb, var(--vigil-primary) 26%, transparent);
 }
 
 * { box-sizing: border-box; }
@@ -137,16 +157,15 @@ body {
 }
 
 /* ------------------------------------------------------------------ */
-/* 组件类（豆包 HTML 风格：1px 细边框 / 圆角 6px / 仅悬浮抽屉极淡阴影）    */
+/* Shared components — ink surfaces, 14px cards, soft elevation         */
 /* ------------------------------------------------------------------ */
 .vigil-card {
   background: var(--vigil-card);
   border: 1px solid var(--vigil-border);
-  border-radius: 6px;
+  border-radius: var(--vigil-radius);
   box-shadow: var(--vigil-shadow);
 }
 
-/* task28 P1.1：可交互卡片 hover 抬升（叠加在 .vigil-card 上，静态卡不加） */
 .vigil-card-interactive {
   transition:
     transform var(--vigil-ease),
@@ -155,45 +174,47 @@ body {
 }
 .vigil-card-interactive:hover {
   transform: translateY(-2px);
-  box-shadow:
-    var(--vigil-shadow),
-    0 6px 18px rgba(0, 0, 0, 0.1);
+  border-color: color-mix(in srgb, var(--vigil-primary) 22%, var(--vigil-border));
+  box-shadow: var(--vigil-shadow-hover);
 }
 
 .vigil-input {
   width: 100%;
-  height: 32px;
+  height: 36px;
   border: 1px solid var(--vigil-border);
-  border-radius: 6px;
-  background: var(--vigil-muted-bg);
+  border-radius: var(--vigil-radius-sm);
+  background: var(--vigil-card-soft);
   color: var(--vigil-text);
-  padding: 0 10px;
-  font-size: 14px;
+  padding: 0 12px;
+  font-size: 13px;
   outline: none;
   font-family: inherit;
+  transition: border-color var(--vigil-ease), box-shadow var(--vigil-ease), background-color var(--vigil-ease);
 }
-.vigil-input:focus { border-color: var(--vigil-primary); }
+.vigil-input:focus {
+  border-color: color-mix(in srgb, var(--vigil-primary) 55%, var(--vigil-border));
+  background: var(--vigil-card);
+  box-shadow: var(--vigil-ring);
+}
 
-/* task27 PART C：带左侧内嵌图标的输入框（图标 absolute left-2.5 → 占位
-   10–24px，30px 左净空 = 10px 图标起点 + 14px 图标宽 + 6px 间隙）。
-   必须用本类而不是 tailwind pl-* 工具类：.vigil-input 是非 layered 规则，
-   CSS 级联中非 layered 恒胜 @layer utilities——pl-8 会被 .vigil-input 的
-   `padding: 0 10px` 吞掉，左净空失效，图标与输入文字重叠（本 bug 根因）。 */
+/* 左侧内嵌图标：34px 左净空（12px 起点 + 14px 图标 + 8px 间隙）。 */
 .vigil-input-icon {
-  padding-left: 30px;
+  padding-left: 34px;
 }
 
 .vigil-badge {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  border: 1px solid var(--vigil-border);
-  border-radius: 6px;
-  padding: 2px 8px;
-  font-size: 12px;
+  gap: 5px;
+  border: 0;
+  border-radius: 9999px;
+  padding: 3px 9px;
+  font-size: 11px;
+  line-height: 1.35;
   color: var(--vigil-muted);
   background: transparent;
-  transition: background-color var(--vigil-ease), color var(--vigil-ease), border-color var(--vigil-ease);
+  box-shadow: inset 0 0 0 1px var(--vigil-border);
+  transition: background-color var(--vigil-ease), color var(--vigil-ease), box-shadow var(--vigil-ease);
 }
 
 .vigil-btn {
@@ -202,15 +223,14 @@ body {
   justify-content: center;
   gap: 6px;
   border: 1px solid transparent;
-  border-radius: 6px;
-  padding: 4px 12px;
-  font-size: 13px;
+  border-radius: 9px;
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
   font-family: inherit;
   cursor: pointer;
   background: transparent;
   color: var(--vigil-text-secondary);
-}
-.vigil-btn {
   transition:
     background-color var(--vigil-ease),
     border-color var(--vigil-ease),
@@ -218,14 +238,24 @@ body {
     transform var(--vigil-ease),
     box-shadow var(--vigil-ease);
 }
-.vigil-btn:hover { background: var(--vigil-muted-bg); transform: translateY(-1px); }
-.vigil-btn:active { transform: translateY(0.5px); filter: brightness(0.96); }
-.vigil-btn:disabled { transition: none; }
-.vigil-btn-primary {
-  background: var(--vigil-primary);
-  color: #fff;
+.vigil-btn:hover {
+  background: var(--vigil-muted-bg);
+  color: var(--vigil-text);
+  transform: translateY(-1px);
 }
-.vigil-btn-primary:hover { opacity: 0.9; background: var(--vigil-primary); }
+.vigil-btn:active { transform: translateY(0.5px); filter: brightness(0.96); }
+.vigil-btn:disabled { transition: none; opacity: 0.5; cursor: not-allowed; }
+.vigil-btn-primary {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--vigil-primary) 88%, white), var(--vigil-primary));
+  border-color: color-mix(in srgb, var(--vigil-primary) 75%, black);
+  color: #fff;
+  box-shadow: 0 6px 16px -8px color-mix(in srgb, var(--vigil-primary) 70%, transparent);
+}
+.vigil-btn-primary:hover {
+  color: #fff;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--vigil-primary) 82%, white), var(--vigil-primary-strong));
+  box-shadow: 0 10px 22px -10px color-mix(in srgb, var(--vigil-primary) 80%, transparent);
+}
 
 .vigil-link {
   color: var(--vigil-primary);
@@ -242,31 +272,30 @@ body {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-  /* task28 P1.1/P1.2：数字列用等宽数字，避免刷新时抖动 */
   font-variant-numeric: tabular-nums;
 }
 .vigil-table th {
   text-align: left;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--vigil-muted);
-  font-size: 11px;
-  padding: 6px 10px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 9px 14px;
   border-bottom: 1px solid var(--vigil-border);
-  /* task28 P2：表格滚动时吸顶表头（非滚动容器内无副作用） */
   position: sticky;
   top: 0;
   z-index: 1;
   background: var(--vigil-card);
 }
 .vigil-table td {
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--vigil-border);
+  padding: 9px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--vigil-border) 75%, transparent);
   color: var(--vigil-text);
 }
 .vigil-table tr:last-child td { border-bottom: none; }
-.vigil-table tbody tr { cursor: pointer; }
-.vigil-table tbody tr { transition: background-color var(--vigil-ease); }
-.vigil-table tbody tr:hover { background: var(--vigil-muted-bg); }
+.vigil-table tbody tr { cursor: pointer; transition: background-color var(--vigil-ease); }
+.vigil-table tbody tr:hover { background: color-mix(in srgb, var(--vigil-muted-bg) 70%, transparent); }
 
 .vigil-status-dot {
   display: inline-block;
@@ -296,16 +325,22 @@ body {
 .pill-offline { background: rgba(107, 114, 128, 0.14); color: var(--vigil-offline); }
 
 .vigil-env {
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 10px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 9999px;
+  padding: 2px 8px;
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: #fff;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
-.env-prod { background: #dc2626; }
-.env-test { background: #d97706; }
-.env-dev { background: #ea580c; }
-.env-local { background: #2563eb; }
-.env-other { background: #6b7280; }
+.env-prod { background: linear-gradient(180deg, #f04438, #d92d20); }
+.env-test { background: linear-gradient(180deg, #f79009, #dc6803); }
+.env-dev { background: linear-gradient(180deg, #f97316, #ea580c); }
+.env-local { background: linear-gradient(180deg, #6366f1, #4f46e5); }
+.env-other { background: linear-gradient(180deg, #98a2b3, #667085); }
 
 .scroll-thin::-webkit-scrollbar { width: 6px; height: 6px; }
 .scroll-thin::-webkit-scrollbar-thumb { background: var(--vigil-border); border-radius: 3px; }
@@ -343,4 +378,550 @@ body {
   .vigil-skeleton::after { animation: none; }
   .vigil-btn:hover { transform: none; }
   .vigil-card-interactive:hover { transform: none; }
+}
+
+/* ------------------------------------------------------------------ */
+/* Ops matrix console —— 权限矩阵页专用设计层（MatrixPage）              */
+/* 三档色板独立于旧 L1-L4：execute / approve / required + manual 覆盖标   */
+/* ------------------------------------------------------------------ */
+:root {
+  --matrix-execute: #059669;
+  --matrix-execute-soft: rgba(5, 150, 105, 0.12);
+  --matrix-execute-border: rgba(5, 150, 105, 0.3);
+  --matrix-approve: #d97706;
+  --matrix-approve-soft: rgba(217, 119, 6, 0.12);
+  --matrix-approve-border: rgba(217, 119, 6, 0.3);
+  --matrix-required: #e11d48;
+  --matrix-required-soft: rgba(225, 29, 72, 0.1);
+  --matrix-required-border: rgba(225, 29, 72, 0.3);
+  --matrix-manual: #7c3aed;
+  --matrix-manual-soft: rgba(124, 58, 237, 0.12);
+}
+
+[data-theme='dark'] {
+  --matrix-execute: #34d399;
+  --matrix-execute-soft: rgba(52, 211, 153, 0.14);
+  --matrix-execute-border: rgba(52, 211, 153, 0.34);
+  --matrix-approve: #fbbf24;
+  --matrix-approve-soft: rgba(251, 191, 36, 0.14);
+  --matrix-approve-border: rgba(251, 191, 36, 0.34);
+  --matrix-required: #fb7185;
+  --matrix-required-soft: rgba(251, 113, 133, 0.14);
+  --matrix-required-border: rgba(251, 113, 133, 0.34);
+  --matrix-manual: #a78bfa;
+  --matrix-manual-soft: rgba(167, 139, 250, 0.14);
+}
+
+/* 主内容区的极淡品牌光锥：只做背景，不抢卡片层级 */
+.vigil-app-bg {
+  background:
+    radial-gradient(1200px 560px at 100% -12%, color-mix(in srgb, var(--vigil-primary) 10%, transparent), transparent 68%),
+    radial-gradient(900px 480px at -8% 30%, color-mix(in srgb, var(--vigil-cyan) 5%, transparent), transparent 65%),
+    var(--vigil-bg);
+}
+
+::selection {
+  background: color-mix(in srgb, var(--vigil-primary) 25%, transparent);
+}
+
+/* 矩阵页 hero：左侧品牌光 + 右侧 required 微光 + 极淡网格纹理 */
+.matrix-hero {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(560px 210px at 0% 0%, color-mix(in srgb, var(--vigil-primary) 13%, transparent), transparent 72%),
+    radial-gradient(420px 190px at 100% 120%, color-mix(in srgb, var(--matrix-required) 8%, transparent), transparent 70%),
+    var(--vigil-card);
+}
+
+.matrix-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.45;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--vigil-text) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--vigil-text) 4%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: linear-gradient(115deg, rgba(0, 0, 0, 0.9), transparent 62%);
+  mask-image: linear-gradient(115deg, rgba(0, 0, 0, 0.9), transparent 62%);
+}
+
+/* 统计卡图标色板 */
+.matrix-stat-icon {
+  display: flex;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+}
+.matrix-stat-icon[data-tone='env'] {
+  background: var(--vigil-accent-bg);
+  color: var(--vigil-accent-text);
+}
+.matrix-stat-icon[data-tone='actions'] {
+  background: var(--matrix-manual-soft);
+  color: var(--matrix-manual);
+}
+.matrix-stat-icon[data-tone='required'] {
+  background: var(--matrix-required-soft);
+  color: var(--matrix-required);
+}
+.matrix-stat-icon[data-tone='manual'] {
+  background: var(--matrix-approve-soft);
+  color: var(--matrix-approve);
+}
+.matrix-stat-icon[data-tone='missing'] {
+  background: var(--vigil-muted-bg);
+  color: var(--vigil-muted);
+}
+
+/* 档位文字色（legend / filter / 摘要） */
+.matrix-level-text[data-level='execute'] { color: var(--matrix-execute); }
+.matrix-level-text[data-level='approve'] { color: var(--matrix-approve); }
+.matrix-level-text[data-level='required'] { color: var(--matrix-required); }
+
+/* 矩阵表：表头与首列双吸顶；横向滚动时动作列常驻 */
+.matrix-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.matrix-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  background: var(--vigil-card);
+  border-bottom: 1px solid var(--vigil-border);
+}
+.matrix-table thead th.matrix-action-col {
+  z-index: 30;
+}
+.matrix-table td {
+  border-bottom: 1px solid var(--vigil-border);
+}
+.matrix-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.matrix-table .matrix-action-col {
+  position: sticky;
+  left: 0;
+  z-index: 10;
+  background: var(--vigil-card);
+}
+.matrix-table tbody tr {
+  transition: background-color var(--vigil-ease);
+}
+.matrix-table tbody tr:hover {
+  background: color-mix(in srgb, var(--vigil-muted-bg) 55%, transparent);
+}
+.matrix-table tbody tr:hover .matrix-action-col {
+  background: var(--vigil-muted-bg);
+}
+.matrix-group-row td {
+  background: color-mix(in srgb, var(--vigil-muted-bg) 62%, transparent);
+  border-bottom: 1px solid var(--vigil-border);
+}
+
+/* 动作风险徽标：全 execute / 含审批 / 含 required */
+.matrix-action-risk {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+}
+.matrix-action-risk[data-risk='execute'] { color: var(--matrix-execute); }
+.matrix-action-risk[data-risk='approve'] { color: var(--matrix-approve); }
+.matrix-action-risk[data-risk='required'] { color: var(--matrix-required); }
+
+/* 三态分段控件 */
+.matrix-seg-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--vigil-border);
+  border-radius: 8px;
+  background: var(--vigil-card);
+  transition: border-color var(--vigil-ease), background-color var(--vigil-ease);
+}
+.matrix-seg-group[data-configured='false'] {
+  border-style: dashed;
+  background: transparent;
+}
+.matrix-seg-group[data-saving='true'] {
+  opacity: 0.55;
+}
+.matrix-seg {
+  display: inline-flex;
+  width: 26px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--vigil-muted);
+  cursor: pointer;
+  transition:
+    background-color var(--vigil-ease),
+    color var(--vigil-ease),
+    box-shadow var(--vigil-ease);
+}
+.matrix-seg:hover {
+  background: var(--vigil-muted-bg);
+  color: var(--vigil-text);
+}
+.matrix-seg:focus-visible {
+  outline: 2px solid var(--vigil-primary);
+  outline-offset: 1px;
+}
+.matrix-seg:disabled {
+  cursor: progress;
+}
+.matrix-seg[data-selected='true'][data-level='execute'] {
+  color: var(--matrix-execute);
+  background: var(--matrix-execute-soft);
+  box-shadow: inset 0 0 0 1px var(--matrix-execute-border);
+}
+.matrix-seg[data-selected='true'][data-level='approve'] {
+  color: var(--matrix-approve);
+  background: var(--matrix-approve-soft);
+  box-shadow: inset 0 0 0 1px var(--matrix-approve-border);
+}
+.matrix-seg[data-selected='true'][data-level='required'] {
+  color: var(--matrix-required);
+  background: var(--matrix-required-soft);
+  box-shadow: inset 0 0 0 1px var(--matrix-required-border);
+}
+
+/* 每格来源标记：manual = 紫点 + 光晕；template = 灰点；missing = 虚线空心 */
+.matrix-source-dot {
+  width: 5px;
+  height: 5px;
+  flex: none;
+  border-radius: 9999px;
+  background: var(--vigil-border);
+}
+.matrix-source-dot[data-source='manual'] {
+  background: var(--matrix-manual);
+  box-shadow: 0 0 0 3px var(--matrix-manual-soft);
+}
+.matrix-source-dot[data-source='template'] {
+  background: var(--vigil-muted);
+  opacity: 0.45;
+}
+.matrix-source-dot[data-source='missing'] {
+  background: transparent;
+  border: 1px dashed var(--vigil-muted);
+  opacity: 0.8;
+}
+
+/* 漏配 warnings 折叠条 */
+.matrix-warning-summary {
+  list-style: none;
+  cursor: pointer;
+}
+.matrix-warning-summary::-webkit-details-marker {
+  display: none;
+}
+
+/* 模板 4 摘要块 */
+.matrix-review-block {
+  border: 1px solid var(--vigil-border);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--vigil-card);
+}
+.matrix-review-block[data-level='execute'] {
+  border-color: var(--matrix-execute-border);
+  background: var(--matrix-execute-soft);
+}
+.matrix-review-block[data-level='approve'] {
+  border-color: var(--matrix-approve-border);
+  background: var(--matrix-approve-soft);
+}
+.matrix-review-block[data-level='required'] {
+  border-color: var(--matrix-required-border);
+  background: var(--matrix-required-soft);
+}
+
+/* Toast / modal 入场（只动 transform/opacity） */
+.matrix-toast {
+  animation: matrix-toast-in 180ms ease-out;
+}
+.matrix-modal {
+  animation: matrix-modal-in 160ms ease-out;
+}
+@keyframes matrix-toast-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@keyframes matrix-modal-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .matrix-toast,
+  .matrix-modal {
+    animation: none;
+  }
+}
+
+/* Header 状态徽标：`.vigil-badge` 是非 layered 规则，会压过 Tailwind 的
+   hidden 工具类；窄屏用显式媒体查询收起，避免 header 换行挤压搜索框。 */
+@media (max-width: 1023px) {
+  .vigil-header-meta {
+    display: none !important;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Page shell: hero header + toolbar, shared by every route             */
+/* ------------------------------------------------------------------ */
+.page-header {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--vigil-border);
+  border-radius: 18px;
+  background:
+    radial-gradient(720px 260px at 0% 0%, color-mix(in srgb, var(--vigil-primary) 12%, transparent), transparent 70%),
+    radial-gradient(520px 220px at 100% 120%, color-mix(in srgb, var(--vigil-cyan) 7%, transparent), transparent 72%),
+    var(--vigil-card);
+  box-shadow: var(--vigil-shadow);
+  padding: 22px;
+}
+
+.page-header::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0.4;
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--vigil-text) 4%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--vigil-text) 4%, transparent) 1px, transparent 1px);
+  background-size: 24px 24px;
+  -webkit-mask-image: linear-gradient(115deg, rgba(0, 0, 0, 0.9), transparent 58%);
+  mask-image: linear-gradient(115deg, rgba(0, 0, 0, 0.9), transparent 58%);
+}
+
+.page-header > * {
+  position: relative;
+  z-index: 1;
+}
+
+.page-header-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.page-header-icon {
+  display: flex;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 14px;
+  background: var(--vigil-accent-bg);
+  color: var(--vigil-accent-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vigil-primary) 14%, transparent);
+}
+
+.page-eyebrow {
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--vigil-muted);
+}
+
+.page-title {
+  margin: 4px 0 0;
+  font-size: 24px;
+  font-weight: 650;
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+  color: var(--vigil-text);
+}
+
+.page-subtitle {
+  margin: 6px 0 0;
+  max-width: 78ch;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--vigil-muted);
+}
+
+.page-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.page-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--vigil-border) 85%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--vigil-muted-bg) 45%, transparent);
+}
+
+.page-header--sm {
+  padding: 16px 18px;
+  border-radius: 14px;
+}
+.page-header--sm .page-header-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 11px;
+}
+.page-header--sm .page-title {
+  font-size: 20px;
+}
+.page-header--sm .page-subtitle {
+  margin-top: 4px;
+  font-size: 11px;
+}
+
+@media (max-width: 640px) {
+  .page-header {
+    padding: 16px;
+    border-radius: 14px;
+  }
+  .page-title {
+    font-size: 20px;
+  }
+  .page-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+  .page-toolbar {
+    margin-top: 12px;
+  }
+}
+
+/* Dark primary button needs a darker gradient (primary is a light indigo). */
+[data-theme='dark'] .vigil-btn-primary {
+  background: linear-gradient(180deg, #6366f1, #4f46e5);
+  border-color: #4338ca;
+  color: #fff;
+  box-shadow: 0 8px 20px -10px rgba(79, 70, 229, 0.8);
+}
+
+/* Thin section label used above card grids / lists. */
+.section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--vigil-muted);
+}
+
+/* Topology summary tiles */
+.topo-stat-icon {
+  display: flex;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 11px;
+}
+.topo-stat-icon[data-tone='clusters'] {
+  background: var(--vigil-accent-bg);
+  color: var(--vigil-accent-text);
+}
+.topo-stat-icon[data-tone='hosts'] {
+  background: color-mix(in srgb, var(--vigil-cyan) 13%, transparent);
+  color: var(--vigil-cyan);
+}
+.topo-stat-icon[data-tone='services'] {
+  background: color-mix(in srgb, var(--vigil-ok) 13%, transparent);
+  color: var(--vigil-ok);
+}
+.topo-stat-icon[data-tone='cross'] {
+  background: color-mix(in srgb, #8b5cf6 13%, transparent);
+  color: #8b5cf6;
+}
+.topo-stat-icon[data-tone='deps'] {
+  background: color-mix(in srgb, var(--vigil-warn) 13%, transparent);
+  color: var(--vigil-warn);
+}
+
+/* App shell surfaces */
+.app-header {
+  background: color-mix(in srgb, var(--vigil-card) 88%, transparent);
+  backdrop-filter: blur(14px);
+}
+.app-sidebar {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--vigil-primary) 4%, var(--vigil-card)), var(--vigil-card) 180px);
+}
+[data-theme='dark'] .app-sidebar {
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--vigil-primary) 7%, var(--vigil-card)), var(--vigil-card) 200px);
+}
+
+/* ReactFlow dark-mode chrome (controls / minimap default to white). */
+.react-flow__controls {
+  overflow: hidden;
+  border: 1px solid var(--vigil-border);
+  border-radius: 10px;
+  box-shadow: var(--vigil-shadow);
+}
+.react-flow__controls-button {
+  background: var(--vigil-card);
+  border-bottom: 1px solid var(--vigil-border);
+  color: var(--vigil-text);
+  fill: currentColor;
+}
+.react-flow__controls-button:hover {
+  background: var(--vigil-muted-bg);
+}
+.react-flow__controls-button svg {
+  fill: currentColor;
+}
+.react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid var(--vigil-border);
+  border-radius: 10px;
+  background: var(--vigil-card);
+}
+.react-flow__minimap svg {
+  background: var(--vigil-card);
+}
+.react-flow__attribution {
+  display: none;
+}
+
+/* MiniMap sits on a white default; force the console surface in both themes. */
+.react-flow__minimap {
+  background: var(--vigil-card) !important;
+}
+.react-flow__minimap svg {
+  background: var(--vigil-card);
+}
+.react-flow__minimap-mask {
+  fill: color-mix(in srgb, var(--vigil-muted-bg) 78%, transparent);
+}
+.react-flow__minimap-node {
+  fill: color-mix(in srgb, var(--vigil-muted) 55%, transparent);
 }

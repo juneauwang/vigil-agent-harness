@@ -3,10 +3,11 @@ import { useNavigate } from "react-router";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { translateBackendMessage } from "@/lib/backendMsg";
-import { ArrowRight, Boxes, ListChecks, Server, TriangleAlert, X } from "lucide-react";
+import { ArrowRight, Boxes, LayoutDashboard, ListChecks, Server, TriangleAlert, X } from "lucide-react";
 import { api } from "@/lib/api";
 import type { RunbookCoverageResponse, RunbookSummary, TopologyView } from "@/lib/api";
 import TopologyGraph from "@/components/TopologyGraph";
+import { PageHeader } from "@/components/PageHeader";
 import DetailDrawer from "@/components/DetailDrawer";
 import { EmptyState } from "@/components/EmptyState";
 import type { GraphEntityRef } from "@/lib/topologyGraph";
@@ -62,7 +63,11 @@ function MetricCard({
         <div className="text-xl font-semibold leading-tight tabular-nums">
           {loading ? <SkeletonValue /> : value}
         </div>
-        {sub && <div className="truncate text-[11px] text-[var(--vigil-muted)] opacity-80">{sub}</div>}
+        {sub && (
+          <div className="line-clamp-2 text-[10px] leading-snug text-[var(--vigil-muted)] opacity-80">
+            {sub}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -186,6 +191,14 @@ export default function OverviewPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-4">
+      <PageHeader
+        icon={<LayoutDashboard className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.overview")}
+        description={t("pageHeader.overviewDesc")}
+        className="shrink-0"
+      />
+
       {error && !view && (
         <div className="vigil-card border-dashed p-6 text-center text-sm text-[var(--vigil-muted)]">
           {translateBackendMessage(error, i18n.language === "en" ? "en" : "zh")}

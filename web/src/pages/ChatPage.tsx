@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { useSearchParams } from "react-router";
 import { api, ApiError } from "@/lib/api";
+import { PageHeader } from "@/components/PageHeader";
 import type { ChatContextUsage, ChatModelOption, ChatSessionSummary, ChatUsageResponse, UsageAnalyticsResponse } from "@/lib/api";
 import {
   approvalIsTimedOut,
@@ -1723,16 +1724,16 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Toolbar: session management */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="flex items-center gap-2">
-          <TerminalSquare className="size-5 text-[var(--vigil-muted)]" />
-          <h1 className="text-lg font-semibold">Chat</h1>
-          <span className="hidden text-xs text-[var(--vigil-muted)] md:inline">{t("chat.headerTagline")}</span>
-        </div>
-
-        <div className="ml-auto flex flex-wrap items-center gap-2">
-          <select
+      <PageHeader
+        icon={<TerminalSquare className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.chat")}
+        description={t("pageHeader.chatDesc")}
+        size="sm"
+        className="mb-4 shrink-0"
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+<select
             value={activeId ?? ""}
             onChange={(e) => switchSession(e.target.value)}
             title={t("chat.sessionSwitchTitle")}
@@ -1791,8 +1792,9 @@ export default function ChatPage() {
           >
             <MessageSquarePlus className="size-3.5" /> {t("chat.newSession")}
           </button>
-        </div>
-      </div>
+          </div>
+        }
+      />
 
       {usageOpen && (
         <UsagePanel

@@ -35,6 +35,7 @@ import type {
   RunbookSummary,
 } from "@/lib/api";
 import YamlEditorDrawer, { type YamlEditorTarget } from "@/components/YamlEditorDrawer";
+import { PageHeader } from "@/components/PageHeader";
 import { DetailTree } from "@/components/DetailTree";
 import { EmptyState } from "@/components/EmptyState";
 import { cn, yamlPreview } from "@/lib/ops";
@@ -929,22 +930,21 @@ export default function RunbooksPage() {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2">
-          <BookOpen className="size-5 text-[var(--vigil-muted)]" />
-          <h1 className="text-lg font-semibold">Runbooks</h1>
-        </div>
-        <span className="ml-auto text-xs text-[var(--vigil-muted)]">
-          {t("runbooks.readonlyNote")}
-        </span>
-      </div>
+      <PageHeader
+        icon={<BookOpen className="size-5" />}
+        eyebrow={t("pageHeader.eyebrow")}
+        title={t("common.nav.runbooks")}
+        description={t("pageHeader.runbooksDesc")}
+        meta={<span className="vigil-badge">{t("runbooks.readonlyNote")}</span>}
+        className="mb-4 shrink-0"
+      />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 lg:grid-cols-[minmax(320px,420px)_1fr]">
         {/* Compact table */}
         <div className="scroll-thin min-h-0 overflow-y-auto">
           {/* task27 PART B1: 列表搜索框（样式与拓扑页搜索框一致） */}
-          <div className="mb-2 flex h-8 items-center gap-2 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-muted-bg)] px-2.5 focus-within:border-[var(--vigil-primary)]">
-            <Search className="size-3.5 shrink-0 text-[var(--vigil-muted)]" />
+          <div className="relative mb-2">
+            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-[var(--vigil-muted)]" />
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -953,14 +953,14 @@ export default function RunbooksPage() {
               }}
               placeholder={t("runbooks.searchPlaceholder")}
               data-testid="runbook-search"
-              className="h-full min-w-0 flex-1 bg-transparent text-sm text-[var(--vigil-text)] outline-none placeholder:text-[var(--vigil-muted)]/60"
+              className="vigil-input vigil-input-icon h-8 pr-8 text-xs"
             />
             {search ? (
               <button
                 type="button"
                 onClick={() => setSearch("")}
                 aria-label={t("common.searchClearAria")}
-                className="rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-[var(--vigil-muted)] hover:text-[var(--vigil-text)]"
               >
                 <X className="size-3.5" />
               </button>
