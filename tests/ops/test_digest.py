@@ -367,3 +367,57 @@ def test_weekly_oplog_blueprint_agent_mode_when_configured(tmp_path, monkeypatch
     assert spec.get("no_agent") is not True
     assert spec["script_args"] == ["--window", "14d", "--format", "facts"]
     assert "bookstack" in spec["enabled_toolsets"]
+
+
+def test_render_md_uses_prose_but_keeps_facts_tables(tmp_path):
+    """模型只交叙述：第 1/4/5 段用 prose，表格仍逐值来自 facts。"""
+    import json as _json
+
+    from ops import digest
+
+    facts = {
+        "window": {"since": "2026-10-20T00:00:00+08:00", "until": "2026-10-27T00:00:00+08:00", "label": "2026-W43"},
+        "totals": {"tasks": 1, "changes": 1, "by_kind": {"拓扑": 1}, "excluded_pipeline_sessions": 0, "active_days": 1},
+        "days": [{"date": "10-21", "task_indexes": [0], "changes": 1, "kinds": {"拓扑": 1}}],
+        "tasks": [{
+            "when": "10-21 10:00", "session": "chat_x", "source": "web", "asks": ["把网关重启"],
+            "change_total": 1, "end_reason": "turn_complete",
+            "changes": [{"kind": "拓扑", "target": "gateway-svc", "detail": "endpoint=1.2.3.4:8080", "why": ""}],
+        }],
+        "gaps": [],
+    }
+    prose = {"summary": "- 重启了网关，服务恢复。", "risks": "- 无。", "next": "1. 观察一天。"}
+    md = digest.render_md(facts, prose)
+    assert "- 重启了网关，服务恢复。" in md
+    assert "## 5. 下周期" in md and "1. 观察一天。" in md
+    # 表格里的参数值必须原样来自 facts，不被 prose 覆盖
+    assert "endpoint=1.2.3.4:8080" in md
+    # prose 覆盖后不再出现模板占位
+    assert "待补：由撰写者" not in md
+
+
+def test_load_prose_default_path_and_fallback(tmp_path):
+    from ops import digest
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    label = "2026-W43"
+    (reports / f"{digest.REPORT_PREFIX}{label}.prose.json").write_text(
+        '{"summary": "S", "risks": "R", "next": "N"}', encoding="utf-8"
+    )
+    prose = digest._load_prose(tmp_path, label, "auto")
+    assert prose == {"summary": "S", "risks": "R", "next": "N"}
+    # 文件不在 → None（回落模板），且不抛
+    assert digest._load_prose(tmp_path, "2026-W99", "auto") is None
+    # 显式 none 强制模板
+    assert digest._load_prose(tmp_path, label, "none") is None
+    # 坏 JSON → None
+    (reports / f"{digest.REPORT_PREFIX}2026-W98.prose.json").write_text("{bad", encoding="utf-8")
+    assert digest._load_prose(tmp_path, "2026-W98", "auto") is None
+
+
+def test_builtin_alert_autodispatch_is_whitelisted():
+    from cron.builtin_scripts import BUILTIN_SCRIPTS, builtin_name
+
+    assert builtin_name("builtin:alert-autodispatch") == "alert-autodispatch"
+    assert BUILTIN_SCRIPTS["alert-autodispatch"] == "hermes_cli.alert_autodispatch"

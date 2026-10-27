@@ -12,6 +12,7 @@ from typing import Optional
 # name -> 实现模块（运行时 import）
 BUILTIN_SCRIPTS = {
     "digest": "ops.digest",
+    "alert-autodispatch": "hermes_cli.alert_autodispatch",
 }
 
 

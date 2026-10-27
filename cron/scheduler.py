@@ -2228,13 +2228,19 @@ def _run_builtin_script(script_path: str, job: Optional[dict] = None) -> tuple[b
 
     stdout_buf, stderr_buf = io.StringIO(), io.StringIO()
     try:
-        if name == "digest":
-            from ops.digest import main as digest_main
+        import importlib
 
-            with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
-                code = digest_main(args, job_id=job_id, job_name=job_name)
-        else:  # pragma: no cover - 白名单已挡住
-            return False, f"Unsupported builtin script: {name!r}"
+        module_name = BUILTIN_SCRIPTS[name]
+        module = importlib.import_module(module_name)
+        main = getattr(module, "main", None)
+        if not callable(main):
+            return False, f"Builtin script {name!r} 的模块 {module_name} 没有 main()"
+        with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(stderr_buf):
+            if name == "digest":
+                # digest 需要 job 上下文（排除本 job 的会话）
+                code = main(args, job_id=job_id, job_name=job_name)
+            else:
+                code = main(args)
     except SystemExit as exc:
         code = int(exc.code or 0)
     except Exception as exc:

@@ -515,7 +515,12 @@ def _json_list(raw):
 # 渲染
 # --------------------------------------------------------------------------
 
-def render_md(facts: dict) -> str:
+def render_md(facts: dict, prose: Optional[Dict[str, str]] = None) -> str:
+    """渲染五段报告。``prose`` 给了就用模型写的叙述（第 1/4/5 段），否则用确定性模板。
+
+    表格与数字永远来自 facts，prose 只能替换叙述段落——这样模型不进不可校验主路径。
+    """
+    prose = prose or {}
     w = facts["window"]
     t = facts["totals"]
     since = datetime.fromisoformat(w["since"]).strftime("%m-%d")
@@ -526,7 +531,11 @@ def render_md(facts: dict) -> str:
     lines.append(f"- 变更构成：{kinds}")
     lines.append(f"- 已排除流水线自身会话：{t['excluded_pipeline_sessions']} 个")
     lines += ["", "## 1. 本周做了什么", ""]
-    if not facts["tasks"]:
+    summary = str(prose.get("summary") or "").strip()
+    if summary:
+        lines.extend(summary.splitlines())
+        lines.append("")
+    elif not facts["tasks"]:
         lines.append("本周期无作业记录。")
     else:
         for day in facts.get("days") or []:
@@ -561,14 +570,21 @@ def render_md(facts: dict) -> str:
         lines.append(f"- 另有 {len(cmds) - 12} 条同类命令未列出")
 
     lines += ["", "## 4. 未闭环与待跟进", ""]
+    risks = str(prose.get("risks") or "").strip()
     pending = [task for task in facts["tasks"] if (task["end_reason"] or "") not in ("cli_close", "turn_complete")]
-    if not pending and not facts["gaps"]:
+    if risks:
+        lines.extend(risks.splitlines())
+        lines.append("")
+    elif not pending and not facts["gaps"]:
         lines.append("无。")
     for task in pending:
         lines.append(f"- {task['when']} {task['asks'][0] if task['asks'] else task['session']}：结束状态 {task['end_reason'] or '未知'}")
     for gap in facts["gaps"]:
         lines.append(f"- 数据缺：{gap}")
-    lines += ["", "## 5. 下周期", "", "- 待补：由撰写者根据第 4 段给出 1-3 条。", ""]
+    next_steps = str(prose.get("next") or "").strip()
+    lines += ["", "## 5. 下周期", ""]
+    lines.extend(next_steps.splitlines() if next_steps else ["- 待补：由撰写者根据第 4 段给出 1-3 条。"])
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -712,6 +728,14 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--format", choices=("facts", "md"), default="facts", help="输出格式（默认 facts）")
     parser.add_argument("--out", default=None, help="写文件；缺省打印 stdout")
     parser.add_argument(
+        "--prose",
+        default="auto",
+        help=(
+            "模型撰写的叙述（JSON：{summary, risks, next}，Markdown 片段）。默认 auto ="
+            "读 <state-dir>/reports/<label>.prose.json；文件不存在则用确定性模板；传 'none' 强制模板。"
+        ),
+    )
+    parser.add_argument(
         "--publish", choices=("none", "file", "bookstack"), default=None,
         help="发布目标（默认 none；weekly-oplog 蓝图按 ops.digest.publish 选择）",
     )
@@ -720,6 +744,33 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         help="额外排除某个 cron job 的会话（可重复，用于已删除的历史测试 job）",
     )
     parser.add_argument("--locale", default="zh", choices=("zh",), help="预留，只做 zh")
+
+
+def _load_prose(state_dir: Path, label: str, spec: str) -> Optional[Dict[str, str]]:
+    """读取模型撰写的叙述。
+
+    ``spec``：``none`` 强制模板；``auto`` 读默认路径；其它当路径。
+    文件不存在/解析失败一律回落模板（报告不能因为缺叙述而失败）。
+    """
+    spec = str(spec or "auto").strip()
+    if spec.lower() == "none":
+        return None
+    path = Path(spec).expanduser() if spec.lower() != "auto" else (
+        state_dir / "reports" / f"{REPORT_PREFIX}{label}.prose.json"
+    )
+    if not path.is_file():
+        if spec.lower() != "auto":
+            print(f"digest: prose 文件不存在，回落模板：{path}", file=sys.stderr)
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        print(f"digest: prose 文件无法解析，回落模板：{path}（{exc}）", file=sys.stderr)
+        return None
+    if not isinstance(data, dict):
+        print(f"digest: prose 顶层必须是对象，回落模板：{path}", file=sys.stderr)
+        return None
+    return {k: str(data.get(k) or "") for k in ("summary", "risks", "next")}
 
 
 def _run(args, *, job_id: Optional[str] = None, job_name: Optional[str] = None) -> int:
@@ -749,12 +800,13 @@ def _run(args, *, job_id: Optional[str] = None, job_name: Optional[str] = None) 
         return 3
 
     target = str(args.publish or "none").strip().lower()
+    prose = _load_prose(state_dir, label, args.prose)
 
     if target == "none":
         if args.format == "facts":
             output = json.dumps(facts, ensure_ascii=False, indent=2)
         else:
-            output = render_md(facts)
+            output = render_md(facts, prose)
         if args.out:
             path = Path(args.out).expanduser()
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -768,7 +820,7 @@ def _run(args, *, job_id: Optional[str] = None, job_name: Optional[str] = None) 
         print("digest: --publish 需要配合 --format md（发布的是渲染稿）", file=sys.stderr)
         return 2
 
-    markdown = render_md(facts)
+    markdown = render_md(facts, prose)
     default_path = state_dir / "reports" / f"{REPORT_PREFIX}{label}.md"
     report_path = Path(args.out).expanduser() if args.out else default_path
     name = report_path.stem
