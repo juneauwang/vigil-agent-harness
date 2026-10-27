@@ -274,9 +274,9 @@ job prompt：
 - job prompt 里的 `<state-dir>` 由 facts 的 `db` 字段（`<state-dir>/state.db`）推导；
   本机是 `/home/wpwang/.vigil`。
 - `--deliver local` 表示投递到本地 cron 输出目录，不往聊天窗口刷屏。
-- 若 `config.yaml` 里保存过显式的 `platform_toolsets.cli` 列表，交互式 CLI 默认
-  不包含新增的 `bookstack` toolset；用 `vigil tools` 勾选一次即可。cron 平台
-  （`hermes-cron`）默认包含它。
+- `publish_bookstack` 是 opt-in：只挂在 `bookstack` toolset、不在核心工具里。
+  需要发布时用 `vigil tools` 勾选；`weekly-oplog` 蓝图会自动把该 toolset 加进
+  生成的 job。
 
 ## Confluence 预留
 

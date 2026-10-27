@@ -5567,3 +5567,36 @@
 - **未做**：`pending_review` 仍不落盘；不改 CLI 参数语义；不改矩阵/权限矩阵；
   未 push。
 - **任务号**：待用户分配（未自行续编）。
+
+### 待分配：作业周报内置化（vigil digest + builtin:digest + weekly-oplog，2026-10-27）
+
+- **背景**：作业周报此前靠往 `~/.vigil/scripts/` 塞 wrapper + 手写采集脚本，
+  换机器就少文件。用户要求「和 prometheus 一样内置，装上就有」。
+- **D1**：`cron/scripts/oplog_digest.py` 的采集/渲染搬到 `ops/digest.py`（facts
+  字段与三条抽取规则不变）；旧脚本保留为 `from ops.digest import main` 薄 shim；
+  `ops` 加入 `pyproject.toml` 的 `packages.find.include`。
+- **D2**：新增 `vigil digest`（`hermes_cli/subcommands/digest.py` +
+  `hermes_cli/digest.py`，`main.py` 注册）。支持 `--window/--week/--since/--until`、
+  `--db/--state-dir`、`--format facts|md`、`--out`、`--publish none|file|bookstack`、
+  `--exclude-job-id`、`--locale zh`。退出码 0/2/3/4；发布失败非 0。
+- **D3**：cron `--script builtin:digest`：创建期白名单（`cron/builtin_scripts.py`），
+  运行期 `cron.scheduler._run_builtin_script` 直接 import 执行，不起子进程/不做
+  路径 resolve；job 的 `script_args` 作 argv，job id/name 传给 `collect()`。
+  物理脚本路径行为不变；`no_agent` stdout 投递语义不变。
+- **D4**：`cron/blueprint_catalog.py` 新增 `weekly-oplog` 蓝图（slots:
+  time/day/window/publish/deliver）。配置了 BookStack → agent 模式
+  （`builtin:digest` 产 facts + prompt 写五段并调 `publish_bookstack`，自动带
+  `bookstack` toolset）；publish=file/none 或未配置 BookStack → no_agent + file，
+  prompt 明确写「未配置发布目标」。
+- **D5**：`ops.digest.publish` 配置化（target/bookstack/base_url/book_id/
+  credential_ref），凭证只走 `credential_vault`；新增 `vigil credential
+  store|list|expire`（不打印明文）。修 `BookstackTarget._find_page`：给了
+  `book_id` 就只认收窄结果，不再跨书更新同名页。`publish_bookstack` 从
+  `_VIGIL_CORE_TOOLS` 移除，只挂 `bookstack` toolset。
+- **D6**：新增 `docs/reports/digest.md`；`docs/reports/oplog-digest.md` 改为迁移
+  指针；`weekly-digest.md` 的 bookstack toolset 说明同步。
+- **验收**：`pytest tests/ -q -k "digest or cron"`；真库 facts/md；wheel 打包含
+  `ops/digest.py`、`cron/scripts/oplog_digest.py`、`tools/publish_targets.py`；
+  干净 venv 安装；真机 BookStack 同名发布两次 created→updated 且 page_id 不变；
+  `weekly-oplog` 蓝图生成 `builtin:digest` job；`vigil cron run` 真跑。
+- **任务号**：待用户分配（未自行续编）。

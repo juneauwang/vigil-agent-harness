@@ -18,6 +18,7 @@ from hermes_constants import display_hermes_home
 
 logger = logging.getLogger(__name__)
 
+
 # Cadence for the heartbeat that keeps the calling agent's inactivity watchdog
 # at bay while a manual `cronjob(action="run")` executes the job synchronously
 # in-process (#76502). Mirrors the 10s cadence of
@@ -529,6 +530,19 @@ def _validate_cron_script_path(script: Optional[str]) -> Optional[str]:
 
     raw = script.strip()
 
+    # 内置脚本：只允许白名单，不落物理路径、不做 resolve。
+    if raw.startswith("builtin:"):
+        from cron.builtin_scripts import BUILTIN_SCRIPTS
+
+        name = raw.split(":", 1)[1].strip()
+        if name in BUILTIN_SCRIPTS:
+            return None
+        allowed = ", ".join(sorted(BUILTIN_SCRIPTS))
+        return (
+            f"未知内置脚本 {raw!r}；可用：{allowed}。"
+            "内置脚本用 builtin:<name>，不要写路径。"
+        )
+
     # Reject absolute paths and ~ expansion at the API boundary.
     # Only relative paths within ~/.vigil/scripts/ are allowed.
     if raw.startswith(("/", "~")) or (len(raw) >= 2 and raw[1] == ":"):
@@ -580,6 +594,8 @@ def _format_job(job: Dict[str, Any]) -> Dict[str, Any]:
     }
     if job.get("script"):
         result["script"] = job["script"]
+    if job.get("script_args"):
+        result["script_args"] = job["script_args"]
     if job.get("no_agent"):
         result["no_agent"] = True
     if job.get("enabled_toolsets"):
@@ -1081,7 +1097,7 @@ Important safety rule: cron-run sessions should not recursively schedule more cr
             },
             "script": {
                 "type": "string",
-                "description": f"Optional path to a script that runs each tick. In the default mode its stdout is injected into the agent's prompt as context (data-collection / change-detection pattern). With no_agent=True, the script IS the job and its stdout is delivered verbatim (classic watchdog pattern). Relative paths resolve under {display_hermes_home()}/scripts/. ``.sh``/``.bash`` extensions run via bash, everything else via Python. On update, pass empty string to clear."
+                "description": f"Optional path to a script that runs each tick. In the default mode its stdout is injected into the agent's prompt as context (data-collection / change-detection pattern). With no_agent=True, the script IS the job and its stdout is delivered verbatim (classic watchdog pattern). Relative paths resolve under {display_hermes_home()}/scripts/. ``.sh``/``.bash`` extensions run via bash, everything else via Python. Builtin scripts use ``builtin:digest`` (no physical file). On update, pass empty string to clear."
             },
             "no_agent": {
                 "type": "boolean",

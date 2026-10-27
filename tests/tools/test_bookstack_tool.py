@@ -109,6 +109,25 @@ def test_same_name_updates_instead_of_creating_duplicate(configured_env, monkeyp
     assert fake.calls[1]["json"] == {"name": NAME, "markdown": MARKDOWN}
 
 
+def test_book_id_never_updates_same_name_in_other_book(configured_env, monkeypatch):
+    """给了 book_id 时，另一本书的同名页不能被误更新（D5 修 bug）。"""
+    fake = _patch_requests(monkeypatch, [
+        # 服务端 filter 返回别的书的同名页；本地收窄后必须视为「不存在」。
+        FakeResponse({"data": [
+            {"id": 8, "book_id": 4, "name": NAME, "slug": "other-book-page"},
+        ]}),
+        FakeResponse({"id": 12, "book_id": 3, "slug": "new-page", "name": NAME}),
+        FakeResponse({"id": 3, "slug": "reports"}),
+    ])
+
+    result = _call({"name": NAME, "markdown": MARKDOWN, "book_id": 3})
+
+    assert result["action"] == "created"
+    assert result["page_id"] == 12
+    assert [call["method"] for call in fake.calls] == ["GET", "POST", "GET"]
+    assert fake.calls[1]["json"]["book_id"] == 3
+
+
 def test_page_id_updates_directly(configured_env, monkeypatch):
     fake = _patch_requests(monkeypatch, [
         FakeResponse({"id": 9, "book_id": 3, "slug": "p9", "name": NAME}),
@@ -211,12 +230,16 @@ def test_tool_is_registered_without_requires_env():
     assert registry.get_schema("publish_bookstack")["name"] == "publish_bookstack"
 
 
-def test_toolset_is_available_for_cron():
-    from hermes_cli.tools_config import _get_platform_tools
+def test_toolset_is_opt_in_not_core():
+    from hermes_cli.tools_config import CONFIGURABLE_TOOLSETS, _get_platform_tools
     from toolsets import resolve_toolset
 
-    assert "publish_bookstack" in resolve_toolset("hermes-cron")
-    assert "bookstack" in _get_platform_tools({}, "cron")
+    # D5：publish_bookstack 不再塞进每个平台的核心 schema；只挂在 bookstack
+    # toolset，需要时显式启用（蓝图 agent job 会自己带上）。
+    assert "publish_bookstack" not in resolve_toolset("hermes-cron")
+    assert "publish_bookstack" in resolve_toolset("bookstack")
+    assert "bookstack" not in _get_platform_tools({}, "cron")
+    assert "bookstack" in {key for key, _label, _desc in CONFIGURABLE_TOOLSETS}
 
 
 # ---------------------------------------------------------------------------

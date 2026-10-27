@@ -187,10 +187,12 @@ class BookstackTarget(PublishTarget):
             return None
         matched = [item for item in items if isinstance(item, dict) and item.get("name") == name]
         if book_id:
-            # 服务端 filter 可能被忽略；本地再按 book_id 收窄，避免跨书误更新。
-            scoped = [item for item in matched if int(item.get("book_id") or 0) == int(book_id)]
-            if scoped:
-                matched = scoped
+            # 服务端 filter 可能被忽略；给了 book_id 就只认收窄结果。
+            # 收窄为空 = 目标书内不存在（新建），绝不回退到别的书的同名页。
+            matched = [
+                item for item in matched
+                if int(item.get("book_id") or 0) == int(book_id)
+            ]
         return matched[0] if matched else None
 
     def _page_url(self, page: Dict[str, Any], page_id: int, book_id: Optional[int]) -> str:

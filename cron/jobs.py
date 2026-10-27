@@ -1256,6 +1256,7 @@ def create_job(
     provider: Optional[str] = None,
     base_url: Optional[str] = None,
     script: Optional[str] = None,
+    script_args: Optional[List[str]] = None,
     context_from: Optional[Union[str, List[str]]] = None,
     enabled_toolsets: Optional[List[str]] = None,
     workdir: Optional[str] = None,
@@ -1285,7 +1286,10 @@ def create_job(
                 injected into the agent's prompt as context (data-collection /
                 change-detection pattern). Paths resolve under
                 ~/.vigil/scripts/; ``.sh`` / ``.bash`` files run via bash,
-                anything else via Python.
+                anything else via Python. ``builtin:digest`` runs the packaged
+                digest directly (no physical script).
+        script_args: Optional argv passed to a ``builtin:`` script (ignored for
+                physical scripts).
         context_from: Optional job ID (or list of job IDs) whose most recent output
                       is injected into the prompt as context before each run.
                       Useful for chaining cron jobs: job A finds data, job B processes it.
@@ -1336,6 +1340,9 @@ def create_job(
     normalized_base_url = _normalize_job_optional_text(base_url, strip_trailing_slash=True)
     normalized_script = str(script).strip() if isinstance(script, str) else None
     normalized_script = normalized_script or None
+    normalized_script_args = [
+        str(arg).strip() for arg in (script_args or []) if str(arg).strip()
+    ] or None
     normalized_toolsets = [str(t).strip() for t in enabled_toolsets if str(t).strip()] if enabled_toolsets else None
     normalized_toolsets = normalized_toolsets or None
     normalized_workdir = _normalize_workdir(workdir)
@@ -1415,6 +1422,7 @@ def create_job(
         "model_snapshot": model_snapshot,
         "base_url": normalized_base_url,
         "script": normalized_script,
+        "script_args": normalized_script_args,
         "no_agent": normalized_no_agent,
         "runbook": normalized_runbook,
         "context_from": context_from,

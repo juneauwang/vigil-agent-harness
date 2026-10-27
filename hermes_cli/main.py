@@ -425,6 +425,8 @@ from hermes_cli.subcommands.cron import build_cron_parser
 from hermes_cli.subcommands.sync import build_sync_parser
 from hermes_cli.subcommands.ops_init import build_ops_init_parser
 from hermes_cli.subcommands.topo_discover import build_topo_discover_parser
+from hermes_cli.subcommands.digest import build_digest_parser
+from hermes_cli.subcommands.credential import build_credential_parser
 from hermes_cli.subcommands.topo_sync import build_topo_sync_parser
 from hermes_cli.subcommands.topo_export import build_topo_export_parser
 from hermes_cli.subcommands.matrix import build_matrix_parser
@@ -4657,6 +4659,20 @@ def cmd_topo_discover(args):
         *(["--force"] if args.force else []),
         *(["--yes"] if args.yes else []),
     ])
+
+
+def cmd_credential(args):
+    """本机凭据保险箱（store/list/expire，不打印明文）。"""
+    from hermes_cli.credential_cmd import cmd_credential as _cmd_credential
+
+    return _cmd_credential(args)
+
+
+def cmd_digest(args):
+    """内置作业周报：采集 facts / 渲染 Markdown / 发布 BookStack。"""
+    from hermes_cli.digest import run_from_args
+
+    return run_from_args(args)
 
 
 def cmd_topo_export(args):
@@ -12913,6 +12929,8 @@ def main():
     # topo-discover command  (parser built in hermes_cli/subcommands/topo_discover.py)
     # =========================================================================
     build_topo_discover_parser(subparsers, cmd_topo_discover=cmd_topo_discover)
+    build_digest_parser(subparsers, cmd_digest=cmd_digest)
+    build_credential_parser(subparsers, cmd_credential=cmd_credential)
     build_topo_sync_parser(subparsers, cmd_topo_sync=cmd_topo_discover)
     build_topo_export_parser(subparsers, cmd_topo_export=cmd_topo_export,
                              cmd_topo_reset=cmd_topo_reset)
