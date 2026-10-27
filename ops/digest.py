@@ -191,18 +191,27 @@ def change_from_call(name: str, raw) -> Optional[dict]:
     return None
 
 
-_WRITE_VERB_RE = re.compile(
-    r"(?i)(?:\b(?:sudo\s+)?(?:kubectl)\s+(?P<kubectl>apply|delete|create|edit|scale|rollout|patch|drain|cordon|taint|label|annotate))"
-    r"|(?:\b(?:helm)\s+(?P<helm>install|upgrade|uninstall|rollback))"
-    r"|(?:\bsystemctl\s+(?P<systemctl>start|stop|restart|reload|enable|disable|mask|unmask))"
-    r"|(?:\bdocker(?:-compose|\s+compose)\s+(?P<compose>up|down|restart|start|stop|rm))"
-    r"|(?:\bdocker\s+(?P<docker>run|rm|stop|start|restart|build|push|exec))"
-    r"|(?:\b(?P<scp>scp|rsync)\b)"
-    r"|(?:\b(?P<fileop>rm|mv|cp|chmod|chown|mkfs|truncate|dd)\s)"
-    r"|(?:\bgit\s+(?P<git>push|reset|checkout|commit|merge|rebase)\b)"
-    r"|(?:\b(?P<sql>DROP|ALTER|DELETE\s+FROM|UPDATE\s+\S+\s+SET)\b)"
-    r"|(?:\b(?P<svc>reboot|shutdown)\b)"
-    r"|(?P<tmux>-X\s+kill-session)"
+# 段首可剥的前缀（命令链被拆段后常见）
+_LEAD_PREFIX_RE = re.compile(
+    r"(?i)^\s*(?:(?:sudo|doas|nohup|time|exec|command|do|then|else|if)\s+)+"
+)
+# 段首的变量赋值（`IMG=xxx kubectl ...`、`BK=$(date) cp ...`）
+_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=(?:\"[^\"]*\"|'[^']*'|\S*)\s+")
+_QUOTED_RE = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+# 必须在段首（剥掉前缀后）才算数的动作——避免 grep 'scp|ssh' 这类文本误命中
+_LEADING_WRITE_RE = re.compile(
+    r"(?i)^(?P<lead>"
+    r"kubectl\s+(?P<kubectl>apply|delete|create|edit|scale|rollout|patch|drain|cordon|taint|label|annotate)"
+    r"|helm\s+(?P<helm>install|upgrade|uninstall|rollback)"
+    r"|systemctl\s+(?P<systemctl>start|stop|restart|reload|enable|disable|mask|unmask)"
+    r"|docker(?:-compose|\s+compose)\s+(?P<compose>up|down|restart|start|stop|rm)"
+    r"|docker\s+(?P<docker>run|rm|stop|start|restart|build|push|exec)"
+    r"|(?P<scp>scp|rsync)"
+    r"|(?P<fileop>rm|mv|cp|chmod|chown|mkfs|truncate|dd)"
+    r"|git\s+(?P<git>push|reset|checkout|commit|merge|rebase)"
+    r"|(?P<svc>reboot|shutdown)"
+    r")(?=\s|$)"
 )
 
 _READ_ONLY_HEADS = (
@@ -212,16 +221,54 @@ _READ_ONLY_HEADS = (
 )
 
 
+def _strip_prefixes(text: str) -> str:
+    """剥掉段首的 sudo/do/nohup 之类前缀与变量赋值（可能叠多层）。"""
+    out = text
+    for _ in range(4):
+        new = _LEAD_PREFIX_RE.sub("", out)
+        new = _ASSIGN_RE.sub("", new, count=1)
+        if new == out:
+            break
+        out = new
+    return out.strip()
+
+
+def _verb_from_leading(text: str) -> Optional[str]:
+    m = _LEADING_WRITE_RE.match(_strip_prefixes(text))
+    if not m:
+        return None
+    for group, value in m.groupdict().items():
+        if group != "lead" and value:
+            return f"{group}:{value.lower()}"
+    return None
+
+
 def write_verb(command: str) -> Optional[str]:
-    """从命令里认出「写类动作」并归一成短标签；认不出返回 None（只读/探测）。"""
+    """从命令里认出「写类动作」并归一成短标签；认不出返回 None（只读/探测）。
+
+    只在**段首**（剥掉 sudo/赋值前缀后）认，避免 `grep -nE 'scp|ssh'` 这类文本
+    把只读命令误判成写操作；`ssh host 'kubectl apply …'` 这种远程包装再对引号
+    内的内容做一次段首匹配。
+    """
     text = str(command or "")
     if not text.strip():
         return None
-    m = _WRITE_VERB_RE.search(text)
-    if m:
-        for group, value in m.groupdict().items():
-            if value:
-                return f"{group}:{value.lower()}"
+    verb = _verb_from_leading(text)
+    if verb:
+        return verb
+    # 引号内的远程命令（`ssh host 'kubectl apply …'`）再试一次段首匹配；
+    # 但 grep/awk/sed 的模式串不是命令，跳过，否则 `grep 'scp |ssh'` 会误判。
+    head = _strip_prefixes(text).split(None, 1)[0].lstrip("./") if text.strip() else ""
+    if head in {"grep", "egrep", "rg", "awk", "sed", "find", "ls", "cat"}:
+        return None
+    for quoted in _QUOTED_RE.findall(text):
+        inner = quoted[1:-1].strip()
+        if not inner:
+            continue
+        for part in _SEG_SPLIT_RE.split(inner):
+            verb = _verb_from_leading(part)
+            if verb:
+                return verb
     return None
 
 
@@ -231,22 +278,53 @@ def looks_read_only(command: str) -> bool:
         return True
     if write_verb(text):
         return False
-    # 含 -X POST/PUT/PATCH/DELETE 或 --data 的 curl 也算写（必须在只读
-    # head 判断之前，否则 curl 会先被当成只读命令）。
-    if re.search(r"(?i)curl\b.*(-X\s*(POST|PUT|PATCH|DELETE)|--data\b|-d\s|--upload-file|-F\s)", text):
+    # 含 -X POST/PUT/PATCH/DELETE 或 --data 的 curl 也算写。
+    # 数据类 flag 区分大小写——`-d` 是 data，`-D` 是 dump-header（只读探测）。
+    if re.search(r"(?i)\bcurl\b", text) and re.search(
+        r"(?i:-X\s*(?:POST|PUT|PATCH|DELETE))|--data\b|(?<![A-Za-z])-d\s|--upload-file|(?<![A-Za-z])-F\s",
+        text,
+    ):
         return False
-    head = re.split(r"[\s;|&]", text, maxsplit=1)[0].lstrip("./")
-    if head in _READ_ONLY_HEADS:
-        return True
     return True
 
 
-def classify_terminal(command: str) -> Optional[dict]:
-    """写类终端命令 → 一条变更记录；只读/探测命令返回 None。"""
-    if looks_read_only(command):
-        return None
-    verb = write_verb(command)
-    return {"kind": "命令", "target": verb or "write", "detail": clean(command, 110), "why": ""}
+_SEG_SPLIT_RE = re.compile(r"\s*(?:&&|\|\||;|\n)\s*")
+
+
+def _segments(command: str) -> list[str]:
+    """按链式操作符拆段（管道不拆：`curl ... | head` 仍算一条）。"""
+    return [seg.strip() for seg in _SEG_SPLIT_RE.split(str(command or "")) if seg.strip()]
+
+
+def _segment_is_upload(seg: str) -> bool:
+    """该段是不是「带数据体的 HTTP 请求」（curl/wget 上传）。
+
+    只看管道的第一节：`curl … | tr -d '\\n'` 里的 `-d` 属于 tr，不算上传。
+    """
+    head = seg.split("|", 1)[0]
+    if not re.search(r"(?i)\b(curl|wget)\b", head):
+        return False
+    return bool(
+        re.search(
+            r"(?i:-X\s*(?:POST|PUT|PATCH|DELETE))|--data\b|(?<![A-Za-z])-d\s|--upload-file|(?<![A-Za-z])-F\s",
+            head,
+        )
+    )
+
+
+def classify_terminal(command: str) -> dict | None:
+    """写类终端命令 → 一条变更记录；只读/探测命令返回 None。
+
+    按链式段逐段判定：只有「真正会改东西的那一段」算变更，detail 也只取那一段，
+    避免把 `sleep 20; echo xxx` 这种复合命令整条记成写操作。
+    """
+    for seg in _segments(command):
+        verb = write_verb(seg)
+        if verb:
+            return {"kind": "命令", "target": verb, "detail": clean(seg, 110), "why": ""}
+        if _segment_is_upload(seg):
+            return {"kind": "命令", "target": "http:upload", "detail": clean(seg, 110), "why": ""}
+    return None
 
 
 def purpose_of(text: str, path: str = "") -> str:
