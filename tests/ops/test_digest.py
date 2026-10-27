@@ -93,6 +93,23 @@ def test_terminal_classification_not_action_classifier():
     assert digest.classify_terminal("curl -X POST http://127.0.0.1:8080/api")["kind"] == "命令"
 
 
+def test_curl_flags_are_case_sensitive():
+    # -D 是 dump-header（只读探测），-d 才是 data（写）。整串 (?i) 会把 -D 误判成 -d。
+    assert digest.classify_terminal(
+        "curl -s -o /dev/null -D - -m 8 http://47.120.50.110:30443/v2/ | head -12"
+    ) is None
+    assert digest.classify_terminal("curl -sI http://127.0.0.1:8080/login") is None
+    assert digest.classify_terminal("curl -s -d 'a=1' http://x/api")["kind"] == "命令"
+    assert digest.classify_terminal("curl --data-binary @f.json http://x/api")["kind"] == "命令"
+    assert digest.classify_terminal("curl -F file=@a.png http://x/up")["kind"] == "命令"
+    # grep 的模式串不是命令：`grep 'scp |ssh'` 不能算写操作。
+    assert digest.classify_terminal("grep -rn 'scp \\|ssh -\\|SSH_KEY' ~/.vigil") is None
+    # ssh 包装的远程写操作要认出来（引号内段首匹配）。
+    assert digest.classify_terminal(
+        "ssh root@h 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml; kubectl apply -f dep.yaml'"
+    )["target"] == "kubectl:apply"
+
+
 def test_purpose_of_prefers_comment_then_yaml():
     assert digest.purpose_of("# 备份脚本\nset -e\n") == "备份脚本"
     assert digest.purpose_of("kind: Deployment\nmetadata:\n  name: web\n") == "kind: Deployment"
