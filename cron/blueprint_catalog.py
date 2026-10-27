@@ -229,8 +229,8 @@ CATALOG: List[AutomationBlueprint] = [
             ),
             BlueprintSlot(
                 name="window", type="enum", label="Window",
-                default="7d", options=("7d", "14d"),
-                help="digest 的时间窗",
+                default="7d", options=("7d", "14d", "30d"),
+                help="digest 的时间窗（也可在 config 里设 ops.digest.window 作缺省）",
             ),
             BlueprintSlot(
                 name="publish", type="enum", label="Publish to",

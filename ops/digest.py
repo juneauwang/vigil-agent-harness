@@ -30,6 +30,7 @@ MAX_CHANGES_PER_TASK = 40
 EXCLUDED_SOURCES = ("cron", "subagent")
 
 REPORT_PREFIX = "Vigil-作业周报-"
+DEFAULT_WINDOW = "7d"
 
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?\S+"),
@@ -602,6 +603,27 @@ def _load_publish_config() -> Dict[str, Any]:
     return publish if isinstance(publish, dict) else {}
 
 
+def default_window() -> str:
+    """``ops.digest.window``（缺省/非法回落 ``7d``）。
+
+    只影响「命令行完全没给窗口参数」的场景：``--window`` / ``--week`` /
+    ``--since`` 任意一个存在时都以显式参数为准。
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+    except Exception:
+        return DEFAULT_WINDOW
+    value = str(((cfg.get("ops") or {}).get("digest") or {}).get("window") or "").strip()
+    if not value:
+        return DEFAULT_WINDOW
+    if not re.fullmatch(r"\d+[dhmw]", value, re.IGNORECASE) or int(value[:-1]) <= 0:
+        print(f"digest: 忽略非法的 ops.digest.window={value!r}，用 {DEFAULT_WINDOW}",
+              file=sys.stderr)
+        return DEFAULT_WINDOW
+    return value
+
+
 def default_publish_target() -> str:
     """config.yaml 里显式设置的发布目标（未配置/非法返回空串）。"""
     target = str(_load_publish_config().get("target") or "").strip().lower()
@@ -719,7 +741,8 @@ def publish_markdown(
 # --------------------------------------------------------------------------
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--window", default=None, help="滚动窗口，如 7d / 24h / 2w（默认 7d）")
+    parser.add_argument("--window", default=None,
+                        help="滚动窗口，如 7d / 24h / 2w（缺省读 ops.digest.window，再缺省 7d）")
     parser.add_argument("--week", default=None, help="ISO 周，如 2026-W43")
     parser.add_argument("--since", default=None, help="窗口起点（含）")
     parser.add_argument("--until", default=None, help="窗口终点（不含）")
@@ -775,6 +798,8 @@ def _load_prose(state_dir: Path, label: str, spec: str) -> Optional[Dict[str, st
 
 def _run(args, *, job_id: Optional[str] = None, job_name: Optional[str] = None) -> int:
     now = datetime.now(SHANGHAI)
+    if not (args.window or args.week or args.since or args.until):
+        args.window = default_window()
     try:
         since, until, label = parse_window(args, now)
     except ValueError as exc:

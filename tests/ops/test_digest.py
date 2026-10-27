@@ -369,6 +369,39 @@ def test_weekly_oplog_blueprint_agent_mode_when_configured(tmp_path, monkeypatch
     assert "bookstack" in spec["enabled_toolsets"]
 
 
+def test_default_window_reads_config(tmp_path, monkeypatch):
+    """ops.digest.window 作为「命令行没给窗口」时的缺省。"""
+    home = tmp_path / "home"
+    home.mkdir()
+    (home / "config.yaml").write_text(
+        "ops:\n  digest:\n    window: 14d\n", encoding="utf-8"
+    )
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    assert digest.default_window() == "14d"
+
+    # 显式参数仍然压倒配置
+    code = digest.main(["--db", str(FIXTURE_DB), "--since", WINDOW[0],
+                        "--until", WINDOW[1], "--format", "facts"])
+    assert code == 0
+
+
+def test_default_window_fallback_and_bad_value(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("VIGIL_HOME", str(home))
+    assert digest.default_window() == "7d"
+
+    (home / "config.yaml").write_text(
+        "ops:\n  digest:\n    window: nonsense\n", encoding="utf-8"
+    )
+    assert digest.default_window() == "7d"
+
+    (home / "config.yaml").write_text(
+        "ops:\n  digest:\n    window: 0d\n", encoding="utf-8"
+    )
+    assert digest.default_window() == "7d"
+
+
 def test_render_md_uses_prose_but_keeps_facts_tables(tmp_path):
     """模型只交叙述：第 1/4/5 段用 prose，表格仍逐值来自 facts。"""
     import json as _json

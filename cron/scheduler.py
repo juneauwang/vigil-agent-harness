@@ -2212,7 +2212,8 @@ def _windows_cron_python_invocation(python_exe: str) -> tuple[str, dict[str, str
 def _run_builtin_script(script_path: str, job: Optional[dict] = None) -> tuple[bool, str]:
     """直接 import 执行 ``builtin:<name>``，不起子进程/不做路径 resolve。
 
-    当前只白名单 ``builtin:digest``；job 的 ``script_args`` 原样作为 argv，
+    当前白名单：``builtin:digest``（作业周报）与 ``builtin:alert-autodispatch``
+    （告警自动派发）。job 的 ``script_args`` 原样作为 argv。
     job id/name 直接传给 ``ops.digest.main``（collect 用 job id 排除自身会话）。
     stdout/stderr 被捕获并按 cron 脚本同样的规则脱敏后返回。
     """

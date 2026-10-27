@@ -28,8 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-import sys
+import re
 import threading
 import time
 from pathlib import Path
@@ -414,29 +413,34 @@ def _iso_now() -> str:
 
 
 # ---------------------------------------------------------------------------
-# cron 注册（task18 topo_sync 同款：no_agent job，0700 脚本，固定 VIGIL_HOME）
+# cron 注册（no_agent job，走内置脚本 builtin:alert-autodispatch）
+#
+# 历史：早期版本在 ``<VIGIL_HOME>/runtime/alert_autodispatch.sh`` 落一个 0700
+# 脚本再让 cron 执行它。但 cron 只允许执行本 profile ``scripts/`` 目录下的脚本，
+# 该路径被判为越界（``Blocked: script path resolves outside the scripts
+# directory``），于是自动派发长期处于 error。现在改为注册内置脚本名，与
+# ``builtin:digest`` 同一机制：运行期直接 import 模块调 ``main()``，不落文件。
 # ---------------------------------------------------------------------------
 
-def _script_path(home: Path) -> Path:
-    return home / "runtime" / "alert_autodispatch.sh"
+_JOB_SCRIPT = "builtin:alert-autodispatch"
 
 
-def _write_script(home: Path) -> Path:
-    """生成 cron 用的派发脚本（每 tick 重读配置门，关了就不派发）。"""
-    path = _script_path(home)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    python = sys.executable or "python3"
-    home_str = str(home).replace('"', '\\"')
-    path.write_text(
-        "#!/bin/sh\n"
-        "# vigil alerts auto-dispatch（cron no_agent job 用；opt-in，配置门在模块内重读）。\n"
-        f'VIGIL_HOME="{home_str}"\n'
-        "export VIGIL_HOME\n"
-        f'exec "{python}" -m hermes_cli.alert_autodispatch\n',
-        encoding="utf-8",
-    )
-    os.chmod(path, 0o700)
-    return path
+def _normalize_interval(value: str) -> str:
+    """``5m`` → ``every 5m``（周期语义）。
+
+    cron 的 ``parse_schedule("5m")`` 意思是**一次性，5 分钟后**；本函数入参的意思
+    是**每 5 分钟**。不归一化就会建出跑完即结束的 job（历史现象：job 一直是
+    ``once`` + ``repeat.times=1``，跑一次变 ``completed``，自动派发其实没在值守）。
+    cron 表达式（5 段以上）与已带 ``every`` 前缀的值原样保留。
+    """
+    text = str(value or "").strip()
+    if not text or text.lower() == "off":
+        return text
+    if text.lower().startswith("every ") or len(text.split()) >= 5:
+        return text
+    if re.fullmatch(r"\d+\s*[smhdw]", text, re.IGNORECASE):
+        return f"every {text}"
+    return text
 
 
 def _existing_job():
@@ -457,7 +461,7 @@ def register_alert_autodispatch_schedule(interval: str,
     from cron.jobs import create_job, remove_job, update_job, use_cron_store
 
     home = Path(home or _active_home()).resolve()
-    interval = str(interval or "").strip()
+    interval = _normalize_interval(interval)
     with use_cron_store(home):
         existing = _existing_job()
         if not interval or interval.lower() == "off":
@@ -467,27 +471,33 @@ def register_alert_autodispatch_schedule(interval: str,
                 return "unregistered"
             print("· 未注册 alert 自动派发，无需注销。")
             return "noop"
-        script = _write_script(home)
         if existing:
             update_job(str(existing["id"]), {
                 "schedule": interval,
                 "schedule_display": interval,
-                "script": str(script),
+                "script": _JOB_SCRIPT,
                 "no_agent": True,
+                # 复活历史遗留记录：老 job 可能是 once + repeat 用完 + enabled
+                # false，只改 schedule 不会重新触发，必须把这三项一起复位。
+                "enabled": True,
+                "state": "scheduled",
+                "repeat": {"times": None, "completed": 0},
+                "paused_at": None,
+                "paused_reason": None,
             })
             print(f"· alert 自动派发已更新：{interval}（cron job {existing['id']}，"
-                  f"脚本 {script}）。")
+                  f"脚本 {_JOB_SCRIPT}）。")
             return "updated"
         job = create_job(
             prompt=None,
             schedule=interval,
             name=_JOB_NAME,
-            script=str(script),
+            script=_JOB_SCRIPT,
             no_agent=True,
             deliver="local",
         )
         print(f"· alert 自动派发已注册：{interval}（cron job {job['id']}，"
-              f"脚本 {script}）。注意：还需 ops.alerts.auto_dispatch.enabled: true "
+              f"脚本 {_JOB_SCRIPT}）。注意：还需 ops.alerts.auto_dispatch.enabled: true "
               "才会实际派发（配置门每次 tick 重读）。")
         return "registered"
 
@@ -500,3 +510,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"alert auto-dispatch error: {exc}", flush=True)
         return _STATUS_ERROR
     return _STATUS_OK
+
+
+if __name__ == "__main__":  # `python -m hermes_cli.alert_autodispatch` 跑一次 tick
+    raise SystemExit(main())

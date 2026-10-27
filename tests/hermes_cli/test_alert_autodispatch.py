@@ -528,18 +528,21 @@ class TestRegistration:
     def test_register_and_unregister(self, ahome):
         out = ad.register_alert_autodispatch_schedule("5m", ahome)
         assert out == "registered"
-        script = ahome / "runtime" / "alert_autodispatch.sh"
-        assert script.is_file()
-        assert (script.stat().st_mode & 0o777) == 0o700
-        body = script.read_text(encoding="utf-8")
-        assert f'VIGIL_HOME="{ahome}"' in body
-        assert "-m hermes_cli.alert_autodispatch" in body
+
+        # 内置脚本，不落外部 .sh（旧实现落在 runtime/ 下，被 cron 越界检查拦死）
+        assert not (ahome / "runtime" / "alert_autodispatch.sh").exists()
 
         from cron.jobs import list_jobs, use_cron_store
         with use_cron_store(ahome):
             jobs = [j for j in list_jobs(include_disabled=True)
                     if str(j.get("name")) == "alert_autodispatch"]
         assert len(jobs) == 1 and jobs[0]["no_agent"] is True
+        assert jobs[0]["script"] == "builtin:alert-autodispatch"
+        assert jobs[0]["enabled"] is True and jobs[0]["next_run_at"]
+        # "5m" 的语义是「每 5 分钟」，不能被 parse_schedule 当成一次性 5 分钟后
+        assert jobs[0]["schedule"]["kind"] == "interval"
+        assert jobs[0]["schedule"]["minutes"] == 5
+        assert jobs[0]["repeat"]["times"] is None
 
         # 幂等更新
         assert ad.register_alert_autodispatch_schedule("10m", ahome) == "updated"
