@@ -6,9 +6,11 @@ import argparse
 import importlib.util
 import json
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -34,13 +36,17 @@ def load_module():
     return module
 
 
-def run_cli(*args: str, timeout: int = 60) -> subprocess.CompletedProcess:
+def run_cli(*args: str, timeout: int = 60, env: dict | None = None) -> subprocess.CompletedProcess:
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
         capture_output=True,
         text=True,
         timeout=timeout,
         cwd=str(ROOT),
+        env=run_env,
     )
 
 
@@ -193,6 +199,132 @@ def test_zero_sessions_does_not_crash(tmp_path):
         "failed_sessions": 0, "tokens": {"in": 0, "out": 0},
     }
     assert "数据缺：本周期无作业记录" in data["gaps"]
+
+
+def _cron_db(tmp_path: Path) -> Path:
+    """复制 fixture，追加两个 cron 会话 + jobs.json（用于自身排除测试）。"""
+    db = tmp_path / "state.db"
+    shutil.copy2(FIXTURE_DB, db)
+    tz = timezone(timedelta(hours=8))
+
+    con = sqlite3.connect(db)
+
+    def add(session_id: str, title: str, started: datetime, messages: int) -> None:
+        con.execute(
+            """
+            INSERT INTO sessions (id, source, title, started_at, ended_at,
+                                  end_reason, status, message_count,
+                                  tool_call_count, input_tokens, output_tokens)
+            VALUES (?, 'cron', ?, ?, ?, 'cron_complete', 'ended', ?, 0, 10, 5)
+            """,
+            (
+                session_id, title, started.timestamp(),
+                (started + timedelta(minutes=10)).timestamp(), messages,
+            ),
+        )
+
+    def add_subagent(session_id: str, parent: str, started: datetime) -> None:
+        con.execute(
+            """
+            INSERT INTO sessions (id, source, title, parent_session_id,
+                                  started_at, ended_at, end_reason, status,
+                                  message_count, tool_call_count,
+                                  input_tokens, output_tokens)
+            VALUES (?, 'subagent', NULL, ?, ?, ?, 'agent_close', 'ended', 1, 0, 5, 2)
+            """,
+            (
+                session_id, parent, started.timestamp(),
+                (started + timedelta(minutes=2)).timestamp(),
+            ),
+        )
+
+    try:
+        add(
+            "cron_6148af107d96_20261026_120000",
+            "Vigil 周报 · Oct 26 12:00",
+            datetime(2026, 10, 26, 12, 0, tzinfo=tz),
+            2,
+        )
+        add(
+            "cron_999999999999_20261026_130000",
+            "bookstack-probe · Oct 26 13:00",
+            datetime(2026, 10, 26, 13, 0, tzinfo=tz),
+            1,
+        )
+        # 流水线派生的 subagent：父会话被排除时应级联排除。
+        add_subagent(
+            "20261026_121000_sub001",
+            "cron_6148af107d96_20261026_120000",
+            datetime(2026, 10, 26, 12, 10, tzinfo=tz),
+        )
+        add_subagent(
+            "20261026_131000_sub002",
+            "cron_999999999999_20261026_130000",
+            datetime(2026, 10, 26, 13, 10, tzinfo=tz),
+        )
+        con.commit()
+    finally:
+        con.close()
+
+    jobs_dir = tmp_path / "cron"
+    jobs_dir.mkdir()
+    (jobs_dir / "jobs.json").write_text(
+        json.dumps({"jobs": [
+            {"id": "6148af107d96", "name": "Vigil 周报（确定性）"},
+        ]}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return db
+
+
+def _no_job_env() -> dict:
+    return {"VIGIL_CRON_JOB_ID": "", "VIGIL_CRON_JOB_NAME": ""}
+
+
+def test_excludes_current_cron_job_sessions(tmp_path):
+    db = _cron_db(tmp_path)
+    base_args = (
+        "--db", str(db), *WINDOW_ARGS, "--format", "facts",
+        "--state-dir", str(tmp_path),
+    )
+
+    baseline = run_cli(*base_args, env=_no_job_env())
+    assert baseline.returncode == 0, baseline.stderr
+    baseline_ids = [s["id"] for s in json.loads(baseline.stdout)["sessions"]]
+    assert "cron_6148af107d96_20261026_120000" in baseline_ids
+    assert "cron_999999999999_20261026_130000" in baseline_ids
+    assert "20261026_121000_sub001" in baseline_ids
+    assert "20261026_131000_sub002" in baseline_ids
+
+    # cron 注入的 job 名 → jobs.json 解析成 id → 排除该 job 全部历史会话，
+    # 并级联排除它派生的 subagent 子会话。
+    filtered = run_cli(
+        *base_args,
+        env={"VIGIL_CRON_JOB_ID": "", "VIGIL_CRON_JOB_NAME": "Vigil 周报（确定性）"},
+    )
+    assert filtered.returncode == 0, filtered.stderr
+    data = json.loads(filtered.stdout)
+    ids = [s["id"] for s in data["sessions"]]
+    assert "cron_6148af107d96_20261026_120000" not in ids
+    assert "20261026_121000_sub001" not in ids
+    assert "cron_999999999999_20261026_130000" in ids
+    assert "20261026_131000_sub002" in ids
+    assert data["totals"]["sessions"] == 5  # fixture 3 + 非周报 cron 1 + 其子会话 1
+
+    # 手动指定 job 名（标题前缀兜底）也能排除历史更名的会话。
+    by_name = run_cli(*base_args, "--exclude-job", "Vigil 周报", env=_no_job_env())
+    by_name_ids = [s["id"] for s in json.loads(by_name.stdout)["sessions"]]
+    assert "cron_6148af107d96_20261026_120000" not in by_name_ids
+    assert "20261026_121000_sub001" not in by_name_ids
+    assert "cron_999999999999_20261026_130000" in by_name_ids
+
+    # 手动指定 job id 可精确排除另一个 job（连同它的子会话）。
+    by_id = run_cli(*base_args, "--exclude-job-id", "999999999999", env=_no_job_env())
+    by_id_ids = [s["id"] for s in json.loads(by_id.stdout)["sessions"]]
+    assert "cron_6148af107d96_20261026_120000" in by_id_ids
+    assert "20261026_121000_sub001" in by_id_ids
+    assert "cron_999999999999_20261026_130000" not in by_id_ids
+    assert "20261026_131000_sub002" not in by_id_ids
 
 
 # ---------------------------------------------------------------------------

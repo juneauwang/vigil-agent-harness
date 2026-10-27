@@ -397,21 +397,103 @@ def _session_row(row: sqlite3.Row) -> Dict[str, Any]:
     }
 
 
+def _load_cron_jobs(state_dir: Path) -> List[Dict[str, Any]]:
+    """读取 <state-dir>/cron/jobs.json；缺失/损坏时返回空列表。"""
+    path = state_dir / "cron" / "jobs.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    jobs = data.get("jobs") if isinstance(data, dict) else data
+    if not isinstance(jobs, list):
+        return []
+    return [job for job in jobs if isinstance(job, dict)]
+
+
+def _resolve_exclusions(
+    names: Sequence[str],
+    job_ids: Sequence[str],
+    state_dir: Path,
+) -> Tuple[List[str], List[str]]:
+    """合并 CLI/环境里的排除目标，并把 job 名解析成 job id。
+
+    cron 在运行预跑脚本时会注入 VIGIL_CRON_JOB_ID / VIGIL_CRON_JOB_NAME；
+    因此默认就能排除「当前 job」自己的历史会话。手动运行时用
+    --exclude-job / --exclude-job-id 指定。
+    """
+    resolved_names: List[str] = [str(n).strip() for n in names if str(n).strip()]
+    resolved_ids: List[str] = [str(i).strip() for i in job_ids if str(i).strip()]
+    env_id = os.environ.get("VIGIL_CRON_JOB_ID", "").strip()
+    env_name = os.environ.get("VIGIL_CRON_JOB_NAME", "").strip()
+    if env_id:
+        resolved_ids.append(env_id)
+    if env_name:
+        resolved_names.append(env_name)
+    if resolved_names:
+        wanted = set(resolved_names)
+        for job in _load_cron_jobs(state_dir):
+            job_name = str(job.get("name") or "").strip()
+            job_id = str(job.get("id") or "").strip()
+            if job_name and job_id and job_name in wanted:
+                resolved_ids.append(job_id)
+    return list(dict.fromkeys(resolved_ids)), list(dict.fromkeys(resolved_names))
+
+
+def _is_excluded_cron_session(
+    row: sqlite3.Row,
+    job_ids: Sequence[str],
+    job_names: Sequence[str],
+) -> bool:
+    """当前周报 job 自己的会话不计入作业面（否则周报统计周报流水线）。"""
+    if str(row["source"] or "").strip().lower() != "cron":
+        return False
+    session_id = str(row["id"] or "")
+    for job_id in job_ids:
+        if job_id and session_id.startswith(f"cron_{job_id}_"):
+            return True
+    title = str(row["title"] or "").strip()
+    for job_name in job_names:
+        if job_name and title.startswith(job_name):
+            return True
+    return False
+
+
 def collect_sessions(
-    con: sqlite3.Connection, since: datetime, until: datetime
+    con: sqlite3.Connection,
+    since: datetime,
+    until: datetime,
+    *,
+    exclude_job_ids: Sequence[str] = (),
+    exclude_job_names: Sequence[str] = (),
 ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]], List[str]]:
     """返回 (sessions facts, unclassified, gaps)。"""
     since_ts, until_ts = since.timestamp(), until.timestamp()
     rows = con.execute(
         """
-        SELECT id, source, started_at, ended_at, end_reason, message_count,
-               tool_call_count, input_tokens, output_tokens
+        SELECT id, source, title, parent_session_id, started_at, ended_at,
+               end_reason, message_count, tool_call_count, input_tokens, output_tokens
         FROM sessions
         WHERE started_at >= ? AND started_at < ?
         ORDER BY started_at, id
         """,
         (since_ts, until_ts),
     ).fetchall()
+    excluded_ids = {
+        str(row["id"]) for row in rows
+        if _is_excluded_cron_session(row, exclude_job_ids, exclude_job_names)
+    }
+    # 周报流水线会派生 subagent 会话（例如「把这份 MD 发布到 BookStack」）。
+    # 父会话已排除时，子会话也一并排除，避免自述残留。
+    while excluded_ids:
+        descendants = {
+            str(row["id"]) for row in rows
+            if str(row["parent_session_id"] or "") in excluded_ids
+        }
+        added = descendants - excluded_ids
+        if not added:
+            break
+        excluded_ids |= added
+    rows = [row for row in rows if str(row["id"]) not in excluded_ids]
 
     sessions: List[Dict[str, Any]] = [_session_row(r) for r in rows]
     by_id = {s["id"]: s for s in sessions}
@@ -764,15 +846,26 @@ def build_facts(
     topology_path: Path,
     state_dir: Path,
     repo_paths: Sequence[str],
+    exclude_job_ids: Sequence[str] = (),
+    exclude_job_names: Sequence[str] = (),
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     now = (now or datetime.now(SHANGHAI)).astimezone(SHANGHAI)
     since = datetime.fromisoformat(window["since"])
     until = datetime.fromisoformat(window["until"])
 
+    job_ids, job_names = _resolve_exclusions(
+        exclude_job_names, exclude_job_ids, state_dir
+    )
     con = _open_db(db_path)
     try:
-        sessions, unclassified, session_gaps = collect_sessions(con, since, until)
+        sessions, unclassified, session_gaps = collect_sessions(
+            con,
+            since,
+            until,
+            exclude_job_ids=job_ids,
+            exclude_job_names=job_names,
+        )
     finally:
         con.close()
 
@@ -1034,6 +1127,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--topology", default=None, help="topology.yaml 路径（默认 <state-dir>/topology.yaml）")
     parser.add_argument("--state-dir", default=None, help="数据根（默认 --db 所在目录）")
     parser.add_argument("--repos", default=None, help="逗号分隔的 git 仓库路径（只读取数）")
+    parser.add_argument(
+        "--exclude-job",
+        action="append",
+        default=None,
+        metavar="NAME",
+        help=(
+            "排除该 cron job 的会话（可重复）。默认读取 VIGIL_CRON_JOB_NAME，"
+            "并按 <state-dir>/cron/jobs.json 把名字解析成 job id。"
+        ),
+    )
+    parser.add_argument(
+        "--exclude-job-id",
+        action="append",
+        default=None,
+        metavar="ID",
+        help="排除该 cron job id 的会话（可重复）。默认读取 VIGIL_CRON_JOB_ID。",
+    )
     parser.add_argument("--format", choices=("facts", "md"), default="facts", help="输出格式（默认 facts）")
     parser.add_argument("--out", default=None, help="输出文件路径（默认 stdout）")
     return parser
@@ -1068,6 +1178,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             topology_path=topology_path,
             state_dir=state_dir,
             repo_paths=repo_paths,
+            exclude_job_ids=args.exclude_job_id or (),
+            exclude_job_names=args.exclude_job or (),
         )
     except (sqlite3.Error, OSError) as exc:
         print(f"weekly_change_digest: 数据库打开失败: {exc}", file=sys.stderr)

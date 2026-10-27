@@ -33,6 +33,7 @@ python cron/scripts/weekly_change_digest.py \
   [--topology /home/wpwang/.vigil/topology.yaml] \
   [--state-dir /home/wpwang/.vigil] \
   [--repos /path/a,/path/b] \
+  [--exclude-job NAME] [--exclude-job-id ID] \
   [--format facts|md] [--out PATH]
 ```
 
@@ -47,6 +48,22 @@ python cron/scripts/weekly_change_digest.py \
   7d 窗口起点是上周五，所以默认任务通常以上一周的周号命名。
 - 会话归属按 `sessions.started_at` 落在窗口内判定；消息级统计（写操作、错误、
   只读工具 Top）只取窗口内的消息。
+
+### 排除周报自身会话
+
+周报 job 自己也会产生 `source=cron` 会话（主题可能是「向 BookStack 发布周报」）。
+这些会话不能计入作业面，否则会出现「周报统计周报流水线」的自指数据。
+
+1. cron 运行预跑脚本时会注入 `VIGIL_CRON_JOB_ID` 和 `VIGIL_CRON_JOB_NAME`；
+   采集器默认读取它们，排除 `source=cron` 且满足任一条件的会话：
+   (1) `session.id` 以 `cron_<当前 job id>_` 开头；(2) `session.title` 以当前 job 名开头。
+2. job id 匹配是主路径，能覆盖改名前后的历史会话；标题匹配只作兜底。
+3. 这些 cron 会话派生的 `subagent` 子会话也一并排除（例如「把这份 MD 发布到
+   BookStack」的委派任务），避免流水线自述残留在作业面里。
+4. 手动运行时可用 `--exclude-job NAME`（可重复；会按
+   `<state-dir>/cron/jobs.json` 把名字解析成 id，并做标题前缀兜底）或
+   `--exclude-job-id ID`（可重复）排除历史 job。
+5. 排除只影响 `sessions` / `totals`，不新增 facts 字段，也不改窗口判定。
 
 ### 写操作判定
 
@@ -209,11 +226,24 @@ chmod 600 ~/.vigil/credentials/bookstack.json
 
 ## 定时任务注册（由用户执行）
 
+1. 先把 wrapper 放进 `<VIGIL_HOME>/scripts/`（创建期只接受这个目录下的相对文件名）：
+
+```bash
+cat > /home/wpwang/.vigil/scripts/weekly_change_digest.sh <<'EOF'
+#!/bin/bash
+exec /home/wpwang/projects/vigil-agent/.venv/bin/python \
+  /home/wpwang/projects/vigil-agent/cron/scripts/weekly_change_digest.py "$@"
+EOF
+chmod 700 /home/wpwang/.vigil/scripts/weekly_change_digest.sh
+```
+
+2. 注册时 `--script` 只写文件名，不能写绝对路径：
+
 ```bash
 VIGIL_HOME=/home/wpwang/.vigil vigil cron create "0 18 * * 5" \
   "见下方 job prompt" \
   --name "Vigil 周报" \
-  --script /home/wpwang/projects/vigil-agent/cron/scripts/weekly_change_digest.py \
+  --script weekly_change_digest.sh \
   --deliver local
 ```
 
@@ -228,25 +258,19 @@ job prompt：
 3. 回报两行：MD 绝对路径；BookStack 返回的 action + url。发布失败最多重试 1 次，仍然失败就只报错误，禁止编造 url。
 ```
 
-注意（已核实，属既有行为，本任务未改 cron）：
+注意：
 
-- `cron/scheduler.py::_run_job_script` 只允许运行 `<VIGIL_HOME>/scripts/` 内的脚本，
-  而且会对路径做 `resolve()`（软链到仓库会被判为越界）。上面命令里的仓库路径在
-  **运行期**会被 `Blocked: script path resolves outside the scripts directory` 拒绝。
-- 落地时在 `<VIGIL_HOME>/scripts/` 放一个 wrapper（一行 exec，仓库更新后无需复制）：
-
-```bash
-cat > /home/wpwang/.vigil/scripts/weekly_change_digest.sh <<'EOF'
-#!/bin/bash
-exec /home/wpwang/projects/vigil-agent/.venv/bin/python \
-  /home/wpwang/projects/vigil-agent/cron/scripts/weekly_change_digest.py "$@"
-EOF
-chmod 700 /home/wpwang/.vigil/scripts/weekly_change_digest.sh
-```
-
-  然后把注册命令的 `--script` 改成
-  `/home/wpwang/.vigil/scripts/weekly_change_digest.sh`（其余参数不变）。
-  也可以直接 `cp` 仓库脚本到 `scripts/` 目录，但仓库更新后需要重新复制。
+- `vigil cron create` / `cronjob` 在**创建期**校验脚本路径：只接受
+  `<VIGIL_HOME>/scripts/` 下的相对路径（如 `weekly_change_digest.sh`、
+  `monitors/check.py`）。绝对路径或 `~` 开头返回
+  `Script path must be relative to ~/.vigil/scripts/.`，目录穿越返回
+  `Script path escapes the scripts directory via traversal`；两种情况 job
+  都不会创建，不是运行期才拦。
+- 也可以直接 `cp` 仓库脚本到 `<VIGIL_HOME>/scripts/`，然后
+  `--script weekly_change_digest.py`；仓库更新后需要重新复制。wrapper 方式
+  不需要复制，推荐。
+- cron 会把 `VIGIL_CRON_JOB_ID` / `VIGIL_CRON_JOB_NAME` 传给预跑脚本，
+  采集器默认排除当前 job 自己的历史会话，所以周报不会统计自己。
 - job prompt 里的 `<state-dir>` 由 facts 的 `db` 字段（`<state-dir>/state.db`）推导；
   本机是 `/home/wpwang/.vigil`。
 - `--deliver local` 表示投递到本地 cron 输出目录，不往聊天窗口刷屏。

@@ -2210,6 +2210,7 @@ def _windows_cron_python_invocation(python_exe: str) -> tuple[str, dict[str, str
 def _run_job_script(
     script_path: str,
     workdir: Optional[str] = None,
+    job: Optional[dict] = None,
 ) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
 
@@ -2230,7 +2231,10 @@ def _run_job_script(
 
     Subprocess environment is passed through ``_sanitize_subprocess_env`` so
     provider credentials and other Hermes-managed secrets are not inherited
-    (SECURITY.md §2.3), matching terminal and MCP child processes.
+    (SECURITY.md §2.3), matching terminal and MCP child processes. When
+    ``job`` is supplied, the script additionally receives
+    ``VIGIL_CRON_JOB_ID`` / ``VIGIL_CRON_JOB_NAME`` so data-collection
+    scripts can exclude their own job's sessions (e.g. weekly digests).
 
     Args:
         script_path: Path to the script.  Relative paths are resolved
@@ -2312,6 +2316,13 @@ def _run_job_script(
             }
         env = build_subprocess_env()
         env.update(env_overlay)
+        if job:
+            job_id = str(job.get("id") or "").strip()
+            job_name = str(job.get("name") or "").strip()
+            if job_id:
+                env["VIGIL_CRON_JOB_ID"] = job_id
+            if job_name:
+                env["VIGIL_CRON_JOB_NAME"] = job_name
         # Use the job's workdir as the subprocess cwd when configured,
         # otherwise default to the scripts-dir parent (back-compat).
         # NEVER mutate the Python process cwd — that would leak into
@@ -2378,7 +2389,7 @@ def _run_job_script_with_claim_heartbeat(
         and schedule.get("kind") == "once"
         and owner
     ):
-        return _run_job_script(script_path, workdir=workdir)
+        return _run_job_script(script_path, workdir=workdir, job=job)
 
     job_id = str(job.get("id") or "")
     stop = threading.Event()
@@ -2409,10 +2420,10 @@ def _run_job_script_with_claim_heartbeat(
             job_id,
             exc_info=True,
         )
-        return _run_job_script(script_path, workdir=workdir)
+        return _run_job_script(script_path, workdir=workdir, job=job)
 
     try:
-        return _run_job_script(script_path, workdir=workdir)
+        return _run_job_script(script_path, workdir=workdir, job=job)
     finally:
         stop.set()
         # Event.wait() wakes immediately.  Keep completion bounded if the
@@ -2473,7 +2484,7 @@ def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
         if prerun_script is not None:
             success, script_output = prerun_script
         else:
-            success, script_output = _run_job_script(script_path)
+            success, script_output = _run_job_script(script_path, job=job)
         if success:
             if script_output:
                 prompt = (
