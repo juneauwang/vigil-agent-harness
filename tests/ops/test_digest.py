@@ -768,3 +768,21 @@ def test_topo_objects_carry_add_update_approve():
             "ok", "s#5")[0]]
     )
     assert len(merged) == 1 and "新增（待审）" in merged[0]["result"] and "审核通过" in merged[0]["result"]
+
+
+def test_topo_delete_object_only_when_deleted():
+    """topo_delete 成功 → 拓扑对象「删除（已归档）」；被拦/审批拒绝 → 不记变更。"""
+    import json as _json
+
+    from ops import digest
+
+    payload = _json.dumps({"status": "deleted", "entity": "grafana", "env": "dev",
+                           "archived": "topology-archive/2026-10-28/grafana.yaml"})
+    objs = digest.objects_from_call("topo_delete", {"entity": "grafana", "reason": "迁移"}, payload, "s#1")
+    assert objs[0]["type"] == "拓扑" and objs[0]["identity"] == "grafana"
+    assert objs[0]["result"] == "删除（已归档）"
+    assert "env=dev" in objs[0]["params"] and "grafana.yaml" in objs[0]["params"]
+
+    # 有引用被拦（error）→ 没删成，不进报告
+    blocked = _json.dumps({"error": "实体 grafana 仍被引用（1 处）：depsvc(depends_on)"})
+    assert digest.objects_from_call("topo_delete", {"entity": "grafana"}, blocked, "s#2") == []

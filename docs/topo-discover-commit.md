@@ -152,3 +152,37 @@ prod 审批拒绝、prod 审批通过、v0.4 结构不降级。全部用注入�
 3. 落盘来源是 `source=discovered`；`topo_update` 确认时会写成 `source=agent`。
 4. 审批只覆盖 prod 档位；非 prod 的新建不做二次确认（按任务定调：prod 才
    是矩阵裁决边界）。
+
+## 生命周期：发现 → 变更 → 删除
+
+三个写入口现在齐了，语义按同一个档位口径：
+
+| 阶段 | 工具 | 落盘 | 审批 |
+|---|---|---|---|
+| 发现（新增） | `topo_discover(commit=true)` | `needs_review=true` 草案 | prod 档 `rule_key=topo_discover:commit:<host>:prod` |
+| 变更 / 审核 | `topo_update(entity, updates)` | 改字段 / 置 `needs_review=false` | prod 档 `rule_key=topo_update:prod:<entity>` |
+| 删除 | `topo_delete(entity, reason, force)` | 归档后摘行 | prod 档 `rule_key=topo_delete:<env>:<entity>` |
+
+### `topo_delete` 的六步与边界
+
+1. 定位：`clusters` → `hosts` → `cross_host` → `services`（服务行带 `_host`，
+   摘行时改的是**读到的那个索引文件**，`_host_index_path` 读写共用）。
+2. 引用扫描：别的实体的 `depends_on` / `depended_by`、cluster 成员、服务行的
+   `host`。有引用且未 `force` → 报错并列出引用者，什么都不动。
+3. 审批：prod 档走 `request_tool_approval`；非 prod 按既有矩阵语义放行
+   （与 discover/update 一致，不新造规则）。拒绝 → 什么都不动。
+4. 归档：`<VIGIL_HOME>/topology-archive/<YYYY-MM-DD>/<entity>.yaml`，含被删行、
+   L3 档案 `detail`、`removed` 清单、`reason`、`deleted_at`。**写归档失败即中止**，
+   不允许「删了没归档」。
+5. 摘行：拔 L3 档案文件 → 从 `topology.yaml`（或 `services/<host>.yaml`）摘掉那一行，
+   L1 行删除时 `updated_at=today`。
+6. 审计：`record_event(type="topo_delete", action="delete <entity>",
+   meta={env, archived, forced, referrers, reason, operator})`，best-effort。
+
+不做：批量/pattern 删除、级联删 runbook/技能/凭据（引用只用于拦）、v0.1 扁平
+`core_entities` 结构（报错带迁移提示）。
+
+**CLI 入口暂缺**：工具层对 prod 走人工审批门，而 `request_tool_approval` 在
+非交互上下文是 fail-closed —— 直接包一层 `vigil topo delete` 会得到「prod 实体
+永远删不掉」的假功能。要做必须先定一条「终端已人工确认」的通道（例如 `--yes`
+显式视为人工确认并跳过工具门），属独立决策。

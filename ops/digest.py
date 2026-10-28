@@ -420,6 +420,25 @@ def objects_from_call(name: str, args: dict, result: str, source: str) -> List[d
         host = str(args.get("host") or "")
         obj = _object_from_command(str(args.get("command") or ""), result, source, host)
         return [obj] if obj else []
+    if name == "topo_delete":
+        ent = str(args.get("entity") or "")
+        if not ent:
+            return []
+        env = archived = ""
+        try:
+            payload = json.loads(str(result or "{}"))
+        except Exception:
+            payload = {}
+        if str(payload.get("status") or "") != "deleted":
+            return []  # 被引用拦住 / 审批拒绝：没删成功，不记变更
+        env = str(payload.get("env") or "")
+        archived = str(payload.get("archived") or "")
+        params = "；".join(x for x in (
+            f"env={env}" if env else "",
+            f"归档 {archived}" if archived else "",
+            "force" if args.get("force") else "",
+        ) if x)
+        return [_obj("拓扑", ent, params, "删除（已归档）", source)]
     if name == "topo_discover":
         if not args.get("commit"):
             return []  # 只出草案不落盘：不算变更

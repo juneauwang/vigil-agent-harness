@@ -84,6 +84,7 @@ gaps[]
 | `helm install|upgrade <release>` | 配置 | `helm release <name>` |
 | `docker run <image>` | 系统服务 | `容器 <image>` |
 | `topo_update(entity, updates)` | 拓扑 | 实体名 + 标量字段（dict/list 只留键） |
+| `topo_delete(entity)` | 拓扑 | 实体名 + env + 归档路径（结果「删除（已归档）」） |
 | 写 `…/runbooks/*.yml` | 可复用资产 | `runbook <stem>` |
 | 写文件内容含 `job_name:` | 监控采集 | job 名 + `targets=[...]` + `scrape_interval` |
 | 写文件内容含 `CREATE ROLE` / `postgresql_user` | 账号与权限 | role 名（同一 role 的多条记录合成一个对象） |
