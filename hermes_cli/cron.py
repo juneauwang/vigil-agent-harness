@@ -43,8 +43,18 @@ def _normalize_skills(single_skill=None, skills: Optional[Iterable[str]] = None)
 
 
 def _cron_api(**kwargs):
+    """CLI → cronjob 工具的薄封装（审计/校验都复用工具层）。
+
+    ``--schedule``/``schedule`` 在 CLI 侧归一裸时长：用户写 ``5m`` 的意思是
+    「每 5 分钟」，而 ``parse_schedule("5m")`` 是**一次性，5 分钟后**。
+    归一实现只有一份（``cron.jobs.normalize_interval_spec``）；``every …``、
+    cron 表达式、ISO 时间戳原样传给工具，一次性任务语义不变。
+    """
+    from cron.jobs import normalize_interval_spec
     from tools.cronjob_tools import cronjob as cronjob_tool
 
+    if kwargs.get("schedule") is not None:
+        kwargs["schedule"] = normalize_interval_spec(kwargs["schedule"])
     return json.loads(cronjob_tool(**kwargs))
 
 

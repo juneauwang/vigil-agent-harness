@@ -28,7 +28,12 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         "create", aliases=["add"], help="Create a scheduled job"
     )
     cron_create.add_argument(
-        "schedule", help="Schedule like '30m', 'every 2h', or '0 9 * * *'"
+        "schedule",
+        help=(
+            "Schedule: bare '5m'/'2h'/'1d' = every 5m/2h/1d (recurring); "
+            "'every 2h'; cron '0 9 * * *'; ISO timestamp '2026-11-01T09:00' "
+            "= one-shot"
+        ),
     )
     cron_create.add_argument(
         "prompt", nargs="?", help="Optional self-contained prompt or task instruction"
@@ -89,7 +94,13 @@ def build_cron_parser(subparsers, *, cmd_cron: Callable) -> None:
         "edit", help="Edit an existing scheduled job"
     )
     cron_edit.add_argument("job_id", help="Job ID to edit")
-    cron_edit.add_argument("--schedule", help="New schedule")
+    cron_edit.add_argument(
+        "--schedule",
+        help=(
+            "New schedule: bare '5m'/'2h'/'1d' = recurring (every 5m/2h/1d); "
+            "'every 2h'; cron '0 9 * * *'; ISO timestamp = one-shot"
+        ),
+    )
     cron_edit.add_argument("--prompt", help="New prompt/task instruction")
     cron_edit.add_argument("--name", help="New job name")
     cron_edit.add_argument("--deliver", help="New delivery target")

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -709,7 +710,8 @@ def test_load_prose_default_path_and_fallback(tmp_path):
     reports = tmp_path / "reports"
     reports.mkdir()
     label = "2026-W43"
-    (reports / f"{digest.REPORT_PREFIX}{label}.prose.json").write_text(
+    weekly_prefix = digest.report_prefix(timedelta(days=7))
+    (reports / f"{weekly_prefix}{label}.prose.json").write_text(
         '{"summary": "S", "risks": "R", "next": "N"}', encoding="utf-8"
     )
     prose = digest._load_prose(tmp_path, label, "auto")
@@ -719,7 +721,7 @@ def test_load_prose_default_path_and_fallback(tmp_path):
     # 显式 none 强制模板
     assert digest._load_prose(tmp_path, label, "none") is None
     # 坏 JSON → None
-    (reports / f"{digest.REPORT_PREFIX}2026-W98.prose.json").write_text("{bad", encoding="utf-8")
+    (reports / f"{weekly_prefix}2026-W98.prose.json").write_text("{bad", encoding="utf-8")
     assert digest._load_prose(tmp_path, "2026-W98", "auto") is None
 
 
@@ -786,3 +788,150 @@ def test_topo_delete_object_only_when_deleted():
     # 有引用被拦（error）→ 没删成，不进报告
     blocked = _json.dumps({"error": "实体 grafana 仍被引用（1 处）：depsvc(depends_on)"})
     assert digest.objects_from_call("topo_delete", {"entity": "grafana"}, blocked, "s#2") == []
+
+
+# ---------------------------------------------------------------------------
+# D1：窗口粒度命名（日报 / 周报 / 区间报告）与蓝图/CLI 放开
+# ---------------------------------------------------------------------------
+
+def _window_label(args):
+    """固定 now 进 parse_window（不依赖真实时间）。"""
+    from datetime import datetime as _dt
+
+    return digest.parse_window(args, _dt(2026, 10, 28, 12, 0, tzinfo=TZ))
+
+
+def test_label_by_span():
+    """1d→日期；7d→ISO 周；90d→区间；--week 保持 2026-W43；since/until 按跨度。"""
+    # 滚动窗口：粒度只看跨度
+    assert _window_label(_args(window="1d"))[2] == "2026-10-28"
+    assert _window_label(_args(window="12h"))[2] == "2026-10-28"
+    assert _window_label(_args(window="7d"))[2] == "2026-W44"
+    assert _window_label(_args(window="90d"))[2] == "2026-07-30_2026-10-28"
+    # --week 保持现状（ISO 周号，不受跨度规则影响）
+    week = _window_label(_args(week="2026-W43"))
+    assert week[2] == "2026-W43"
+    assert week[1] - week[0] == timedelta(days=7)
+    # --since/--until：跨度 1 天 → 日期；跨度 30 天 → 区间
+    day = _window_label(_args(since="2026-10-20", until="2026-10-21"))
+    assert day[2] == "2026-10-20"
+    month = _window_label(_args(since="2026-09-28", until="2026-10-28"))
+    assert month[2] == "2026-09-28_2026-10-27"  # 右端取 until-1s（10-28 00:00 → 10-27）
+    # 边界：恰好 2 天 = 日报；2 天 + 1 秒 = 周报；10 天 = 周报；>10 天 = 区间
+    assert digest.granularity(timedelta(days=2)) == "daily"
+    assert digest.granularity(timedelta(days=2, seconds=1)) == "weekly"
+    assert digest.granularity(timedelta(days=10)) == "weekly"
+    assert digest.granularity(timedelta(days=10, seconds=1)) == "range"
+
+
+def test_label_range_uses_until_minus_one_second():
+    """区间 label 的右端是 until-1s 的日期（跨零点不越到第二天）。"""
+    from datetime import datetime as _dt
+
+    since = _dt(2026, 7, 30, tzinfo=TZ)
+    until = _dt(2026, 10, 29, 0, 0, 0, tzinfo=TZ)  # 90 天 + 跨零点
+    assert digest.label_for(since, until) == "2026-07-30_2026-10-28"
+    # label 只允许 [0-9A-Za-z_-]
+    for span in ("1d", "7d", "90d"):
+        _, _, label = _window_label(_args(window=span))
+        assert re.fullmatch(r"[0-9A-Za-z_-]+", label), label
+
+
+def test_report_title_and_prefix_by_granularity(tmp_path, monkeypatch):
+    """三种粒度各渲染一次：首行标题、文件名前缀、BookStack 页名都跟 label 走。"""
+    monkeypatch.setenv("VIGIL_HOME", str(tmp_path / "home"))
+    cases = {
+        # 1d：窗口 10-20 00:00 → 10-21 00:00，label 取 until-1s 的日期（10-20）
+        "1d": ("Vigil-作业日报-2026-10-20.md", "# Vigil 作业日报 2026-10-20（10-20 ~ 10-20）"),
+        # 7d：10-20 ~ 10-27，until-1s = 10-26（W44 周一）
+        "7d": ("Vigil-作业周报-2026-W44.md", "# Vigil 作业周报 2026-W44（10-20 ~ 10-26）"),
+        # 30d：10-27 23:59:59 收尾，label = 起始日期_结束日期
+        "30d": ("Vigil-作业报告-2026-09-28_2026-10-27.md",
+                "# Vigil 作业报告 2026-09-28_2026-10-27（09-28 ~ 10-27）"),
+    }
+    windows = {
+        "1d": ("2026-10-20", "2026-10-21"),
+        "7d": ("2026-10-20", "2026-10-27"),
+        "30d": ("2026-09-28", "2026-10-28"),
+    }
+    state = tmp_path / "state"
+    for key, (filename, first_line) in cases.items():
+        since, until = windows[key]
+        code = digest.main([
+            "--db", str(FIXTURE_DB),
+            "--since", since, "--until", until,
+            "--format", "md", "--publish", "file",
+            "--state-dir", str(state),
+        ])
+        assert code == 0, key
+        path = state / "reports" / filename
+        assert path.is_file(), f"{key}: 期望 {filename}，实际 {sorted(p.name for p in (state / 'reports').iterdir())}"
+        assert path.read_text(encoding="utf-8").startswith(first_line), key
+
+
+def test_prose_path_falls_back_to_legacy_prefix(tmp_path):
+    """新前缀文件不存在时，回落读旧的 Vigil-作业周报-<label>.prose.json。"""
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    label = "2026-10-20"
+    daily_prefix = digest.report_prefix(timedelta(days=1))
+    legacy = reports / f"Vigil-作业周报-{label}.prose.json"
+    legacy.write_text('{"summary": "旧稿", "risks": "R", "next": "N"}', encoding="utf-8")
+
+    prose = digest._load_prose(tmp_path, label, "auto", prefix=daily_prefix)
+    assert prose and prose["summary"] == "旧稿"
+
+    # 新名字存在时优先用它（旧文件只在回落时读）
+    (reports / f"{daily_prefix}{label}.prose.json").write_text(
+        '{"summary": "新稿", "risks": "R", "next": "N"}', encoding="utf-8"
+    )
+    assert digest._load_prose(tmp_path, label, "auto", prefix=daily_prefix)["summary"] == "新稿"
+
+
+def test_blueprint_window_accepts_any_duration():
+    """蓝图窗口槽是开放输入：1d/12h/45d 都过 fill，值进 script_args；bad 留到运行期。"""
+    from cron.blueprint_catalog import fill_blueprint, get_blueprint
+
+    bp = get_blueprint("weekly-oplog")
+    assert bp is not None
+    slot = next(s for s in bp.slots if s.name == "window")
+    assert slot.strict is False and slot.options == ("7d", "14d", "30d")
+
+    for value in ("1d", "12h", "45d", "90d", "2w"):
+        spec = fill_blueprint(bp, {"window": value, "publish": "file"})
+        args = spec["script_args"]
+        assert args[args.index("--window") + 1] == value, value
+
+    # 语法错误不在 fill 阶段拦（留给 digest 运行期 exit 2 + 明确 message）
+    spec = fill_blueprint(bp, {"window": "bad", "publish": "file"})
+    assert spec["script_args"][spec["script_args"].index("--window") + 1] == "bad"
+    assert digest.main(["--window", "bad", "--db", str(FIXTURE_DB)]) == 2
+
+
+def test_cron_cli_normalizes_bare_duration(monkeypatch):
+    """CLI 的 schedule 归一：裸 5m→every 5m；every/表达式/ISO 原样；ISO 仍一次性。"""
+    from cron.jobs import normalize_interval_spec, parse_schedule
+
+    assert normalize_interval_spec("5m") == "every 5m"
+    assert normalize_interval_spec("2h") == "every 2h"
+    assert normalize_interval_spec("every 10m") == "every 10m"
+    assert normalize_interval_spec("0 9 * * *") == "0 9 * * *"
+    assert normalize_interval_spec("2026-11-01T09:00") == "2026-11-01T09:00"
+    assert normalize_interval_spec("off") == "off"
+    # 一次性语义不能变
+    assert parse_schedule("2026-11-01T09:00")["kind"] == "once"
+    assert parse_schedule(normalize_interval_spec("5m"))["kind"] == "interval"
+    assert parse_schedule(normalize_interval_spec("5m"))["minutes"] == 5
+
+    # CLI 真实接线：_cron_api 把裸时长归一后才交给工具层
+    import hermes_cli.cron as cron_cli
+    import tools.cronjob_tools as cj
+
+    seen = []
+    monkeypatch.setattr(cj, "cronjob", lambda **kw: seen.append(kw) or json.dumps({"success": True}))
+    cron_cli._cron_api(action="create", schedule="5m", prompt="p")
+    cron_cli._cron_api(action="update", job_id="j1", schedule="every 10m")
+    cron_cli._cron_api(action="create", schedule="2026-11-01T09:00", prompt="p")
+    assert seen[0]["schedule"] == "every 5m"
+    assert seen[1]["schedule"] == "every 10m"
+    assert seen[2]["schedule"] == "2026-11-01T09:00"

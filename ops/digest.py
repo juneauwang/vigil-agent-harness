@@ -30,8 +30,24 @@ MAX_CHANGES_PER_TASK = 40
 MAX_OBJECTS_PER_TASK = 60
 EXCLUDED_SOURCES = ("cron", "subagent")
 
-REPORT_PREFIX = "Vigil-作业周报-"
 DEFAULT_WINDOW = "7d"
+
+# 报告粒度（D1）：窗口跨度 → 标题词 / 文件名前缀。label 里只允许
+# ``[0-9A-Za-z_-]``——BookStack 会丢掉中文并拿 ASCII 做 slug，中文只出现在
+# 标题与文件名前缀里，页名 = 文件名去扩展名（规则不变）。
+_GRANULARITY_TITLE = {"daily": "日报", "weekly": "周报", "range": "报告"}
+_PREFIX_BY_GRANULARITY = {
+    "daily": "Vigil-作业日报-",
+    "weekly": "Vigil-作业周报-",
+    "range": "Vigil-作业报告-",
+}
+# 兼容：D1 之前所有产物都叫「作业周报」。新前缀读不到 prose 时回落读它
+# （旧 job 产出的 prose 文件还在，不能因为改名而丢掉模型叙述）。
+_LEGACY_WEEKLY_PREFIX = _PREFIX_BY_GRANULARITY["weekly"]
+
+# 粒度阈值：≤2 天日报；2~10 天周报；>10 天区间报告。
+_DAILY_MAX_SPAN = timedelta(days=2)
+_WEEKLY_MAX_SPAN = timedelta(days=10)
 
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(authorization\s*[:=]\s*)(?:(?:bearer|basic|token)\s+)?\S+"),
@@ -89,7 +105,7 @@ def parse_window(args, now: datetime) -> Tuple[datetime, datetime, str]:
         until = _parse_dt(args.until)
         if since >= until:
             raise ValueError("--since 必须早于 --until")
-        return since, until, _label(until - timedelta(seconds=1))
+        return since, until, label_for(since, until)
     m = re.fullmatch(r"(\d+)([dhmw])", (args.window or "7d").strip(), re.IGNORECASE)
     if not m:
         raise ValueError("--window 需要形如 7d / 24h / 2w")
@@ -103,7 +119,7 @@ def parse_window(args, now: datetime) -> Tuple[datetime, datetime, str]:
         "w": timedelta(weeks=n),
     }[unit]
     since = now - delta
-    return since, now, _label(now - timedelta(seconds=1))
+    return since, now, label_for(since, now)
 
 
 def _parse_dt(text: str) -> datetime:
@@ -124,9 +140,41 @@ def _parse_dt(text: str) -> datetime:
     return parsed.astimezone(SHANGHAI)
 
 
-def _label(dt: datetime) -> str:
-    iso = dt.astimezone(SHANGHAI).isocalendar()
-    return f"{iso[0]}-W{iso[1]:02d}"
+def granularity(span: timedelta) -> str:
+    """窗口跨度 → 粒度：``daily``（≤2 天）/ ``weekly``（≤10 天）/ ``range``。"""
+    if span <= _DAILY_MAX_SPAN:
+        return "daily"
+    if span <= _WEEKLY_MAX_SPAN:
+        return "weekly"
+    return "range"
+
+
+def report_prefix(span: timedelta) -> str:
+    """报告文件名前缀（页名 = 文件名去扩展名，中文只在这个前缀里）。"""
+    return _PREFIX_BY_GRANULARITY[granularity(span)]
+
+
+def label_for(since: datetime, until: datetime, week: Optional[str] = None) -> str:
+    """窗口 → label（时区固定 Asia/Shanghai，终点用 ``until - 1s`` 取日期）。
+
+    - ``--week`` 给定时用它本身（保持现状 ``YYYY-Www``）；
+    - 跨度 ≤2 天 → ``YYYY-MM-DD``；
+    - 2 天 < 跨度 ≤10 天 → ISO 周 ``YYYY-Www``；
+    - >10 天 → ``YYYY-MM-DD_YYYY-MM-DD``（since ~ until-1s）。
+
+    label 只含 ``[0-9A-Za-z_-]``：BookStack 拿 ASCII 做 slug，中文放标题与前缀。
+    """
+    if week:
+        return str(week)
+    end = (until - timedelta(seconds=1)).astimezone(SHANGHAI)
+    kind = granularity(until - since)
+    if kind == "daily":
+        return end.date().isoformat()
+    if kind == "weekly":
+        iso = end.isocalendar()
+        return f"{iso[0]}-W{iso[1]:02d}"
+    start = since.astimezone(SHANGHAI)
+    return f"{start.date().isoformat()}_{end.date().isoformat()}"
 
 
 # --------------------------------------------------------------------------
@@ -860,6 +908,7 @@ def collect(
     *,
     job_id: Optional[str] = None,
     job_name: Optional[str] = None,
+    week: Optional[str] = None,
 ) -> dict:
     """采集一个窗口的 facts。
 
@@ -1025,11 +1074,14 @@ def collect(
         for ch in task["changes"]:
             bucket["kinds"][ch["kind"]] = bucket["kinds"].get(ch["kind"], 0) + 1
 
+    span = until - since
     return {
         "window": {
             "since": since.isoformat(),
             "until": until.isoformat(),
-            "label": _label(until - timedelta(seconds=1)),
+            "label": label_for(since, until, week),
+            "granularity": granularity(span),
+            "span_days": round(span.total_seconds() / 86400, 2),
         },
         "generated_at": datetime.now(SHANGHAI).isoformat(timespec="seconds"),
         "db": str(db),
@@ -1062,6 +1114,18 @@ def _json_list(raw):
 # 渲染
 # --------------------------------------------------------------------------
 
+def _granularity_of_window(w: dict) -> str:
+    """facts 没带 ``granularity`` 时（老 facts / 手搓 facts）按窗口跨度反推。
+
+    反推不出来就按老行为当周报——渲染绝不能因为 facts 少字段而失败。
+    """
+    try:
+        span = datetime.fromisoformat(w["until"]) - datetime.fromisoformat(w["since"])
+    except (KeyError, TypeError, ValueError):
+        return "weekly"
+    return granularity(span)
+
+
 def render_md(facts: dict, prose: Optional[Dict[str, str]] = None) -> str:
     """渲染四段报告：子目标与结果 / 变更明细（按对象）/ 未闭环 / 下周期。
 
@@ -1077,7 +1141,11 @@ def render_md(facts: dict, prose: Optional[Dict[str, str]] = None) -> str:
     with_id = int(t.get("objects_with_identity") or 0)
     missing = int(t.get("objects_missing_identity") or 0)
 
-    lines = [f"# Vigil 作业周报 {w['label']}（{since} ~ {until}）", ""]
+    kind = str(w.get("granularity") or _granularity_of_window(w))
+    lines = [
+        f"# Vigil 作业{_GRANULARITY_TITLE.get(kind, '周报')} {w['label']}（{since} ~ {until}）",
+        "",
+    ]
     lines.append(f"- 作业会话 {t['tasks']} 个 / 变更对象 {total_objs} 个，其中 {with_id} 个带可复核标识")
     types = "、".join(f"{k} {v}" for k, v in sorted((t.get("by_type") or {}).items())) or "无"
     lines.append(f"- 对象构成：{types}")
@@ -1331,7 +1399,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
         default="auto",
         help=(
             "模型撰写的叙述（JSON：{summary, risks, next}，Markdown 片段）。默认 auto ="
-            "读 <state-dir>/reports/<label>.prose.json；文件不存在则用确定性模板；传 'none' 强制模板。"
+            "读 <state-dir>/reports/<文件名前缀><label>.prose.json（前缀按窗口粒度："
+            "Vigil-作业日报- / Vigil-作业周报- / Vigil-作业报告-；旧周报前缀作兼容回落）；"
+            "文件不存在则用确定性模板；传 'none' 强制模板。"
         ),
     )
     parser.add_argument(
@@ -1345,18 +1415,36 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--locale", default="zh", choices=("zh",), help="预留，只做 zh")
 
 
-def _load_prose(state_dir: Path, label: str, spec: str) -> Optional[Dict[str, str]]:
+def prose_paths(state_dir: Path, label: str, prefix: str) -> List[Path]:
+    """prose 候选路径：新前缀优先，再回落旧的「作业周报」前缀（D1 兼容）。
+
+    旧 job 产出的 ``Vigil-作业周报-<label>.prose.json`` 还在，改名前后的
+    label 相同时（周报窗口）必须还能读到；周报自身新旧前缀相同，只有一份。
+    """
+    reports = state_dir / "reports"
+    paths = [reports / f"{prefix}{label}.prose.json"]
+    legacy = reports / f"{_LEGACY_WEEKLY_PREFIX}{label}.prose.json"
+    if legacy not in paths:
+        paths.append(legacy)
+    return paths
+
+
+def _load_prose(state_dir: Path, label: str, spec: str, *,
+                prefix: str = _LEGACY_WEEKLY_PREFIX) -> Optional[Dict[str, str]]:
     """读取模型撰写的叙述。
 
     ``spec``：``none`` 强制模板；``auto`` 读默认路径；其它当路径。
     文件不存在/解析失败一律回落模板（报告不能因为缺叙述而失败）。
+    ``prefix`` 由窗口粒度决定（``report_prefix``）；缺省按周报，兼容旧调用方。
     """
     spec = str(spec or "auto").strip()
     if spec.lower() == "none":
         return None
-    path = Path(spec).expanduser() if spec.lower() != "auto" else (
-        state_dir / "reports" / f"{REPORT_PREFIX}{label}.prose.json"
-    )
+    if spec.lower() == "auto":
+        paths = prose_paths(state_dir, label, prefix)
+        path = next((c for c in paths if c.is_file()), paths[0])
+    else:
+        path = Path(spec).expanduser()
     if not path.is_file():
         if spec.lower() != "auto":
             print(f"digest: prose 文件不存在，回落模板：{path}", file=sys.stderr)
@@ -1381,6 +1469,8 @@ def _run(args, *, job_id: Optional[str] = None, job_name: Optional[str] = None) 
     except ValueError as exc:
         print(f"digest: {exc}", file=sys.stderr)
         return 2
+    span = until - since
+    prefix = report_prefix(span)
 
     home = Path(os.environ.get("VIGIL_HOME") or (Path.home() / ".vigil"))
     db = Path(args.db).expanduser() if args.db else home / "state.db"
@@ -1395,13 +1485,14 @@ def _run(args, *, job_id: Optional[str] = None, job_name: Optional[str] = None) 
             extra_job_ids=args.exclude_job_id,
             job_id=job_id,
             job_name=job_name,
+            week=args.week,
         )
     except (sqlite3.Error, OSError) as exc:
         print(f"digest: 无法读取 state.db：{exc}", file=sys.stderr)
         return 3
 
     target = str(args.publish or "none").strip().lower()
-    prose = _load_prose(state_dir, label, args.prose)
+    prose = _load_prose(state_dir, label, args.prose, prefix=prefix)
 
     if target == "none":
         if args.format == "facts":
@@ -1422,7 +1513,7 @@ def _run(args, *, job_id: Optional[str] = None, job_name: Optional[str] = None) 
         return 2
 
     markdown = render_md(facts, prose)
-    default_path = state_dir / "reports" / f"{REPORT_PREFIX}{label}.md"
+    default_path = state_dir / "reports" / f"{prefix}{label}.md"
     report_path = Path(args.out).expanduser() if args.out else default_path
     name = report_path.stem
     try:

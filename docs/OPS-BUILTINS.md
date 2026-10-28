@@ -81,9 +81,12 @@ vigil cron tick                      # 手动跑一轮到期的 job（调试用�
    vigil alerts auto-dispatch --schedule 5m     # 注册/更新；off 注销
    ```
 
-   ⚠️ 注册函数会把裸 `5m` 归一成 `every 5m`。手写 job 时也必须写 `every 5m`——
-   cron 的 `parse_schedule("5m")` 语义是**一次性，5 分钟后**，跑完就
-   `state=completed`，看起来在值守其实早停了（历史 job 就这么坏的）。
+   ⚠️ CLI 已把裸时长归一：`vigil alerts auto-dispatch --schedule 5m`、
+   `vigil cron create 5m`、`vigil cron edit --schedule 5m` 都会落成 `every 5m`。
+   **手写 `jobs.json` 或直接调 `create_job` 仍需写 `every 5m`**——cron 的
+   `parse_schedule("5m")` 语义是**一次性，5 分钟后**，跑完就 `state=completed`，
+   看起来在值守其实早停了（历史 job 就这么坏的）。一次性任务仍写 ISO 时间戳
+   （`2026-11-01T09:00`），CLI 不会把它改成周期。
 
    同时也是 `config.yaml` 里的 `ops.alerts.auto_dispatch.interval`（人读的意图值，
    CLI 注册时以 `--schedule` 为准）。
@@ -209,7 +212,9 @@ vigil credential expire bookstack-api
    → job 的 `script` 是外挂绝对路径。改成 `builtin:<name>` 或把脚本放回
    `<VIGIL_HOME>/scripts/`。
 2. job 跑一次就 `state=completed`、再也不动
-   → schedule 写成了裸 `5m`（= 一次性）。周期任务必须 `every 5m` 或 cron 表达式。
+   → 手写的 `jobs.json` 里 schedule 是裸 `5m`（= 一次性）。CLI 侧已归一
+   （`vigil cron create 5m` → `every 5m`），但手写文件仍需写 `every 5m` 或
+   cron 表达式。
 3. 工具/蓝图「明明有代码但用不了」
    → 网关进程没重启，内存里的 toolset 是旧版本。`systemctl --user restart` 相关
      服务，或 `vigil gateway restart`。

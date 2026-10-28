@@ -561,6 +561,27 @@ def parse_duration(s: str) -> int:
     return value * multipliers[unit]
 
 
+# 裸时长：CLI 上 ``5m`` 的意思是「每 5 分钟」，而 ``parse_schedule("5m")`` 的
+# 语义是「一次性，5 分钟后」。只有这种纯 ``<N>[smhdw]`` 形态需要归一——
+# ``every …``、cron 表达式、ISO 时间戳、``off``/空串一律不动（一次性任务
+# 的语义不能变）。归一放在 CLI 侧（``hermes_cli.cron``），后端 ``parse_schedule``
+# 与模型工具 ``cronjob`` 的语义保持不变。
+_BARE_INTERVAL_RE = re.compile(r"^\d+[smhdw]$", re.IGNORECASE)
+
+
+def normalize_interval_spec(value: str) -> str:
+    """裸时长 → 周期语义：``5m`` → ``every 5m``；其它形态原样返回。
+
+    ``every 10m`` / ``0 9 * * *`` / ``2026-11-01T09:00`` / ``off`` 不变——
+    一次性任务仍然要写 ISO 时间戳，cron 表达式不变。CLI 的 ``cron create`` /
+    ``cron edit --schedule`` 与 ``alert-autodispatch`` 共用这一份实现。
+    """
+    text = str(value or "").strip()
+    if text and _BARE_INTERVAL_RE.fullmatch(text):
+        return f"every {text}"
+    return text
+
+
 def parse_schedule(schedule: str) -> Dict[str, Any]:
     """
     Parse schedule string into structured format.

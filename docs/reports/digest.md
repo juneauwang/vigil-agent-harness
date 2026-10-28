@@ -24,22 +24,33 @@ vigil digest --window 7d --format md --publish bookstack
 
 | 参数 | 说明 |
 |---|---|
-| `--window` | 滚动窗口 `7d / 24h / 2w`；不传则读 `ops.digest.window`，再缺省 `7d` |
+| `--window` | 滚动窗口 `<N>[dhmw]`——`1d` / `12h` / `7d` / `2w` / `90d` 都行；不传则读 `ops.digest.window`，再缺省 `7d` |
 | `--week` | ISO 周（`2026-W43`），周一 00:00 到下周一 00:00；与其余窗口参数互斥 |
 | `--since` / `--until` | 显式区间，必须同时给且 `since < until`；与 `--window` 互斥 |
 | `--db` | `state.db` 路径，缺省 `<VIGIL_HOME>/state.db` |
 | `--state-dir` | 报告输出根目录，缺省 db 所在目录 |
 | `--format` | `facts`（默认）/ `md` |
 | `--out` | 写文件；缺省打 stdout。**发布时它决定 BookStack 页名**（文件名去 `.md`） |
-| `--prose` | `auto`（默认，读 `<state-dir>/reports/<label>.prose.json`）/ `none`（强制模板）/ 具体路径 |
+| `--prose` | `auto`（默认，读 `<state-dir>/reports/<文件名前缀><label>.prose.json`）/ `none`（强制模板）/ 具体路径 |
 | `--publish` | `none`（默认）/ `file` / `bookstack`；要求 `--format md` |
 | `--exclude-job-id` | 额外排除某个 cron job 的会话，可重复 |
 
 ## 2. 时间窗与自排除
 
 1. 时区固定 `Asia/Shanghai`，窗口左闭右开 `[since, until)`。
-2. `label` 取窗口结束前最后一刻所在 ISO 周（`--week` 用其本身）；报告文件名与
-   BookStack 页名都用它，例如 `Vigil-作业周报-2026-W44`。
+2. **怎么命名看窗口跨度，不再一律叫「周报」**（时区固定 `Asia/Shanghai`，
+   `until` 用 `until - 1s` 取日期）：
+
+   | 跨度 | label | 标题首行 | 文件名前缀 |
+   |---|---|---|---|
+   | `--week` 给定 | `2026-W43` | `# Vigil 作业周报 2026-W43（…）` | `Vigil-作业周报-` |
+   | ≤ 2 天 | `2026-10-28` | `# Vigil 作业日报 2026-10-28（10-27 ~ 10-28）` | `Vigil-作业日报-` |
+   | 2 天 < 跨度 ≤ 10 天 | `2026-W44` | `# Vigil 作业周报 2026-W44（10-21 ~ 10-28）` | `Vigil-作业周报-` |
+   | > 10 天 | `2026-07-30_2026-10-28` | `# Vigil 作业报告 2026-07-30_2026-10-28（…）` | `Vigil-作业报告-` |
+
+   `label` 只含 `[0-9A-Za-z_-]`（BookStack 拿 ASCII 做 slug）；报告文件名与
+   BookStack 页名都是「前缀 + label」（页名 = 文件名去扩展名，规则不变），例如
+   `Vigil-作业日报-2026-10-28`、`Vigil-作业报告-2026-07-30_2026-10-28`。
 3. 会话归属按 `sessions.started_at` 落在窗口内判定。
 4. 自排除：有 job 上下文时只排**本 job 及其派生 subagent**；手动跑（无 job 上下文）
    排全部 `cron` / `subagent` 会话。已删除的历史 job 用 `--exclude-job-id` 手工清。
@@ -49,7 +60,8 @@ vigil digest --window 7d --format md --publish bookstack
 字段名固定，模型与发布端都依赖：
 
 ```
-window{since,until,label}  generated_at  db
+window{since,until,label,granularity,span_days}  generated_at  db
+  # granularity: daily | weekly | range（报告粒度，前端与 prose 提示词可读）
 totals{tasks,objects,objects_with_identity,objects_missing_identity,by_type,
        changes,by_kind,excluded_pipeline_sessions,active_days}
 tasks[]{when,session,source,asks[],end_reason,
@@ -139,7 +151,7 @@ restore、把探测型 `curl` 判成 `transfer_file`）：
 > 这条口径的理由：另一个人拿着报告，要能判断集群到底改了什么；能复核的标清楚，
 > 不能复核的也标清楚 —— 编一个 URL 出来比缺更糟。
 
-prose 文件路径：`<state-dir>/reports/Vigil-作业周报-<label>.prose.json`
+prose 文件路径：`<state-dir>/reports/<前缀><label>.prose.json`（前缀按粒度 `Vigil-作业日报-` / `Vigil-作业周报-` / `Vigil-作业报告-`；新名字读不到时回落旧的 `Vigil-作业周报-<label>.prose.json`）
 
 ```json
 {
@@ -222,13 +234,14 @@ vigil credential expire bookstack-api
 
 行为：
 
-1. 先写 `<state-dir>/reports/Vigil-作业周报-<label>.md`，再调
+1. 先写 `<state-dir>/reports/<前缀><label>.md`（前缀按窗口粒度，见 §2），再调
    `BookstackTarget`（`tools/publish_targets.py`）。
 2. 幂等：在 `book_id` 范围内按**页名精确匹配**，命中则更新、否则新建；
    `--out` 改了文件名就等于改了页名。
 3. stdout 只打印 `action=… page_id=… url=… md=…`，不打印凭证；失败走退出码 4。
 4. 页名里的中文会被 BookStack 的 slug 规则丢弃——`name="Vigil 发布工具自检"` 会
-   落成 `/page/vigil`。**页名必须带 ASCII 部分**（周报的 `2026-W44` 就是）。
+   落成 `/page/vigil`。**页名必须带 ASCII 部分**（label 的 `2026-10-28` /
+   `2026-W44` / `2026-07-30_2026-10-28` 就是）。
 
 ## 7. Confluence：现状与缺口
 

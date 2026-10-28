@@ -213,8 +213,10 @@ CATALOG: List[AutomationBlueprint] = [
             "只写 end_reason 不是 cli_close/turn_complete 的任务、以及 gaps。\n"
             "## 5. 下周期\n"
             "1-3 条，必须对应第 4 段的未闭环项；没有就写「无」。\n\n"
-            "写完后把 Markdown 写到 facts.db 所在目录的 "
-            "reports/Vigil-作业周报-<facts.window.label>.md，然后调用 "
+            "写完后把 Markdown 写到 facts.db 所在目录的 reports/ 下，文件名按 "
+            "facts.window.granularity 取前缀：daily→Vigil-作业日报-，weekly→"
+            "Vigil-作业周报-，range→Vigil-作业报告-，后面接 <facts.window.label>"
+            "（label 形如 2026-10-28 / 2026-W44 / 2026-07-30_2026-10-28）；然后调用 "
             "publish_bookstack 发布：name=文件名去 .md，markdown=刚写文件的内容，"
             "book_id 由工具配置解析。禁止用 curl/terminal 自行发布；发布失败最多"
             "重试 1 次，仍失败只报错误，禁止编造 URL。最后回报两行：MD 绝对路径；"
@@ -229,8 +231,13 @@ CATALOG: List[AutomationBlueprint] = [
             ),
             BlueprintSlot(
                 name="window", type="enum", label="Window",
-                default="7d", options=("7d", "14d", "30d"),
-                help="digest 的时间窗（也可在 config 里设 ops.digest.window 作缺省）",
+                default="7d", options=("7d", "14d", "30d"), strict=False,
+                help=(
+                    "digest 的时间窗：任意 <N>[dhmw]（1d / 12h / 90d 都行；"
+                    "7d/14d/30d 只是建议）。≤2 天出日报、≤10 天出周报、>10 天出"
+                    "区间报告。语法错误由 digest 运行期报错。也可在 config 里设 "
+                    "ops.digest.window 作缺省"
+                ),
             ),
             BlueprintSlot(
                 name="publish", type="enum", label="Publish to",

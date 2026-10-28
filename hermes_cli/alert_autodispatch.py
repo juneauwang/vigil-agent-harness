@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 import threading
 import time
 from pathlib import Path
@@ -431,16 +430,12 @@ def _normalize_interval(value: str) -> str:
     cron 的 ``parse_schedule("5m")`` 意思是**一次性，5 分钟后**；本函数入参的意思
     是**每 5 分钟**。不归一化就会建出跑完即结束的 job（历史现象：job 一直是
     ``once`` + ``repeat.times=1``，跑一次变 ``completed``，自动派发其实没在值守）。
-    cron 表达式（5 段以上）与已带 ``every`` 前缀的值原样保留。
+    实现只有一份：``cron.jobs.normalize_interval_spec``（CLI 的 cron create/edit
+    也走它）——``every …``、cron 表达式、ISO 时间戳、``off``/空串原样保留。
     """
-    text = str(value or "").strip()
-    if not text or text.lower() == "off":
-        return text
-    if text.lower().startswith("every ") or len(text.split()) >= 5:
-        return text
-    if re.fullmatch(r"\d+\s*[smhdw]", text, re.IGNORECASE):
-        return f"every {text}"
-    return text
+    from cron.jobs import normalize_interval_spec
+
+    return normalize_interval_spec(value)
 
 
 def _existing_job():
