@@ -420,6 +420,15 @@ def objects_from_call(name: str, args: dict, result: str, source: str) -> List[d
         host = str(args.get("host") or "")
         obj = _object_from_command(str(args.get("command") or ""), result, source, host)
         return [obj] if obj else []
+    if name == "topo_discover":
+        if not args.get("commit"):
+            return []  # 只出草案不落盘：不算变更
+        try:
+            payload = json.loads(str(result or "{}"))
+        except Exception:
+            payload = {}
+        drafts = [str(x).strip() for x in (payload.get("drafts") or []) if str(x).strip()]
+        return [_obj("拓扑", d, "", "新增（待审）", source) for d in drafts[:20]]
     if name == "topo_update":
         ent = str(args.get("entity") or "")
         if not ent:
@@ -427,11 +436,15 @@ def objects_from_call(name: str, args: dict, result: str, source: str) -> List[d
         ups = args.get("updates") or {}
         parts = []
         for key, value in list(ups.items())[:4]:
+            if key == "needs_review":
+                continue  # 审核标记不是「改了什么」，单独落结果列
             if isinstance(value, (dict, list, tuple)):
                 parts.append(f"{key}=[…]")
             else:
                 parts.append(f"{key}={_fmt_value(value)}")
-        return [_obj("拓扑", ent, "；".join(parts), _result_summary(result), source)]
+        only_review = list(ups.keys()) == ["needs_review"] and ups.get("needs_review") is False
+        hint = "审核通过" if only_review else "更新"
+        return [_obj("拓扑", ent, "；".join(parts), hint, source)]
     if name in ("write_file", "patch"):
         path = str(args.get("path") or args.get("file_path") or "")
         body = args.get("new_string") if name == "patch" else args.get("content")
@@ -544,8 +557,8 @@ def _coalesce_topo(objects: List[dict]) -> List[dict]:
             merged[key] = value
         keeper["params"] = "；".join(f"{k}={v}" if v else k for k, v in merged.items())
         keeper["hits"] = int(keeper.get("hits") or 1) + int(obj.get("hits") or 1)
-        if not keeper["result"]:
-            keeper["result"] = obj["result"]
+        results = [r for r in (keeper["result"], obj["result"]) if r]
+        keeper["result"] = "；".join(dict.fromkeys(results))[:40]
     return out
 
 

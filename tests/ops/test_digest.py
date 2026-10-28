@@ -728,3 +728,43 @@ def test_builtin_alert_autodispatch_is_whitelisted():
 
     assert builtin_name("builtin:alert-autodispatch") == "alert-autodispatch"
     assert BUILTIN_SCRIPTS["alert-autodispatch"] == "hermes_cli.alert_autodispatch"
+
+
+def test_topo_objects_carry_add_update_approve():
+    """拓扑对象的结果列要能看出是新增/更新/审核通过（用户 2026-10-28 指出全是 '—'）。"""
+    import json as _json
+
+    from ops import digest
+
+    # discover 未 commit → 不算变更
+    assert digest.objects_from_call("topo_discover", {"host": "h", "commit": False}, "{}", "s#1") == []
+
+    # discover commit → 新增（待审），实体名来自 drafts
+    payload = _json.dumps({"status": "committed", "drafts": ["laptop-t2ja2ere", "kind-registry"],
+                           "appended": 2, "kept": 0})
+    objs = digest.objects_from_call("topo_discover", {"host": "h", "commit": True}, payload, "s#2")
+    assert [o["identity"] for o in objs] == ["laptop-t2ja2ere", "kind-registry"]
+    assert {o["result"] for o in objs} == {"新增（待审）"}
+
+    # 只改 needs_review=false → 审核通过，且不把 needs_review 塞进参数
+    objs = digest.objects_from_call(
+        "topo_update", {"entity": "argo-server", "updates": {"needs_review": False}}, "ok", "s#3")
+    assert objs[0]["result"] == "审核通过"
+    assert "needs_review" not in objs[0]["params"]
+
+    # 真改字段 → 更新，参数保留
+    objs = digest.objects_from_call(
+        "topo_update", {"entity": "laptop-t2ja2ere",
+                        "updates": {"type": "host", "endpoint": "172.18.120.67", "needs_review": False}},
+        "ok", "s#4")
+    assert objs[0]["result"] == "更新"
+    assert "endpoint=172.18.120.67" in objs[0]["params"]
+
+    # 同一实体「新增 → 审核通过」合并成一行，两个结果都留着
+    merged = digest._coalesce_topo(
+        digest.objects_from_call("topo_discover", {"commit": True}, payload, "s#2")[:1]
+        + [digest.objects_from_call(
+            "topo_update", {"entity": "laptop-t2ja2ere", "updates": {"needs_review": False}},
+            "ok", "s#5")[0]]
+    )
+    assert len(merged) == 1 and "新增（待审）" in merged[0]["result"] and "审核通过" in merged[0]["result"]
