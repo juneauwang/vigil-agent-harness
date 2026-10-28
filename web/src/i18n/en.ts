@@ -765,6 +765,8 @@ const en = {
     triggerQueued: "Queued — runs on the next tick",
     triggerStarted: "Started — refreshes in a few seconds",
     runNowPaused: "Paused — resume before running",
+    queueNext: "Queue for next tick",
+    queuePaused: "Paused — resume before queuing",
     actionFailed: "Action failed: ",
     saved: "Saved",
     deleteTitle: "Delete scheduled job",

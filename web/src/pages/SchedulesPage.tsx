@@ -2,18 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
-import {
-  CalendarClock,
-  Check,
-  Loader2,
-  Pause,
-  Play,
-  Plus,
-  RefreshCw,
-  Trash2,
-  X,
-  Zap,
-} from "lucide-react";
+import { CalendarClock, Check, Loader2, Pause, Play, Plus, RefreshCw, Timer, Trash2, X, Zap } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { CronBlueprint, CronJob } from "@/lib/api";
 import { translateBackendMessage } from "@/lib/backendMsg";
@@ -199,6 +188,16 @@ export default function SchedulesPage() {
       refreshTimer.current = window.setTimeout(() => void load(), TRIGGER_REFRESH_MS);
       return job; // 立即跑不返回 job 新状态，等下一次列表刷新
     });
+
+  const queueNext = (job: CronJob) => {
+    void runRowAction(job, async () => {
+      const updated = await api.triggerCronJob(job.id);
+      setNotice(t("schedules.triggerQueued"));
+      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
+      refreshTimer.current = window.setTimeout(() => void load(), TRIGGER_REFRESH_MS);
+      return updated;
+    });
+  };
 
   const confirmDelete = async () => {
     const target = deleteTarget;
@@ -413,6 +412,7 @@ export default function SchedulesPage() {
                     onEdit={(mode) => openEdit(job, mode)}
                     onTogglePause={() => togglePause(job)}
                     onRunNow={() => runNow(job)}
+                    onQueue={() => queueNext(job)}
                     onDelete={() => setDeleteTarget(job)}
                     onEditChange={(value) => setEdit((cur) => (cur ? { ...cur, value } : cur))}
                     onEditSave={() => void saveEdit()}
@@ -618,6 +618,7 @@ function ScheduleRow({
   onEdit,
   onTogglePause,
   onRunNow,
+  onQueue,
   onDelete,
   onEditChange,
   onEditSave,
@@ -632,6 +633,7 @@ function ScheduleRow({
   onEdit: (mode: EditState["mode"]) => void;
   onTogglePause: () => void;
   onRunNow: () => void;
+  onQueue: () => void;
   onDelete: () => void;
   onEditChange: (value: string) => void;
   onEditSave: () => void;
@@ -716,6 +718,10 @@ function ScheduleRow({
             <IconButton label={paused ? t("schedules.runNowPaused") : t("schedules.runNow")}
               onClick={onRunNow} disabled={busy || paused}>
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Zap className="size-3.5" />}
+            </IconButton>
+            <IconButton label={paused ? t("schedules.queuePaused") : t("schedules.queueNext")}
+              onClick={onQueue} disabled={busy || paused}>
+              <Timer className="size-3.5" />
             </IconButton>
             <IconButton label={t("schedules.delete")} onClick={onDelete} disabled={busy} tone="danger">
               <Trash2 className="size-3.5" />

@@ -266,3 +266,22 @@ describe("立即跑（run-now）", () => {
     root.unmount();
   });
 });
+
+describe("queue-for-next-tick", () => {
+  it("uses triggerCronJob (not run-now) and shows the queued notice", async () => {
+    (api.listCronJobs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([DIGEST_JOB]);
+    (api.triggerCronJob as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DIGEST_JOB });
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<MemoryRouter><SchedulesPage /></MemoryRouter>);
+    });
+    const btn = Array.from(container.querySelectorAll("button"))
+      .find((b) => (b.getAttribute("aria-label") ?? "").includes("下一轮"));
+    expect(btn).toBeTruthy();
+    await act(async () => { btn!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    expect(api.triggerCronJob).toHaveBeenCalledWith("job-digest");
+    expect(api.runCronJobNow).not.toHaveBeenCalled();
+    root.unmount();
+  });
+});

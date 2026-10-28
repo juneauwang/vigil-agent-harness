@@ -756,6 +756,8 @@ const zh = {
     triggerQueued: "已排队，下一个 tick 执行",
     triggerStarted: "已开始执行，几秒后刷新可看结果",
     runNowPaused: "已暂停：先恢复再立即跑",
+    queueNext: "排到下一轮（下个 tick 执行）",
+    queuePaused: "已暂停：先恢复再排队",
     actionFailed: "操作失败：",
     saved: "已保存",
     deleteTitle: "删除定时任务",
