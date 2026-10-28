@@ -825,7 +825,6 @@ const en = {
     statusFile: "Publish target: file (local only)",
     settingsTitle: "Publish settings",
     settingsHint: "Config goes to config.yaml; the token goes to the local credential vault (never echoed).",
-    fldWindow: "Default window",
     fldTarget: "Publish target",
     fldBaseUrl: "BookStack URL",
     fldBookId: "Book ID",

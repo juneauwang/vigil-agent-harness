@@ -35,6 +35,10 @@ vigil digest --window 7d --format md --publish bookstack
 | `--publish` | `none`（默认）/ `file` / `bookstack`；要求 `--format md` |
 | `--exclude-job-id` | 额外排除某个 cron job 的会话，可重复 |
 
+窗口只有一个可改入口：`/registre` 流水线卡里的「改窗口」，它写的是 job 的 `--window`（真正生效）。
+`config.yaml` 的 `ops.digest.window` 只是「job 没写 `--window`」或手敲 `vigil digest` 不带参数时的兜底，
+页面上不暴露——避免两处数字互相打脸。
+
 ## 2. 时间窗与自排除
 
 1. 时区固定 `Asia/Shanghai`，窗口左闭右开 `[since, until)`。

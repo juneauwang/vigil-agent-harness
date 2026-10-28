@@ -101,7 +101,6 @@ interface EditState {
 }
 
 interface SettingsForm {
-  window: string;
   target: string;
   base_url: string;
   book_id: string;
@@ -112,7 +111,6 @@ interface SettingsForm {
 function formFromConfig(config: DigestConfig | null): SettingsForm {
   const bookstack = config?.publish?.bookstack;
   return {
-    window: config?.window ?? "",
     target: config?.publish?.target ?? "none",
     base_url: bookstack?.base_url ?? "",
     book_id: bookstack?.book_id ? String(bookstack.book_id) : "",
@@ -320,15 +318,12 @@ export default function RegistrePage() {
     setSettingsMsg(null);
     const ref = form.credential_ref.trim() || "bookstack-api";
     try {
-      // window 留空 = 不改（后端只接受 <N>[dhmw]，空值不发给它）。
       const patch: DigestConfigPatch = {
         target: form.target,
         base_url: form.base_url.trim(),
         book_id: Number(form.book_id || 0),
         credential_ref: ref,
       };
-      const window = form.window.trim();
-      if (window) patch.window = window;
       const saved = await api.updateDigestConfig(patch);
       if (saved?.data) setConfig(saved.data);
 
@@ -574,16 +569,6 @@ export default function RegistrePage() {
           <div className="mt-0.5 text-[11px] text-[var(--vigil-muted)]">{t("registre.settingsHint")}</div>
         </div>
         <div className="grid gap-3 px-4 py-3 sm:grid-cols-2">
-          <label className="block space-y-1">
-            <span className="text-[11px] font-medium text-[var(--vigil-text)]">{t("registre.fldWindow")}</span>
-            <input
-              aria-label={t("registre.fldWindow")}
-              value={form.window}
-              placeholder="7d"
-              onChange={(event) => setForm((cur) => ({ ...cur, window: event.target.value }))}
-              className="w-full rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1.5 font-mono text-xs text-[var(--vigil-text)]"
-            />
-          </label>
           <label className="block space-y-1">
             <span className="text-[11px] font-medium text-[var(--vigil-text)]">{t("registre.fldTarget")}</span>
             <select

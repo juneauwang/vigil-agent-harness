@@ -816,7 +816,6 @@ const zh = {
     statusFile: "发布目标：file（本地保存）",
     settingsTitle: "发布设置",
     settingsHint: "配置写 config.yaml；令牌写本机凭据保险箱（永不回显）。",
-    fldWindow: "默认窗口",
     fldTarget: "发布目标",
     fldBaseUrl: "BookStack 地址",
     fldBookId: "书 ID",
