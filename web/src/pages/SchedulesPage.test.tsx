@@ -17,6 +17,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       updateCronJob: vi.fn(),
       pauseCronJob: vi.fn(),
       resumeCronJob: vi.fn(),
+      runCronJobNow: vi.fn(),
       triggerCronJob: vi.fn(),
       deleteCronJob: vi.fn(),
       listBlueprints: vi.fn(),
@@ -244,5 +245,24 @@ describe("window arg helpers", () => {
     expect(withWindowArg(base, "  ")).toEqual(["--format", "facts"]);
     expect(windowArg(base)).toBe("7d");
     expect(windowArg(["--format", "facts"])).toBe("");
+  });
+});
+
+describe("立即跑（run-now）", () => {
+  it("走 /run-now（不是排到下一个 tick），并提示已开始执行", async () => {
+    (api.listCronJobs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([DIGEST_JOB]);
+    (api.runCronJobNow as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ started: true });
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => {
+      root.render(<MemoryRouter><SchedulesPage /></MemoryRouter>);
+    });
+    const btn = Array.from(container.querySelectorAll("button"))
+      .find((b) => (b.getAttribute("aria-label") ?? "").includes("立即跑"));
+    expect(btn).toBeTruthy();
+    await act(async () => { btn!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    expect(api.runCronJobNow).toHaveBeenCalledWith("job-digest");
+    expect(api.triggerCronJob).not.toHaveBeenCalled();
+    root.unmount();
   });
 });

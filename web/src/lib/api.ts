@@ -1213,6 +1213,11 @@ export const api = {
     fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" }),
   triggerCronJob: (jobId: string) =>
     fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(jobId)}/trigger`, { method: "POST" }),
+  /** 立即执行一次（后台 fire，不等 tick）。任务暂停时后端返回 400。 */
+  runCronJobNow: (jobId: string) =>
+    fetchJSON<{ started?: boolean; job_id?: string }>(
+      `/api/cron/jobs/${encodeURIComponent(jobId)}/run-now`, { method: "POST" },
+    ),
   deleteCronJob: (jobId: string) =>
     fetchJSON<{ ok?: boolean }>(`/api/cron/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
   listBlueprints: () => fetchJSON<CronBlueprintListResponse>("/api/cron/blueprints"),

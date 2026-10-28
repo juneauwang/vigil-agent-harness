@@ -191,11 +191,13 @@ export default function SchedulesPage() {
 
   const runNow = (job: CronJob) =>
     void runRowAction(job, async () => {
-      const updated = await api.triggerCronJob(job.id);
-      setNotice(t("schedules.triggerQueued"));
+      await api.runCronJobNow(job.id);
+      setNotice(t("schedules.triggerStarted"));
+      if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
+      refreshTimer.current = window.setTimeout(() => void load(), 3000);
       if (refreshTimer.current !== null) window.clearTimeout(refreshTimer.current);
       refreshTimer.current = window.setTimeout(() => void load(), TRIGGER_REFRESH_MS);
-      return updated;
+      return job; // 立即跑不返回 job 新状态，等下一次列表刷新
     });
 
   const confirmDelete = async () => {
@@ -711,7 +713,8 @@ function ScheduleRow({
             <IconButton label={paused ? t("schedules.resume") : t("schedules.pause")} onClick={onTogglePause} disabled={busy}>
               {paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
             </IconButton>
-            <IconButton label={t("schedules.runNow")} onClick={onRunNow} disabled={busy}>
+            <IconButton label={paused ? t("schedules.runNowPaused") : t("schedules.runNow")}
+              onClick={onRunNow} disabled={busy || paused}>
               {busy ? <Loader2 className="size-3.5 animate-spin" /> : <Zap className="size-3.5" />}
             </IconButton>
             <IconButton label={t("schedules.delete")} onClick={onDelete} disabled={busy} tone="danger">

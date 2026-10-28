@@ -14369,6 +14369,33 @@ def _trigger_cron_job_sync(job_id: str, profile: Optional[str] = None):
     return job
 
 
+def _run_cron_job_now_sync(job_id: str, profile: Optional[str] = None):
+    """立即执行一次（不等下一个 tick）。
+
+    走 scheduler provider 的 ``fire_due``（store 级 CAS 认领 + ``run_one_job``），
+    与外部调度器的 inbound fire 同一条执行链；执行本身放到后台线程，请求立刻返回。
+    任务被暂停时不执行（暂停语义优先），返回 400 让人先恢复。
+    """
+    selected = profile or _find_cron_job_profile(job_id)
+    if not selected:
+        raise HTTPException(status_code=404, detail="Job not found")
+    job = _call_cron_for_profile(selected, "get_job", job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if not job.get("enabled") or job.get("state") == "paused":
+        raise HTTPException(status_code=400, detail="任务已暂停，先恢复再立即跑")
+
+    def _fire() -> None:
+        try:
+            fired = _fire_cron_job_for_profile(selected, job_id)
+            _log.info("cron run-now %s: %s", job_id, "fired" if fired else "not claimed")
+        except Exception:
+            _log.exception("cron run-now failed for job %s", job_id)
+
+    threading.Thread(target=_fire, name=f"cron-run-now-{job_id}", daemon=True).start()
+    return {"started": True, "job_id": job_id, "profile": selected}
+
+
 
 
 def _delete_cron_job_sync(job_id: str, profile: Optional[str] = None):

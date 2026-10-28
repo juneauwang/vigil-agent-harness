@@ -763,6 +763,8 @@ const en = {
     windowPlaceholder: "7d",
     windowHint: "7d / 24h / 1d / 2w all work; windows ≤2 days are named by date, >10 days by range. Only --window changes; other args stay. Empty = default.",
     triggerQueued: "Queued — runs on the next tick",
+    triggerStarted: "Started — refreshes in a few seconds",
+    runNowPaused: "Paused — resume before running",
     actionFailed: "Action failed: ",
     saved: "Saved",
     deleteTitle: "Delete scheduled job",

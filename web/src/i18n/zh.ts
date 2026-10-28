@@ -754,6 +754,8 @@ const zh = {
     windowPlaceholder: "7d",
     windowHint: "7d / 24h / 1d / 2w 都可；窗口 ≤2 天报告按日期命名，>10 天按区间命名。只改 --window，其余参数不动；留空 = 用缺省。",
     triggerQueued: "已排队，下一个 tick 执行",
+    triggerStarted: "已开始执行，几秒后刷新可看结果",
+    runNowPaused: "已暂停：先恢复再立即跑",
     actionFailed: "操作失败：",
     saved: "已保存",
     deleteTitle: "删除定时任务",

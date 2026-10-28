@@ -40,6 +40,7 @@ _update_cron_job_sync = late("_update_cron_job_sync")
 _pause_cron_job_sync = late("_pause_cron_job_sync")
 _resume_cron_job_sync = late("_resume_cron_job_sync")
 _trigger_cron_job_sync = late("_trigger_cron_job_sync")
+_run_cron_job_now_sync = late("_run_cron_job_now_sync")
 _delete_cron_job_sync = late("_delete_cron_job_sync")
 _find_cron_job_profile = late("_find_cron_job_profile")
 _fire_cron_job_for_profile = late("_fire_cron_job_for_profile")
@@ -113,7 +114,14 @@ async def resume_cron_job(job_id: str, profile: Optional[str] = None):
 
 @router.post("/api/cron/jobs/{job_id}/trigger")
 async def trigger_cron_job(job_id: str, profile: Optional[str] = None):
+    """排到下一个 tick 执行（不是立即执行）。"""
     return await _run_cron_dashboard_io(_trigger_cron_job_sync, job_id, profile)
+
+
+@router.post("/api/cron/jobs/{job_id}/run-now")
+async def run_cron_job_now(job_id: str, profile: Optional[str] = None):
+    """立即执行一次（后台线程跑 fire_due，请求立刻返回）。"""
+    return await _run_cron_dashboard_io(_run_cron_job_now_sync, job_id, profile)
 
 
 @router.delete("/api/cron/jobs/{job_id}")

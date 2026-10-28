@@ -105,3 +105,42 @@ def test_put_script_args_roundtrip_and_type_check(client, cron_home):
     )
     assert bad.status_code == 400, bad.text
     assert "script_args" in bad.json()["detail"]
+
+
+class TestRunNow:
+    """run-now executes via fire_due in a background thread (not trigger_job)."""
+
+    def test_missing_job_404(self, client):
+        assert client.post("/api/cron/jobs/nope/run-now").status_code == 404
+
+    def test_paused_job_400(self, client, cron_home):
+        job = _create_job(cron_home)
+        from cron.jobs import update_job, use_cron_store
+
+        with use_cron_store(cron_home):
+            update_job(job["id"], {"enabled": False, "state": "paused"})
+
+        resp = client.post(f"/api/cron/jobs/{job['id']}/run-now")
+        assert resp.status_code == 400, resp.text
+        assert "paused" in resp.json()["detail"].lower() or "\u6682\u505c" in resp.json()["detail"]
+
+    def test_run_now_spawns_fire(self, client, cron_home, monkeypatch):
+        import threading
+
+        job = _create_job(cron_home)
+        called = threading.Event()
+        seen = {}
+
+        from hermes_cli import web_server
+
+        def fake_fire(profile, job_id):
+            seen["job_id"] = job_id
+            called.set()
+            return True
+
+        monkeypatch.setattr(web_server, "_fire_cron_job_for_profile", fake_fire)
+        resp = client.post(f"/api/cron/jobs/{job['id']}/run-now")
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["started"] is True
+        assert called.wait(3), "fire_due was never called"
+        assert seen["job_id"] == job["id"]
