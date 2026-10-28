@@ -184,23 +184,46 @@ def _posted_configured() -> bool:
     )
 
 
+def _publish_ledger() -> Dict[str, Any]:
+    """发布账本 reports/publish-index.json（发布时写入的真实 URL）。"""
+    try:
+        from ops.digest import read_publish_index
+
+        return read_publish_index(_reports_dir().parent)
+    except Exception:
+        return {}
+
+
 def _list_reports_sync() -> List[Dict[str, Any]]:
+    """台账：reports/*.md + 发布账本里的真实 URL。
+
+    注意：URL 只能来自账本（发布时由 BookstackTarget 生成，形如
+    ``/books/<book_slug>/page/<page_slug>``）。不要用 book_id 拼地址 ——
+    BookStack 的 book 路由认 slug 不认 id，拼出来是死链。
+    """
     directory = _reports_dir()
     items: List[Dict[str, Any]] = []
+    ledger = _publish_ledger()
     if directory.is_dir():
-        posted = _posted_configured()
         for path in sorted(directory.glob("*.md")):
             try:
                 stat = path.stat()
             except OSError:
                 continue
+            # 账本键是「报告名」= 文件名去 .md（发布时 BookStack 页名同源），
+            # 早期手写条目可能带 .md，两种都认。
+            entry = ledger.get(path.stem) or ledger.get(path.name)
+            entry = entry if isinstance(entry, dict) else {}
+            url = str(entry.get("url") or "")
             items.append({
                 "name": path.name,
                 "path": str(path),
                 "mtime": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
                 "size": stat.st_size,
                 "granularity": _granularity_of_name(path.name),
-                "posted": posted,
+                "posted": bool(url),
+                "url": url,
+                "page_id": entry.get("page_id"),
             })
     items.sort(key=lambda item: item["mtime"], reverse=True)
     return items

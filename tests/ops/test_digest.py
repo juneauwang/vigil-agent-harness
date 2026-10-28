@@ -935,3 +935,30 @@ def test_cron_cli_normalizes_bare_duration(monkeypatch):
     assert seen[0]["schedule"] == "every 5m"
     assert seen[1]["schedule"] == "every 10m"
     assert seen[2]["schedule"] == "2026-11-01T09:00"
+
+
+def test_publish_index_records_real_url(tmp_path):
+    """发布账本：URL 只能来自发布结果（BookStack /books/<book_slug>/page/<slug>）。"""
+    from ops import digest
+
+    state = tmp_path
+    (state / "reports").mkdir()
+    assert digest.read_publish_index(state) == {}
+
+    digest._record_publish(state, "Vigil-作业周报-2026-W44",
+                           {"url": "http://127.0.0.1:8080/books/vigil/page/vigil-2026-w44",
+                            "page_id": 4, "book_id": 1})
+    digest._record_publish(state, "Vigil-作业日报-2026-10-28",
+                           {"url": "http://127.0.0.1:8080/books/vigil/page/vigil-2026-10-28",
+                            "page_id": 8, "book_id": 1})
+
+    index = digest.read_publish_index(state)
+    assert index["Vigil-作业周报-2026-W44"]["page_id"] == 4
+    assert index["Vigil-作业周报-2026-W44"]["url"].endswith("/books/vigil/page/vigil-2026-w44")
+    assert "/books/1/page/" not in index["Vigil-作业周报-2026-W44"]["url"]
+
+    # 重复发布只更新同一条
+    digest._record_publish(state, "Vigil-作业周报-2026-W44",
+                           {"url": "http://127.0.0.1:8080/books/vigil/page/vigil-2026-w44",
+                            "page_id": 4, "book_id": 1})
+    assert len(digest.read_publish_index(state)) == 2

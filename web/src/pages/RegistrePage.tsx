@@ -402,14 +402,9 @@ export default function RegistrePage() {
     copyTimer.current = window.setTimeout(() => setCopied(null), 2000);
   };
 
-  const linkFor = (report: DigestReport): string => {
-    const bookstack = config?.publish?.bookstack;
-    if (!report.posted || config?.publish?.target !== "bookstack") return "";
-    if (!bookstack?.base_url || !bookstack.book_id) return "";
-    const slug = bookstackSlug(report.name);
-    if (!slug) return "";
-    return `${bookstack.base_url.replace(/\/+$/, "")}/books/${bookstack.book_id}/page/${slug}`;
-  };
+  // URL 只认发布账本里的真值（BookStack 的 book 路由认 slug 不认 id，
+  // 前端拼 /books/<id>/page/<slug> 会得到死链）。
+  const linkFor = (report: DigestReport): string => (report.url ?? "").trim();
 
   return (
     <div className="space-y-4 p-4" data-testid="registre-page">

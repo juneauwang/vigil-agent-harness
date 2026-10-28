@@ -940,6 +940,8 @@ export interface DigestReport {
   granularity?: string;
   /** 当前发布配置下能否推导 BookStack 链接。 */
   posted?: boolean;
+  /** 真实 BookStack URL（来自发布账本；空 = 未发布/无链接） */
+  url?: string;
 }
 
 export interface DigestReportsResponse {

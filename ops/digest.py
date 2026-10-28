@@ -1374,10 +1374,58 @@ def publish_markdown(
         base_url, book_id, token_id, secret = _bookstack_credentials()
         try:
             publisher = BookstackTarget(base_url, token_id, secret, timeout=30)
-            return publisher.publish(name=name, markdown=markdown, book_id=book_id)
+            result = publisher.publish(name=name, markdown=markdown, book_id=book_id)
         except PublishTargetError as exc:
             raise DigestPublishError(str(exc)) from exc
+        _record_publish(state_dir, name, result)
+        return result
     raise DigestPublishError(f"未知发布目标：{target!r}（支持 none/file/bookstack）")
+
+
+PUBLISH_INDEX_NAME = "publish-index.json"
+
+
+def _publish_index_path(state_dir: Path) -> Path:
+    return Path(state_dir) / "reports" / PUBLISH_INDEX_NAME
+
+
+def _record_publish(state_dir: Path, name: str, result: Dict[str, Any]) -> None:
+    """记发布账本 ``reports/publish-index.json``：报告名 → 真实 URL / page_id / 时间。
+
+    台账（Le Registre）只认这里的 URL —— 不许再拿 book_id 拼链接（BookStack 的
+    页面路径是 ``/books/<book_slug>/page/<page_slug>``，book_id 拼出来的地址是错的）。
+    写失败不致命：发布已经成功，账本只是索引。
+    """
+    try:
+        path = _publish_index_path(state_dir)
+        data: Dict[str, Any] = {}
+        if path.is_file():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    data = loaded
+            except (OSError, ValueError):
+                data = {}
+        data[str(name)] = {
+            "url": str(result.get("url") or ""),
+            "page_id": result.get("page_id"),
+            "book_id": result.get("book_id"),
+            "at": datetime.now(SHANGHAI).isoformat(timespec="seconds"),
+        }
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001 - 账本失败不能影响发布结果
+        print(f"digest: 发布账本写入失败（不影响发布）：{exc}", file=sys.stderr)
+
+
+def read_publish_index(state_dir: Path) -> Dict[str, Any]:
+    """读发布账本（台账用）；不存在/坏文件返回空 dict。"""
+    path = _publish_index_path(state_dir)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
 
 
 # --------------------------------------------------------------------------

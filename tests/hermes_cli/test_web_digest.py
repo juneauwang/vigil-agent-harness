@@ -335,3 +335,29 @@ def test_runs_endpoint_lists_recent_executions(client, digest_home, monkeypatch)
     resp = client.get("/api/digest/runs")
     assert resp.status_code == 200, resp.text
     assert resp.json()["data"] == []
+
+
+def test_reports_use_publish_ledger_url(client, digest_home):
+    """台账链接只认发布账本：没有账本条目 = 未发布、不给链接。"""
+    import json
+
+    reports = digest_home / "reports"
+    reports.mkdir(parents=True, exist_ok=True)
+    (reports / "Vigil-作业周报-2026-W44.md").write_text("# x\n", encoding="utf-8")
+    (reports / "Vigil-作业日报-2026-10-28.md").write_text("# y\n", encoding="utf-8")
+    (reports / "publish-index.json").write_text(json.dumps({
+        "Vigil-作业周报-2026-W44": {
+            "url": "http://127.0.0.1:8080/books/vigil/page/vigil-2026-w44",
+            "page_id": 4, "book_id": 1, "at": "2026-10-28T22:00:00+08:00",
+        }
+    }), encoding="utf-8")
+
+    body = client.get("/api/digest/reports").json()
+    items = {item["name"]: item for item in body["data"]}
+    posted = items["Vigil-作业周报-2026-W44.md"]
+    assert posted["posted"] is True
+    assert posted["url"] == "http://127.0.0.1:8080/books/vigil/page/vigil-2026-w44"
+    assert posted["page_id"] == 4
+
+    unposted = items["Vigil-作业日报-2026-10-28.md"]
+    assert unposted["posted"] is False and unposted["url"] == ""
