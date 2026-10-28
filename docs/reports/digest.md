@@ -79,6 +79,12 @@ gaps[]
 | `curl … /-/reload` | 不单独成对象 | 结果并到同任务的 scrape job（`target state=up`） |
 | `ansible-playbook x.yml` / `kubectl apply -f x.yml` | 配置 | playbook / manifest 名 |
 | `systemctl start|enable <unit>` | 系统服务 | unit 名 |
+| `sudo_exec` / `vssh`（host 来自工具参数） | 同上各类 | 命令没有 `-h` 时用 `host` 补 |
+| `apt/yum/dnf install <pkg>` | 系统服务 | `<pkg> @ <host>` |
+| `helm install|upgrade <release>` | 配置 | `helm release <name>` |
+| `docker run <image>` | 系统服务 | `容器 <image>` |
+| `topo_update(entity, updates)` | 拓扑 | 实体名 + 标量字段（dict/list 只留键） |
+| 写 `…/runbooks/*.yml` | 可复用资产 | `runbook <stem>` |
 | 写文件内容含 `job_name:` | 监控采集 | job 名 + `targets=[...]` + `scrape_interval` |
 | 写文件内容含 `CREATE ROLE` / `postgresql_user` | 账号与权限 | role 名（同一 role 的多条记录合成一个对象） |
 | 写文件内容含 `kv/…`、`secret/…` | 账号与权限 | role + 口令路径 |

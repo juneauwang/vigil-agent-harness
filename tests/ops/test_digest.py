@@ -560,6 +560,48 @@ def test_render_md_groups_by_day(tmp_path):
     assert "监控接入：scrape job milvus（1 项：target state=up）" in md
 
 
+def test_sudo_exec_and_kubectl_and_topo_objects():
+    """提权/远程工具与拓扑更新也要能抽成对象（90d 实测里这三类全丢了）。"""
+    from ops import digest
+
+    # sudo_exec：host 来自工具参数，命令里没有 -h
+    objs = digest.objects_from_call(
+        "sudo_exec",
+        {"host": "39.106.217.32", "env": "prod", "command": "apt-get install -y openbao"},
+        "ok", "chat_x#1",
+    )
+    assert objs and objs[0]["type"] == "系统服务"
+    assert objs[0]["identity"] == "openbao @ 39.106.217.32"
+
+    # kubectl apply：标识取文件名，不是整条命令
+    objs = digest.objects_from_call(
+        "terminal", {"command": "kubectl apply -f /opt/manifests/alertmanager.yaml"}, "created", "chat_x#2"
+    )
+    assert objs[0]["identity"] == "alertmanager.yaml"
+    assert "kubectl apply" in objs[0]["params"]
+
+    # 拓扑更新
+    objs = digest.objects_from_call(
+        "topo_update", {"entity": "gateway-svc", "updates": {"endpoint": "1.2.3.4:8080"}},
+        "ok", "chat_x#3",
+    )
+    assert objs[0]["type"] == "拓扑" and objs[0]["identity"] == "gateway-svc"
+    assert "endpoint=1.2.3.4:8080" in objs[0]["params"]
+
+    # 同一文件的写 + apply 合成一个对象
+    written = digest._objects_from_content(
+        "/opt/manifests/alertmanager.yaml", "kind: Deployment\nmetadata:\n  name: am\n", "ok", "s#1")
+    assert written and written[0]["identity"] == "alertmanager.yaml"
+    merged = digest._coalesce_configs(written + objs_from_call_apply())
+    assert len(merged) == 1
+
+
+def objs_from_call_apply():
+    from ops import digest
+    return digest.objects_from_call(
+        "terminal", {"command": "kubectl apply -f /opt/manifests/alertmanager.yaml"}, "created", "s#2")
+
+
 def test_e2e_objects_from_real_session_shape(tmp_path):
     """端到端：一条「建账号 + 接监控」的会话，报告要能看出改了什么。
 

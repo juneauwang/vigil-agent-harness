@@ -208,13 +208,15 @@ _OBJ_FAMILY = {
     "数据源": "监控",
     "配置": "配置",
     "系统服务": "配置",
+    "拓扑": "拓扑",
     "可复用资产": "交付",
     "技能": "交付",
     "文档": "交付",
     "发布": "交付",
 }
-_FAMILY_LABEL = {"账号": "数据库账号", "监控": "监控接入", "配置": "配置与服务", "交付": "交付与资产"}
-_FAMILY_ORDER = ("账号", "监控", "配置", "交付")
+_FAMILY_LABEL = {"账号": "数据库账号", "监控": "监控接入", "拓扑": "拓扑实体", "配置": "配置与服务", "交付": "交付与资产"}
+_FAMILY_ORDER = ("账号", "监控", "拓扑", "配置", "交付")
+MAX_ROWS_PER_INTENT = 15
 
 # 过程产物：临时脚本/诊断/验证文件——只做证据，不进报告
 _RE_PROCESS_PATH = re.compile(
@@ -234,6 +236,10 @@ _RE_DB_NAME = re.compile(r"(?i)(?:\s-d|--dbname|--database)[\s=]+([\w.-]+)")
 _RE_SYSTEMD_UNIT = re.compile(r"(?i)^systemctl\s+(?:start|restart|enable|reload)\s+([\w@.:-]+)")
 _RE_ANSIBLE = re.compile(r"(?i)\bansible-playbook\s+(\S+)")
 _RE_KUBECTL_APPLY = re.compile(r"(?i)^kubectl\s+(apply|create|patch|delete)\b")
+_RE_KUBECTL_FILE = re.compile(r"(?i)-f\s+(\S+)")
+_RE_PKG_INSTALL = re.compile(r"(?i)\b(?:apt(?:-get)?|yum|dnf|apk)\s+(?:install|add)\s+(?:-\S+\s+)*([\w.+-]+)")
+_RE_HELM = re.compile(r"(?i)\bhelm\s+(?:install|upgrade)\s+([\w.-]+)")
+_RE_DOCKER_IMAGE = re.compile(r"(?i)\bdocker\s+run\b[^|;]*?\s([\w./-]+:[\w.-]+)")
 _DB_CLIENTS = ("psql", "mysql", "mariadb", "mongosh", "redis-cli", "clickhouse-client", "sqlcmd")
 
 _RESULT_HINTS = (
@@ -278,18 +284,18 @@ def _obj(type_: str, identity: str = "", params: str = "", result: str = "", sou
     }
 
 
-def _object_from_command(cmd: str, result: str, source: str) -> Optional[dict]:
-    """从一条终端命令认出「它对集群里的哪个对象做了什么」。"""
+def _object_from_command(cmd: str, result: str, source: str, host: str = "") -> Optional[dict]:
+    """从一条终端/提权命令认出「它对集群里的哪个对象做了什么」。"""
     flat = re.sub(r"\s+", " ", str(cmd or "")).strip()
     if not flat:
         return None
     low = flat.lower()
+    where_host = host or _g(_RE_DB_HOST, flat)
 
     role = _g(_RE_ROLE, flat)
     if role and any(c in low for c in _DB_CLIENTS):
-        host = _g(_RE_DB_HOST, flat)
         db = _g(_RE_DB_NAME, flat)
-        where = "/".join(x for x in (host, db) if x)
+        where = "/".join(x for x in (where_host, db) if x)
         params = "；".join(x for x in (
             f"role={role}",
             "SUPERUSER" if re.search(r"(?i)\bsuperuser\b", flat) else "",
@@ -299,22 +305,31 @@ def _object_from_command(cmd: str, result: str, source: str) -> Optional[dict]:
 
     if "curl" in low:
         url = _g(_RE_URL, flat)
+        http_write = bool(re.search(
+            r"(?i)(-X\s*(?:POST|PUT|PATCH|DELETE)|--data\b|(?<![A-Za-z])-d\s|--upload-file)", flat))
         if "/api/datasources" in low:
+            if not http_write:
+                return None  # GET 列表/查询不算变更
             uid = _g(_RE_UID, result)
             name = _g(_RE_JSON_NAME, result)
             ident = f"{name}（uid {uid}）" if name and uid else (name or (f"uid {uid}" if uid else ""))
             ds_url = _g(_RE_URL, result) or url
             return _obj("数据源", ident, ds_url, _result_summary(result), source)
         if "/api/dashboards" in low or "/d/" in low:
+            if not http_write:
+                return None
             uid = _g(_RE_UID, result) or _g(re.compile(r"/d/([\w-]{4,})"), url)
             return _obj("监控面板", f"dashboard {uid}" if uid else "", url,
                         _result_summary(result), source)
         if "/-/reload" in low:
             return None  # 热加载是证据，不是对象变更（结果会并到同族的 scrape job 上）
-        if "prometheus" in low or "/api/v1/" in low:
+        if ("prometheus" in low or "/api/v1/" in low) and http_write:
             job = _g(_RE_JOB_NAME, flat)
-            return _obj("监控采集", f"scrape job {job}" if job else "Prometheus 配置",
+            host_hint = re.sub(r"^https?://", "", url).split("/")[0] or where_host
+            return _obj("监控采集",
+                        f"scrape job {job}" if job else (f"Prometheus {host_hint}" if host_hint else "Prometheus"),
                         url, _result_summary(result), source)
+        return None
 
     if re.search(r"(?i)openbao|vault\b", low) and re.search(r"(?i)\b(kv|secret)/", low):
         return _obj("账号与权限", _g(_RE_KV_PATH, flat), "口令写入密钥库",
@@ -322,13 +337,30 @@ def _object_from_command(cmd: str, result: str, source: str) -> Optional[dict]:
 
     playbook = _g(_RE_ANSIBLE, flat)
     if playbook and not re.search(r"(?i)--check|--syntax-check", flat):
-        return _obj("配置", Path(playbook).name, "playbook 执行",
+        return _obj("配置", Path(playbook).name, f"playbook 执行 @ {where_host}" if where_host else "playbook 执行",
                     _result_summary(result), source)
     if _RE_KUBECTL_APPLY.search(low):
-        return _obj("配置", flat[:70], "", _result_summary(result), source)
+        target_file = _g(_RE_KUBECTL_FILE, flat)
+        ident = Path(target_file).name if target_file else flat[:60]
+        return _obj("配置", ident,
+                    f"kubectl {_RE_KUBECTL_APPLY.search(low).group(1)}" + (f" @ {where_host}" if where_host else ""),
+                    _result_summary(result), source)
+    pkg = _g(_RE_PKG_INSTALL, flat)
+    if pkg:
+        return _obj("系统服务", f"{pkg} @ {where_host}" if where_host else pkg,
+                    "包安装", _result_summary(result), source)
+    helm = _g(_RE_HELM, flat)
+    if helm:
+        return _obj("配置", f"helm release {helm}", f"@ {where_host}" if where_host else "",
+                    _result_summary(result), source)
+    image = _g(_RE_DOCKER_IMAGE, flat)
+    if image:
+        return _obj("系统服务", f"容器 {image}", f"@ {where_host}" if where_host else "",
+                    _result_summary(result), source)
     unit = _g(_RE_SYSTEMD_UNIT, flat)
     if unit:
-        return _obj("系统服务", unit, "systemctl", _result_summary(result), source)
+        return _obj("系统服务", unit, "systemctl" + (f" @ {where_host}" if where_host else ""),
+                    _result_summary(result), source)
     return None
 
 
@@ -375,6 +407,8 @@ def _objects_from_content(path: str, content: str, result: str, source: str) -> 
     base = Path(str(path or "")).name
     if base.endswith(".md"):
         return [_obj("文档", base, "", _result_summary(result), source)]
+    if "/runbooks/" in str(path or "") and base.endswith((".yml", ".yaml")):
+        return [_obj("可复用资产", f"runbook {Path(base).stem}", "", _result_summary(result), source)]
     if base.endswith((".yml", ".yaml", ".json", ".toml", ".service", ".timer", ".conf", ".ini")):
         return [_obj("配置", base, "", _result_summary(result), source)]
     return []
@@ -382,9 +416,22 @@ def _objects_from_content(path: str, content: str, result: str, source: str) -> 
 
 def objects_from_call(name: str, args: dict, result: str, source: str) -> List[dict]:
     """一次工具调用 → 0..N 个变更对象。认不出的返回空（过程动作不进报告）。"""
-    if name == "terminal":
-        obj = _object_from_command(str(args.get("command") or ""), result, source)
+    if name in ("terminal", "sudo_exec", "vssh"):
+        host = str(args.get("host") or "")
+        obj = _object_from_command(str(args.get("command") or ""), result, source, host)
         return [obj] if obj else []
+    if name == "topo_update":
+        ent = str(args.get("entity") or "")
+        if not ent:
+            return []
+        ups = args.get("updates") or {}
+        parts = []
+        for key, value in list(ups.items())[:4]:
+            if isinstance(value, (dict, list, tuple)):
+                parts.append(f"{key}=[…]")
+            else:
+                parts.append(f"{key}={_fmt_value(value)}")
+        return [_obj("拓扑", ent, "；".join(parts), _result_summary(result), source)]
     if name in ("write_file", "patch"):
         path = str(args.get("path") or args.get("file_path") or "")
         body = args.get("new_string") if name == "patch" else args.get("content")
@@ -442,6 +489,83 @@ def _coalesce_accounts(objects: List[dict]) -> List[dict]:
                 parts = [x for x in parts if not x.startswith("口令写入")]
             parts.append(part)
         keeper["params"] = "；".join(parts)
+        keeper["hits"] = int(keeper.get("hits") or 1) + int(obj.get("hits") or 1)
+        if not keeper["result"]:
+            keeper["result"] = obj["result"]
+    return out
+
+
+def _coalesce_configs(objects: List[dict]) -> List[dict]:
+    """同一个文件（写的 + apply 的）合成一个对象：按文件名去重。"""
+    out: List[dict] = []
+    by_name: Dict[str, dict] = {}
+    for obj in objects:
+        if obj["type"] not in ("配置", "系统服务"):
+            out.append(obj)
+            continue
+        base = Path(str(obj["identity"]).split(" ")[0]).name
+        if not base or "." not in base:
+            out.append(obj)
+            continue
+        keeper = by_name.get(base)
+        if keeper is None:
+            by_name[base] = obj
+            out.append(obj)
+            continue
+        parts = [p for p in keeper["params"].split("；") if p]
+        for part in obj["params"].split("；"):
+            if part and part not in parts:
+                parts.append(part)
+        keeper["params"] = "；".join(parts)
+        keeper["hits"] = int(keeper.get("hits") or 1) + int(obj.get("hits") or 1)
+        if not keeper["result"]:
+            keeper["result"] = obj["result"]
+    return out
+
+
+def _coalesce_topo(objects: List[dict]) -> List[dict]:
+    """同一个拓扑实体被更新多次 → 合成一个对象（字段后写覆盖先写）。"""
+    out: List[dict] = []
+    by_ent: Dict[str, dict] = {}
+    for obj in objects:
+        if obj["type"] != "拓扑":
+            out.append(obj)
+            continue
+        keeper = by_ent.get(obj["identity"])
+        if keeper is None:
+            by_ent[obj["identity"]] = obj
+            out.append(obj)
+            continue
+        merged: Dict[str, str] = {}
+        for part in (keeper["params"].split("；") + obj["params"].split("；")):
+            if not part.strip():
+                continue
+            key, _, value = part.partition("=")
+            merged[key] = value
+        keeper["params"] = "；".join(f"{k}={v}" if v else k for k, v in merged.items())
+        keeper["hits"] = int(keeper.get("hits") or 1) + int(obj.get("hits") or 1)
+        if not keeper["result"]:
+            keeper["result"] = obj["result"]
+    return out
+
+
+def _coalesce_monitor(objects: List[dict]) -> List[dict]:
+    """同一个 Prometheus 上的多次读写合成一个对象（保留最多 3 个不同 URL）。"""
+    out: List[dict] = []
+    by_id: Dict[str, dict] = {}
+    for obj in objects:
+        if obj["type"] != "监控采集":
+            out.append(obj)
+            continue
+        keeper = by_id.get(obj["identity"])
+        if keeper is None:
+            by_id[obj["identity"]] = obj
+            out.append(obj)
+            continue
+        urls = [p for p in keeper["params"].split("；") if p]
+        if obj["params"] and obj["params"] not in urls and len(urls) < 3:
+            urls.append(obj["params"])
+        keeper["params"] = "；".join(urls)
         keeper["hits"] = int(keeper.get("hits") or 1) + int(obj.get("hits") or 1)
         if not keeper["result"]:
             keeper["result"] = obj["result"]
@@ -511,7 +635,10 @@ def group_into_intents(objects: List[dict], ask: str = "") -> List[dict]:
         items = buckets.get(fam) or []
         if not items:
             continue
-        ids = [o["identity"] for o in items if o["identity"] and o["type"] not in ("文档", "技能")]
+        ids = list(dict.fromkeys(
+            o["identity"] for o in items
+            if o["identity"] and o["type"] not in ("文档", "技能")
+        ))
         tail = "、".join(ids[:2])
         label = _FAMILY_LABEL.get(fam, fam)
         if tail:
@@ -818,6 +945,9 @@ def collect(
                         objects.append(obj)
 
         objects = _coalesce_accounts(objects)
+        objects = _coalesce_configs(objects)
+        objects = _coalesce_topo(objects)
+        objects = _coalesce_monitor(objects)
         _fill_monitor_results(objects, monitor_evidence)
 
         if not changes and not asks and not objects:
@@ -937,7 +1067,7 @@ def render_md(facts: dict, prose: Optional[Dict[str, str]] = None) -> str:
             lines.append("")
             intents = task.get("intents") or []
             if not intents:
-                lines.append(f"- 无结构化变更（结束状态 {task['end_reason'] or '-'}）")
+                lines.append(f"- 该会话没有可复核的变更（只读或中断，结束状态 {task['end_reason'] or '-'}）")
             for intent in intents:
                 results = "；".join(dict.fromkeys(intent["results"]))[:80]
                 tail = f"（{len(intent['objects'])} 项" + (f"：{results}" if results else "") + "）"
@@ -952,13 +1082,17 @@ def render_md(facts: dict, prose: Optional[Dict[str, str]] = None) -> str:
             lines.append("")
             lines.append("| 对象 | 标识 / 参数 | 结果 | 溯源 |")
             lines.append("|---|---|---|---|")
-            for obj in intent["objects"]:
+            for obj in intent["objects"][:MAX_ROWS_PER_INTENT]:
                 rows += 1
                 ident = obj["identity"] or "标识未记录"
                 cell = f"{ident}；{obj['params']}" if obj["params"] else ident
                 lines.append(
                     f"| {obj['type']} | {cell} | {obj['result'] or '—'} | "
                     f"{str(obj['source']).split('#')[0]} |"
+                )
+            if len(intent["objects"]) > MAX_ROWS_PER_INTENT:
+                lines.append(
+                    f"| … | 另有 {len(intent['objects']) - MAX_ROWS_PER_INTENT} 个对象未列出 | — | — |"
                 )
             lines.append("")
     if rows == 0 and not any(task.get("intents") for task in facts["tasks"]):
