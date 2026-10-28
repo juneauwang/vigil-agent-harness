@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { Link } from "react-router";
 import { useTranslation } from "react-i18next";
 import "@/i18n";
 import { CalendarClock, Check, Loader2, Pause, Play, Plus, RefreshCw, Timer, Trash2, X, Zap } from "lucide-react";
@@ -10,17 +11,16 @@ import { currentLang } from "@/i18n";
 import { EmptyState } from "@/components/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
 import { cn } from "@/lib/ops";
-import { windowArg, withWindowArg } from "@/lib/schedules";
 
 /**
  * /schedules（D2）：所有 cron 作业一张表——看得见（下次运行 / 最近状态）、
- * 改得动（计划 + digest 窗口）、按得下（暂停/恢复/立即跑/删除/从蓝图新建）。
+ * 改得动（计划）、按得下（暂停/恢复/立即跑/排队/删除/从蓝图新建）。
+ * 报告流水线（builtin:digest 的两条 job）不在这里——归 /registre（Le Registre）。
  *
  * 后端接口就是既有的 /api/cron/jobs*，本页不新造契约；前端不做语法校验，
  * PUT 的 400 detail 原样显示（后端是唯一校验点）。列表默认 profile=all。
  */
 
-const DIGEST_SCRIPT = "builtin:digest";
 /** 立即跑之后多久自动刷新一次（下一个 tick 才会真正执行）。 */
 const TRIGGER_REFRESH_MS = 30_000;
 
@@ -51,7 +51,7 @@ function stamp(iso?: string | null): string {
 
 interface EditState {
   id: string;
-  mode: "schedule" | "window";
+  mode: "schedule";
   value: string;
   saving: boolean;
   error: string | null;
@@ -221,7 +221,7 @@ export default function SchedulesPage() {
     setEdit({
       id: job.id,
       mode,
-      value: mode === "schedule" ? job.schedule_display ?? job.schedule?.display ?? "" : windowArg(job.script_args),
+      value: job.schedule_display ?? job.schedule?.display ?? "",
       saving: false,
       error: null,
     });
@@ -229,11 +229,7 @@ export default function SchedulesPage() {
 
   const saveEdit = async () => {
     if (!edit) return;
-    const job = (jobs ?? []).find((item) => item.id === edit.id);
-    const updates =
-      edit.mode === "schedule"
-        ? { schedule: edit.value.trim() }
-        : { script_args: withWindowArg(job?.script_args, edit.value) };
+    const updates = { schedule: edit.value.trim() };
     setEdit({ ...edit, saving: true, error: null });
     try {
       const updated = await api.updateCronJob(edit.id, updates);
@@ -295,7 +291,11 @@ export default function SchedulesPage() {
     }
   };
 
-  const hasJobs = (jobs?.length ?? 0) > 0;
+  // 报告流水线归 Le Registre：这里只列通用 cron（按 script 前缀过滤，不按名字猜）。
+  const visibleJobs = (jobs ?? []).filter(
+    (job) => !String(job.script ?? "").startsWith("builtin:digest"),
+  );
+  const hasJobs = visibleJobs.length > 0;
 
   return (
     <div className="space-y-4 p-4" data-testid="schedules-page">
@@ -325,6 +325,17 @@ export default function SchedulesPage() {
           </div>
         }
       />
+
+      <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-card)] px-3 py-2 text-xs text-[var(--vigil-muted)]">
+        <span>{t("schedules.registreHint")}</span>
+        <Link
+          to="/registre"
+          className="inline-flex items-center gap-1 font-medium text-[var(--vigil-primary)] hover:underline"
+        >
+          {t("schedules.registreLink")}
+          <span aria-hidden="true">→</span>
+        </Link>
+      </div>
 
       {loadError ? (
         <div className="flex items-center gap-3 rounded-md border border-[var(--vigil-error)] bg-[var(--vigil-error-bg)] px-3 py-2 text-xs text-[var(--vigil-error)]">
@@ -394,9 +405,8 @@ export default function SchedulesPage() {
               </tr>
             </thead>
             <tbody>
-              {(jobs ?? []).map((job) => {
+              {visibleJobs.map((job) => {
                 const paused = job.enabled === false;
-                const digest = job.script === DIGEST_SCRIPT;
                 const tone = lastTone(job);
                 const busy = busyId === job.id;
                 const editing = edit && edit.id === job.id ? edit : null;
@@ -405,7 +415,6 @@ export default function SchedulesPage() {
                     key={job.id}
                     job={job}
                     paused={paused}
-                    digest={digest}
                     tone={tone}
                     busy={busy}
                     editing={editing}
@@ -611,7 +620,6 @@ export default function SchedulesPage() {
 function ScheduleRow({
   job,
   paused,
-  digest,
   tone,
   busy,
   editing,
@@ -626,7 +634,6 @@ function ScheduleRow({
 }: {
   job: CronJob;
   paused: boolean;
-  digest: boolean;
   tone: Tone;
   busy: boolean;
   editing: EditState | null;
@@ -641,7 +648,6 @@ function ScheduleRow({
 }) {
   const { t } = useTranslation();
   const next = paused ? t("schedules.paused") : stamp(job.next_run_at) || "—";
-  const showWindow = digest;
   return (
     <>
       <tr className="border-b border-[var(--vigil-border)] align-middle last:border-b-0">
@@ -702,16 +708,6 @@ function ScheduleRow({
             >
               {t("schedules.editSchedule")}
             </button>
-            {showWindow ? (
-              <button
-                type="button"
-                onClick={() => onEdit("window")}
-                disabled={busy}
-                className="rounded-md border border-[var(--vigil-border)] px-2 py-1 text-[11px] text-[var(--vigil-muted)] hover:bg-[var(--vigil-muted-bg)] hover:text-[var(--vigil-text)] disabled:opacity-40"
-              >
-                {t("schedules.editWindow")}
-              </button>
-            ) : null}
             <IconButton label={paused ? t("schedules.resume") : t("schedules.pause")} onClick={onTogglePause} disabled={busy}>
               {paused ? <Play className="size-3.5" /> : <Pause className="size-3.5" />}
             </IconButton>
@@ -757,26 +753,26 @@ function EditPanel({
   onCancel: () => void;
 }) {
   const { t } = useTranslation();
-  const isWindow = editing.mode === "window";
-  const chips = isWindow
-    ? ["7d", "1d", "24h", "2w"]
-    : [t("schedules.scheduleChipInterval"), t("schedules.scheduleChipCron"), t("schedules.scheduleChipOnce")];
+  const chips = [
+    t("schedules.scheduleChipInterval"),
+    t("schedules.scheduleChipCron"),
+    t("schedules.scheduleChipOnce"),
+  ];
   return (
     <div className="space-y-2" data-testid={`schedule-edit-${editing.mode}`}>
       <label className="block space-y-1">
         <span className="text-[11px] font-medium text-[var(--vigil-text)]">
-          {isWindow ? t("schedules.windowLabel") : t("schedules.scheduleLabel")}
+          {t("schedules.scheduleLabel")}
         </span>
         <input
-          aria-label={isWindow ? t("schedules.windowLabel") : t("schedules.scheduleLabel")}
+          aria-label={t("schedules.scheduleLabel")}
           value={editing.value}
-          placeholder={isWindow ? t("schedules.windowPlaceholder") : t("schedules.schedulePlaceholder")}
+          placeholder={t("schedules.schedulePlaceholder")}
           onChange={(event) => onChange(event.target.value)}
           className="w-full max-w-md rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1.5 font-mono text-xs text-[var(--vigil-text)]"
         />
       </label>
-      {!isWindow ? (
-        <div className="flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
           {chips.map((chip) => (
             <button
               key={chip}
@@ -786,11 +782,10 @@ function EditPanel({
             >
               {chip}
             </button>
-          ))}
-        </div>
-      ) : null}
+        ))}
+      </div>
       <p className="max-w-2xl text-[10px] leading-relaxed text-[var(--vigil-muted)]">
-        {isWindow ? t("schedules.windowHint") : t("schedules.scheduleHint")}
+        {t("schedules.scheduleHint")}
       </p>
       {editing.error ? (
         <div className="max-w-2xl rounded-md border border-[var(--vigil-error)] bg-[var(--vigil-error-bg)] px-2 py-1.5 text-[11px] text-[var(--vigil-error)]">

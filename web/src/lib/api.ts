@@ -905,6 +905,84 @@ export interface CronBlueprintListResponse {
   blueprints: CronBlueprint[];
 }
 
+// ── Le Registre（D3）：digest 发布配置 / 报告台账 / 生成流水线 ─────────────
+
+export interface DigestBookstackConfig {
+  base_url: string;
+  book_id: number;
+  credential_ref: string;
+  /** 令牌是否已写入 vault（只回布尔，值永不返回）。 */
+  configured: boolean;
+}
+
+export interface DigestPublishConfig {
+  target: "none" | "file" | "bookstack" | string;
+  bookstack: DigestBookstackConfig;
+}
+
+export interface DigestConfig {
+  window: string;
+  publish: DigestPublishConfig;
+}
+
+export interface DigestConfigResponse {
+  ok?: boolean;
+  data?: DigestConfig;
+}
+
+export interface DigestReport {
+  name: string;
+  /** 绝对路径（服务端给；「复制路径」用）。 */
+  path?: string;
+  mtime: string;
+  size: number;
+  /** daily | weekly | range（从文件名前缀判断；未知为空串）。 */
+  granularity?: string;
+  /** 当前发布配置下能否推导 BookStack 链接。 */
+  posted?: boolean;
+}
+
+export interface DigestReportsResponse {
+  ok?: boolean;
+  data?: DigestReport[];
+}
+
+export interface DigestReportContent {
+  name: string;
+  content: string;
+  mtime: string;
+  size: number;
+  granularity?: string;
+}
+
+export interface DigestTestResult {
+  ok: boolean;
+  status?: number | null;
+  book_name?: string;
+  book_id?: number;
+  detail?: string;
+}
+
+export interface DigestRun {
+  id: string;
+  job_id: string;
+  job_name?: string;
+  status: string;
+  claimed_at: string;
+  started_at?: string;
+  finished_at?: string;
+  duration_s?: number | null;
+  summary?: string;
+}
+
+export interface DigestConfigPatch {
+  window?: string;
+  target?: string;
+  base_url?: string;
+  book_id?: number;
+  credential_ref?: string;
+}
+
 // ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -1226,6 +1304,36 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ blueprint, values }),
     }),
+
+  // ── Le Registre（D3）：digest 配置 / 台账 / 生成 ──
+  getDigestConfig: () => fetchJSON<DigestConfigResponse>("/api/digest/config"),
+  updateDigestConfig: (patch: DigestConfigPatch) =>
+    fetchJSON<DigestConfigResponse>("/api/digest/config", {
+      method: "PUT",
+      body: JSON.stringify(patch),
+    }),
+  setDigestCredential: (ref: string, value: string) =>
+    fetchJSON<{ ok: boolean; ref: string; configured: boolean }>("/api/digest/credential", {
+      method: "PUT",
+      body: JSON.stringify({ ref, value }),
+    }),
+  testDigestPublish: (body: { base_url: string; book_id: number; credential_ref?: string }) =>
+    fetchJSON<DigestTestResult>("/api/digest/test", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  listDigestReports: () => fetchJSON<DigestReportsResponse>("/api/digest/reports"),
+  getDigestReport: (name: string) =>
+    fetchJSON<{ ok?: boolean; data?: DigestReportContent }>(
+      `/api/digest/reports/${encodeURIComponent(name)}`,
+    ),
+  generateDigest: (window?: string) =>
+    fetchJSON<{ started: boolean; jobs: string[]; window?: string }>("/api/digest/generate", {
+      method: "POST",
+      body: JSON.stringify({ window }),
+    }),
+  listDigestRuns: () =>
+    fetchJSON<{ ok?: boolean; data?: DigestRun[] }>("/api/digest/runs"),
 };
 
 function cleanParams(p: Record<string, string | number | undefined>): Record<string, string> {

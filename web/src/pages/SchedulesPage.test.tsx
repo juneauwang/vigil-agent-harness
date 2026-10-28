@@ -123,71 +123,71 @@ function setInput(input: HTMLInputElement, value: string) {
 }
 
 describe("SchedulesPage", () => {
-  it("列表渲染：名称/计划/下次/上次状态都在；只有 digest 有「改窗口」", async () => {
+  it("列表渲染：名称/计划/下次/上次状态都在（只列非 digest 任务）", async () => {
     const container = render(<SchedulesPage />);
     await flush();
 
     const text = container.textContent ?? "";
-    expect(text).toContain("作业周报");
-    expect(text).toContain("0 18 * * 5");
-    expect(text).toContain("digest");
-    expect(text).toContain("2026-11-06");
-    expect(text).toContain("成功");
-    expect(text).toContain("2026-10-30");
     expect(text).toContain("巡检");
     expect(text).toContain("every 10m");
+    expect(text).toContain("2026-10-28");
     expect(text).toContain("还没跑过");
-
-    expect(api.listCronJobs).toHaveBeenCalledWith("all");
+    // digest 流水线归 /registre：它的行、计划、改窗口按钮都不该出现
+    expect(text).not.toContain("作业周报");
+    expect(text).not.toContain("0 18 * * 5");
     const windowButtons = Array.from(container.querySelectorAll("button")).filter(
       (item) => (item.textContent ?? "").trim() === "改窗口",
     );
-    expect(windowButtons).toHaveLength(1);
+    expect(windowButtons).toHaveLength(0);
+    expect(api.listCronJobs).toHaveBeenCalledWith("all");
   });
 
-  it("改窗口：只替换 --window，其余参数顺序不变", async () => {
-    vi.mocked(api.updateCronJob).mockResolvedValue({
-      ...DIGEST_JOB,
-      script_args: ["--window", "1d", "--format", "facts"],
-    } as never);
+  it("过滤：mock digest + 普通 job → 表里只剩普通那条，页头有 Le Registre 链接", async () => {
     const container = render(<SchedulesPage />);
     await flush();
 
-    act(() => button(container, "改窗口")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    const input = container.querySelector('input[aria-label="digest 时间窗"]') as HTMLInputElement;
-    expect(input).toBeTruthy();
-    setInput(input, "1d");
-    act(() => button(container, "保存")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    await flush();
+    const rows = Array.from(container.querySelectorAll("tbody tr"));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].textContent).toContain("巡检");
 
-    expect(api.updateCronJob).toHaveBeenCalledWith("job-digest", {
-      script_args: ["--window", "1d", "--format", "facts"],
-    });
-    expect(container.textContent ?? "").toContain("已保存");
+    const link = container.querySelector('a[href="/registre"]');
+    expect(link, "页头必须给出 Le Registre 入口").toBeTruthy();
+    expect(link?.textContent ?? "").toContain("Le Registre");
   });
 
-  it("改计划：保存后 PUT body 含 {schedule: \"every 10m\"}", async () => {
+  it("改计划：保存后 PUT body 含 {schedule: \"every 5m\"}", async () => {
+    vi.mocked(api.updateCronJob).mockResolvedValue({
+      ...PLAIN_JOB,
+      schedule: { kind: "interval", display: "every 5m", minutes: 5 },
+      schedule_display: "every 5m",
+    } as never);
     const container = render(<SchedulesPage />);
     await flush();
 
     act(() => button(container, "编辑计划")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     const input = container.querySelector('input[aria-label="计划"]') as HTMLInputElement;
-    expect(input.value).toBe("0 18 * * 5");
-    setInput(input, "every 10m");
+    expect(input.value).toBe("every 10m");
+    setInput(input, "every 5m");
     act(() => button(container, "保存")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
 
-    expect(api.updateCronJob).toHaveBeenCalledWith("job-digest", { schedule: "every 10m" });
+    expect(api.updateCronJob).toHaveBeenCalledWith("job-plain", { schedule: "every 5m" });
+    expect(container.textContent ?? "").toContain("已保存");
   });
 
   it("暂停：调 POST pause，行状态变成「已暂停」", async () => {
+    vi.mocked(api.pauseCronJob).mockResolvedValue({
+      ...PLAIN_JOB,
+      enabled: false,
+      state: "paused",
+    } as never);
     const container = render(<SchedulesPage />);
     await flush();
 
     act(() => button(container, "暂停")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
 
-    expect(api.pauseCronJob).toHaveBeenCalledWith("job-digest");
+    expect(api.pauseCronJob).toHaveBeenCalledWith("job-plain");
     expect(container.textContent ?? "").toContain("已暂停");
     expect(button(container, "恢复")).toBeTruthy();
   });
@@ -250,7 +250,7 @@ describe("window arg helpers", () => {
 
 describe("立即跑（run-now）", () => {
   it("走 /run-now（不是排到下一个 tick），并提示已开始执行", async () => {
-    (api.listCronJobs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([DIGEST_JOB]);
+    (api.listCronJobs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([PLAIN_JOB]);
     (api.runCronJobNow as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ started: true });
     const container = document.createElement("div");
     const root = createRoot(container);
@@ -261,7 +261,7 @@ describe("立即跑（run-now）", () => {
       .find((b) => (b.getAttribute("aria-label") ?? "").includes("立即跑"));
     expect(btn).toBeTruthy();
     await act(async () => { btn!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-    expect(api.runCronJobNow).toHaveBeenCalledWith("job-digest");
+    expect(api.runCronJobNow).toHaveBeenCalledWith("job-plain");
     expect(api.triggerCronJob).not.toHaveBeenCalled();
     root.unmount();
   });
@@ -269,8 +269,8 @@ describe("立即跑（run-now）", () => {
 
 describe("queue-for-next-tick", () => {
   it("uses triggerCronJob (not run-now) and shows the queued notice", async () => {
-    (api.listCronJobs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([DIGEST_JOB]);
-    (api.triggerCronJob as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ...DIGEST_JOB });
+    (api.listCronJobs as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([PLAIN_JOB]);
+    (api.triggerCronJob as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({ ...PLAIN_JOB });
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(async () => {
@@ -280,7 +280,7 @@ describe("queue-for-next-tick", () => {
       .find((b) => (b.getAttribute("aria-label") ?? "").includes("下一轮"));
     expect(btn).toBeTruthy();
     await act(async () => { btn!.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-    expect(api.triggerCronJob).toHaveBeenCalledWith("job-digest");
+    expect(api.triggerCronJob).toHaveBeenCalledWith("job-plain");
     expect(api.runCronJobNow).not.toHaveBeenCalled();
     root.unmount();
   });

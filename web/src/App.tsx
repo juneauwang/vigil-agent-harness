@@ -6,6 +6,7 @@ import { currentLang, switchLang } from "@/i18n";
 import {
   Activity,
   Bell,
+  BookMarked,
   History,
   Grid3x3,
   LayoutDashboard,
@@ -37,6 +38,7 @@ const AuditPage = lazy(() => import("@/pages/AuditPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
 const MonitoringPage = lazy(() => import("@/pages/MonitoringPage"));
 const SchedulesPage = lazy(() => import("@/pages/SchedulesPage"));
+const RegistrePage = lazy(() => import("@/pages/RegistrePage"));
 
 interface NavItem {
   path: string;
@@ -52,6 +54,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/topology", label: "common.nav.topology", icon: Network },
   { path: "/runbooks", label: "common.nav.runbooks", icon: ScrollText },
   { path: "/schedules", label: "common.nav.schedules", icon: CalendarClock },
+  { path: "/registre", label: "common.nav.registre", icon: BookMarked },
   { path: "/matrix", label: "common.nav.matrix", icon: Grid3x3 },
   { path: "/incidents", label: "common.nav.incidents", icon: TriangleAlert },
   { path: "/approvals", label: "common.nav.approvals", icon: ShieldCheck },
@@ -60,7 +63,7 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 const NAV_GROUPS: Array<{ id: "operate" | "respond" | "observe"; paths: string[] }> = [
-  { id: "operate", paths: ["/chat", "/overview", "/topology", "/runbooks", "/schedules", "/matrix"] },
+  { id: "operate", paths: ["/chat", "/overview", "/topology", "/runbooks", "/schedules", "/registre", "/matrix"] },
   { id: "respond", paths: ["/incidents", "/approvals"] },
   { id: "observe", paths: ["/audit", "/monitoring"] },
 ];
@@ -339,6 +342,7 @@ export default function App() {
                 <Route path="/topology" element={<TopologyPage />} />
                 <Route path="/runbooks" element={<RunbooksPage />} />
                 <Route path="/schedules" element={<SchedulesPage />} />
+                <Route path="/registre" element={<RegistrePage />} />
                 <Route path="/matrix" element={<MatrixPage />} />
                 <Route path="/incidents" element={<IncidentsPage />} />
                 <Route path="/approvals" element={<ApprovalsPage />} />

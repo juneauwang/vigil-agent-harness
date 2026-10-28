@@ -14179,8 +14179,10 @@ async def _run_cron_dashboard_io(func, *args, **kwargs):
 
 
 from hermes_cli.web_routers import cron as _cron_routes  # noqa: E402
+from hermes_cli.web_routers import digest as _digest_routes  # noqa: E402
 
 app.include_router(_cron_routes.router)
+app.include_router(_digest_routes.router)
 from hermes_cli.web_routers.cron import (  # noqa: E402,F401 — legacy re-exports; tests call these via web_server.<name>
     list_cron_jobs,
     get_cron_job,
