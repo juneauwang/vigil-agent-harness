@@ -29,7 +29,7 @@ import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -55,6 +55,8 @@ _ENTITIES_DIRNAME = "entities"
 _SERVICES_DIRNAME = "services"
 _HOSTS_DIRNAME = "hosts"  # v0.3 兼容回退（读取端 services/ 优先）
 _HARDWARE_DIRNAME = "hardware"
+# 删除实体前整行归档的目录（topology-archive/<YYYY-MM-DD>/<entity>.yaml）。
+_ARCHIVE_DIRNAME = "topology-archive"
 
 # source=agent writes carry this tag (topo_update data contract).
 _SOURCE_AGENT = "agent"
@@ -156,6 +158,43 @@ _DEFAULT_TOPO_UPDATE_SCHEMA = {
             },
         },
         "required": ["entity", "updates"],
+    },
+}
+
+_TOPO_DELETE_SCHEMA = {
+    "name": "topo_delete",
+    "description": (
+        "删除拓扑实体（生命周期：发现新增 → 更新/审核 → 删除，schema v0.4）。"
+        "删除前先把被删行的完整内容（L1 行 / 所属 host 的服务行 + L3 档案）归档到 "
+        "<VIGIL_HOME>/topology-archive/<YYYY-MM-DD>/<entity>.yaml；归档写失败即"
+        "中止删除——绝不允许「删了但没归档」。默认不破坏引用：其他实体的 "
+        "depends_on / depended_by、cluster 的 hosts / members、服务行的 host 命中"
+        "即返回错误并列出引用者；确认要留下孤立引用才传 force=true（结果带 "
+        "forced=true 与 referrers_ignored）。PROD 档删除需人工审批，审批 "
+        "rule_key 形如 topo_delete:<env>:<entity>，拒绝时什么都不动。定位顺序 "
+        "clusters → hosts → cross_host → services（服务行同时从 services/<host>.yaml "
+        "摘掉）。只按实体名删除：不批量、不按 pattern、不级联删除 runbook/技能/凭据。"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "entity": {
+                "type": "string",
+                "description": "要删除的实体名（必须已存在于拓扑表）。",
+            },
+            "reason": {
+                "type": "string",
+                "description": "删除原因（审批展示、归档与审计用）。",
+            },
+            "force": {
+                "type": "boolean",
+                "description": (
+                    "确认要删除仍有引用的实体（如主机下线）时置 true：忽略引用继续"
+                    "删除，引用者记入 referrers_ignored。默认 false = 有引用就拒绝。"
+                ),
+            },
+        },
+        "required": ["entity"],
     },
 }
 
@@ -371,6 +410,30 @@ def _is_v2_or_v3(topo: Dict[str, Any]) -> bool:
     return bool(topo.get("hosts") or topo.get("cross_host") or topo.get("clusters"))
 
 
+def _host_index_path(home: Path, host: Dict[str, Any]) -> Optional[Path]:
+    """A host's layer-2 service catalog path (the file actually on disk).
+
+    v0.4 路径约定 services/<name>.yaml；老数据 hosts/<name>.yaml 兼容回退；
+    显式 ``services_index`` 优先（越界检查与 entities/ 同一道 containment guard）。
+    读（``_load_host_index``）与写（``topo_delete`` 摘服务行）共用本函数，
+    杜绝"读一个文件、改另一个文件"的漂移。
+    """
+    name = host.get("name") if isinstance(host, dict) else None
+    if not name or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
+        return None
+    index_field = host.get("services_index") if isinstance(host, dict) else None
+    if index_field:
+        candidate = _safe_entity_path(home, index_field)
+        return candidate if candidate is not None and candidate.is_file() else None
+    for candidate in (
+        (home / _SERVICES_DIRNAME / f"{name}.yaml").resolve(),
+        (home / _HOSTS_DIRNAME / f"{name}.yaml").resolve(),
+    ):
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def _load_host_index(home: Path, host: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Load a host's layer-2 service catalog (services/<name>.yaml by default).
 
@@ -379,17 +442,7 @@ def _load_host_index(home: Path, host: Dict[str, Any]) -> Optional[Dict[str, Any
     VIGIL_HOME via ``_safe_entity_path`` — both directories are covered by the
     same traversal guard as entities/).
     """
-    name = host.get("name") if isinstance(host, dict) else None
-    if not name or not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", name):
-        return None
-    index_field = host.get("services_index") if isinstance(host, dict) else None
-    candidates: List[Path] = []
-    if index_field:
-        candidates.append(_safe_entity_path(home, index_field))
-    else:
-        candidates.append((home / _SERVICES_DIRNAME / f"{name}.yaml").resolve())
-        candidates.append((home / _HOSTS_DIRNAME / f"{name}.yaml").resolve())
-    path = next((p for p in candidates if p is not None and p.is_file()), None)
+    path = _host_index_path(home, host)
     if path is None:
         return None
     try:
@@ -1280,6 +1333,418 @@ def topo_update(
 
 
 # ---------------------------------------------------------------------------
+# topo_delete
+# ---------------------------------------------------------------------------
+
+def _locate_entity(
+    topo: Dict[str, Any], home: Path, entity: str
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """按 clusters → hosts → cross_host → services 优先级定位实体行。
+
+    返回 ``(row, kind)``，kind ∈ {cluster, host, cross_host, service}；未命中
+    返回 ``(None, "")``。优先级固定：同名 host 与 service 并存时删 host（层级
+    是组织方式不是命名空间，L1 行优先）。
+    """
+    for cluster in topo.get("clusters") or []:
+        if isinstance(cluster, dict) and cluster.get("name") == entity:
+            return cluster, "cluster"
+    for host in topo.get("hosts") or []:
+        if isinstance(host, dict) and host.get("name") == entity:
+            return host, "host"
+    for cross in topo.get("cross_host") or []:
+        if isinstance(cross, dict) and cross.get("name") == entity:
+            return cross, "cross_host"
+    for service in _all_services(topo, home):
+        if service.get("name") == entity:
+            return service, "service"
+    return None, ""
+
+
+def _reference_names(value: Any) -> List[str]:
+    """depends_on / depended_by / cluster hosts|members 归一成名字列表。
+
+    容错：字符串按逗号切（手写 YAML 常见），列表/元组/集合逐项转字符串；
+    其他形态（None / dict / 标量）→ 空。
+    """
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def _find_referrers(topo: Dict[str, Any], home: Path, entity: str) -> List[str]:
+    """扫描指向 ``entity`` 的引用，返回 ``实体名(字段)`` 形态清单（去重保序）。
+
+    覆盖：其他实体的 depends_on / depended_by；cluster 的 hosts / members；
+    服务行的 host（``_host`` 归属标记与显式 host 字段都算）。例外：被删实体
+    自己的引用不算（删 host 时它自己服务行里的自引用、cluster 成员表里的自己）。
+    """
+    referrers: List[str] = []
+
+    def _hit(name: str, field: str) -> None:
+        if not name or name == entity:
+            return
+        label = f"{name}({field})"
+        if label not in referrers:
+            referrers.append(label)
+
+    for row in _all_core_entities(topo, home):
+        name = str(row.get("name") or "")
+        if not name or name == entity:
+            continue
+        for field in ("depends_on", "depended_by"):
+            if entity in _reference_names(row.get(field)):
+                _hit(name, field)
+        if entity in (str(row.get("host") or ""), str(row.get("_host") or "")):
+            _hit(name, "host")
+    for cluster in topo.get("clusters") or []:
+        if not isinstance(cluster, dict):
+            continue
+        name = str(cluster.get("name") or "")
+        for field in ("hosts", "members"):
+            if entity in _reference_names(cluster.get(field)):
+                _hit(name, field)
+    return referrers
+
+
+def _rel_to_home(home: Path, path: Path) -> str:
+    """``path`` 相对 VIGIL_HOME 的 posix 形态（返回契约/归档都用它，便于复核）。"""
+    try:
+        return path.resolve().relative_to(home.resolve()).as_posix()
+    except ValueError:
+        return str(path)
+
+
+def _archive_target(home: Path, entity: str) -> Optional[Path]:
+    """归档路径 ``<home>/topology-archive/<YYYY-MM-DD>/<entity>.yaml``（禁穿越）。
+
+    实体名可能含 ``.``/``-``/大写（``39.106.217.32``、``LAPTOP-T2JA2ERE``）：
+    ``_safe_filename`` 只净化非法字符、保大小写（不能小写归一——会写偏文件名），
+    再做一次 containment 校验，``..``/分隔符形态的名字也出不 VIGIL_HOME。
+    """
+    safe = _safe_filename(entity)
+    if not safe or safe in {".", ".."}:
+        return None
+    candidate = (home / _ARCHIVE_DIRNAME / _today() / f"{safe}.yaml").resolve()
+    try:
+        candidate.relative_to(home.resolve())
+    except ValueError:
+        logger.warning("topo: archive path escapes VIGIL_HOME: %r", entity)
+        return None
+    return candidate
+
+
+def _archived_row(row: Dict[str, Any]) -> Dict[str, Any]:
+    """归档用行副本：剥掉内部 ``_host`` 标记，服务行补回 host 归属。
+
+    ``ports: null`` 是 load_topology 的归一化产物（源文件里根本没这行），
+    归档按源行形态落盘——本来没有 ports 就不写 null。
+    """
+    out = {
+        k: v for k, v in row.items()
+        if not str(k).startswith("_") and not (k == "ports" and v is None)
+    }
+    if row.get("_host") and not out.get("host"):
+        out["host"] = row.get("_host")
+    return out
+
+
+def _audit_topo_delete(*, entity: str, env: str, archived: str,
+                       removed: List[str], forced: bool, referrers: List[str],
+                       reason: str, approval_required: bool) -> None:
+    """删除即审计（best-effort：失败只记日志，绝不回滚已完成的删除）。
+
+    归档失败在调用方就是硬失败（第 1 条验收），这里只负责落「删了哪个实体」
+    事件，供 digest / trajectory 抽取。
+    """
+    try:
+        import getpass
+
+        from agent.trajectory import record_event
+        try:
+            from tools.approval import get_current_session_key
+            session_id = get_current_session_key(default="topology")
+        except Exception:
+            session_id = "topology"
+        summary = f"删除 {entity}（env={env}；归档 {archived}"
+        summary += "；forced" if forced else ""
+        summary += "）"
+        record_event(
+            type="topo_delete",
+            session_id=session_id,
+            tool="topology",
+            action=f"delete {entity}",
+            result=summary,
+            approval="approved" if approval_required else None,
+            meta={
+                "env": env,
+                "archived": archived,
+                "forced": bool(forced),
+                "referrers": list(referrers),
+                "reason": reason,
+                "operator": getpass.getuser(),
+                "removed": list(removed),
+                "approval_required": bool(approval_required),
+            },
+        )
+    except Exception:
+        logger.debug("topo delete audit event failed", exc_info=True)
+
+
+def topo_delete(
+    entity: str,
+    *,
+    reason: str = "",
+    force: bool = False,
+    home: Optional[Path] = None,
+) -> str:
+    """删除拓扑实体：归档 → 引用检查 → 审批 → 摘行/拔档案 → 审计。
+
+    生命周期第三段（发现新增 → 更新/审核 → 删除）。顺序固定：
+
+      1. 定位实体（clusters → hosts → cross_host → services）并解析 env/档位；
+      2. 引用扫描：有引用且未 ``force`` → 直接报错（附引用者清单），什么都不动；
+      3. PROD 档位走人工审批门（``request_tool_approval``，rule_key =
+         ``topo_delete:<env>:<entity>``）；非 PROD 档位按既有矩阵语义自动放行
+         （同 topo_update / topo_discover，不新造规则）。审批拒绝 → 什么都不动；
+      4. 把被删行（+ L3 档案 + 所属 host 的服务行）写进
+         ``topology-archive/<YYYY-MM-DD>/<entity>.yaml``；写失败即中止，
+         绝不出现「删了没归档」；
+      5. 拔 L3 档案文件 → 从 topology.yaml 摘 L1 行（或从 services/<host>.yaml
+         摘服务行）→ 写回（L1 行删除时 ``updated_at = today``）；
+      6. 审计事件 ``type=topo_delete``（best-effort；归档失败已在第 4 步硬失败）。
+    """
+    from tools.ops_data_home import resolve_ops_data_home
+
+    # 读写同一数据 home：与 topo_query / topo_update 落同一处（不存在数据分裂）。
+    home = resolve_ops_data_home(home or _hermes_home(), _TOPO_FILENAME)
+    entity = str(entity or "").strip()
+    if not entity:
+        return tool_error("entity 不能为空（topo_delete 只按实体名删除）。")
+    reason = str(reason or "").strip()[:200]
+    force = bool(force)
+
+    topo = load_topology(home)
+    if topo is None:
+        return tool_error("拓扑表不存在或无法解析，无法删除。")
+
+    row, kind = _locate_entity(topo, home, entity)
+    if row is None:
+        hint = ""
+        if not _is_v2_or_v3(topo):
+            hint = (
+                "（当前 topology.yaml 是 v0.1 扁平 core_entities 结构，topo_delete "
+                "只删 v0.2+ 分层实体；请先迁移到 hosts/services 布局）"
+            )
+        return tool_error(f"拓扑表中不存在实体: {entity}{hint}")
+
+    env_name = _entity_env(topo, row)
+
+    # 默认不破坏引用：先扫引用，有就拒绝并列出引用者（force 才继续）。
+    referrers = _find_referrers(topo, home, entity)
+    if referrers and not force:
+        return tool_error(
+            f"实体 {entity} 仍被引用（{len(referrers)} 处）：{'、'.join(referrers)}。"
+            "删除会留下孤立引用；确认要强行删除（引用者记入 referrers_ignored）"
+            "请传 force=true。",
+            referrers=referrers,
+        )
+
+    # 删除一律走审批门；档位语义与 topo_update/topo_discover 一致（不新造规则）：
+    # PROD 档必须人工确认，其余档位按矩阵既有语义自动放行。
+    approval_required = _env_tier(env_name) == "prod"
+    if approval_required:
+        from tools.approval import request_tool_approval
+        ignored = f"；忽略引用 {len(referrers)} 处" if force and referrers else ""
+        approval = request_tool_approval(
+            "topo_delete",
+            (
+                f"删除 PROD 拓扑实体 {entity}（env={env_name}，{kind}）需要审批确认"
+                + (f"，原因：{reason}" if reason else "")
+                + ignored
+            ),
+            rule_key=f"topo_delete:{env_name}:{entity}",
+        )
+        if not approval.get("approved"):
+            return tool_error(
+                approval.get("message") or "拓扑实体删除未获审批，已取消。",
+                approved=False,
+            )
+
+    # 服务行：确定所属 host 与其 services 索引文件（读与写走同一路径）。
+    host_row: Optional[Dict[str, Any]] = None
+    index_path: Optional[Path] = None
+    if kind == "service":
+        host_name = str(row.get("_host") or "")
+        host_row = next(
+            (h for h in topo.get("hosts") or []
+             if isinstance(h, dict) and h.get("name") == host_name),
+            None,
+        )
+        index_path = _host_index_path(home, host_row) if host_row else None
+        if index_path is None:
+            return tool_error(
+                f"服务行 {entity} 所属 host 的服务索引缺失"
+                f"（host={host_name or '?'}），已中止删除。"
+            )
+
+    # L3 档案：解析路径 + 命中候选（含 *.yaml.yaml 兼容形态）后一起归档并删除。
+    detail_data: Optional[Dict[str, Any]] = None
+    detail_file: Optional[Path] = None
+    detail_path = _resolve_entity_detail(home, row)
+    if detail_path is not None:
+        detail_file = next(
+            (c for c in _entity_detail_candidates(detail_path) if c.is_file()), None
+        )
+        if detail_file is not None:
+            try:
+                loaded = yaml.safe_load(detail_file.read_text(encoding="utf-8"))
+            except Exception as exc:
+                return tool_error(
+                    f"读取实体档案失败，已中止删除（拓扑未改动）：{detail_file} ({exc})"
+                )
+            detail_data = _normalize(loaded) if isinstance(loaded, dict) else None
+
+    removed: List[str] = []
+    if kind == "service":
+        removed.append(f"{_rel_to_home(home, index_path)}:services[{entity}]")
+    else:
+        section = {"cluster": "clusters", "host": "hosts",
+                   "cross_host": "cross_host"}[kind]
+        removed.append(f"{_TOPO_FILENAME}:{section}[{entity}]")
+    if detail_file is not None:
+        removed.append(_rel_to_home(home, detail_file))
+
+    # 先归档（失败即中止：绝不允许「删了但没归档」）。tmp + replace 落盘，
+    # 半截文件不会顶替正式归档。
+    archive_path = _archive_target(home, entity)
+    if archive_path is None:
+        return tool_error(
+            f"实体名 {entity!r} 无法安全归档（非法/越界路径），已中止删除。"
+        )
+    archived_rel = _rel_to_home(home, archive_path)
+    archive_body = {
+        "entity": entity,
+        "env": env_name,
+        # 带 tz 偏移的归档时间（跨时区复核删除时刻；`_today()` 只到天）。
+        "deleted_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+        "reason": reason,
+        "source": _SOURCE_AGENT,
+        "row": _archived_row(row),
+        "detail": detail_data,
+        "removed": removed,
+    }
+    tmp_path = archive_path.with_name(archive_path.name + ".tmp")
+    try:
+        archive_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path.write_text(
+            yaml.safe_dump(archive_body, allow_unicode=True, sort_keys=False),
+            encoding="utf-8",
+        )
+        tmp_path.replace(archive_path)
+    except Exception as exc:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        return tool_error(f"归档失败，已中止删除（拓扑未改动）：{exc}", archived=False)
+
+    # 归档就位后再动数据：先拔 L3 档案（失败则行还没删，归档里有副本可恢复）。
+    if detail_file is not None:
+        try:
+            detail_file.unlink()
+        except Exception as exc:
+            return tool_error(
+                f"删除实体档案失败（归档已写入 {archived_rel}，拓扑行未删）：{exc}"
+            )
+
+    if kind == "service":
+        try:
+            index_data = yaml.safe_load(index_path.read_text(encoding="utf-8")) or {}
+        except Exception as exc:
+            return tool_error(
+                f"服务索引解析失败（归档已写入 {archived_rel}）：{index_path} ({exc})"
+            )
+        if not isinstance(index_data, dict):
+            index_data = {}
+        rows = index_data.get("services")
+        if not isinstance(rows, list):
+            rows = []
+        remaining = [
+            r for r in rows
+            if not (isinstance(r, dict) and str(r.get("name") or "") == entity)
+        ]
+        if len(remaining) == len(rows):
+            return tool_error(
+                f"服务索引里找不到服务行 {entity}"
+                f"（归档已写入 {archived_rel}，拓扑未改动）：{index_path}"
+            )
+        index_data["services"] = remaining
+        try:
+            index_path.write_text(
+                yaml.safe_dump(index_data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            return tool_error(
+                f"写入服务索引失败（归档已写入 {archived_rel}）：{exc}"
+            )
+    else:
+        section = {"cluster": "clusters", "host": "hosts",
+                   "cross_host": "cross_host"}[kind]
+        topo[section] = [
+            r for r in (topo.get(section) or [])
+            if not (isinstance(r, dict) and r.get("name") == entity)
+        ]
+        topo["updated_at"] = _today()
+        try:
+            _topology_path(home).write_text(
+                yaml.safe_dump(topo, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            return tool_error(
+                f"写入 topology.yaml 失败（归档已写入 {archived_rel}，"
+                f"L3 档案已拔）：{exc}"
+            )
+
+    _audit_topo_delete(
+        entity=entity,
+        env=env_name,
+        archived=archived_rel,
+        removed=removed,
+        forced=force,
+        referrers=referrers,
+        reason=reason,
+        approval_required=approval_required,
+    )
+
+    result: Dict[str, Any] = {
+        "status": "deleted",
+        "entity": entity,
+        "env": env_name,
+        "archived": archived_rel,
+        "removed": removed,
+        "forced": force,
+        "referrers_ignored": referrers if force else [],
+    }
+    if kind == "service":
+        other_hosts = sorted({
+            str(s.get("_host") or "")
+            for s in _all_services(topo, home)
+            if s.get("name") == entity
+            and str(s.get("_host") or "") not in ("", host_name)
+        } - {""})
+        if other_hosts:
+            result["note"] = (
+                f"同名服务仍存在于其他 host（{'、'.join(other_hosts)}）——"
+                "topo_delete 只按实体名删一行，重名需逐条确认。"
+            )
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
 # topo_status_sync
 # ---------------------------------------------------------------------------
 
@@ -1655,6 +2120,14 @@ def _tool_bool(value: Any, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _delete_handler(args: Dict[str, Any], **kwargs) -> str:
+    return topo_delete(
+        entity=args.get("entity", ""),
+        reason=args.get("reason", ""),
+        force=_tool_bool(args.get("force"), default=False),
+    )
+
+
 def _discover_handler(args: Dict[str, Any], **kwargs) -> str:
     """会话内发起拓扑发现。
 
@@ -1801,6 +2274,16 @@ registry.register(
     handler=_update_handler,
     check_fn=check_topo_requirements,
     emoji="✏️",
+    max_result_size_chars=30_000,
+)
+
+registry.register(
+    name="topo_delete",
+    toolset="topo",
+    schema=_TOPO_DELETE_SCHEMA,
+    handler=_delete_handler,
+    check_fn=check_topo_requirements,
+    emoji="🗑️",
     max_result_size_chars=30_000,
 )
 
