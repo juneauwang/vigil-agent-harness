@@ -16,6 +16,7 @@ import {
   PanelLeftOpen,
   ScrollText,
   Search,
+  CalendarClock,
   Settings,
   ShieldCheck,
   Sun,
@@ -35,6 +36,7 @@ const ApprovalsPage = lazy(() => import("@/pages/ApprovalsPage"));
 const AuditPage = lazy(() => import("@/pages/AuditPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
 const MonitoringPage = lazy(() => import("@/pages/MonitoringPage"));
+const SchedulesPage = lazy(() => import("@/pages/SchedulesPage"));
 
 interface NavItem {
   path: string;
@@ -49,6 +51,7 @@ const NAV_ITEMS: NavItem[] = [
   { path: "/overview", label: "common.nav.overview", icon: LayoutDashboard },
   { path: "/topology", label: "common.nav.topology", icon: Network },
   { path: "/runbooks", label: "common.nav.runbooks", icon: ScrollText },
+  { path: "/schedules", label: "common.nav.schedules", icon: CalendarClock },
   { path: "/matrix", label: "common.nav.matrix", icon: Grid3x3 },
   { path: "/incidents", label: "common.nav.incidents", icon: TriangleAlert },
   { path: "/approvals", label: "common.nav.approvals", icon: ShieldCheck },
@@ -57,7 +60,7 @@ const NAV_ITEMS: NavItem[] = [
 ];
 
 const NAV_GROUPS: Array<{ id: "operate" | "respond" | "observe"; paths: string[] }> = [
-  { id: "operate", paths: ["/chat", "/overview", "/topology", "/runbooks", "/matrix"] },
+  { id: "operate", paths: ["/chat", "/overview", "/topology", "/runbooks", "/schedules", "/matrix"] },
   { id: "respond", paths: ["/incidents", "/approvals"] },
   { id: "observe", paths: ["/audit", "/monitoring"] },
 ];
@@ -335,6 +338,7 @@ export default function App() {
                 <Route path="/overview" element={<OverviewPage />} />
                 <Route path="/topology" element={<TopologyPage />} />
                 <Route path="/runbooks" element={<RunbooksPage />} />
+                <Route path="/schedules" element={<SchedulesPage />} />
                 <Route path="/matrix" element={<MatrixPage />} />
                 <Route path="/incidents" element={<IncidentsPage />} />
                 <Route path="/approvals" element={<ApprovalsPage />} />

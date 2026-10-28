@@ -844,6 +844,67 @@ export interface AutodispatchAuditResponse {
   error?: { code?: string; message?: string; details?: Record<string, unknown> };
 }
 
+// ── Cron / schedules（D2 `/schedules` 页）─────────────────────────────────
+
+/** `parse_schedule` 的结构化结果：kind 决定「一次性 / 周期 / cron」。 */
+export interface CronSchedule {
+  kind?: "once" | "interval" | "cron";
+  /** 可读串，如 `every 5m` / `0 18 * * 5`。 */
+  display?: string;
+  /** interval 的分钟数。 */
+  minutes?: number;
+  /** cron 表达式。 */
+  expr?: string;
+  /** once 的执行时刻（ISO）。 */
+  run_at?: string;
+}
+
+/** GET /api/cron/jobs 的一条（完整 job；dashboard 直接渲染）。 */
+export interface CronJob {
+  id: string;
+  name?: string | null;
+  prompt?: string | null;
+  schedule?: CronSchedule | null;
+  schedule_display?: string | null;
+  /** `builtin:digest` 或 scripts 目录下的路径。 */
+  script?: string | null;
+  script_args?: string[] | null;
+  no_agent?: boolean;
+  enabled?: boolean;
+  state?: string | null;
+  last_status?: string | null;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  deliver?: string | null;
+  profile?: string | null;
+}
+
+/** 蓝图 slot 的表单描述（enum → select，其它 → input）。 */
+export interface CronBlueprintField {
+  name: string;
+  type: string;
+  label: string;
+  default?: unknown;
+  options?: string[];
+  optional?: boolean;
+  strict?: boolean;
+  help?: string;
+}
+
+export interface CronBlueprint {
+  key: string;
+  title: string;
+  description?: string;
+  category?: string;
+  fields?: CronBlueprintField[];
+  schedule?: string;
+  scheduleHuman?: string;
+}
+
+export interface CronBlueprintListResponse {
+  blueprints: CronBlueprint[];
+}
+
 // ── API methods ────────────────────────────────────────────────────────────
 
 export const api = {
@@ -1136,6 +1197,30 @@ export const api = {
   /** 批六十四：历史累计（今天取 daily 末行；近 30 天取 totals）。 */
   getUsageAnalytics: (days = 30) =>
     fetchJSON<UsageAnalyticsResponse>(`/api/analytics/usage?${new URLSearchParams({ days: String(days) })}`),
+
+  // ── Cron / schedules（D2 /schedules 页）──
+  // 列表默认 profile=all（各 profile 的 job 一起看；行上带 profile 字段）。
+  listCronJobs: (profile = "all") =>
+    fetchJSON<CronJob[]>(`/api/cron/jobs?${new URLSearchParams({ profile })}`),
+  updateCronJob: (jobId: string, updates: Record<string, unknown>) =>
+    fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(jobId)}`, {
+      method: "PUT",
+      body: JSON.stringify({ updates }),
+    }),
+  pauseCronJob: (jobId: string) =>
+    fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(jobId)}/pause`, { method: "POST" }),
+  resumeCronJob: (jobId: string) =>
+    fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(jobId)}/resume`, { method: "POST" }),
+  triggerCronJob: (jobId: string) =>
+    fetchJSON<CronJob>(`/api/cron/jobs/${encodeURIComponent(jobId)}/trigger`, { method: "POST" }),
+  deleteCronJob: (jobId: string) =>
+    fetchJSON<{ ok?: boolean }>(`/api/cron/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" }),
+  listBlueprints: () => fetchJSON<CronBlueprintListResponse>("/api/cron/blueprints"),
+  instantiateBlueprint: (blueprint: string, values: Record<string, unknown>) =>
+    fetchJSON<CronJob>("/api/cron/blueprints/instantiate", {
+      method: "POST",
+      body: JSON.stringify({ blueprint, values }),
+    }),
 };
 
 function cleanParams(p: Record<string, string | number | undefined>): Record<string, string> {

@@ -53,3 +53,50 @@ describe("interruptChatSession（批三十六）", () => {
     });
   });
 });
+
+/**
+ * D2 /schedules：cron job 的 PUT/POST 契约（页面只传 updates，包裹由 api 层做）。
+ */
+describe("cron jobs（D2 /schedules）", () => {
+  it("updateCronJob → PUT /api/cron/jobs/{id}，body 是 {updates:{...}}", async () => {
+    const job = { id: "job-1", name: "digest", script_args: ["--window", "1d"] };
+    const fetchMock = stubFetch(200, job);
+    const res = await api.updateCronJob("job-1", { script_args: ["--window", "1d"] });
+    expect(res).toMatchObject({ id: "job-1" });
+
+    const [url, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/cron/jobs/job-1");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({
+      updates: { script_args: ["--window", "1d"] },
+    });
+  });
+
+  it("pause/resume/trigger → POST 到子路径；delete → DELETE", async () => {
+    const fetchMock = stubFetch(200, { ok: true });
+    await api.pauseCronJob("job-1");
+    await api.resumeCronJob("job-1");
+    await api.triggerCronJob("job-1");
+    await api.deleteCronJob("job-1");
+
+    const calls = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls as Array<[string, RequestInit]>;
+    expect(calls.map(([url, init]) => `${init.method} ${url}`)).toEqual([
+      "POST /api/cron/jobs/job-1/pause",
+      "POST /api/cron/jobs/job-1/resume",
+      "POST /api/cron/jobs/job-1/trigger",
+      "DELETE /api/cron/jobs/job-1",
+    ]);
+  });
+
+  it("instantiateBlueprint → POST body {blueprint, values}", async () => {
+    const fetchMock = stubFetch(200, { id: "job-9", name: "Weekly work log (digest)" });
+    await api.instantiateBlueprint("weekly-oplog", { window: "1d" });
+
+    const [url, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/cron/blueprints/instantiate");
+    expect(JSON.parse(String(init.body))).toEqual({
+      blueprint: "weekly-oplog",
+      values: { window: "1d" },
+    });
+  });
+});

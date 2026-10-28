@@ -322,7 +322,7 @@ export function buildGraphModel(view: TopologyView): TopologyGraphModel {
       });
       count += 1;
 
-      host.services.forEach((svc, _si) => {
+      host.services.forEach((svc) => {
         const sc = svc.card;
         nodes.push({
           id: svcId(card.name, sc.name),

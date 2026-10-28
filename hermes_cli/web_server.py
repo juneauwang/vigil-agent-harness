@@ -13940,6 +13940,28 @@ def _cron_string_list(value: Any) -> Optional[List[str]]:
     return items or None
 
 
+def _cron_script_args(value: Any) -> List[str]:
+    """Dashboard 的 ``script_args`` 只收字符串数组（``["--window", "1d"]``）。
+
+    传字符串/对象 = 客户端 bug：明确 ValueError → 路由层 400，而不是把
+    一段字符串写进 job 的 ``script_args`` 让脚本运行时才炸。
+    """
+    if value is None:
+        return []
+    if isinstance(value, str) or not isinstance(value, (list, tuple)):
+        raise ValueError(
+            'script_args must be an array of strings, e.g. ["--window", "1d"]'
+        )
+    args: List[str] = []
+    for item in value:
+        if item is None or isinstance(item, (dict, list, tuple)):
+            raise ValueError("script_args items must be strings")
+        text = str(item).strip()
+        if text:
+            args.append(text)
+    return args
+
+
 def _normalize_dashboard_cron_script(value: Any, profile_home: Path) -> Optional[str]:
     """Validate a dashboard-selected cron script against the profile sandbox."""
     text = _cron_optional_text(value)
@@ -14014,6 +14036,8 @@ def _normalize_dashboard_cron_updates(
         normalized["context_from"] = _cron_string_list(normalized["context_from"])
     if "enabled_toolsets" in normalized:
         normalized["enabled_toolsets"] = _cron_string_list(normalized["enabled_toolsets"])
+    if "script_args" in normalized:
+        normalized["script_args"] = _cron_script_args(normalized["script_args"])
     return normalized
 
 

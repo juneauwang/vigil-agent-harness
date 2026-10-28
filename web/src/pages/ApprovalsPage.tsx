@@ -179,6 +179,8 @@ export default function ApprovalsPage() {
   };
 
   const isPastTimeout = (item: ApprovalItem): boolean =>
+    // 超时徽标按「渲染时刻」判定：这里就是要随每次 render 重算，语义不能改成 state
+    // eslint-disable-next-line react-hooks/purity
     Boolean(item.status === "pending" && item.timeout_at && new Date(item.timeout_at).getTime() < Date.now());
 
   return (
