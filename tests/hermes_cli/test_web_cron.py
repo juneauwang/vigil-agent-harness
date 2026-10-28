@@ -107,6 +107,39 @@ def test_put_script_args_roundtrip_and_type_check(client, cron_home):
     assert "script_args" in bad.json()["detail"]
 
 
+def test_put_bare_interval_means_recurring(client, cron_home):
+    """网页里写裸 ``7d`` 与 CLI 同口径：每 7 天，不是 7 天后一次性。
+
+    核心层 parse_schedule("7d") 仍是一次性语义（模型工具依赖它），归一只发生在
+    dashboard 适配层，所以这条必须在 API 边界上钉住。
+    """
+    job = _create_job(cron_home)
+
+    resp = client.put(
+        f"/api/cron/jobs/{job['id']}",
+        json={"updates": {"schedule": "7d"}},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["schedule"]["kind"] == "interval"
+    assert body["schedule"]["minutes"] == 7 * 24 * 60
+    assert body["schedule_display"] == "every 10080m"
+
+
+def test_put_iso_timestamp_stays_one_shot(client, cron_home):
+    """ISO 时间戳仍是一次性——归一不能把一次性任务改成周期任务。"""
+    job = _create_job(cron_home)
+
+    resp = client.put(
+        f"/api/cron/jobs/{job['id']}",
+        json={"updates": {"schedule": "2027-11-01T09:00:00"}},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["schedule"]["kind"] == "once"
+
+
 class TestRunNow:
     """run-now executes via fire_due in a background thread (not trigger_job)."""
 

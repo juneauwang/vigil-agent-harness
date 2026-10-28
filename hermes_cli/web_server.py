@@ -14038,6 +14038,16 @@ def _normalize_dashboard_cron_updates(
         normalized["enabled_toolsets"] = _cron_string_list(normalized["enabled_toolsets"])
     if "script_args" in normalized:
         normalized["script_args"] = _cron_script_args(normalized["script_args"])
+    # 计划字符串：与 CLI（hermes_cli.cron）同一口径，裸 ``7d`` 这类时长按
+    # 周期理解（每 7 天），不是「7 天后一次性」。核心层 parse_schedule 的
+    # 语义保持不变——一次性仍写 ISO 时间戳，模型工具也不受影响。
+    if isinstance(normalized.get("schedule"), str):
+        try:
+            from cron.jobs import normalize_interval_spec
+
+            normalized["schedule"] = normalize_interval_spec(normalized["schedule"])
+        except Exception:  # pragma: no cover - 归一失败不阻断保存
+            _log.exception("normalize schedule failed: %r", normalized.get("schedule"))
     return normalized
 
 
