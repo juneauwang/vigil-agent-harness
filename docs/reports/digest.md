@@ -50,16 +50,57 @@ vigil digest --window 7d --format md --publish bookstack
 
 ```
 window{since,until,label}  generated_at  db
-totals{tasks,changes,by_kind,excluded_pipeline_sessions,active_days}
-days[]{date,task_indexes[],changes,kinds{}}
-tasks[]{when,session,source,asks[],changes[],change_total,end_reason}
-  changes[]{kind,target,detail,why}   # kind: 拓扑/文件/runbook/技能/记忆/发布/命令
+totals{tasks,objects,objects_with_identity,objects_missing_identity,by_type,
+       changes,by_kind,excluded_pipeline_sessions,active_days}
+tasks[]{when,session,source,asks[],end_reason,
+        objects[],object_total,with_identity,intents[],changes[],change_total}
+  objects[]{type,identity,params,result,source,hits}
+    # type: 账号与权限 / 监控采集 / 监控面板 / 数据源 / 配置 / 系统服务
+    #       可复用资产 / 技能 / 文档 / 发布
+    # identity: 能复核的标识（role@host/db、scrape job 名、datasource uid、文件名…）
+    #           抽不到 = 空串，渲染成「标识未记录」
+    # source:  会话#消息 id（溯源锚点）
+  intents[]{family,label,objects[],with_identity,results[]}
+    # family: 账号 / 监控 / 配置 / 交付（= 子目标）
+  changes[]{kind,target,detail,why}   # 仅保留供溯源；报告不再渲染
 gaps[]
 ```
 
-抽取规则（**不使用** `tools/action_classifier`：它把 `helm show chart` 判成
-restore、把探测型 `curl` 判成 `transfer_file`）：
+### 3.1 对象抽取规则（确定性，认不出就留空）
 
+**报告的主语是集群里的对象，不是 Vigil 调了什么。** 所有标识都从工具参数与
+工具结果里用正则抽，抽不到就留空并计入覆盖率缺口，**禁止让模型补全**。
+
+| 来源 | 抽出来的对象 | 标识/参数 |
+|---|---|---|
+| `psql/mysql/mongosh/redis-cli … CREATE ROLE|USER` | 账号与权限 | `role @ host/db` + SUPERUSER |
+| `curl -X POST … /api/datasources` | 数据源 | name + uid + datasource url（取返回体） |
+| `curl … /api/dashboards`、`/d/<uid>` | 监控面板 | dashboard uid / URL |
+| `curl … /-/reload` | 不单独成对象 | 结果并到同任务的 scrape job（`target state=up`） |
+| `ansible-playbook x.yml` / `kubectl apply -f x.yml` | 配置 | playbook / manifest 名 |
+| `systemctl start|enable <unit>` | 系统服务 | unit 名 |
+| 写文件内容含 `job_name:` | 监控采集 | job 名 + `targets=[...]` + `scrape_interval` |
+| 写文件内容含 `CREATE ROLE` / `postgresql_user` | 账号与权限 | role 名（同一 role 的多条记录合成一个对象） |
+| 写文件内容含 `kv/…`、`secret/…` | 账号与权限 | role + 口令路径 |
+| `runbook_execute` | 可复用资产 | runbook 名 + env |
+| `skill_manage` | 技能 | 技能名 |
+| 写 `.md`（非 /tmp） | 文档 | 文件名 |
+
+过程产物**不进报告**：`/tmp`、`/var/tmp` 下的文件，以及 `diag-*` / `probe-*` /
+`smoke-*` / `*-verify.*` / `*-check.*`。它们只留在 `changes[]` 与 `source` 里做证据。
+
+### 3.2 子目标聚类
+
+`intents[]` 由 `group_into_intents()` 生成：先按对象类型落到 账号 / 监控 / 配置，
+交付物（runbook/技能/文档/发布）不单独成节 —— 先按标识词对齐
+（`xinggh-superadmin-account` → 账号族，`grafana-dashboard-sync` → 监控族），
+对不上就挂到它前面最近的主族。
+
+### 3.3 变更判定（`changes[]`，只供溯源）
+
+`changes[]` 是「写类动作」的流水，报告不再渲染，只作为 `source` 的旁证。判定规则
+（**不使用** `tools/action_classifier`：它把 `helm show chart` 判成
+restore、把探测型 `curl` 判成 `transfer_file`）：
 1. 终端写类判定用写动词白名单：kubectl apply/delete/create/scale/rollout/patch、
    helm install/upgrade/uninstall/rollback、systemctl start/stop/restart/reload/
    enable/disable、docker run/rm/stop/build/push、docker compose up/down、scp/rsync、
@@ -73,27 +114,43 @@ restore、把探测型 `curl` 判成 `transfer_file`）：
 
 ## 4. 报告结构与 prose 契约
 
-五段固定：`1. 本周期做了什么` / `2. 变更明细(表)` / `3. 执行过的写类命令(摘)` /
-`4. 未闭环与待跟进` / `5. 下周期`。
+四段固定：`1. 子目标与结果` / `2. 变更明细（按对象）` / `3. 未闭环与待跟进` /
+`4. 下周期`。**没有「执行过的命令」「调了什么工具」这类章节** —— 那些是证据，
+不是周报内容。
 
-**表格与数字永远来自 facts**，prose 只能换第 1/4/5 段的叙述——模型不进不可校验主路径。
+报告头部固定给覆盖率：
+
+```
+- 作业会话 3 个 / 变更对象 17 个，其中 14 个带可复核标识
+- 对象构成：账号与权限 3、监控采集 5、…
+- 标识缺口：3 个（没有名字/URL/参数，见第 3 节）
+```
+
+第 2 段每行四列：`对象 | 标识 / 参数 | 结果 | 溯源`。标识抽不到写
+「标识未记录」，并在第 3 段落成「数据缺口：N 个对象没有可复核标识」。
+
+> 这条口径的理由：另一个人拿着报告，要能判断集群到底改了什么；能复核的标清楚，
+> 不能复核的也标清楚 —— 编一个 URL 出来比缺更糟。
 
 prose 文件路径：`<state-dir>/reports/Vigil-作业周报-<label>.prose.json`
 
 ```json
 {
-  "summary": "按天分组的人话：### 10-20 做了什么 → 结果",
-  "risks":   "只写 end_reason 不是 cli_close/turn_complete 的任务、以及 gaps",
-  "next":    "1-3 条，必须对应 risks 里的未闭环项"
+  "summary": "第 1 段正文：每个子目标一行「做了什么 → 结果」",
+  "risks":   "第 3 段正文：卡在哪 + 下一步",
+  "next":    "第 4 段正文：1-3 条"
 }
 ```
 
 规则：
 
 1. 三个字段值都是 Markdown 片段，**不含** `##` 标题（标题由脚本渲染）。
-2. 文件不存在 / JSON 坏 / 顶层不是对象 → 打一行 stderr 并**回落确定性模板**，
+2. 模型禁止写 facts 里没有的标识（账号名/job 名/URL/uid）；identity 为空就是
+   「标识未记录」，不许猜。
+3. 模型禁止写工具名、命令、临时脚本、会话 id。
+4. 文件不存在 / JSON 坏 / 顶层不是对象 → 打一行 stderr 并**回落确定性模板**，
    报告照出，不因缺叙述而失败。
-3. `--prose none` 强制模板；`--prose <path>` 指定其它位置。
+5. `--prose none` 强制模板；`--prose <path>` 指定其它位置。
 
 ## 5. 三种生产形态
 
@@ -106,8 +163,9 @@ prose 文件路径：`<state-dir>/reports/Vigil-作业周报-<label>.prose.json`
 | `0 18 * * 5` | Weekly work log (digest) | agent | `builtin:digest` / `--window 7d --format facts` | `file, session_search, skills` |
 | `10 18 * * 5` | Weekly work log (render) | `no_agent` | `builtin:digest` / `--format md --publish bookstack` | — |
 
-A 的 prompt 只要求：读注入的 facts → 按 `facts.days` 分组写三段 → 写成上面的
-prose JSON → 回读确认是合法 JSON。禁止发布、禁止编造、禁止用 curl。
+A 的 prompt 只要求：读注入的 facts → 按 `facts.tasks[].intents[]` 每个子目标写一行
+「做了什么 → 结果」→ 写成上面的 prose JSON → 回读确认是合法 JSON。禁止发布、
+禁止编造标识、禁止写工具名/命令/临时脚本、禁止用 curl。
 
 这样做的原因：模型若直接写整篇 15KB 报告，会撞上「疑似凭据落盘」护栏（正文含
 ssh/chmod/密码 等词），被逼成分段 patch；改成只交 JSON 后工具链干净，且结构上

@@ -27,6 +27,7 @@ CRON_HDR = re.compile(r"^\[IMPORTANT: You are running as a scheduled cron job")
 MAX_ASK = 140
 MAX_DETAIL = 160
 MAX_CHANGES_PER_TASK = 40
+MAX_OBJECTS_PER_TASK = 60
 EXCLUDED_SOURCES = ("cron", "subagent")
 
 REPORT_PREFIX = "Vigil-作业周报-"
@@ -190,6 +191,339 @@ def change_from_call(name: str, raw) -> Optional[dict]:
     if name == "publish_bookstack":
         return {"kind": "发布", "target": a.get("name") or "?", "detail": "BookStack 页面", "why": ""}
     return None
+
+
+# --------------------------------------------------------------------------
+# 对象抽取：报告只写「集群里的对象变了什么」，工具调用只作证据
+#
+# 原则：能从命令/脚本内容/接口返回里**确定性**抽到的标识才写；抽不到就留空，
+# 渲染成「标识未记录」并计入覆盖率缺口——禁止让模型补全。
+# --------------------------------------------------------------------------
+
+# 对象类型 → 子目标族（族决定分组，类型决定表格「对象」列）
+_OBJ_FAMILY = {
+    "账号与权限": "账号",
+    "监控采集": "监控",
+    "监控面板": "监控",
+    "数据源": "监控",
+    "配置": "配置",
+    "系统服务": "配置",
+    "可复用资产": "交付",
+    "技能": "交付",
+    "文档": "交付",
+    "发布": "交付",
+}
+_FAMILY_LABEL = {"账号": "数据库账号", "监控": "监控接入", "配置": "配置与服务", "交付": "交付与资产"}
+_FAMILY_ORDER = ("账号", "监控", "配置", "交付")
+
+# 过程产物：临时脚本/诊断/验证文件——只做证据，不进报告
+_RE_PROCESS_PATH = re.compile(
+    r"(?i)(?:^|/)(?:tmp|temp)/|(?:^|/)(?:diag|probe|smoke)[-_]|[-_](?:verify|check)\.[a-z]+$"
+)
+
+_RE_ROLE = re.compile(r"(?i)\bcreate\s+(?:role|user)\s+\"?([a-z_][\w$@.-]*)\"?")
+_RE_JOB_NAME = re.compile(r"(?i)\bjob_name\s*[:=]\s*[\"']?([\w.-]+)")
+_RE_SCRAPE_INT = re.compile(r"(?i)\bscrape_interval\s*[:=]\s*[\"']?([\w.]+)")
+_RE_TARGETS = re.compile(r"(?i)\btargets\s*:\s*\[([^\]]{0,160})\]")
+_RE_UID = re.compile(r"(?i)\"uid\"\s*:\s*\"([\w-]{4,})\"")
+_RE_JSON_NAME = re.compile(r"(?i)\"name\"\s*:\s*\"([^\"]{1,60})\"")
+_RE_URL = re.compile(r"https?://[\w.:@%/?=&~+-]{4,200}")
+_RE_KV_PATH = re.compile(r"\b(?:kv|secret|openbao|vault)/[\w./-]{2,80}")
+_RE_DB_HOST = re.compile(r"(?i)(?:-h|--host)[\s=]+([\w.-]+)")
+_RE_DB_NAME = re.compile(r"(?i)(?:\s-d|--dbname|--database)[\s=]+([\w.-]+)")
+_RE_SYSTEMD_UNIT = re.compile(r"(?i)^systemctl\s+(?:start|restart|enable|reload)\s+([\w@.:-]+)")
+_RE_ANSIBLE = re.compile(r"(?i)\bansible-playbook\s+(\S+)")
+_RE_KUBECTL_APPLY = re.compile(r"(?i)^kubectl\s+(apply|create|patch|delete)\b")
+_DB_CLIENTS = ("psql", "mysql", "mariadb", "mongosh", "redis-cli", "clickhouse-client", "sqlcmd")
+
+_RESULT_HINTS = (
+    (re.compile(r"(?i)\bstate[\"'=:\s]+up\b"), "target state=up"),
+    (re.compile(r"(?i)\"health\"\s*:\s*\"?up"), "health=up"),
+    (re.compile(r"(?i)\bselect\s+1\b"), "SELECT 1 通过"),
+    (re.compile(r"(?i)\bHTTP/\d(?:\.\d)?\"?\s+2\d\d\b"), "HTTP 2xx"),
+    (re.compile(r"(?i)\b(?:200|201|204)\b"), "HTTP 2xx"),
+    (re.compile(r"(?i)\bcreated\b"), "created"),
+    (re.compile(r"(?i)\bconfigured\b"), "configured"),
+)
+
+
+def _g(pat: re.Pattern, text: str, default: str = "") -> str:
+    """取第一个捕获组；正则没有分组时取整个匹配。"""
+    m = pat.search(str(text or ""))
+    if not m:
+        return default
+    if pat.groups:
+        return (m.group(1) or "").strip()
+    return (m.group(0) or "").strip()
+
+
+def _result_summary(text: str) -> str:
+    """从工具输出里取一句可复核的结果；认不出返回空串（不猜）。"""
+    body = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not body:
+        return ""
+    for pat, label in _RESULT_HINTS:
+        if pat.search(body):
+            return label
+    return ""
+
+
+def _obj(type_: str, identity: str = "", params: str = "", result: str = "", source: str = "") -> dict:
+    return {
+        "type": type_,
+        "identity": clean(identity, 90),
+        "params": clean(params, 120),
+        "result": clean(result, 60),
+        "source": source,
+    }
+
+
+def _object_from_command(cmd: str, result: str, source: str) -> Optional[dict]:
+    """从一条终端命令认出「它对集群里的哪个对象做了什么」。"""
+    flat = re.sub(r"\s+", " ", str(cmd or "")).strip()
+    if not flat:
+        return None
+    low = flat.lower()
+
+    role = _g(_RE_ROLE, flat)
+    if role and any(c in low for c in _DB_CLIENTS):
+        host = _g(_RE_DB_HOST, flat)
+        db = _g(_RE_DB_NAME, flat)
+        where = "/".join(x for x in (host, db) if x)
+        params = "；".join(x for x in (
+            f"role={role}",
+            "SUPERUSER" if re.search(r"(?i)\bsuperuser\b", flat) else "",
+        ) if x)
+        return _obj("账号与权限", f"{role} @ {where}" if where else role,
+                    params, _result_summary(result), source)
+
+    if "curl" in low:
+        url = _g(_RE_URL, flat)
+        if "/api/datasources" in low:
+            uid = _g(_RE_UID, result)
+            name = _g(_RE_JSON_NAME, result)
+            ident = f"{name}（uid {uid}）" if name and uid else (name or (f"uid {uid}" if uid else ""))
+            ds_url = _g(_RE_URL, result) or url
+            return _obj("数据源", ident, ds_url, _result_summary(result), source)
+        if "/api/dashboards" in low or "/d/" in low:
+            uid = _g(_RE_UID, result) or _g(re.compile(r"/d/([\w-]{4,})"), url)
+            return _obj("监控面板", f"dashboard {uid}" if uid else "", url,
+                        _result_summary(result), source)
+        if "/-/reload" in low:
+            return None  # 热加载是证据，不是对象变更（结果会并到同族的 scrape job 上）
+        if "prometheus" in low or "/api/v1/" in low:
+            job = _g(_RE_JOB_NAME, flat)
+            return _obj("监控采集", f"scrape job {job}" if job else "Prometheus 配置",
+                        url, _result_summary(result), source)
+
+    if re.search(r"(?i)openbao|vault\b", low) and re.search(r"(?i)\b(kv|secret)/", low):
+        return _obj("账号与权限", _g(_RE_KV_PATH, flat), "口令写入密钥库",
+                    _result_summary(result), source)
+
+    playbook = _g(_RE_ANSIBLE, flat)
+    if playbook and not re.search(r"(?i)--check|--syntax-check", flat):
+        return _obj("配置", Path(playbook).name, "playbook 执行",
+                    _result_summary(result), source)
+    if _RE_KUBECTL_APPLY.search(low):
+        return _obj("配置", flat[:70], "", _result_summary(result), source)
+    unit = _g(_RE_SYSTEMD_UNIT, flat)
+    if unit:
+        return _obj("系统服务", unit, "systemctl", _result_summary(result), source)
+    return None
+
+
+def _objects_from_content(path: str, content: str, result: str, source: str) -> List[dict]:
+    """从写文件/改文件的内容里认出对象（prometheus job、账号、数据源、面板、配置、文档）。"""
+    if not content or not str(content).strip():
+        return []
+    if _RE_PROCESS_PATH.search(str(path or "")):
+        return []  # 过程脚本：不计入
+    out: List[dict] = []
+
+    job = _g(_RE_JOB_NAME, content)
+    if job:
+        params = "；".join(x for x in (
+            f"targets=[{_g(_RE_TARGETS, content)}]" if _g(_RE_TARGETS, content) else "",
+            f"interval={_g(_RE_SCRAPE_INT, content)}" if _g(_RE_SCRAPE_INT, content) else "",
+        ) if x)
+        out.append(_obj("监控采集", f"scrape job {job}", params, _result_summary(result), source))
+
+    role = _g(_RE_ROLE, content)
+    if role:
+        out.append(_obj("账号与权限", role, f"role={role}；由 SQL/playbook 定义",
+                        _result_summary(result), source))
+
+    kv = _g(_RE_KV_PATH, content)
+    if kv and role:
+        out.append(_obj("账号与权限", f"口令 {kv}", f"role={role}；口令写入 {kv}",
+                        _result_summary(result), source))
+
+    if re.search(r"(?i)datasource", content) and _RE_UID.search(content):
+        name = _g(_RE_JSON_NAME, content)
+        uid = _g(_RE_UID, content)
+        out.append(_obj("数据源", f"{name}（uid {uid}）" if name else f"uid {uid}",
+                        _g(_RE_URL, content), _result_summary(result), source))
+
+    if re.search(r"(?i)\"panels\"|dashboard", content) and not out:
+        uid = _g(_RE_UID, content)
+        out.append(_obj("监控面板", f"dashboard {uid}" if uid else "",
+                        _g(_RE_URL, content), _result_summary(result), source))
+
+    if out:
+        return out
+
+    base = Path(str(path or "")).name
+    if base.endswith(".md"):
+        return [_obj("文档", base, "", _result_summary(result), source)]
+    if base.endswith((".yml", ".yaml", ".json", ".toml", ".service", ".timer", ".conf", ".ini")):
+        return [_obj("配置", base, "", _result_summary(result), source)]
+    return []
+
+
+def objects_from_call(name: str, args: dict, result: str, source: str) -> List[dict]:
+    """一次工具调用 → 0..N 个变更对象。认不出的返回空（过程动作不进报告）。"""
+    if name == "terminal":
+        obj = _object_from_command(str(args.get("command") or ""), result, source)
+        return [obj] if obj else []
+    if name in ("write_file", "patch"):
+        path = str(args.get("path") or args.get("file_path") or "")
+        body = args.get("new_string") if name == "patch" else args.get("content")
+        return _objects_from_content(path, str(body or ""), result, source)
+    if name == "runbook_execute":
+        rb = str(args.get("runbook") or "")
+        if not rb:
+            return []
+        return [_obj("可复用资产", f"runbook {rb}", f"env={args.get('env') or '-'}",
+                     _result_summary(result), source)]
+    if name == "script_asset_create":
+        nm = str(args.get("name") or "")
+        return [_obj("可复用资产", f"脚本资产 {nm}", "内容审批通过",
+                     _result_summary(result), source)] if nm else []
+    if name == "skill_manage":
+        nm = str(args.get("name") or "")
+        return [_obj("技能", nm, str(args.get("action") or "patch"),
+                     _result_summary(result), source)] if nm else []
+    if name == "publish_bookstack":
+        nm = str(args.get("name") or "")
+        return [_obj("发布", nm, "BookStack 页面", _result_summary(result), source)] if nm else []
+    return []
+
+
+_RE_ROLE_PARAM = re.compile(r"role=([\w$@.-]+)")
+
+
+def _coalesce_accounts(objects: List[dict]) -> List[dict]:
+    """同一个 role 的多条记录（psql 命令 / playbook / 口令路径）合成一个对象。
+
+    报告里「对象」应该是一个账号，而不是三条不同来源的记录。
+    """
+    out: List[dict] = []
+    by_role: Dict[str, dict] = {}
+    for obj in objects:
+        if obj["type"] != "账号与权限":
+            out.append(obj)
+            continue
+        role = _g(_RE_ROLE_PARAM, obj["params"])
+        if not role:
+            out.append(obj)
+            continue
+        keeper = by_role.get(role)
+        if keeper is None:
+            by_role[role] = obj
+            out.append(obj)
+            continue
+        if "@" in obj["identity"] and "@" not in keeper["identity"]:
+            keeper["identity"] = obj["identity"]
+        parts = [p for p in keeper["params"].split("；") if p and not p.startswith("role=")]
+        for part in obj["params"].split("；"):
+            if not part or part.startswith("role=") or part in parts:
+                continue
+            if part.startswith("口令写入"):
+                parts = [x for x in parts if not x.startswith("口令写入")]
+            parts.append(part)
+        keeper["params"] = "；".join(parts)
+        keeper["hits"] = int(keeper.get("hits") or 1) + int(obj.get("hits") or 1)
+        if not keeper["result"]:
+            keeper["result"] = obj["result"]
+    return out
+
+
+def _fill_monitor_results(objects: List[dict], extra: str = "") -> None:
+    """热加载/查询的验证结果补到同任务的 scrape job 行上（只在监控采集内传播）。"""
+    results = [o["result"] for o in objects if o["type"] == "监控采集" and o["result"]]
+    if extra:
+        results.append(extra)
+    if not results:
+        return
+    for obj in objects:
+        if obj["type"] == "监控采集" and not obj["result"]:
+            obj["result"] = results[0]
+
+
+_GENERIC_TOKENS = {
+    "runbook", "scrape", "job", "http", "https", "www", "yml", "yaml", "json", "md",
+    "env", "test", "prod", "the", "and", "for", "with", "scr", "tmp",
+}
+
+
+def _tokens(text: str) -> set:
+    """标识里能用来判断「这件交付物是为谁做的」的词（粗粒度，够用即止）。"""
+    parts = re.split(r"[^\w\u4e00-\u9fff]+", str(text or "").lower())
+    return {p for p in parts if len(p) >= 3 and p not in _GENERIC_TOKENS}
+
+
+def group_into_intents(objects: List[dict], ask: str = "") -> List[dict]:
+    """把对象聚成「子目标」：账号 / 监控 / 配置 / 交付。
+
+    交付物（runbook/技能/文档/发布）不单独成节：先按标识词与主族对齐
+    （`xinggh-superadmin-account` → 账号族，`grafana-dashboard-sync` → 监控族），
+    对不上就挂到它前面最近的那个主族；仍无则挂本任务的主族。
+    """
+    if not objects:
+        return []
+    buckets: Dict[str, List[dict]] = {}
+    for obj in objects:
+        fam = _OBJ_FAMILY.get(obj["type"], "交付")
+        if fam != "交付":
+            buckets.setdefault(fam, []).append(obj)
+    dominant = max(buckets, key=lambda f: len(buckets[f]), default="")
+    pools = {
+        fam: set().union(*[_tokens(o["identity"]) | _tokens(o["params"]) for o in items])
+        for fam, items in buckets.items()
+    }
+
+    last_family = ""
+    for obj in objects:
+        fam = _OBJ_FAMILY.get(obj["type"], "交付")
+        if fam != "交付":
+            last_family = fam
+            continue
+        toks = _tokens(obj["identity"]) | _tokens(obj["params"])
+        scored = sorted(((len(toks & pools[f]), f) for f in pools), reverse=True)
+        if scored and scored[0][0] > 0:
+            target = scored[0][1]
+        else:
+            target = last_family or dominant or "交付"
+        buckets.setdefault(target, []).append(obj)
+
+    intents = []
+    for fam in _FAMILY_ORDER:
+        items = buckets.get(fam) or []
+        if not items:
+            continue
+        ids = [o["identity"] for o in items if o["identity"] and o["type"] not in ("文档", "技能")]
+        tail = "、".join(ids[:2])
+        label = _FAMILY_LABEL.get(fam, fam)
+        if tail:
+            label = f"{label}：{tail}"
+        intents.append({
+            "family": fam,
+            "label": label,
+            "objects": items,
+            "with_identity": sum(1 for o in items if o["identity"]),
+            "results": [o["result"] for o in items if o["result"]],
+        })
+    return intents
 
 
 # 段首可剥的前缀（命令链被拆段后常见）
@@ -432,30 +766,63 @@ def collect(
                 break
 
         changes, seen = [], set()
-        for m in conn.execute("select tool_calls from messages where session_id=? and tool_calls is not null"
-                              " order by id", (row["id"],)):
+        objects: List[dict] = []
+        obj_seen: Dict[tuple, dict] = {}
+        monitor_evidence = ""
+        # 工具结果按 tool_call_id 索引：结果用来填「结果」列（state=up / SELECT 1 / 2xx）
+        results: Dict[str, str] = {}
+        msgs = conn.execute(
+            "select id, role, content, tool_call_id, tool_calls from messages"
+            " where session_id=? order by id", (row["id"],)
+        ).fetchall()
+        for m in msgs:
+            if str(m["role"] or "") == "tool" and m["tool_call_id"]:
+                results[str(m["tool_call_id"])] = str(m["content"] or "")
+        for m in msgs:
             for call in _json_list(m["tool_calls"]):
                 fn = (call or {}).get("function") or {}
                 name, raw = fn.get("name"), fn.get("arguments")
+                args = _json(raw)
+                res = results.get(str((call or {}).get("id") or ""), "")
+                source = f"{str(row['id'])[:12]}#{m['id']}"
                 item = None
                 if name == "terminal":
-                    args = _json(raw)
                     item = classify_terminal(str(args.get("command") or ""))
                 else:
                     item = change_from_call(str(name or ""), raw)
-                if not item:
-                    continue
-                key = (item["kind"], item["target"])
-                if key in seen:
-                    for existing in changes:
-                        if (existing["kind"], existing["target"]) == key and item.get("why"):
-                            existing["why"] = item["why"]
-                    continue
-                seen.add(key)
-                changes.append(item)
+                if item:
+                    key = (item["kind"], item["target"])
+                    if key in seen:
+                        for existing in changes:
+                            if (existing["kind"], existing["target"]) == key and item.get("why"):
+                                existing["why"] = item["why"]
+                    else:
+                        seen.add(key)
+                        changes.append(item)
+                # 变更对象（报告主体）：与 tools/命令 解耦，认不出就跳过
+                objs = objects_from_call(str(name or ""), args, res, source)
+                if not objs and name == "terminal":
+                    cmd = str(args.get("command") or "")
+                    if re.search(r"(?i)/-/reload|prometheus", cmd):
+                        monitor_evidence = monitor_evidence or _result_summary(res)
+                for obj in objs:
+                    okey = (obj["type"], obj["identity"], obj["params"])
+                    if okey in obj_seen:
+                        kept = obj_seen[okey]
+                        if not kept["result"] and obj["result"]:
+                            kept["result"] = obj["result"]
+                        kept["hits"] = int(kept.get("hits") or 1) + 1
+                    else:
+                        obj["hits"] = 1
+                        obj_seen[okey] = obj
+                        objects.append(obj)
 
-        if not changes and not asks:
+        objects = _coalesce_accounts(objects)
+        _fill_monitor_results(objects, monitor_evidence)
+
+        if not changes and not asks and not objects:
             continue
+        intents = group_into_intents(objects, asks[0] if asks else "")
         tasks.append({
             "when": datetime.fromtimestamp(row["started_at"], SHANGHAI).strftime("%m-%d %H:%M"),
             "session": row["id"],
@@ -463,6 +830,10 @@ def collect(
             "asks": asks,
             "changes": changes[:MAX_CHANGES_PER_TASK],
             "change_total": len(changes),
+            "objects": objects[:MAX_OBJECTS_PER_TASK],
+            "object_total": len(objects),
+            "with_identity": sum(1 for o in objects if o["identity"]),
+            "intents": intents,
             "end_reason": row["end_reason"],
         })
 
@@ -470,6 +841,15 @@ def collect(
     for task in tasks:
         for ch in task["changes"]:
             by_kind[ch["kind"]] = by_kind.get(ch["kind"], 0) + 1
+
+    by_type: Dict[str, int] = {}
+    objects_total = with_identity = 0
+    for task in tasks:
+        objects_total += task["object_total"]
+        with_identity += task["with_identity"]
+        for obj in task["objects"]:
+            by_type[obj["type"]] = by_type.get(obj["type"], 0) + 1
+    missing_identity = objects_total - with_identity
 
     days: List[dict] = []
     for index, task in enumerate(tasks):
@@ -495,6 +875,10 @@ def collect(
             "tasks": len(tasks),
             "changes": sum(t["change_total"] for t in tasks),
             "by_kind": by_kind,
+            "objects": objects_total,
+            "objects_with_identity": with_identity,
+            "objects_missing_identity": missing_identity,
+            "by_type": by_type,
             "excluded_pipeline_sessions": skipped,
             "active_days": len(days),
         },
@@ -517,21 +901,29 @@ def _json_list(raw):
 # --------------------------------------------------------------------------
 
 def render_md(facts: dict, prose: Optional[Dict[str, str]] = None) -> str:
-    """渲染五段报告。``prose`` 给了就用模型写的叙述（第 1/4/5 段），否则用确定性模板。
+    """渲染四段报告：子目标与结果 / 变更明细（按对象）/ 未闭环 / 下周期。
 
-    表格与数字永远来自 facts，prose 只能替换叙述段落——这样模型不进不可校验主路径。
+    ``prose`` 只能替换第 1/3/4 段的叙述；对象、标识、参数、结果永远来自 facts，
+    这样「另一个人拿着报告能复核」才有意义。
     """
     prose = prose or {}
     w = facts["window"]
     t = facts["totals"]
     since = datetime.fromisoformat(w["since"]).strftime("%m-%d")
     until = (datetime.fromisoformat(w["until"]) - timedelta(seconds=1)).strftime("%m-%d")
+    total_objs = int(t.get("objects") or 0)
+    with_id = int(t.get("objects_with_identity") or 0)
+    missing = int(t.get("objects_missing_identity") or 0)
+
     lines = [f"# Vigil 作业周报 {w['label']}（{since} ~ {until}）", ""]
-    lines.append(f"- 人工作业会话 {t['tasks']} 个 / 变更 {t['changes']} 项")
-    kinds = "、".join(f"{k} {v}" for k, v in sorted(t["by_kind"].items())) or "无"
-    lines.append(f"- 变更构成：{kinds}")
+    lines.append(f"- 作业会话 {t['tasks']} 个 / 变更对象 {total_objs} 个，其中 {with_id} 个带可复核标识")
+    types = "、".join(f"{k} {v}" for k, v in sorted((t.get("by_type") or {}).items())) or "无"
+    lines.append(f"- 对象构成：{types}")
+    if missing:
+        lines.append(f"- 标识缺口：{missing} 个（没有名字/URL/参数，见第 3 节）")
     lines.append(f"- 已排除流水线自身会话：{t['excluded_pipeline_sessions']} 个")
-    lines += ["", "## 1. 本周做了什么", ""]
+
+    lines += ["", "## 1. 子目标与结果", ""]
     summary = str(prose.get("summary") or "").strip()
     if summary:
         lines.extend(summary.splitlines())
@@ -539,52 +931,70 @@ def render_md(facts: dict, prose: Optional[Dict[str, str]] = None) -> str:
     elif not facts["tasks"]:
         lines.append("本周期无作业记录。")
     else:
-        for day in facts.get("days") or []:
-            lines.append(f"### {day['date']}（{len(day['task_indexes'])} 个任务 / {day['changes']} 项变更）")
+        for task in facts["tasks"]:
+            ask = task["asks"][0] if task["asks"] else "（无用户指令记录）"
+            lines.append(f"### {task['when'][:5]} · {ask}")
             lines.append("")
-            for idx in day["task_indexes"]:
-                task = facts["tasks"][idx]
-                ask = task["asks"][0] if task["asks"] else "（无用户指令记录）"
-                lines.append(f"- {ask} → 结束状态 {task['end_reason'] or '-'}，变更 {task['change_total']} 项")
+            intents = task.get("intents") or []
+            if not intents:
+                lines.append(f"- 无结构化变更（结束状态 {task['end_reason'] or '-'}）")
+            for intent in intents:
+                results = "；".join(dict.fromkeys(intent["results"]))[:80]
+                tail = f"（{len(intent['objects'])} 项" + (f"：{results}" if results else "") + "）"
+                lines.append(f"- {intent['label']}{tail}")
             lines.append("")
 
-    structured = ("拓扑", "文件", "runbook", "技能", "发布", "记忆")
-    lines += ["", "## 2. 变更明细（服务 / 配置 / 参数）", "",
-              "| 时间 | 类型 | 对象 | 变更内容 | 会话 |", "|---|---|---|---|---|"]
+    lines += ["## 2. 变更明细（按对象）", ""]
     rows = 0
     for task in facts["tasks"]:
-        for ch in task["changes"]:
-            if ch["kind"] not in structured:
-                continue
-            rows += 1
-            lines.append(f"| {task['when']} | {ch['kind']} | {ch['target']} | {ch['detail']} | {task['session'][:12]} |")
-    if rows == 0:
-        lines.append("| - | - | - | 本周期无结构化变更 | - |")
+        for intent in task.get("intents") or []:
+            lines.append(f"### {intent['label']}")
+            lines.append("")
+            lines.append("| 对象 | 标识 / 参数 | 结果 | 溯源 |")
+            lines.append("|---|---|---|---|")
+            for obj in intent["objects"]:
+                rows += 1
+                ident = obj["identity"] or "标识未记录"
+                cell = f"{ident}；{obj['params']}" if obj["params"] else ident
+                lines.append(
+                    f"| {obj['type']} | {cell} | {obj['result'] or '—'} | "
+                    f"{str(obj['source']).split('#')[0]} |"
+                )
+            lines.append("")
+    if rows == 0 and not any(task.get("intents") for task in facts["tasks"]):
+        lines += ["本周期没有被认定为「对象变更」的记录。", ""]
 
-    lines += ["", "## 3. 执行过的写类命令（摘）", ""]
-    cmds = [(task, ch) for task in facts["tasks"] for ch in task["changes"] if ch["kind"] == "命令"]
-    if not cmds:
-        lines.append("无。")
-    for task, ch in cmds[:12]:
-        lines.append(f"- {task['when']} [{ch['target']}] `{ch['detail'][:100]}`")
-    if len(cmds) > 12:
-        lines.append(f"- 另有 {len(cmds) - 12} 条同类命令未列出")
-
-    lines += ["", "## 4. 未闭环与待跟进", ""]
+    lines += ["## 3. 未闭环与待跟进", ""]
     risks = str(prose.get("risks") or "").strip()
-    pending = [task for task in facts["tasks"] if (task["end_reason"] or "") not in ("cli_close", "turn_complete")]
+    pending = [
+        task for task in facts["tasks"]
+        if (task["end_reason"] or "") not in ("cli_close", "turn_complete")
+    ]
     if risks:
         lines.extend(risks.splitlines())
         lines.append("")
     elif not pending and not facts["gaps"]:
         lines.append("无。")
     for task in pending:
-        lines.append(f"- {task['when']} {task['asks'][0] if task['asks'] else task['session']}：结束状态 {task['end_reason'] or '未知'}")
+        ask = task["asks"][0] if task["asks"] else task["session"]
+        lines.append(f"- {task['when']} {ask}：结束状态 {task['end_reason'] or '未知'}")
     for gap in facts["gaps"]:
         lines.append(f"- 数据缺：{gap}")
+
+    no_ident = [
+        (task, obj) for task in facts["tasks"]
+        for obj in task.get("objects") or [] if not obj["identity"]
+    ]
+    if no_ident:
+        lines += ["", f"数据缺口：{len(no_ident)} 个对象没有可复核标识（只有类型，没有名字/URL/参数）："]
+        for task, obj in no_ident[:10]:
+            lines.append(f"- {task['when']} {obj['type']}（{task['session'][:12]}）")
+        if len(no_ident) > 10:
+            lines.append(f"- 另有 {len(no_ident) - 10} 个未列出")
+
     next_steps = str(prose.get("next") or "").strip()
-    lines += ["", "## 5. 下周期", ""]
-    lines.extend(next_steps.splitlines() if next_steps else ["- 待补：由撰写者根据第 4 段给出 1-3 条。"])
+    lines += ["", "## 4. 下周期", ""]
+    lines.extend(next_steps.splitlines() if next_steps else ["- 待补：由撰写者根据第 3 段给出 1-3 条。"])
     lines.append("")
     return "\n".join(lines)
 

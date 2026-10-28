@@ -403,30 +403,262 @@ def test_default_window_fallback_and_bad_value(tmp_path, monkeypatch):
 
 
 def test_render_md_uses_prose_but_keeps_facts_tables(tmp_path):
-    """模型只交叙述：第 1/4/5 段用 prose，表格仍逐值来自 facts。"""
-    import json as _json
-
+    """模型只交叙述：第 1/3/4 段用 prose，对象表仍逐值来自 facts。"""
     from ops import digest
 
     facts = {
         "window": {"since": "2026-10-20T00:00:00+08:00", "until": "2026-10-27T00:00:00+08:00", "label": "2026-W43"},
-        "totals": {"tasks": 1, "changes": 1, "by_kind": {"拓扑": 1}, "excluded_pipeline_sessions": 0, "active_days": 1},
+        "totals": {
+            "tasks": 1, "changes": 1, "by_kind": {"拓扑": 1},
+            "objects": 1, "objects_with_identity": 1, "objects_missing_identity": 0,
+            "by_type": {"配置": 1},
+            "excluded_pipeline_sessions": 0, "active_days": 1,
+        },
         "days": [{"date": "10-21", "task_indexes": [0], "changes": 1, "kinds": {"拓扑": 1}}],
         "tasks": [{
             "when": "10-21 10:00", "session": "chat_x", "source": "web", "asks": ["把网关重启"],
-            "change_total": 1, "end_reason": "turn_complete",
+            "change_total": 1, "object_total": 1, "with_identity": 1,
+            "end_reason": "turn_complete",
             "changes": [{"kind": "拓扑", "target": "gateway-svc", "detail": "endpoint=1.2.3.4:8080", "why": ""}],
+            "objects": [{"type": "配置", "identity": "gateway-svc.yaml", "params": "endpoint=1.2.3.4:8080",
+                         "result": "configured", "source": "chat_x#7", "hits": 1}],
+            "intents": [{"family": "配置", "label": "配置与服务：gateway-svc.yaml",
+                         "objects": [{"type": "配置", "identity": "gateway-svc.yaml",
+                                      "params": "endpoint=1.2.3.4:8080", "result": "configured",
+                                      "source": "chat_x#7", "hits": 1}],
+                         "with_identity": 1, "results": ["configured"]}],
         }],
         "gaps": [],
     }
     prose = {"summary": "- 重启了网关，服务恢复。", "risks": "- 无。", "next": "1. 观察一天。"}
     md = digest.render_md(facts, prose)
     assert "- 重启了网关，服务恢复。" in md
-    assert "## 5. 下周期" in md and "1. 观察一天。" in md
-    # 表格里的参数值必须原样来自 facts，不被 prose 覆盖
-    assert "endpoint=1.2.3.4:8080" in md
-    # prose 覆盖后不再出现模板占位
+    assert "## 1. 子目标与结果" in md
+    assert "## 2. 变更明细（按对象）" in md
+    assert "## 3. 未闭环与待跟进" in md
+    assert "## 4. 下周期" in md and "1. 观察一天。" in md
+    # 对象表的标识/参数必须原样来自 facts，不被 prose 覆盖
+    assert "gateway-svc.yaml" in md and "endpoint=1.2.3.4:8080" in md
+    # 报告不再出现「调了什么工具/命令」这类过程章节
+    assert "执行过的写类命令" not in md
     assert "待补：由撰写者" not in md
+
+
+def test_render_md_marks_missing_identity_and_coverage(tmp_path):
+    """抽不到标识的对象：表里写「标识未记录」，头部给覆盖率，第 3 节列缺口。"""
+    from ops import digest
+
+    obj = {"type": "监控面板", "identity": "", "params": "", "result": "", "source": "chat_y#9", "hits": 1}
+    facts = {
+        "window": {"since": "2026-10-20T00:00:00+08:00", "until": "2026-10-27T00:00:00+08:00", "label": "2026-W43"},
+        "totals": {
+            "tasks": 1, "changes": 0, "by_kind": {},
+            "objects": 1, "objects_with_identity": 0, "objects_missing_identity": 1,
+            "by_type": {"监控面板": 1},
+            "excluded_pipeline_sessions": 0, "active_days": 1,
+        },
+        "days": [],
+        "tasks": [{
+            "when": "10-21 10:00", "session": "chat_y", "source": "web", "asks": ["配面板"],
+            "change_total": 0, "object_total": 1, "with_identity": 0, "end_reason": "turn_complete",
+            "changes": [], "objects": [obj],
+            "intents": [{"family": "监控", "label": "监控接入", "objects": [obj],
+                         "with_identity": 0, "results": []}],
+        }],
+        "gaps": [],
+    }
+    md = digest.render_md(facts, {})
+    assert "0 个带可复核标识" in md
+    assert "标识未记录" in md
+    assert "1 个对象没有可复核标识" in md
+
+
+def test_object_from_db_command_extracts_identity():
+    from ops import digest
+
+    cmd = 'psql -h node233 -d test_pg -U admin -c "CREATE ROLE xinggh LOGIN SUPERUSER PASSWORD \'x\'"'
+    obj = digest._object_from_command(cmd, "CREATE ROLE", "chat_b72a9f5#12")
+    assert obj["type"] == "账号与权限"
+    assert "xinggh" in obj["identity"] and "node233" in obj["identity"] and "test_pg" in obj["identity"]
+    assert "SUPERUSER" in obj["params"]
+
+
+def test_objects_from_content_extracts_prometheus_job_and_skips_process_scripts():
+    from ops import digest
+
+    content = """
+serverFiles:
+  prometheus.yml:
+    scrape_configs:
+      - job_name: milvus
+        scrape_interval: 15s
+        static_configs:
+          - targets: ['node233:9091']
+"""
+    objs = digest._objects_from_content("/opt/prom/prometheus_new.yaml", content, "state=up", "chat_x#3")
+    assert objs and objs[0]["type"] == "监控采集"
+    assert "milvus" in objs[0]["identity"]
+    assert "node233:9091" in objs[0]["params"] and "15s" in objs[0]["params"]
+    assert objs[0]["result"] == "target state=up"
+
+    # /tmp 下的诊断/验证脚本是过程产物，不进报告
+    assert digest._objects_from_content("/tmp/diag-milvus-rbac.yml", content, "", "chat_x#4") == []
+    assert digest._objects_from_content("/tmp/prom-reload-verify.py", "print(1)", "", "chat_x#5") == []
+
+
+def test_group_into_intents_splits_account_and_monitoring():
+    """交付物（runbook/文档/技能）挂到本任务的主族，不单独成一节。"""
+    from ops import digest
+
+    objs = [
+        {"type": "账号与权限", "identity": "xinggh @ node233/test_pg", "params": "", "result": "", "source": "s#1", "hits": 1},
+        {"type": "可复用资产", "identity": "runbook xinggh-superadmin-account", "params": "env=test", "result": "", "source": "s#2", "hits": 1},
+        {"type": "文档", "identity": "xinggh-连接说明.md", "params": "", "result": "", "source": "s#3", "hits": 1},
+        {"type": "监控采集", "identity": "scrape job milvus", "params": "targets=[node233:9091]", "result": "target state=up", "source": "s#4", "hits": 1},
+        {"type": "数据源", "identity": "milvus-prom（uid af123456）", "params": "http://grafana:3000", "result": "", "source": "s#5", "hits": 1},
+    ]
+    intents = digest.group_into_intents(objs, "建 xinggh 账号并接监控")
+    fams = [i["family"] for i in intents]
+    assert fams == ["账号", "监控"]
+    assert {o["type"] for o in intents[0]["objects"]} == {"账号与权限", "可复用资产", "文档"}
+    assert {o["type"] for o in intents[1]["objects"]} == {"监控采集", "数据源"}
+
+
+def test_render_md_groups_by_day(tmp_path):
+    """无 prose 时第 1 段按天列出任务与子目标（模板口径）。"""
+    from ops import digest
+
+    facts = {
+        "window": {"since": "2026-10-20T00:00:00+08:00", "until": "2026-10-21T00:00:00+08:00", "label": "2026-10-20"},
+        "totals": {"tasks": 1, "changes": 1, "by_kind": {"文件": 1},
+                   "objects": 2, "objects_with_identity": 2, "objects_missing_identity": 0,
+                   "by_type": {"监控采集": 1, "账号与权限": 1},
+                   "excluded_pipeline_sessions": 0, "active_days": 1},
+        "days": [{"date": "10-20", "task_indexes": [0], "changes": 1, "kinds": {"文件": 1}}],
+        "tasks": [{
+            "when": "10-20 10:00", "session": "chat_a", "source": "web", "asks": ["建账号和监控"],
+            "change_total": 1, "object_total": 2, "with_identity": 2, "end_reason": "turn_complete",
+            "changes": [{"kind": "文件", "target": "a.yml", "detail": "写：x", "why": ""}],
+            "objects": [],
+            "intents": [
+                {"family": "账号", "label": "数据库账号：xinggh",
+                 "objects": [{"type": "账号与权限", "identity": "xinggh @ node233/test_pg", "params": "",
+                              "result": "", "source": "chat_a#3", "hits": 1}],
+                 "with_identity": 1, "results": []},
+                {"family": "监控", "label": "监控接入：scrape job milvus",
+                 "objects": [{"type": "监控采集", "identity": "scrape job milvus",
+                              "params": "targets=[node233:9091]", "result": "target state=up",
+                              "source": "chat_a#4", "hits": 1}],
+                 "with_identity": 1, "results": ["target state=up"]},
+            ],
+        }],
+        "gaps": [],
+    }
+    md = digest.render_md(facts, {})
+    assert "### 10-20 · 建账号和监控" in md
+    assert "数据库账号：xinggh" in md
+    assert "监控接入：scrape job milvus（1 项：target state=up）" in md
+
+
+def test_e2e_objects_from_real_session_shape(tmp_path):
+    """端到端：一条「建账号 + 接监控」的会话，报告要能看出改了什么。
+
+    用最小 state.db 复刻 dogfood 里的真实形态：psql 建账号、prometheus 配置、
+    grafana 数据源、runbook、交付文档，外加 /tmp 过程脚本（必须被折叠掉）。
+    """
+    import json as _json
+    import sqlite3 as _sqlite3
+    from datetime import datetime, timedelta
+
+    from ops import digest
+
+    db = tmp_path / "state.db"
+    conn = _sqlite3.connect(db)
+    conn.executescript(
+        """
+        create table sessions (id text primary key, source text, parent_session_id text,
+          started_at real, ended_at real, end_reason text, message_count int,
+          tool_call_count int, input_tokens int, output_tokens int);
+        create table messages (id integer primary key autoincrement, session_id text,
+          role text, content text, tool_call_id text, tool_calls text);
+        """
+    )
+    started = datetime.now(digest.SHANGHAI) - timedelta(hours=3)
+    conn.execute(
+        "insert into sessions values (?,?,?,?,?,?,?,?,?,?)",
+        ("chat_b72a9f5", "web", None, started.timestamp(), started.timestamp() + 3600,
+         "turn_complete", 20, 10, 0, 0),
+    )
+
+    def call(cid, name, args, result):
+        conn.execute(
+            "insert into messages (session_id, role, content, tool_calls) values (?,?,?,?)",
+            ("chat_b72a9f5", "assistant", "",
+             _json.dumps([{"id": cid, "function": {"name": name, "arguments": _json.dumps(args)}}])),
+        )
+        conn.execute(
+            "insert into messages (session_id, role, content, tool_call_id) values (?,?,?,?)",
+            ("chat_b72a9f5", "tool", result, cid),
+        )
+
+    conn.execute(
+        "insert into messages (session_id, role, content) values (?,?,?)",
+        ("chat_b72a9f5", "user", "帮我在node233和node234的test-pg和test-milvus上建管理员用户 xinggh，密码放 openbao"),
+    )
+    call("c1", "terminal",
+         {"command": 'psql -h node233 -d test_pg -U admin -c "CREATE ROLE xinggh LOGIN SUPERUSER"'},
+         "CREATE ROLE")
+    call("c2", "write_file",
+         {"path": "/opt/ansible/playbooks/provision-superadmin-account.yml",
+          "content": "---\n- name: provision\n  community.postgresql.postgresql_user:\n    name: xinggh\n# CREATE ROLE xinggh; password -> kv/test/pg/xinggh\n"},
+         "wrote 12 lines")
+    call("c3", "write_file",
+         {"path": "/tmp/diag-milvus-rbac.yml", "content": "kind: Pod\nmetadata:\n  name: diag\n"},
+         "wrote 3 lines")
+    call("c4", "write_file",
+         {"path": "/opt/prom/prometheus_new.yml",
+          "content": "scrape_configs:\n  - job_name: milvus\n    scrape_interval: 15s\n    static_configs:\n      - targets: ['node233:9091']\n"},
+         "wrote 7 lines")
+    call("c5", "terminal", {"command": "curl -s http://node233:9090/-/reload -X POST"},
+         '{"status":"success"} target state=up')
+    call("c6", "terminal",
+         {"command": "curl -s -X POST http://grafana:3000/api/datasources -d @ds.json"},
+         '{"id":3,"uid":"af123456","name":"milvus-prom","url":"http://node233:9091"}')
+    call("c7", "runbook_execute",
+         {"runbook": "xinggh-superadmin-account", "env": "test"}, '{"result":"ok"}')
+    call("c8", "write_file",
+         {"path": "/root/reports/xinggh-连接说明.md",
+          "content": "# 数据库账号使用说明（账号：xinggh）\nhost node233 port 5432\n"},
+         "wrote 4 lines")
+    call("c9", "skill_manage", {"name": "grafana-dashboard-sync", "action": "patch"}, "ok")
+    conn.commit()
+    conn.close()
+
+    now = datetime.now(digest.SHANGHAI)
+    facts = digest.collect(db, now - timedelta(days=1), now)
+    totals = facts["totals"]
+    assert totals["objects"] >= 6
+    assert totals["objects_missing_identity"] == 0
+    task = facts["tasks"][0]
+    fams = [i["family"] for i in task["intents"]]
+    assert fams == ["账号", "监控"], fams
+    account_types = {o["type"] for o in task["intents"][0]["objects"]}
+    monitor_types = {o["type"] for o in task["intents"][1]["objects"]}
+    assert "账号与权限" in account_types and "可复用资产" in account_types and "文档" in account_types
+    assert "监控采集" in monitor_types and "数据源" in monitor_types
+
+    md = digest.render_md(facts, {})
+    # 报告能看出改了什么（标识 + 参数 + 结果）
+    assert "xinggh @ node233/test_pg" in md
+    assert "scrape job milvus" in md and "node233:9091" in md and "15s" in md
+    assert "target state=up" in md
+    assert "milvus-prom（uid af123456）" in md
+    assert "runbook xinggh-superadmin-account" in md
+    assert "xinggh-连接说明.md" in md
+    # 过程脚本不进报告；也没有「调了什么工具」这种章节
+    assert "diag-milvus-rbac" not in md
+    assert "执行过的写类命令" not in md
+    assert "0 个带可复核标识" not in md
 
 
 def test_load_prose_default_path_and_fallback(tmp_path):
