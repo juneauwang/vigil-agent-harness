@@ -1334,6 +1334,20 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ window }),
     }),
+  createDigestPipeline: (body: {
+    window?: string;
+    facts_schedule?: string;
+    render_schedule?: string;
+  }) =>
+    fetchJSON<{
+      ok?: boolean;
+      data?: {
+        window: string;
+        publish: string;
+        facts: { id: string; schedule: string };
+        render: { id: string; schedule: string };
+      };
+    }>("/api/digest/pipeline", { method: "POST", body: JSON.stringify(body) }),
   listDigestRuns: () =>
     fetchJSON<{ ok?: boolean; data?: DigestRun[] }>("/api/digest/runs"),
 };

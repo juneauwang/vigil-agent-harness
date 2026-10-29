@@ -9,6 +9,16 @@ Markdown，可直接发 BookStack。
 与 `weekly-digest.md`（会话/计数为中心）互补：那份回答「这周跑了多少」，这份回答
 「这周我动了什么」。
 
+## 0. 初始化（Le Registre 一键建）
+
+新机器上还没有 digest job 时，`/registre` 的流水线卡直接给表单：窗口 + 每周几 + 几点，
+点「创建流水线」一次建好两条 job（写稿、渲染发布，相隔 10 分钟）。
+不需要去 `/schedules` 的蓝图目录里挑——那条 `weekly-oplog` 蓝图是旧的单 job 口径
+（一个 agent 写完自己发布），与现在的 A/B 两条 job 模型不兼容，所以不再在网页里列出。
+
+对应的接口是 `POST /api/digest/pipeline`：幂等（已有流水线返回 409），
+第二条建失败会把第一条删掉，不留半成品。
+
 ## 1. 用法与参数
 
 ```bash

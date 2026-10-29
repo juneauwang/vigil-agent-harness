@@ -57,9 +57,9 @@ const PLAIN_JOB = {
 };
 
 const BLUEPRINT = {
-  key: "weekly-oplog",
-  title: "Weekly work log (digest)",
-  description: "按「我提的任务 → 实际做的变更」汇总一周",
+  key: "daily-report",
+  title: "Daily report",
+  description: "每天汇总一次",
   fields: [
     { name: "time", type: "time", label: "What time?", default: "18:00" },
     {
@@ -229,7 +229,7 @@ describe("SchedulesPage", () => {
     act(() => button(container, "创建")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     await flush();
 
-    expect(api.instantiateBlueprint).toHaveBeenCalledWith("weekly-oplog", {
+    expect(api.instantiateBlueprint).toHaveBeenCalledWith("daily-report", {
       time: "18:00",
       window: "1d",
       publish: "file",
@@ -283,5 +283,19 @@ describe("queue-for-next-tick", () => {
     expect(api.triggerCronJob).toHaveBeenCalledWith("job-plain");
     expect(api.runCronJobNow).not.toHaveBeenCalled();
     root.unmount();
+  });
+});
+
+describe("digest 蓝图不在 /schedules 列出", () => {
+  it("weekly-oplog 被过滤（流水线统一在 /registre 建）", async () => {
+    const container = render(<SchedulesPage />);
+    await flush();
+    act(() => button(container, "新建")?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await flush();
+    const options = Array.from(container.querySelectorAll("option")).map(
+      (item) => (item.textContent ?? "").trim(),
+    );
+    expect(options).not.toContain("Weekly work log (digest)");
+    expect(options).toContain("Daily report");
   });
 });

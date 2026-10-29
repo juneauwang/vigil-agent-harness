@@ -323,6 +323,65 @@ def test_generate_without_digest_jobs_returns_404(client, digest_home):
     assert "digest" in resp.text.lower()
 
 
+def test_create_pipeline_without_jobs_makes_two(client, digest_home):
+    """没有流水线时一键初始化：两条 job、同一窗口、写稿在前渲染在后。"""
+    resp = client.post("/api/digest/pipeline", json={"window": "7d"})
+    assert resp.status_code == 200, resp.text
+    data = resp.json()["data"]
+    assert data["window"] == "7d"
+    assert data["facts"]["schedule"] == "0 18 * * 5"
+    assert data["render"]["schedule"] == "10 18 * * 5"
+
+    from cron.jobs import get_job, use_cron_store
+
+    with use_cron_store(digest_home):
+        facts = get_job(data["facts"]["id"])
+        render = get_job(data["render"]["id"])
+    assert facts["script"] == "builtin:digest"
+    assert facts["script_args"] == ["--window", "7d", "--format", "facts"]
+    assert facts["no_agent"] is False
+    assert facts["enabled_toolsets"] == ["file", "session_search", "skills"]
+    assert "prose.json" in facts["prompt"]
+    assert render["script_args"][:4] == ["--window", "7d", "--format", "md"]
+    assert "--publish" in render["script_args"]
+    assert render["no_agent"] is True
+
+
+def test_create_pipeline_is_idempotent(client, digest_home):
+    """已存在就 409，不重复建、不动已有 job。"""
+    first = client.post("/api/digest/pipeline", json={})
+    assert first.status_code == 200, first.text
+    ids = [first.json()["data"]["facts"]["id"], first.json()["data"]["render"]["id"]]
+
+    second = client.post("/api/digest/pipeline", json={})
+    assert second.status_code == 409, second.text
+    assert second.json()["error"]["code"] == "pipeline_exists"
+    for job_id in ids:
+        assert job_id in second.text
+
+    from cron.jobs import list_jobs, use_cron_store
+
+    with use_cron_store(digest_home):
+        digest_jobs = [j for j in list_jobs(True) if j.get("script") == "builtin:digest"]
+    assert len(digest_jobs) == 2
+
+
+def test_create_pipeline_rejects_bad_input(client, digest_home):
+    bad_window = client.post("/api/digest/pipeline", json={"window": "week"})
+    assert bad_window.status_code == 400, bad_window.text
+    assert bad_window.json()["error"]["code"] == "invalid_window"
+
+    once = client.post("/api/digest/pipeline", json={"facts_schedule": "2027-01-01T09:00:00"})
+    assert once.status_code == 400, once.text
+    assert once.json()["error"]["code"] == "invalid_schedule"
+
+    # 校验失败不能留下半条流水线
+    from cron.jobs import list_jobs, use_cron_store
+
+    with use_cron_store(digest_home):
+        assert [j for j in list_jobs(True) if j.get("script") == "builtin:digest"] == []
+
+
 def test_runs_endpoint_lists_recent_executions(client, digest_home, monkeypatch):
     """`/api/digest/runs` 读 cron 执行账本（空账本 → []，不 500）。"""
     _create_digest_jobs(digest_home)

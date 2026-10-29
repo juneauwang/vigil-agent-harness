@@ -146,6 +146,10 @@ export default function RegistrePage() {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [copied, setCopied] = useState<string | null>(null);
 
+  // 一键初始化：没有流水线时给的最小表单（窗口 + 周几 + 几点，不让用户碰 cron 语法）
+  const [createForm, setCreateForm] = useState({ window: "7d", dow: "5", hour: "18" });
+  const [creating, setCreating] = useState(false);
+
   const pollTimer = useRef<number | null>(null);
   const copyTimer = useRef<number | null>(null);
 
@@ -268,6 +272,37 @@ export default function RegistrePage() {
       setActionError(`${t("registre.actionFailed")}${errorText(err)}`);
     } finally {
       setSyncing(false);
+    }
+  };
+
+  const createPipeline = async () => {
+    if (creating) return;
+    const window = createForm.window.trim() || "7d";
+    const hour = createForm.hour.trim() || "18";
+    const dow = createForm.dow;
+    setCreating(true);
+    setActionError(null);
+    setNotice(null);
+    try {
+      const payload = await api.createDigestPipeline({
+        window,
+        facts_schedule: `0 ${hour} * * ${dow}`,
+        render_schedule: `10 ${hour} * * ${dow}`,
+      });
+      const data = payload?.data;
+      await reloadJobs();
+      setNotice(
+        data
+          ? t("registre.pipelineCreated", {
+              facts: `${data.facts.schedule} (${data.facts.id})`,
+              render: `${data.render.schedule} (${data.render.id})`,
+            })
+          : t("registre.createPipeline"),
+      );
+    } catch (err) {
+      setActionError(`${t("registre.pipelineCreateFailed")}${errorText(err)}`);
+    } finally {
+      setCreating(false);
     }
   };
 
@@ -476,7 +511,81 @@ export default function RegistrePage() {
         </div>
 
         {pipelineMissing ? (
-          <div className="px-4 py-6 text-xs text-[var(--vigil-muted)]">{t("registre.pipelineMissing")}</div>
+          <div className="space-y-3 px-4 py-4" data-testid="registre-pipeline-empty">
+            <div>
+              <div className="text-xs font-medium text-[var(--vigil-text)]">
+                {t("registre.pipelineEmptyTitle")}
+              </div>
+              <div className="mt-0.5 text-[11px] leading-relaxed text-[var(--vigil-muted)]">
+                {t("registre.pipelineEmptyHint")}
+              </div>
+            </div>
+            <div className="flex flex-wrap items-end gap-3">
+              <label className="block space-y-1">
+                <span className="text-[11px] font-medium text-[var(--vigil-text)]">
+                  {t("registre.createWindow")}
+                </span>
+                <input
+                  aria-label={t("registre.createWindow")}
+                  value={createForm.window}
+                  placeholder="7d"
+                  onChange={(event) =>
+                    setCreateForm((cur) => ({ ...cur, window: event.target.value }))
+                  }
+                  className="w-24 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1.5 font-mono text-xs text-[var(--vigil-text)]"
+                />
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] font-medium text-[var(--vigil-text)]">
+                  {t("registre.createDow")}
+                </span>
+                <select
+                  aria-label={t("registre.createDow")}
+                  value={createForm.dow}
+                  onChange={(event) =>
+                    setCreateForm((cur) => ({ ...cur, dow: event.target.value }))
+                  }
+                  className="rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1.5 text-xs text-[var(--vigil-text)]"
+                >
+                  <option value="1">{t("registre.dowMon")}</option>
+                  <option value="2">{t("registre.dowTue")}</option>
+                  <option value="3">{t("registre.dowWed")}</option>
+                  <option value="4">{t("registre.dowThu")}</option>
+                  <option value="5">{t("registre.dowFri")}</option>
+                  <option value="6">{t("registre.dowSat")}</option>
+                  <option value="0">{t("registre.dowSun")}</option>
+                </select>
+              </label>
+              <label className="block space-y-1">
+                <span className="text-[11px] font-medium text-[var(--vigil-text)]">
+                  {t("registre.createHour")}
+                </span>
+                <input
+                  aria-label={t("registre.createHour")}
+                  type="number"
+                  min={0}
+                  max={23}
+                  value={createForm.hour}
+                  onChange={(event) =>
+                    setCreateForm((cur) => ({ ...cur, hour: event.target.value }))
+                  }
+                  className="w-20 rounded-md border border-[var(--vigil-border)] bg-[var(--vigil-bg)] px-2 py-1.5 font-mono text-xs text-[var(--vigil-text)]"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void createPipeline()}
+                disabled={creating}
+                className="inline-flex items-center gap-1.5 rounded-md bg-[var(--vigil-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {creating ? <Loader2 className="size-3.5 animate-spin" /> : null}
+                {creating ? t("registre.creatingPipeline") : t("registre.createPipeline")}
+              </button>
+            </div>
+            <div className="text-[11px] text-[var(--vigil-muted)]">
+              {t("registre.createPipelineHint", { hour: createForm.hour || "18" })}
+            </div>
+          </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] border-collapse text-left text-xs">

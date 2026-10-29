@@ -38,6 +38,7 @@ _run_cron_dashboard_io = late("_run_cron_dashboard_io")
 _list_cron_jobs_sync = late("_list_cron_jobs_sync")
 _call_cron_for_profile = late("_call_cron_for_profile")
 _fire_cron_job_for_profile = late("_fire_cron_job_for_profile")
+_cron_default_profile = late("_cron_default_profile")
 
 DIGEST_SCRIPT = "builtin:digest"
 DEFAULT_CREDENTIAL_REF = "bookstack-api"
@@ -108,6 +109,26 @@ def _credential_configured(ref: str) -> bool:
         return ref in list_names()
     except Exception:
         return False
+
+
+def _default_window() -> str:
+    """缺省窗口：``ops.digest.window``，非法/缺失回落 ``7d``（与 CLI 同源）。"""
+    try:
+        from ops.digest import default_window
+
+        return default_window()
+    except Exception:
+        _log.exception("digest pipeline: default_window failed")
+        return "7d"
+
+
+def _default_publish_target() -> str:
+    """缺省发布目标：跟着发布设置走（没配就 file，不默认往 BookStack 发）。"""
+    try:
+        return str(_publish_snapshot().get("target") or "file")
+    except Exception:
+        _log.exception("digest pipeline: publish target read failed")
+        return "file"
 
 
 def _publish_snapshot() -> Dict[str, Any]:
@@ -589,6 +610,138 @@ async def generate_digest(
         "jobs": [str(facts.get("id")), str(render.get("id"))],
         "window": window or _window_arg(facts.get("script_args")) or _window_arg(render.get("script_args")),
     }
+
+
+# ---------------------------------------------------------------------------
+# 一键初始化流水线
+# ---------------------------------------------------------------------------
+
+@router.post("/api/digest/pipeline")
+async def create_digest_pipeline(
+    payload: Dict[str, Any] = Body(default_factory=dict),
+    request: Request = None,
+):
+    """一次建好「写稿 + 渲染发布」两条 job。
+
+    用户从 web 建周报，不该被拉去蓝图目录里挑半小时：窗口只有一个、排期只有一对、
+    发布目标跟着发布设置走，所以这里给默认值，只允许改窗口和周几几点。
+
+    body（都可选）::
+
+        { "window": "7d",                  # 缺省 ops.digest.window，再缺省 7d
+          "facts_schedule": "0 18 * * 5",   # 缺省周五 18:00 写稿
+          "render_schedule": "10 18 * * 5", # 缺省周五 18:10 渲染发布
+          "profile": "default" }
+
+    幂等：任一条已存在就 409，不重复建、不覆盖已有 job。
+    """
+    _require_token(request)
+    body = payload or {}
+
+    window = str(body.get("window") or "").strip() or _default_window()
+    if not _WINDOW_RE.fullmatch(window) or int(window[:-1]) <= 0:
+        return _bad("invalid_window", "窗口需要形如 7d / 24h / 2w（且大于 0）")
+
+    from ops.digest_prompt import (
+        DEFAULT_FACTS_SCHEDULE,
+        DEFAULT_RENDER_SCHEDULE,
+        FACTS_JOB_NAME,
+        FACTS_TOOLSETS,
+        PROSE_PROMPT,
+        RENDER_JOB_NAME,
+    )
+
+    facts_schedule = str(body.get("facts_schedule") or DEFAULT_FACTS_SCHEDULE).strip()
+    render_schedule = str(body.get("render_schedule") or DEFAULT_RENDER_SCHEDULE).strip()
+    for label, expr in (("写稿", facts_schedule), ("渲染", render_schedule)):
+        problem = _schedule_problem(expr)
+        if problem:
+            return _bad("invalid_schedule", f"{label}排期无效：{problem}")
+
+    target = _default_publish_target()
+    if target not in PUBLISH_TARGETS:
+        target = "file"
+
+    jobs = await _run_cron_dashboard_io(_list_cron_jobs_sync, "all")
+    existing_facts, existing_render = _digest_jobs(jobs or [])
+    if existing_facts or existing_render:
+        ids = [str(job.get("id")) for job in (existing_facts, existing_render) if job]
+        return JSONResponse(
+            status_code=409,
+            content={**_api_error(
+                "pipeline_exists",
+                "流水线已存在（job " + "、".join(ids) + "），不重复创建；要重建请先删掉这两条 job。",
+            ), "detail": "流水线已存在"},
+        )
+
+    profile = str(body.get("profile") or "").strip() or _cron_default_profile()
+    facts_spec = {
+        "prompt": PROSE_PROMPT,
+        "schedule": facts_schedule,
+        "name": FACTS_JOB_NAME,
+        "deliver": "local",
+        "script": DIGEST_SCRIPT,
+        "script_args": ["--window", window, "--format", "facts"],
+        "enabled_toolsets": list(FACTS_TOOLSETS),
+        "no_agent": False,
+    }
+    render_spec = {
+        "prompt": "",
+        "schedule": render_schedule,
+        "name": RENDER_JOB_NAME,
+        "deliver": "local",
+        "script": DIGEST_SCRIPT,
+        "script_args": ["--window", window, "--format", "md", "--publish", target],
+        "no_agent": True,
+    }
+
+    try:
+        facts_job = await _run_cron_dashboard_io(_create_pipeline_job_sync, profile, facts_spec)
+        try:
+            render_job = await _run_cron_dashboard_io(_create_pipeline_job_sync, profile, render_spec)
+        except Exception:
+            # 半成品流水线比没有更难查：第二次失败就把第一条删掉。
+            try:
+                await _run_cron_dashboard_io(
+                    _call_cron_for_profile, profile, "remove_job", str(facts_job.get("id"))
+                )
+            except Exception:
+                _log.exception("digest pipeline: rollback of facts job failed")
+            raise
+    except Exception as exc:
+        _log.exception("digest pipeline: create failed")
+        return JSONResponse(
+            status_code=400,
+            content={**_api_error("pipeline_create_failed", f"创建流水线失败：{exc}"),
+                     "detail": f"创建流水线失败：{exc}"},
+        )
+
+    return {
+        "ok": True,
+        "data": {
+            "window": window,
+            "publish": target,
+            "facts": {"id": facts_job.get("id"), "schedule": facts_job.get("schedule_display")},
+            "render": {"id": render_job.get("id"), "schedule": render_job.get("schedule_display")},
+        },
+    }
+
+
+def _create_pipeline_job_sync(profile: str, spec: Dict[str, Any]) -> Dict[str, Any]:
+    return _call_cron_for_profile(profile, "create_job", **spec)
+
+
+def _schedule_problem(expr: str) -> str:
+    """排期字符串校验：cron / every 周期都行，一次性时间戳不行（周报要能重复）。"""
+    from cron.jobs import parse_schedule
+
+    try:
+        parsed = parse_schedule(expr)
+    except Exception as exc:
+        return str(exc) or "无法解析"
+    if parsed.get("kind") == "once":
+        return "流水线要周期性执行，一次性时间戳不适用（改用 cron 或 every 7d）"
+    return ""
 
 
 def _with_window(args: Optional[List[Any]], window: str) -> List[str]:

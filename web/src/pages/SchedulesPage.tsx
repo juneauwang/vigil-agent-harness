@@ -244,7 +244,10 @@ export default function SchedulesPage() {
   const loadBlueprints = useCallback(async () => {
     try {
       const payload = await api.listBlueprints();
-      const list = payload?.blueprints ?? [];
+      // digest 流水线统一在 /registre 一键创建（两条 job：写稿 + 渲染发布）。
+      // 蓝图目录里那条 weekly-oplog 是旧的「一条 agent job 写完再自己发布」口径，
+      // 和现在的 A/B 模型打架，建出来会让 Le Registre 显示「缺渲染 job」，所以不列。
+      const list = (payload?.blueprints ?? []).filter((item) => item.key !== "weekly-oplog");
       setBlueprints(list);
       setBlueprintError(null);
       return list;

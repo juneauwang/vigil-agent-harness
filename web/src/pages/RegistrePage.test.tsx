@@ -23,6 +23,7 @@ vi.mock("@/lib/api", async (importOriginal) => {
       listDigestReports: vi.fn(),
       getDigestReport: vi.fn(),
       generateDigest: vi.fn(),
+      createDigestPipeline: vi.fn(),
       listDigestRuns: vi.fn(),
     },
   };
@@ -151,6 +152,37 @@ describe("RegistrePage", () => {
     expect(api.updateCronJob).toHaveBeenNthCalledWith(2, "job-render", {
       script_args: ["--window", "7d", "--format", "md", "--publish", "bookstack"],
     });
+  });
+
+
+  it("空态：没有流水线 → 直接建两条（窗口/周几/几点 → 两条 job）", async () => {
+    vi.mocked(api.listCronJobs).mockResolvedValue([] as never);
+    vi.mocked(api.createDigestPipeline).mockResolvedValue({
+      ok: true,
+      data: {
+        window: "7d",
+        publish: "file",
+        facts: { id: "new-facts", schedule: "0 18 * * 5" },
+        render: { id: "new-render", schedule: "10 18 * * 5" },
+      },
+    } as never);
+
+    const container = render(<RegistrePage />);
+    await flush();
+
+    expect(container.querySelector("[data-testid='registre-pipeline-empty']")).toBeTruthy();
+    const createBtn = button(container, "创建流水线");
+    expect(createBtn, "空态必须给一键创建入口").toBeTruthy();
+
+    act(() => createBtn?.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    await flush();
+
+    expect(api.createDigestPipeline).toHaveBeenCalledWith({
+      window: "7d",
+      facts_schedule: "0 18 * * 5",
+      render_schedule: "10 18 * * 5",
+    });
+    expect(container.textContent ?? "").toContain("流水线已创建");
   });
 
   it("设置卡：令牌留空不发 credential；填了才发，保存后 configured 变 true", async () => {
