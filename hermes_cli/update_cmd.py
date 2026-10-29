@@ -39,6 +39,12 @@ from typing import Optional
 from hermes_cli.config import get_hermes_home
 from hermes_constants import venv_python_path
 
+# 网关 unit 的两个前缀：本 fork（Vigil）用 vigil-gateway，上游 Hermes 用
+# hermes-gateway。升级流程必须两套都认 —— 否则改名后的 unit 不会被重启，
+# 更新会「成功」但进程还是旧代码。
+_GATEWAY_UNIT_PREFIXES = ("hermes-gateway", "vigil-gateway")
+_GATEWAY_UNIT_PATTERNS = ("hermes-gateway*", "vigil-gateway*")
+
 logger = logging.getLogger(__name__)
 
 
@@ -3279,7 +3285,7 @@ def _for_each_systemd_gateway_unit(
             continue
         # list-units is already pattern-filtered, but keep the name gate so a
         # stray non-gateway line cannot enter the restart path.
-        if not unit.startswith("hermes-gateway"):
+        if not unit.startswith(_GATEWAY_UNIT_PREFIXES):
             continue
         svc_name = unit.removesuffix(".service")
         try:
@@ -4912,7 +4918,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             scope_cmd
                             + [
                                 "list-units",
-                                "hermes-gateway*",
+                                *_GATEWAY_UNIT_PATTERNS,
                                 "--plain",
                                 "--no-legend",
                                 "--no-pager",

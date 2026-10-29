@@ -115,7 +115,9 @@ def _get_service_pids() -> set:
                     scope_args
                     + [
                         "list-units",
-                        "hermes-gateway*",
+                        # 两个产品前缀都要匹配：本 fork 的 unit 现在叫
+                        # vigil-gateway*，上游 Hermes 仍叫 hermes-gateway*。
+                        *_GATEWAY_UNIT_PATTERNS,
                         "--plain",
                         "--no-legend",
                         "--no-pager",
@@ -963,6 +965,70 @@ def _read_systemd_unit_environment(system: bool = False) -> dict[str, str]:
     return parsed
 
 
+def _unit_env_home(text: str) -> str | None:
+    """从 unit 文本里取 ``VIGIL_HOME=``（也认旧名 HERMES_HOME=）。"""
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("Environment="):
+            continue
+        body = stripped[len("Environment=") :].strip().strip('"')
+        for key in ("VIGIL_HOME=", "HERMES_HOME="):
+            if body.startswith(key):
+                value = body[len(key) :].strip().strip('"')
+                if value:
+                    return value
+    return None
+
+
+def _unit_belongs_to_current_home(unit_path: Path) -> bool:
+    """这个 unit 文件是不是「本 home」的。
+
+    没写 home 的单元一律按「不是我们的」处理 —— 宁可拒绝改写，也不要把别人的
+    unit 覆盖成自己的。这条判断是 2026-10-27 事故的直接补丁：当时 refresh 只看
+    「内容与生成结果不一致」就整段重写，把 personal 的飞书网关 unit 换成了 Vigil。
+    """
+    try:
+        text = unit_path.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return False
+    owner = _unit_env_home(text)
+    if not owner:
+        return False
+    try:
+        return Path(owner).expanduser().resolve() == get_hermes_home().resolve()
+    except OSError:
+        return False
+
+
+def _legacy_unit_paths_for_current_product(system: bool = False) -> list[Path]:
+    """本产品过去用过的 unit 名（撞名时期的 ``hermes-gateway``）的候选路径。"""
+    base = _SERVICE_BASE  # 上游名 = 撞名时期的旧名
+    suffix = _profile_suffix()
+    name = base if not suffix else f"{base}-{suffix}"
+    paths: list[Path] = []
+    for is_system, base_dir in _legacy_unit_search_paths():
+        if bool(is_system) != bool(system):
+            continue
+        paths.append(Path(base_dir) / f"{name}.service")
+    return paths
+
+
+def _adoptable_legacy_unit(system: bool = False) -> tuple[str, Path] | None:
+    """找到「同 home、旧名字」的 unit：可以迁移，返回 ``(unit_name, path)``。
+
+    只在三种条件同时成立时返回：路径与当前不同、文件存在、内容里的 home 就是
+    本 home。别人的 unit（例如上游 Hermes 的 hermes-gateway.service）永远返回 None。
+    """
+    current_path = get_systemd_unit_path(system=system)
+    for legacy_path in _legacy_unit_paths_for_current_product(system=system):
+        if legacy_path == current_path or not legacy_path.exists():
+            continue
+        if not _unit_belongs_to_current_home(legacy_path):
+            continue
+        return legacy_path.name.removesuffix(".service"), legacy_path
+    return None
+
+
 def _hermes_home_from_systemd_unit_file(system: bool = False) -> str | None:
     """Read ``VIGIL_HOME`` from the on-disk unit file (not ``systemctl show``).
 
@@ -1748,7 +1814,30 @@ def _windows_gateway_should_absorb_console_controls() -> bool:
 # =============================================================================
 
 _SERVICE_BASE = "hermes-gateway"
+# 本 fork（Vigil，默认 home 是 ~/.vigil）与上游 Hermes（默认 home 是 ~/.hermes）
+# 如果共用一个 unit 名，谁后装谁覆盖：install / 自愈 refresh 会把对方的 unit
+# 内容整段改写成自己的，下一次 restart 起来的就是另一个产品（2026-10-27 飞书
+# 网关静默 39 小时事故的机制）。所以按**默认根目录**选产品名，撞名不可能发生。
+_VIGIL_SERVICE_BASE = "vigil-gateway"
+# systemd 里要扫的 unit glob：两个产品前缀都算「网关 unit」。
+_GATEWAY_UNIT_PATTERNS = ("hermes-gateway*", "vigil-gateway*")
 SERVICE_DESCRIPTION = "Vigil Agent Gateway - Messaging Platform Integration"
+
+
+def _service_base() -> str:
+    """当前产品该用的 unit 前缀：Vigil 用 ``vigil-gateway``，其余 ``hermes-gateway``。"""
+    from pathlib import Path as _Path
+
+    try:
+        from hermes_constants import get_default_hermes_root
+
+        root = get_default_hermes_root().resolve()
+    except Exception:
+        return _SERVICE_BASE
+    native_vigil = (_Path.home() / ".vigil").resolve()
+    if root == native_vigil or root.name in {".vigil", "vigil"}:
+        return _VIGIL_SERVICE_BASE
+    return _SERVICE_BASE
 
 
 def _profile_suffix() -> str:
@@ -1826,14 +1915,17 @@ def _profile_arg_for_target_user(hermes_home: str, target_home_dir: str) -> str:
 def get_service_name() -> str:
     """Derive a systemd service name scoped to this VIGIL_HOME.
 
-    Default ``~/.vigil`` returns ``hermes-gateway`` (backward compatible).
-    Profile ``~/.vigil/profiles/coder`` returns ``hermes-gateway-coder``.
+    Default ``~/.vigil`` returns ``vigil-gateway``; producing the same unit name
+    as upstream Hermes (``hermes-gateway``) is what let one install silently
+    overwrite the other's unit, so the name is product-scoped now.
+    Profile ``~/.vigil/profiles/coder`` returns ``vigil-gateway-coder``.
     Any other VIGIL_HOME appends a short hash for uniqueness.
     """
+    base = _service_base()
     suffix = _profile_suffix()
     if not suffix:
-        return _SERVICE_BASE
-    return f"{_SERVICE_BASE}-{suffix}"
+        return base
+    return f"{base}-{suffix}"
 
 
 def get_systemd_unit_path(system: bool = False) -> Path:
@@ -3118,6 +3210,21 @@ def refresh_systemd_unit_if_needed(system: bool = False) -> bool:
     if not unit_path.exists():
         return False
 
+    # 只改写本 home 的 unit。撞名时期的另一条产品（上游 Hermes 的
+    # hermes-gateway.service）就躺在这个路径上时，这里以前会把它整段换成
+    # Vigil 的定义 —— 对方下一次 restart 起来的就是 Vigil 网关，且不报错。
+    #
+    # system 作用域要先从 unit 里认领 VIGIL_HOME（sudo 下我们的 env 是 /root），
+    # 否则「归属」判断会把自己的 system unit 误判成别人的。
+    _sync_hermes_home_from_systemd_unit(system)
+    if not _unit_belongs_to_current_home(unit_path):
+        print(
+            f"⚠ 跳过 {unit_path.name} 的自愈改写：这个 unit 属于另一个 home"
+            f"（{_unit_env_home(unit_path.read_text(encoding='utf-8', errors='ignore')) or '未标注'}），"
+            "不是当前 Vigil 的。"
+        )
+        return False
+
     # The gate below funnels through ``systemd_unit_is_current``, which is the
     # single VIGIL_HOME-sync chokepoint (adopts the unit's pinned home before
     # any compare/regenerate). No separate pre-sync needed here — and the env
@@ -3313,6 +3420,27 @@ def systemd_install(
     if system:
         _require_root_for_system_service("install")
 
+    # 撞名时期装的本产品 unit（旧名）先认领：同 home 才迁移，别人的 unit 一律不碰。
+    adoptable = _adoptable_legacy_unit(system=system)
+    if adoptable is not None:
+        legacy_name, legacy_path = adoptable
+        print(
+            f"↻ 发现本产品旧 unit：{legacy_path}（home 匹配）→ 迁移到 "
+            f"{get_systemd_unit_path(system=system).name}"
+        )
+        _run_systemctl(["stop", legacy_name], system=system, check=False, timeout=90)
+        _run_systemctl(["disable", legacy_name], system=system, check=False, timeout=30)
+
+    # 目标路径上已有 unit 但不是本 home 的 → 拒绝覆盖（另一条产品就躺在这里时，
+    # 覆盖 = 悄悄杀掉它，且要等它下次 restart 才暴露）。
+    current_unit_path = get_systemd_unit_path(system=system)
+    if current_unit_path.exists() and not _unit_belongs_to_current_home(current_unit_path):
+        owner = _unit_env_home(current_unit_path.read_text(encoding="utf-8", errors="ignore"))
+        print(f"✗ 拒绝覆盖 {current_unit_path}：它属于 home {owner or '未标注'}，不是当前 Vigil。")
+        print("  如果要装的是另一条产品，请用它的命令安装；本产品的 unit 名现在是 "
+              f"{get_service_name()}。")
+        return
+
     # Offer to remove legacy units (hermes.service from pre-rename installs)
     # before installing the new hermes-gateway.service. If both remain, they
     # flap-fight for the Telegram bot token on every gateway startup.
@@ -3362,6 +3490,18 @@ def systemd_install(
     _run_systemctl(["daemon-reload"], system=system, check=True, timeout=30)
     if enable_on_startup:
         _run_systemctl(["enable", get_service_name()], system=system, check=True, timeout=30)
+
+    if adoptable is not None:
+        legacy_name, legacy_path = adoptable
+        backup = legacy_path.with_name(f"{legacy_path.name}.bak-migrated-{time.strftime('%Y%m%d%H%M%S')}")
+        try:
+            if legacy_path.exists():
+                shutil.copy2(legacy_path, backup)
+                legacy_path.unlink()
+                _run_systemctl(["daemon-reload"], system=system, check=False, timeout=30)
+                print(f"✓ 旧 unit 已归档到 {backup.name} 并移除 {legacy_name}.service")
+        except OSError as exc:
+            print(f"⚠ 旧 unit 清理失败（不影响新 unit）：{exc}")
 
     print()
     enable_label = "installed and enabled" if enable_on_startup else "installed"
